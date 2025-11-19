@@ -1,0 +1,59 @@
+# Node modules
+node_modules
+npm-debug.log
+dashboard/node_modules
+
+# TypeScript build output
+dist
+dist-sdk
+*.tsbuildinfo
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# IDE files
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Git
+.git
+.gitignore
+
+# Documentation
+docs
+*.md
+!README.md
+
+# Test files
+tests
+*.test.ts
+*.spec.ts
+coverage
+
+# Logs
+logs
+*.log
+
+# Temporary files
+tmp
+temp
+
+# Build artifacts
+trial-dist
+build-config
+
+# Examples
+examples
+
+# Dashboard build output
+dashboard/dist
+dashboard/node_modules

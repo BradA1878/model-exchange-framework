@@ -1,0 +1,206 @@
+services:
+  # MongoDB - Existing MXF database
+  mongodb:
+    image: mongo:7.0
+    container_name: mxf-mongodb
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGODB_USERNAME:-mxf_admin}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGODB_PASSWORD:-changeme_in_production}
+      MONGO_INITDB_DATABASE: ${MONGODB_DATABASE:-mxf}
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+      - mongodb_config:/data/configdb
+    networks:
+      - mxf-network
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/test --quiet
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+
+  # Meilisearch - Semantic search engine
+  meilisearch:
+    image: getmeili/meilisearch:latest
+    container_name: mxf-meilisearch
+    restart: unless-stopped
+    environment:
+      MEILI_MASTER_KEY: ${MEILISEARCH_MASTER_KEY:-changeme_generate_secure_key}
+      MEILI_ENV: ${MEILISEARCH_ENV:-production}
+      MEILI_HTTP_ADDR: 0.0.0.0:7700
+      MEILI_DB_PATH: /meili_data
+      MEILI_DUMPS_DIR: /meili_data/dumps
+      MEILI_SNAPSHOTS_DIR: /meili_data/snapshots
+      # Performance tuning
+      MEILI_MAX_INDEXING_MEMORY: ${MEILI_MAX_INDEXING_MEMORY:-2GB}
+      MEILI_MAX_INDEXING_THREADS: ${MEILI_MAX_INDEXING_THREADS:-4}
+      # Enable experimental features for vector search
+      MEILI_EXPERIMENTAL_ENABLE_METRICS: ${MEILI_ENABLE_METRICS:-false}
+      MEILI_EXPERIMENTAL_ENABLE_VECTOR_STORE: "true"
+    ports:
+      - "7700:7700"
+    volumes:
+      - meilisearch_data:/meili_data
+    networks:
+      - mxf-network
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:7700/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # Redis - Caching layer for validation and memory services
+  redis:
+    image: redis:7.2-alpine
+    container_name: mxf-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-changeme_redis_password}
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - mxf-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # MXF Server - Main application server
+  mxf-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: mxf-server
+    restart: unless-stopped
+    environment:
+      # Node environment
+      NODE_ENV: ${NODE_ENV:-production}
+      PORT: ${MXF_PORT:-3001}
+
+      # MongoDB connection
+      MONGODB_URI: mongodb://${MONGODB_USERNAME:-mxf_admin}:${MONGODB_PASSWORD:-changeme_in_production}@mongodb:27017/${MONGODB_DATABASE:-mxf}?authSource=admin
+
+      # Redis connection
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-changeme_redis_password}
+
+      # Meilisearch connection
+      MEILISEARCH_HOST: http://meilisearch:7700
+      MEILISEARCH_MASTER_KEY: ${MEILISEARCH_MASTER_KEY:-changeme_generate_secure_key}
+
+      # JWT & API Keys
+      JWT_SECRET: ${JWT_SECRET:-changeme_generate_secure_jwt_secret}
+      AGENT_API_KEY: ${AGENT_API_KEY:-changeme_generate_secure_api_key}
+
+      # LLM Integration
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+
+      # Feature Flags
+      ENABLE_MEILISEARCH: ${ENABLE_MEILISEARCH:-true}
+      ENABLE_SEMANTIC_SEARCH: ${ENABLE_SEMANTIC_SEARCH:-true}
+      MEILISEARCH_HYBRID_RATIO: ${MEILISEARCH_HYBRID_RATIO:-0.7}
+
+      # Performance
+      VALIDATION_CACHE_ENABLED: ${VALIDATION_CACHE_ENABLED:-true}
+      AUTO_CORRECTION_ENABLED: ${AUTO_CORRECTION_ENABLED:-true}
+    ports:
+      - "3001:3001"
+    volumes:
+      - ./logs:/app/logs
+      - ./uploads:/app/uploads
+    networks:
+      - mxf-network
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      meilisearch:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # MXF Dashboard - Vue.js frontend
+  mxf-dashboard:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile
+    container_name: mxf-dashboard
+    restart: unless-stopped
+    environment:
+      VITE_API_URL: ${VITE_API_URL:-http://localhost:3001}
+    ports:
+      - "5173:80"
+    networks:
+      - mxf-network
+    depends_on:
+      - mxf-server
+
+  # n8n - Workflow automation
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: mxf-n8n
+    restart: unless-stopped
+    environment:
+      # Basic configuration
+      N8N_HOST: ${N8N_HOST:-localhost}
+      N8N_PORT: 5678
+      N8N_PROTOCOL: ${N8N_PROTOCOL:-http}
+
+      # Security
+      N8N_BASIC_AUTH_ACTIVE: ${N8N_BASIC_AUTH_ACTIVE:-true}
+      N8N_BASIC_AUTH_USER: ${N8N_BASIC_AUTH_USER:-admin}
+      N8N_BASIC_AUTH_PASSWORD: ${N8N_BASIC_AUTH_PASSWORD:-changeme_n8n_password}
+
+      # Timezone
+      GENERIC_TIMEZONE: ${TZ:-America/Los_Angeles}
+      TZ: ${TZ:-America/Los_Angeles}
+
+      # Execution
+      EXECUTIONS_PROCESS: main
+      EXECUTIONS_DATA_SAVE_ON_ERROR: all
+      EXECUTIONS_DATA_SAVE_ON_SUCCESS: all
+      EXECUTIONS_DATA_SAVE_MANUAL_EXECUTIONS: true
+
+      # Optional: Connect to MXF
+      N8N_CUSTOM_EXTENSIONS: /home/node/.n8n/custom
+    ports:
+      - "5678:5678"
+    volumes:
+      - n8n_data:/home/node/.n8n
+    networks:
+      - mxf-network
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:5678/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+networks:
+  mxf-network:
+    driver: bridge
+
+volumes:
+  mongodb_data:
+    driver: local
+  mongodb_config:
+    driver: local
+  meilisearch_data:
+    driver: local
+  redis_data:
+    driver: local
+  n8n_data:
+    driver: local

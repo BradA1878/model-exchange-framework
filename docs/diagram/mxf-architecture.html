@@ -1,0 +1,929 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MXF Architecture - Interactive Diagram</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            overflow: hidden;
+        }
+
+        #container {
+            width: 100vw;
+            height: 100vh;
+            position: relative;
+        }
+
+        #controls {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background: rgba(255, 255, 255, 0.95);
+            padding: 15px 20px;
+            border-radius: 12px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+            z-index: 1000;
+            backdrop-filter: blur(10px);
+        }
+
+        #controls h1 {
+            font-size: 1.5em;
+            margin-bottom: 10px;
+            color: #2d3748;
+        }
+
+        .control-buttons {
+            display: flex;
+            gap: 10px;
+            margin-top: 10px;
+        }
+
+        .control-btn {
+            padding: 8px 16px;
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        .control-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        }
+
+        #legend {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            background: rgba(255, 255, 255, 0.95);
+            padding: 15px;
+            border-radius: 12px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+            backdrop-filter: blur(10px);
+        }
+
+        #legend h3 {
+            margin-bottom: 10px;
+            color: #2d3748;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            margin: 5px 0;
+            font-size: 14px;
+        }
+
+        .legend-color {
+            width: 20px;
+            height: 20px;
+            margin-right: 10px;
+            border-radius: 4px;
+            border: 1px solid #e2e8f0;
+        }
+
+        #tooltip {
+            position: absolute;
+            padding: 12px;
+            background: rgba(45, 55, 72, 0.95);
+            color: white;
+            border-radius: 8px;
+            font-size: 14px;
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 0.3s;
+            max-width: 300px;
+            line-height: 1.5;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+            backdrop-filter: blur(10px);
+        }
+
+        #tooltip h4 {
+            margin-bottom: 5px;
+            color: #a0aec0;
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        #tooltip p {
+            margin: 5px 0;
+        }
+
+        #info-panel {
+            position: absolute;
+            top: 200px;
+            right: 20px;
+            width: 320px;
+            max-height: calc(100vh - 220px);
+            background: rgba(255, 255, 255, 0.95);
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+            backdrop-filter: blur(10px);
+            overflow-y: auto;
+            opacity: 0;
+            transform: translateX(100%);
+            transition: all 0.3s ease;
+        }
+
+        #info-panel.active {
+            opacity: 1;
+            transform: translateX(0);
+        }
+
+        #info-panel h2 {
+            color: #2d3748;
+            margin-bottom: 15px;
+            font-size: 1.3em;
+        }
+
+        #info-panel .info-section {
+            margin-bottom: 15px;
+            padding-bottom: 15px;
+            border-bottom: 1px solid #e2e8f0;
+        }
+
+        #info-panel .info-section:last-child {
+            border-bottom: none;
+        }
+
+        #info-panel h3 {
+            color: #4a5568;
+            font-size: 1em;
+            margin-bottom: 8px;
+        }
+
+        #info-panel ul {
+            list-style: none;
+            padding-left: 10px;
+        }
+
+        #info-panel li {
+            color: #718096;
+            font-size: 0.9em;
+            margin: 4px 0;
+            padding-left: 15px;
+            position: relative;
+        }
+
+        #info-panel li:before {
+            content: '▸';
+            position: absolute;
+            left: 0;
+            color: #a0aec0;
+        }
+
+        .close-btn {
+            position: absolute;
+            top: 15px;
+            right: 15px;
+            width: 30px;
+            height: 30px;
+            background: #f7fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 50%;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s;
+        }
+
+        .close-btn:hover {
+            background: #edf2f7;
+            transform: rotate(90deg);
+        }
+
+        .close-btn:before {
+            content: '✕';
+            color: #718096;
+        }
+
+        svg {
+            width: 100%;
+            height: 100%;
+        }
+
+        .node {
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .node:hover {
+            filter: brightness(1.1);
+        }
+
+        .node-label {
+            pointer-events: none;
+            font-size: 12px;
+            font-weight: 600;
+            fill: white;
+            text-anchor: middle;
+            dominant-baseline: middle;
+        }
+
+        .link {
+            fill: none;
+            stroke-opacity: 0.6;
+            transition: all 0.3s ease;
+        }
+
+        .link:hover {
+            stroke-opacity: 1;
+            stroke-width: 3;
+        }
+
+        .link-label {
+            font-size: 10px;
+            fill: #4a5568;
+            text-anchor: middle;
+            dominant-baseline: middle;
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+
+        .link:hover + .link-label {
+            opacity: 1;
+        }
+
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+            100% { transform: scale(1); }
+        }
+
+        .node.highlight {
+            animation: pulse 2s infinite;
+        }
+
+        .arrow {
+            fill: #718096;
+        }
+    </style>
+</head>
+<body>
+    <div id="container">
+        <div id="controls">
+            <h1>🚀 Model Exchange Framework Architecture</h1>
+            <p style="color: #718096; font-size: 14px; margin-bottom: 10px;">Interactive system diagram - Click nodes for details</p>
+            <div class="control-buttons">
+                <button class="control-btn" onclick="resetZoom()">Reset View</button>
+                <button class="control-btn" onclick="toggleLabels()">Toggle Labels</button>
+                <button class="control-btn" onclick="highlightFlow('agent')">Agent Flow</button>
+                <button class="control-btn" onclick="highlightFlow('tool')">Tool Flow</button>
+                <button class="control-btn" onclick="highlightFlow('data')">Data Flow</button>
+            </div>
+        </div>
+
+        <div id="legend">
+            <h3>Component Types</h3>
+            <div class="legend-item">
+                <div class="legend-color" style="background: linear-gradient(135deg, #48bb78, #38a169);"></div>
+                <span>SDK/Client Layer</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: linear-gradient(135deg, #4299e1, #3182ce);"></div>
+                <span>Server Layer</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: linear-gradient(135deg, #ed8936, #dd6b20);"></div>
+                <span>MCP/Tools</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: linear-gradient(135deg, #9f7aea, #805ad5);"></div>
+                <span>Data/Storage</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: linear-gradient(135deg, #f687b3, #ed64a6);"></div>
+                <span>Analytics/ML</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: linear-gradient(135deg, #fbb6ce, #f687b3);"></div>
+                <span>Dashboard/UI</span>
+            </div>
+        </div>
+
+        <div id="tooltip"></div>
+        
+        <div id="info-panel">
+            <button class="close-btn" onclick="closeInfoPanel()"></button>
+            <h2 id="info-title"></h2>
+            <div id="info-content"></div>
+        </div>
+    </div>
+
+    <script>
+        // Architecture data
+        const architectureData = {
+            nodes: [
+                // SDK Layer
+                {
+                    id: 'mxf-client',
+                    label: 'MxfClient',
+                    type: 'sdk',
+                    x: 150,
+                    y: 200,
+                    description: 'Main agent client with lazy connection and retry logic',
+                    details: {
+                        handlers: ['MessageHandlers', 'ControlLoopHandlers', 'MemoryHandlers', 'McpToolHandlers', 'TaskHandlers'],
+                        managers: ['MxfMcpClientManager', 'MxfMemoryManager', 'MxfTaskExecutionManager'],
+                        features: ['Lazy connection', 'Exponential backoff', 'Auto-reconnection', 'State tracking']
+                    }
+                },
+                {
+                    id: 'sdk-handlers',
+                    label: 'SDK Handlers',
+                    type: 'sdk',
+                    x: 150,
+                    y: 300,
+                    description: 'Modular handler system for separation of concerns',
+                    details: {
+                        components: ['Message & MXP Protocol', 'ORPAR Control Loop', 'Memory Operations', 'Tool Discovery', 'Task Management'],
+                        patterns: ['Event-driven', 'Observable streams', 'Error recovery']
+                    }
+                },
+                {
+                    id: 'sdk-services',
+                    label: 'SDK Services',
+                    type: 'sdk',
+                    x: 150,
+                    y: 400,
+                    description: 'Client-side service layer',
+                    details: {
+                        services: ['MxfApiService', 'MxfEventHandlerService', 'MxfToolService', 'MxfLayeredPromptAssembler'],
+                        capabilities: ['REST API calls', 'Event processing', 'Tool loading', 'Prompt generation']
+                    }
+                },
+
+                // Server Layer
+                {
+                    id: 'socket-server',
+                    label: 'Socket.IO Server',
+                    type: 'server',
+                    x: 400,
+                    y: 200,
+                    description: 'Real-time WebSocket server with fallback',
+                    details: {
+                        transport: ['WebSocket primary', 'HTTP long-polling fallback'],
+                        config: ['120s ping timeout', '60s ping interval', '100MB buffer', '30s heartbeat'],
+                        tracking: ['Agent-Socket mapping', 'Room management', 'Connection health']
+                    }
+                },
+                {
+                    id: 'rest-api',
+                    label: 'REST API',
+                    type: 'server',
+                    x: 400,
+                    y: 300,
+                    description: 'Comprehensive REST endpoints',
+                    details: {
+                        endpoints: ['/api/agents', '/api/channels', '/api/tasks', '/api/mcp', '/api/dashboard'],
+                        auth: ['JWT for users', 'API keys for agents', 'Dual authentication'],
+                        features: ['CRUD operations', 'Analytics', 'Monitoring']
+                    }
+                },
+                {
+                    id: 'event-bus',
+                    label: 'EventBus',
+                    type: 'server',
+                    x: 400,
+                    y: 400,
+                    description: 'Three-layer event architecture',
+                    details: {
+                        layers: ['EventBusImplementation (RxJS)', 'ClientEventBus', 'ServerEventBus'],
+                        categories: ['Agent', 'Channel', 'Message', 'ControlLoop', 'Task', 'System'],
+                        patterns: ['Observable streams', 'Room broadcasting', 'Event forwarding']
+                    }
+                },
+                {
+                    id: 'auth-service',
+                    label: 'Authentication',
+                    type: 'server',
+                    x: 400,
+                    y: 500,
+                    description: 'Dual authentication system',
+                    details: {
+                        methods: ['JWT (RS256) for users', 'API keys for agents', 'Combined middleware'],
+                        security: ['Token refresh', 'Session management', 'Role-based access'],
+                        encryption: ['AES-256-GCM for MXP', 'TLS for network', 'Secure key storage']
+                    }
+                },
+
+                // MCP/Tools Layer
+                {
+                    id: 'hybrid-registry',
+                    label: 'HybridMcpRegistry',
+                    type: 'mcp',
+                    x: 650,
+                    y: 200,
+                    description: 'Unified tool interface',
+                    details: {
+                        components: ['McpToolRegistry (75+ internal)', 'ExternalMcpServerManager', 'Circuit breakers'],
+                        categories: ['Meta Tools', 'Communication', 'Control Loop', 'Infrastructure', 'Analytics'],
+                        features: ['AI-powered discovery', 'Graceful fallback', 'Health monitoring']
+                    }
+                },
+                {
+                    id: 'validation-system',
+                    label: 'Validation System',
+                    type: 'mcp',
+                    x: 650,
+                    y: 300,
+                    description: 'Advanced validation and auto-correction',
+                    details: {
+                        services: ['ProactiveValidationService', 'AutoCorrectionService', 'PredictiveAnalyticsService'],
+                        metrics: ['<50ms latency', '>80% correction rate', '>70% prediction accuracy'],
+                        levels: ['ASYNC', 'BLOCKING', 'STRICT']
+                    }
+                },
+                {
+                    id: 'system-llm',
+                    label: 'SystemLLM',
+                    type: 'mcp',
+                    x: 650,
+                    y: 400,
+                    description: 'ORPAR-optimized LLM service',
+                    details: {
+                        models: ['claude-3-haiku (observation)', 'claude-3-opus (reasoning)', 'gpt-4-turbo (action)', 'claude-3-sonnet (planning)'],
+                        features: ['Phase-optimized selection', 'Structured output', 'Pattern recognition'],
+                        operations: ['Topic extraction', 'Reasoning analysis', 'Plan generation', 'Tool recommendation']
+                    }
+                },
+                {
+                    id: 'orpar-loop',
+                    label: 'ORPAR Control',
+                    type: 'mcp',
+                    x: 650,
+                    y: 500,
+                    description: 'Cognitive cycle management',
+                    details: {
+                        phases: ['Observation', 'Reasoning', 'Planning', 'Action', 'Reflection'],
+                        features: ['State management', 'Error recovery', 'Performance tracking', 'Structured parsing'],
+                        patterns: ['BehaviorSubject', 'Exponential backoff', 'Timing metrics']
+                    }
+                },
+
+                // Data Layer
+                {
+                    id: 'mongodb',
+                    label: 'MongoDB',
+                    type: 'data',
+                    x: 900,
+                    y: 200,
+                    description: 'Primary data persistence',
+                    details: {
+                        models: ['agent', 'channel', 'task', 'memory', 'toolExecution', 'auditLog'],
+                        features: ['TTL indexes', 'Semantic search', 'Pattern storage', 'Analytics data'],
+                        optimization: ['Connection pooling', 'Batch operations', 'Index optimization']
+                    }
+                },
+                {
+                    id: 'memory-service',
+                    label: 'Memory Service',
+                    type: 'data',
+                    x: 900,
+                    y: 300,
+                    description: 'Three-scope memory management',
+                    details: {
+                        scopes: ['Agent memory', 'Channel memory', 'Relationship memory'],
+                        caching: ['In-process cache', 'Redis layer', 'MongoDB persistence'],
+                        features: ['Semantic retrieval', 'Context windows', 'Pattern memory']
+                    }
+                },
+                {
+                    id: 'cache-layer',
+                    label: 'Cache System',
+                    type: 'data',
+                    x: 900,
+                    y: 400,
+                    description: 'Multi-level caching strategy',
+                    details: {
+                        levels: ['Memory (in-process)', 'Redis (distributed)', 'MongoDB (persistent)'],
+                        strategies: ['LRU eviction', 'TTL management', 'Pattern caching'],
+                        optimization: ['Lazy loading', 'Batch processing', 'Stream processing']
+                    }
+                },
+
+                // Analytics/ML Layer
+                {
+                    id: 'analytics-service',
+                    label: 'Analytics Services',
+                    type: 'analytics',
+                    x: 1150,
+                    y: 200,
+                    description: 'Comprehensive analytics system',
+                    details: {
+                        services: ['ValidationAnalyticsService', 'PerformanceOptimizationService', 'AgentPerformanceService'],
+                        metrics: ['ORPAR timings', 'Tool usage', 'Success rates', 'Error patterns'],
+                        features: ['Trend analysis', 'A/B testing', 'ROI calculation', 'Bottleneck detection']
+                    }
+                },
+                {
+                    id: 'ml-prediction',
+                    label: 'ML Prediction',
+                    type: 'analytics',
+                    x: 1150,
+                    y: 300,
+                    description: 'Machine learning prediction system',
+                    details: {
+                        models: ['Random Forest', 'Gradient Boosting', 'Ensemble methods'],
+                        capabilities: ['Error prediction (>70%)', 'Anomaly detection', 'Pattern learning'],
+                        features: ['Real-time updates', 'Model retraining', 'Cross-agent learning']
+                    }
+                },
+                {
+                    id: 'pattern-learning',
+                    label: 'Pattern Learning',
+                    type: 'analytics',
+                    x: 1150,
+                    y: 400,
+                    description: 'AI-powered pattern detection',
+                    details: {
+                        services: ['PatternMemoryService', 'PatternLearningService', 'Learning progression'],
+                        features: ['Success pattern recognition', 'Knowledge sharing', 'Adaptive behavior'],
+                        optimization: ['Workflow patterns', 'Tool selection', 'Task routing']
+                    }
+                },
+
+                // Dashboard Layer
+                {
+                    id: 'vue-dashboard',
+                    label: 'Vue.js Dashboard',
+                    type: 'dashboard',
+                    x: 1150,
+                    y: 500,
+                    description: 'Real-time monitoring interface',
+                    details: {
+                        components: ['Agent metrics', 'Channel activity', 'Task completion', 'System health'],
+                        stores: ['Pinia state management', 'Real-time updates', 'Data persistence'],
+                        features: ['Responsive UI', 'Data visualization', 'Export functionality']
+                    }
+                },
+
+                // Task Management
+                {
+                    id: 'task-service',
+                    label: 'Task Service',
+                    type: 'server',
+                    x: 550,
+                    y: 600,
+                    description: 'Autonomous task coordination',
+                    details: {
+                        workflow: ['Goal-oriented prompting', 'Capability matching', 'Progress tracking'],
+                        states: ['pending', 'assigned', 'in_progress', 'completed'],
+                        features: ['SystemLLM analysis', 'Completion detection', 'Effectiveness metrics']
+                    }
+                },
+
+                // Channel System
+                {
+                    id: 'channel-service',
+                    label: 'Channel Service',
+                    type: 'server',
+                    x: 250,
+                    y: 600,
+                    description: 'Channel-based collaboration',
+                    details: {
+                        features: ['Room management', 'Context sharing', 'MXP protocol', 'Broadcast messaging'],
+                        coordination: ['Formal workflows', 'State tracking', 'Knowledge sharing'],
+                        security: ['Channel isolation', 'Key management', 'Access control']
+                    }
+                }
+            ],
+
+            links: [
+                // Client to Server connections
+                { source: 'mxf-client', target: 'socket-server', label: 'WebSocket', type: 'primary' },
+                { source: 'mxf-client', target: 'rest-api', label: 'HTTP', type: 'secondary' },
+                { source: 'sdk-handlers', target: 'mxf-client', label: 'Events', type: 'data' },
+                { source: 'sdk-services', target: 'sdk-handlers', label: 'Service calls', type: 'data' },
+                
+                // Server internal connections
+                { source: 'socket-server', target: 'event-bus', label: 'Events', type: 'primary' },
+                { source: 'rest-api', target: 'auth-service', label: 'Auth', type: 'secondary' },
+                { source: 'event-bus', target: 'channel-service', label: 'Channel events', type: 'data' },
+                { source: 'event-bus', target: 'task-service', label: 'Task events', type: 'data' },
+                
+                // MCP/Tool connections
+                { source: 'socket-server', target: 'hybrid-registry', label: 'Tool calls', type: 'primary' },
+                { source: 'rest-api', target: 'hybrid-registry', label: 'Tool API', type: 'secondary' },
+                { source: 'hybrid-registry', target: 'validation-system', label: 'Validation', type: 'primary' },
+                { source: 'validation-system', target: 'system-llm', label: 'AI analysis', type: 'secondary' },
+                { source: 'system-llm', target: 'orpar-loop', label: 'Control', type: 'primary' },
+                
+                // Data connections
+                { source: 'event-bus', target: 'mongodb', label: 'Persistence', type: 'data' },
+                { source: 'memory-service', target: 'mongodb', label: 'Storage', type: 'data' },
+                { source: 'memory-service', target: 'cache-layer', label: 'Caching', type: 'secondary' },
+                { source: 'cache-layer', target: 'mongodb', label: 'Fallback', type: 'secondary' },
+                
+                // Analytics connections
+                { source: 'orpar-loop', target: 'analytics-service', label: 'Metrics', type: 'data' },
+                { source: 'analytics-service', target: 'ml-prediction', label: 'Training data', type: 'secondary' },
+                { source: 'ml-prediction', target: 'pattern-learning', label: 'Patterns', type: 'data' },
+                { source: 'pattern-learning', target: 'memory-service', label: 'Storage', type: 'secondary' },
+                
+                // Dashboard connections
+                { source: 'analytics-service', target: 'vue-dashboard', label: 'Real-time data', type: 'primary' },
+                { source: 'rest-api', target: 'vue-dashboard', label: 'API', type: 'secondary' },
+                
+                // Task and Channel connections
+                { source: 'task-service', target: 'system-llm', label: 'Analysis', type: 'primary' },
+                { source: 'task-service', target: 'mongodb', label: 'Persistence', type: 'data' },
+                { source: 'channel-service', target: 'memory-service', label: 'Context', type: 'primary' },
+                { source: 'channel-service', target: 'socket-server', label: 'Broadcasting', type: 'secondary' }
+            ]
+        };
+
+        // Color schemes for different node types
+        const colorSchemes = {
+            sdk: 'linear-gradient(135deg, #48bb78, #38a169)',
+            server: 'linear-gradient(135deg, #4299e1, #3182ce)',
+            mcp: 'linear-gradient(135deg, #ed8936, #dd6b20)',
+            data: 'linear-gradient(135deg, #9f7aea, #805ad5)',
+            analytics: 'linear-gradient(135deg, #f687b3, #ed64a6)',
+            dashboard: 'linear-gradient(135deg, #fbb6ce, #f687b3)'
+        };
+
+        // Initialize D3
+        const width = window.innerWidth;
+        const height = window.innerHeight;
+
+        const svg = d3.select('#container')
+            .append('svg')
+            .attr('width', width)
+            .attr('height', height);
+
+        // Add zoom behavior
+        const g = svg.append('g');
+        const zoom = d3.zoom()
+            .scaleExtent([0.5, 3])
+            .on('zoom', (event) => {
+                g.attr('transform', event.transform);
+            });
+        
+        svg.call(zoom);
+
+        // Create arrow markers
+        svg.append('defs').selectAll('marker')
+            .data(['primary', 'secondary', 'data'])
+            .enter().append('marker')
+            .attr('id', d => `arrow-${d}`)
+            .attr('viewBox', '0 -5 10 10')
+            .attr('refX', 25)
+            .attr('refY', 0)
+            .attr('markerWidth', 8)
+            .attr('markerHeight', 8)
+            .attr('orient', 'auto')
+            .append('path')
+            .attr('d', 'M0,-5L10,0L0,5')
+            .attr('class', 'arrow')
+            .style('fill', d => {
+                if (d === 'primary') return '#4299e1';
+                if (d === 'secondary') return '#718096';
+                return '#9f7aea';
+            });
+
+        // Create links
+        const links = g.append('g')
+            .selectAll('.link')
+            .data(architectureData.links)
+            .enter().append('path')
+            .attr('class', 'link')
+            .attr('stroke', d => {
+                if (d.type === 'primary') return '#4299e1';
+                if (d.type === 'secondary') return '#718096';
+                return '#9f7aea';
+            })
+            .attr('stroke-width', 2)
+            .attr('marker-end', d => `url(#arrow-${d.type})`);
+
+        // Create link labels
+        const linkLabels = g.append('g')
+            .selectAll('.link-label')
+            .data(architectureData.links)
+            .enter().append('text')
+            .attr('class', 'link-label')
+            .text(d => d.label);
+
+        // Create nodes
+        const nodes = g.append('g')
+            .selectAll('.node')
+            .data(architectureData.nodes)
+            .enter().append('g')
+            .attr('class', 'node')
+            .attr('transform', d => `translate(${d.x}, ${d.y})`)
+            .on('click', showNodeInfo)
+            .on('mouseover', showTooltip)
+            .on('mouseout', hideTooltip);
+
+        // Add rectangles to nodes
+        nodes.append('rect')
+            .attr('x', -60)
+            .attr('y', -25)
+            .attr('width', 120)
+            .attr('height', 50)
+            .attr('rx', 8)
+            .style('fill', d => {
+                const gradient = svg.append('defs')
+                    .append('linearGradient')
+                    .attr('id', `gradient-${d.id}`)
+                    .attr('x1', '0%')
+                    .attr('y1', '0%')
+                    .attr('x2', '100%')
+                    .attr('y2', '100%');
+
+                if (d.type === 'sdk') {
+                    gradient.append('stop').attr('offset', '0%').attr('stop-color', '#48bb78');
+                    gradient.append('stop').attr('offset', '100%').attr('stop-color', '#38a169');
+                } else if (d.type === 'server') {
+                    gradient.append('stop').attr('offset', '0%').attr('stop-color', '#4299e1');
+                    gradient.append('stop').attr('offset', '100%').attr('stop-color', '#3182ce');
+                } else if (d.type === 'mcp') {
+                    gradient.append('stop').attr('offset', '0%').attr('stop-color', '#ed8936');
+                    gradient.append('stop').attr('offset', '100%').attr('stop-color', '#dd6b20');
+                } else if (d.type === 'data') {
+                    gradient.append('stop').attr('offset', '0%').attr('stop-color', '#9f7aea');
+                    gradient.append('stop').attr('offset', '100%').attr('stop-color', '#805ad5');
+                } else if (d.type === 'analytics') {
+                    gradient.append('stop').attr('offset', '0%').attr('stop-color', '#f687b3');
+                    gradient.append('stop').attr('offset', '100%').attr('stop-color', '#ed64a6');
+                } else if (d.type === 'dashboard') {
+                    gradient.append('stop').attr('offset', '0%').attr('stop-color', '#fbb6ce');
+                    gradient.append('stop').attr('offset', '100%').attr('stop-color', '#f687b3');
+                }
+
+                return `url(#gradient-${d.id})`;
+            })
+            .style('filter', 'drop-shadow(0 4px 8px rgba(0, 0, 0, 0.1))');
+
+        // Add labels to nodes
+        nodes.append('text')
+            .attr('class', 'node-label')
+            .text(d => d.label)
+            .style('font-size', '11px');
+
+        // Update link paths
+        function updateLinks() {
+            links.attr('d', d => {
+                const sourceNode = architectureData.nodes.find(n => n.id === d.source);
+                const targetNode = architectureData.nodes.find(n => n.id === d.target);
+                
+                const dx = targetNode.x - sourceNode.x;
+                const dy = targetNode.y - sourceNode.y;
+                const dr = Math.sqrt(dx * dx + dy * dy) * 0.7;
+                
+                return `M${sourceNode.x},${sourceNode.y}A${dr},${dr} 0 0,1 ${targetNode.x},${targetNode.y}`;
+            });
+
+            linkLabels
+                .attr('x', d => {
+                    const sourceNode = architectureData.nodes.find(n => n.id === d.source);
+                    const targetNode = architectureData.nodes.find(n => n.id === d.target);
+                    return (sourceNode.x + targetNode.x) / 2;
+                })
+                .attr('y', d => {
+                    const sourceNode = architectureData.nodes.find(n => n.id === d.source);
+                    const targetNode = architectureData.nodes.find(n => n.id === d.target);
+                    return (sourceNode.y + targetNode.y) / 2 - 5;
+                });
+        }
+
+        updateLinks();
+
+        // Tooltip functions
+        function showTooltip(event, d) {
+            const tooltip = document.getElementById('tooltip');
+            tooltip.innerHTML = `
+                <h4>${d.type.toUpperCase()}</h4>
+                <p><strong>${d.label}</strong></p>
+                <p>${d.description}</p>
+            `;
+            tooltip.style.left = event.pageX + 10 + 'px';
+            tooltip.style.top = event.pageY - 10 + 'px';
+            tooltip.style.opacity = 1;
+        }
+
+        function hideTooltip() {
+            document.getElementById('tooltip').style.opacity = 0;
+        }
+
+        // Info panel functions
+        function showNodeInfo(event, d) {
+            const panel = document.getElementById('info-panel');
+            const title = document.getElementById('info-title');
+            const content = document.getElementById('info-content');
+            
+            title.textContent = d.label;
+            
+            let html = `<div class="info-section">
+                <h3>Description</h3>
+                <p style="color: #718096; font-size: 14px;">${d.description}</p>
+            </div>`;
+            
+            if (d.details) {
+                for (const [key, value] of Object.entries(d.details)) {
+                    html += `<div class="info-section">
+                        <h3>${key.charAt(0).toUpperCase() + key.slice(1)}</h3>
+                        <ul>`;
+                    
+                    if (Array.isArray(value)) {
+                        value.forEach(item => {
+                            html += `<li>${item}</li>`;
+                        });
+                    } else {
+                        html += `<li>${value}</li>`;
+                    }
+                    
+                    html += `</ul></div>`;
+                }
+            }
+            
+            content.innerHTML = html;
+            panel.classList.add('active');
+        }
+
+        function closeInfoPanel() {
+            document.getElementById('info-panel').classList.remove('active');
+        }
+
+        // Control functions
+        function resetZoom() {
+            svg.transition().duration(750).call(
+                zoom.transform,
+                d3.zoomIdentity
+            );
+        }
+
+        let labelsVisible = true;
+        function toggleLabels() {
+            labelsVisible = !labelsVisible;
+            d3.selectAll('.node-label').style('opacity', labelsVisible ? 1 : 0);
+            d3.selectAll('.link-label').style('opacity', 0);
+        }
+
+        function highlightFlow(type) {
+            // Reset all highlights
+            d3.selectAll('.node').classed('highlight', false);
+            d3.selectAll('.link').style('stroke-width', 2).style('stroke-opacity', 0.6);
+            
+            if (type === 'agent') {
+                // Highlight agent flow
+                const agentNodes = ['mxf-client', 'sdk-handlers', 'socket-server', 'event-bus', 'channel-service'];
+                agentNodes.forEach(id => {
+                    d3.select(`[transform*="${architectureData.nodes.find(n => n.id === id).x}"]`)
+                        .classed('highlight', true);
+                });
+            } else if (type === 'tool') {
+                // Highlight tool flow
+                const toolNodes = ['hybrid-registry', 'validation-system', 'system-llm', 'orpar-loop'];
+                toolNodes.forEach(id => {
+                    d3.select(`[transform*="${architectureData.nodes.find(n => n.id === id).x}"]`)
+                        .classed('highlight', true);
+                });
+            } else if (type === 'data') {
+                // Highlight data flow
+                const dataNodes = ['mongodb', 'memory-service', 'cache-layer', 'analytics-service'];
+                dataNodes.forEach(id => {
+                    d3.select(`[transform*="${architectureData.nodes.find(n => n.id === id).x}"]`)
+                        .classed('highlight', true);
+                });
+            }
+        }
+
+        // Initial zoom to fit
+        window.addEventListener('load', () => {
+            const bounds = g.node().getBBox();
+            const fullWidth = width;
+            const fullHeight = height;
+            const widthScale = fullWidth / bounds.width;
+            const heightScale = fullHeight / bounds.height;
+            const scale = 0.8 * Math.min(widthScale, heightScale);
+            
+            const translate = [
+                fullWidth / 2 - scale * (bounds.x + bounds.width / 2),
+                fullHeight / 2 - scale * (bounds.y + bounds.height / 2)
+            ];
+            
+            svg.call(
+                zoom.transform,
+                d3.zoomIdentity.translate(translate[0], translate[1]).scale(scale)
+            );
+        });
+    </script>
+</body>
+</html>

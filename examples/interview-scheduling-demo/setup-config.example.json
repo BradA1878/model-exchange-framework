@@ -1,0 +1,18 @@
+{
+  "user": {
+    "email": "${MXF_USER_EMAIL}",
+    "password": "${MXF_USER_PASSWORD}",
+    "username": "${MXF_USERNAME}"
+  },
+  "channel": {
+    "id": "interview-scheduling",
+    "name": "AI Interview Scheduling",
+    "description": "Multi-agent coordination for scheduling technical interviews",
+    "isPrivate": false
+  },
+  "agents": [
+    "recruiter",
+    "candidate",
+    "scheduler"
+  ]
+}

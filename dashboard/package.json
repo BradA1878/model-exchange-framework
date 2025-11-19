@@ -1,0 +1,37 @@
+{
+    "name": "mxf-dashboard",
+    "version": "1.0.0",
+    "type": "module",
+    "description": "MXF Framework Dashboard - Vue 3 + Vuetify 3",
+    "scripts": {
+        "dev": "vite",
+        "build": "vite build",
+        "preview": "vite preview",
+        "type-check": "vue-tsc --noEmit",
+        "lint": "eslint src --ext .ts,.vue --fix"
+    },
+    "dependencies": {
+        "@mdi/font": "^7.4.47",
+        "chart.js": "^4.5.0",
+        "pinia": "^2.1.7",
+        "vue": "^3.4.15",
+        "vue-router": "^4.2.5",
+        "vuetify": "^3.5.1"
+    },
+    "devDependencies": {
+        "@types/node": "^20.11.5",
+        "@typescript-eslint/eslint-plugin": "^6.19.1",
+        "@typescript-eslint/parser": "^6.19.1",
+        "@vitejs/plugin-vue": "^5.0.3",
+        "@vue/tsconfig": "^0.5.1",
+        "eslint": "^8.56.0",
+        "eslint-plugin-vue": "^9.20.1",
+        "sass": "^1.70.0",
+        "typescript": "^5.3.3",
+        "vite": "^5.0.12",
+        "vue-tsc": "^2.0.6"
+    },
+    "engines": {
+        "node": ">=18.0.0"
+    }
+}

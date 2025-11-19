@@ -1,0 +1,18 @@
+{
+  "user": {
+    "email": "admin@techrecruit.com",
+    "password": "SecurePassword123!",
+    "username": "techrecruit-admin"
+  },
+  "channel": {
+    "id": "interview-scheduling",
+    "name": "AI Interview Scheduling",
+    "description": "Multi-agent coordination for scheduling technical interviews",
+    "isPrivate": false
+  },
+  "agents": [
+    "recruiter",
+    "candidate",
+    "scheduler"
+  ]
+}

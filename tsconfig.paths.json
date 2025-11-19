@@ -1,0 +1,11 @@
+{
+  "compilerOptions": {
+    "paths": {
+      "@server/*": ["dist/src/server/*"],
+      "@agents/*": ["dist/src/agents/*"],
+      "@utils/*": ["dist/src/server/utils/*"],
+      "@shared/*": ["dist/shared/*"]
+    },
+    "baseUrl": "."
+  }
+}

@@ -1,0 +1,46 @@
+{
+  "serverUrl": "http://localhost:3001",
+  "user": {
+    "username": "first-contact-admin",
+    "email": "admin@uss-sentinel.starfleet",
+    "password": "FirstContact2024!",
+    "role": "admin"
+  },
+  "channel": {
+    "channelId": "uss-sentinel-first-contact",
+    "name": "USS Sentinel Horizon - First Contact Mission",
+    "description": "Command bridge for first contact scenario with alien vessel",
+    "isPrivate": false,
+    "metadata": {
+      "mission": "First Contact Protocol",
+      "vessel": "USS Sentinel Horizon",
+      "scenario": "Alien encounter demonstration"
+    }
+  },
+  "keys": [
+    {
+      "name": "Commander Kane Key",
+      "agentId": "commander-kane"
+    },
+    {
+      "name": "Dr. Chen Key",
+      "agentId": "dr-chen"
+    },
+    {
+      "name": "Lt. Rodriguez Key",
+      "agentId": "lt-rodriguez"
+    },
+    {
+      "name": "Ensign Park Key",
+      "agentId": "ensign-park"
+    },
+    {
+      "name": "Dr. Xenara Key",
+      "agentId": "dr-xenara"
+    },
+    {
+      "name": "Commander Zenth Key",
+      "agentId": "commander-zenth"
+    }
+  ]
+}

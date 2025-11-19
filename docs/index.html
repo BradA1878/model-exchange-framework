@@ -1,0 +1,1162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MXF Documentation</title>
+    
+    <!-- Marked.js for Markdown parsing -->
+    <script src="https://cdn.jsdelivr.net/npm/marked@11.1.1/marked.min.js"></script>
+    
+    <!-- Highlight.js for code syntax highlighting -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css" id="highlight-dark">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css" id="highlight-light" disabled>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    
+    <!-- Mermaid.js for diagram rendering -->
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10.6.1/dist/mermaid.min.js"></script>
+    
+    <style>
+        :root {
+            --bg-primary: #f5f5f5;
+            --bg-secondary: #ffffff;
+            --bg-tertiary: #f8f9fa;
+            --text-primary: #333333;
+            --text-secondary: #666666;
+            --text-tertiary: #999999;
+            --border-color: #e0e0e0;
+            --hover-bg: #f0f0f0;
+            --code-bg: #f5f5f5;
+            --code-text: #555555;
+            --scrollbar-track: #f1f1f1;
+            --scrollbar-thumb: #c1c1c1;
+            --scrollbar-thumb-hover: #a1a1a1;
+        }
+
+        [data-theme="dark"] {
+            --bg-primary: #1a1a1a;
+            --bg-secondary: #2d2d2d;
+            --bg-tertiary: #242424;
+            --text-primary: #e0e0e0;
+            --text-secondary: #b0b0b0;
+            --text-tertiary: #808080;
+            --border-color: #404040;
+            --hover-bg: #3a3a3a;
+            --code-bg: #1e1e1e;
+            --code-text: #aaaaaa;
+            --scrollbar-track: #2d2d2d;
+            --scrollbar-thumb: #505050;
+            --scrollbar-thumb-hover: #606060;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            height: 100vh;
+            overflow: hidden;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            transition: background-color 0.3s ease, color 0.3s ease;
+        }
+
+        .container {
+            display: flex;
+            height: 100vh;
+        }
+
+        /* Header */
+        .header {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 60px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            display: flex;
+            align-items: center;
+            padding: 0 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            z-index: 100;
+        }
+
+        .header h1 {
+            font-size: 24px;
+            font-weight: 600;
+            flex: 1;
+        }
+
+        .header .subtitle {
+            margin-left: 15px;
+            font-size: 14px;
+            opacity: 0.9;
+        }
+
+        .theme-toggle {
+            margin-left: auto;
+            background: rgba(255, 255, 255, 0.2);
+            border: none;
+            color: white;
+            padding: 8px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            transition: background 0.2s;
+        }
+
+        .theme-toggle:hover {
+            background: rgba(255, 255, 255, 0.3);
+        }
+
+        .nav-buttons {
+            display: flex;
+            gap: 8px;
+            margin-left: 16px;
+        }
+
+        .nav-btn {
+            background: rgba(255, 255, 255, 0.2);
+            border: none;
+            color: white;
+            padding: 8px 12px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background 0.2s;
+        }
+
+        .nav-btn:hover:not(:disabled) {
+            background: rgba(255, 255, 255, 0.3);
+        }
+
+        .nav-btn:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+
+        /* Sidebar */
+        .sidebar {
+            width: 320px;
+            background: var(--bg-secondary);
+            border-right: 1px solid var(--border-color);
+            overflow-y: auto;
+            margin-top: 60px;
+            box-shadow: 2px 0 10px rgba(0,0,0,0.05);
+        }
+
+        .sidebar-header {
+            padding: 20px;
+            background: var(--bg-tertiary);
+            border-bottom: 1px solid var(--border-color);
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
+
+        .sidebar-header h2 {
+            font-size: 16px;
+            font-weight: 600;
+            color: var(--text-primary);
+            margin-bottom: 8px;
+        }
+
+        .search-box {
+            width: 100%;
+            padding: 8px 12px;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            font-size: 14px;
+            outline: none;
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+        }
+
+        .search-box:focus {
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+
+        /* TOC */
+        .toc {
+            padding: 10px;
+        }
+
+        .toc-section {
+            margin-bottom: 15px;
+        }
+
+        .toc-section-title {
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            padding: 10px 10px 8px 10px;
+            cursor: pointer;
+            user-select: none;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .toc-section-title:hover {
+            color: #667eea;
+        }
+
+        .toc-section-title .icon {
+            font-size: 10px;
+            transition: transform 0.2s;
+        }
+
+        .toc-section.collapsed .icon {
+            transform: rotate(-90deg);
+        }
+
+        .toc-section.collapsed .toc-items {
+            display: none;
+        }
+
+        .toc-items {
+            padding-left: 10px;
+        }
+
+        .toc-item {
+            padding: 8px 12px;
+            margin: 2px 0;
+            cursor: pointer;
+            border-radius: 6px;
+            font-size: 14px;
+            color: var(--text-primary);
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+        }
+
+        .toc-item:hover {
+            background: var(--hover-bg);
+            color: #667eea;
+        }
+
+        .toc-item.active {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            font-weight: 500;
+        }
+
+        .toc-item-icon {
+            margin-right: 8px;
+            font-size: 12px;
+        }
+
+        .toc-subsection {
+            padding-left: 20px;
+        }
+
+        /* Content */
+        .content {
+            flex: 1;
+            overflow-y: auto;
+            margin-top: 60px;
+            background: var(--bg-secondary);
+        }
+
+        .content-inner {
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 40px;
+        }
+
+        /* Markdown Styles */
+        .markdown-body {
+            font-size: 16px;
+            line-height: 1.6;
+            color: var(--text-primary);
+        }
+
+        .markdown-body h1 {
+            font-size: 32px;
+            font-weight: 700;
+            margin-top: 24px;
+            margin-bottom: 16px;
+            padding-bottom: 8px;
+            border-bottom: 2px solid var(--border-color);
+            color: var(--text-primary);
+        }
+
+        .markdown-body h2 {
+            font-size: 24px;
+            font-weight: 600;
+            margin-top: 24px;
+            margin-bottom: 12px;
+            color: var(--text-primary);
+        }
+
+        .markdown-body h3 {
+            font-size: 20px;
+            font-weight: 600;
+            margin-top: 20px;
+            margin-bottom: 10px;
+            color: var(--text-primary);
+        }
+
+        .markdown-body h4 {
+            font-size: 16px;
+            font-weight: 600;
+            margin-top: 16px;
+            margin-bottom: 8px;
+            color: var(--text-primary);
+        }
+
+        .markdown-body p {
+            margin-bottom: 16px;
+        }
+
+        .markdown-body ul, .markdown-body ol {
+            margin-bottom: 16px;
+            padding-left: 30px;
+        }
+
+        .markdown-body li {
+            margin-bottom: 8px;
+        }
+
+        .markdown-body code {
+            background: var(--code-bg);
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 14px;
+            font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+            color: var(--code-text);
+        }
+
+        .markdown-body pre {
+            background: var(--code-bg);
+            padding: 16px;
+            border-radius: 8px;
+            overflow-x: auto;
+            margin-bottom: 16px;
+            border: 1px solid var(--border-color);
+        }
+
+        .markdown-body pre code {
+            background: transparent;
+            padding: 0;
+        }
+
+        .markdown-body blockquote {
+            border-left: 4px solid #667eea;
+            padding-left: 16px;
+            margin: 16px 0;
+            color: var(--text-secondary);
+            font-style: italic;
+        }
+
+        .markdown-body a {
+            color: #667eea;
+            text-decoration: none;
+        }
+
+        .markdown-body a:hover {
+            text-decoration: underline;
+        }
+
+        .markdown-body table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 16px;
+        }
+
+        .markdown-body th, .markdown-body td {
+            border: 1px solid var(--border-color);
+            padding: 8px 12px;
+            text-align: left;
+        }
+
+        .markdown-body th {
+            background: var(--bg-tertiary);
+            font-weight: 600;
+        }
+
+        .markdown-body hr {
+            border: none;
+            border-top: 2px solid var(--border-color);
+            margin: 24px 0;
+        }
+
+        .markdown-body img {
+            max-width: 100%;
+            height: auto;
+        }
+
+        /* Mermaid Diagrams */
+        .markdown-body .mermaid {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+            text-align: center;
+            overflow-x: auto;
+        }
+
+        .markdown-body .mermaid svg {
+            max-width: 100%;
+            height: auto;
+        }
+
+        /* Welcome Screen */
+        .welcome {
+            text-align: center;
+            padding: 60px 20px;
+            color: var(--text-secondary);
+        }
+
+        .welcome h1 {
+            font-size: 48px;
+            margin-bottom: 16px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .welcome p {
+            font-size: 18px;
+            margin-bottom: 32px;
+        }
+
+        .welcome-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            max-width: 800px;
+            margin: 0 auto;
+            text-align: left;
+        }
+
+        .welcome-card {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 20px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .welcome-card:hover {
+            border-color: #667eea;
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.15);
+            transform: translateY(-2px);
+        }
+
+        .welcome-card h3 {
+            color: #667eea;
+            margin-bottom: 8px;
+            font-size: 18px;
+        }
+
+        .welcome-card p {
+            color: var(--text-secondary);
+            font-size: 14px;
+            margin: 0;
+        }
+
+        /* Loading */
+        .loading {
+            text-align: center;
+            padding: 60px 20px;
+            color: var(--text-tertiary);
+        }
+
+        .loading-spinner {
+            width: 40px;
+            height: 40px;
+            border: 4px solid #f0f0f0;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: var(--scrollbar-track);
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: var(--scrollbar-thumb);
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--scrollbar-thumb-hover);
+        }
+
+        /* Server instruction banner */
+        .server-banner {
+            background: #fff3cd;
+            border: 1px solid #ffc107;
+            border-radius: 8px;
+            padding: 16px;
+            margin-bottom: 24px;
+            font-size: 14px;
+        }
+
+        .server-banner strong {
+            color: #856404;
+        }
+
+        .server-banner code {
+            background: #fff;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 13px;
+        }
+
+        /* Mobile hamburger button */
+        .hamburger {
+            display: none;
+            background: rgba(255, 255, 255, 0.2);
+            border: none;
+            color: white;
+            width: 40px;
+            height: 40px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 24px;
+            align-items: center;
+            justify-content: center;
+            margin-right: 12px;
+            transition: background 0.2s;
+        }
+
+        .hamburger:hover {
+            background: rgba(255, 255, 255, 0.3);
+        }
+
+        /* Sidebar overlay for mobile */
+        .sidebar-overlay {
+            display: none;
+            position: fixed;
+            top: 60px;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.5);
+            z-index: 98;
+        }
+
+        /* Mobile Responsive Styles */
+        @media (max-width: 768px) {
+            .hamburger {
+                display: flex;
+            }
+
+            .header h1 {
+                font-size: 18px;
+            }
+
+            .header .subtitle {
+                display: none;
+            }
+
+            .nav-buttons {
+                display: none;
+            }
+
+            .theme-toggle {
+                padding: 8px;
+            }
+
+            .theme-toggle span {
+                display: none;
+            }
+
+            .theme-toggle #themeIcon {
+                display: inline;
+                margin: 0;
+            }
+
+            .sidebar {
+                position: fixed;
+                left: -320px;
+                top: 60px;
+                bottom: 0;
+                z-index: 99;
+                transition: left 0.3s ease;
+                box-shadow: 2px 0 10px rgba(0,0,0,0.3);
+            }
+
+            .sidebar.open {
+                left: 0;
+            }
+
+            .sidebar-overlay.visible {
+                display: block;
+            }
+
+            .content {
+                margin-left: 0 !important;
+            }
+
+            .content-inner {
+                padding: 20px;
+            }
+
+            .welcome h1 {
+                font-size: 32px;
+            }
+
+            .welcome-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .markdown-body h1 {
+                font-size: 28px;
+            }
+
+            .markdown-body h2 {
+                font-size: 22px;
+            }
+
+            .markdown-body {
+                font-size: 15px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <button class="hamburger" onclick="toggleSidebar()" id="hamburgerBtn">
+            ☰
+        </button>
+        <h1>📚 MXF Documentation</h1>
+        <span class="subtitle">Model Exchange Framework</span>
+        <div class="nav-buttons">
+            <button class="nav-btn" onclick="navigateBack()" id="backBtn" disabled>
+                ← Back
+            </button>
+            <button class="nav-btn" onclick="navigateForward()" id="forwardBtn" disabled>
+                Forward →
+            </button>
+        </div>
+        <button class="theme-toggle" onclick="toggleTheme()" id="themeToggle">
+            <span id="themeIcon">🌙</span>
+            <span id="themeText">Dark</span>
+        </button>
+    </div>
+
+    <div class="sidebar-overlay" id="sidebarOverlay" onclick="toggleSidebar()"></div>
+
+    <div class="container">
+        <div class="sidebar">
+            <div class="sidebar-header">
+                <h2>Table of Contents</h2>
+                <input type="text" class="search-box" placeholder="Search documentation..." id="searchBox">
+            </div>
+            <div class="toc" id="toc"></div>
+        </div>
+
+        <div class="content">
+            <div class="content-inner" id="content">
+                <div class="welcome">
+                    <h1>Welcome to MXF Documentation</h1>
+                    <p>Select a document from the sidebar to get started</p>
+                    
+                    <div class="server-banner">
+                        <strong>📌 For Best Experience:</strong> Run a local server from the docs directory:<br>
+                        <code>cd docs && python3 -m http.server 8000</code> or <code>npx serve</code><br>
+                        Then open <code>http://localhost:8000/index.html</code>
+                    </div>
+
+                    <div class="welcome-grid">
+                        <div class="welcome-card" onclick="loadDoc('index.md')">
+                            <h3>🏠 Overview</h3>
+                            <p>Start here for an introduction to MXF</p>
+                        </div>
+                        <div class="welcome-card" onclick="loadDoc('getting-started.md')">
+                            <h3>🚀 Getting Started</h3>
+                            <p>Quick start guide and tutorials</p>
+                        </div>
+                        <div class="welcome-card" onclick="loadDoc('diagram/mxf-architecture.html')">
+                            <h3>🎨 Interactive Architecture</h3>
+                            <p>Explore the system visually</p>
+                        </div>
+                        <div class="welcome-card" onclick="loadDoc('sdk/index.md')">
+                            <h3>📦 SDK Reference</h3>
+                            <p>TypeScript SDK documentation</p>
+                        </div>
+                        <div class="welcome-card" onclick="loadDoc('api/index.md')">
+                            <h3>🔌 API Reference</h3>
+                            <p>REST and WebSocket APIs</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Mobile sidebar toggle
+        function toggleSidebar() {
+            const sidebar = document.querySelector('.sidebar');
+            const overlay = document.getElementById('sidebarOverlay');
+            
+            sidebar.classList.toggle('open');
+            overlay.classList.toggle('visible');
+        }
+
+        // Close sidebar on mobile when clicking a link
+        function closeSidebarOnMobile() {
+            if (window.innerWidth <= 768) {
+                const sidebar = document.querySelector('.sidebar');
+                const overlay = document.getElementById('sidebarOverlay');
+                
+                sidebar.classList.remove('open');
+                overlay.classList.remove('visible');
+            }
+        }
+
+        // Navigation history management
+        let docHistory = [];
+        let historyIndex = -1;
+
+        function updateNavButtons() {
+            const backBtn = document.getElementById('backBtn');
+            const forwardBtn = document.getElementById('forwardBtn');
+            
+            backBtn.disabled = historyIndex <= 0;
+            forwardBtn.disabled = historyIndex >= docHistory.length - 1;
+        }
+
+        function addToHistory(file) {
+            // If we're not at the end of history, remove everything after current position
+            if (historyIndex < docHistory.length - 1) {
+                docHistory = docHistory.slice(0, historyIndex + 1);
+            }
+            
+            // Add new file to history
+            docHistory.push(file);
+            historyIndex = docHistory.length - 1;
+            updateNavButtons();
+        }
+
+        function navigateBack() {
+            if (historyIndex > 0) {
+                historyIndex--;
+                loadDoc(docHistory[historyIndex], false); // false = don't add to history
+                updateNavButtons();
+            }
+        }
+
+        function navigateForward() {
+            if (historyIndex < docHistory.length - 1) {
+                historyIndex++;
+                loadDoc(docHistory[historyIndex], false); // false = don't add to history
+                updateNavButtons();
+            }
+        }
+
+        // Theme management
+        function toggleTheme() {
+            const html = document.documentElement;
+            const currentTheme = html.getAttribute('data-theme');
+            const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+            
+            html.setAttribute('data-theme', newTheme);
+            localStorage.setItem('theme', newTheme);
+            
+            // Update button
+            const icon = document.getElementById('themeIcon');
+            const text = document.getElementById('themeText');
+            if (newTheme === 'dark') {
+                icon.textContent = '☀️';
+                text.textContent = 'Light';
+            } else {
+                icon.textContent = '🌙';
+                text.textContent = 'Dark';
+            }
+            
+            // Toggle highlight.js themes
+            const darkStyle = document.getElementById('highlight-dark');
+            const lightStyle = document.getElementById('highlight-light');
+            if (newTheme === 'dark') {
+                darkStyle.disabled = false;
+                lightStyle.disabled = true;
+            } else {
+                darkStyle.disabled = true;
+                lightStyle.disabled = false;
+            }
+            
+            // Update Mermaid theme and re-render diagrams
+            updateMermaidTheme(newTheme);
+            const content = document.getElementById('content');
+            if (content.querySelector('.mermaid')) {
+                // Re-render current document to update Mermaid diagrams
+                const currentFile = document.querySelector('.toc-item.active')?.dataset.file;
+                if (currentFile) {
+                    loadDoc(currentFile);
+                }
+            }
+        }
+
+        // Initialize theme from localStorage
+        function initTheme() {
+            const savedTheme = localStorage.getItem('theme') || 'light';
+            document.documentElement.setAttribute('data-theme', savedTheme);
+            
+            const icon = document.getElementById('themeIcon');
+            const text = document.getElementById('themeText');
+            if (savedTheme === 'dark') {
+                icon.textContent = '☀️';
+                text.textContent = 'Light';
+                document.getElementById('highlight-dark').disabled = false;
+                document.getElementById('highlight-light').disabled = true;
+            } else {
+                icon.textContent = '🌙';
+                text.textContent = 'Dark';
+                document.getElementById('highlight-dark').disabled = true;
+                document.getElementById('highlight-light').disabled = false;
+            }
+            
+            // Update Mermaid theme
+            updateMermaidTheme(savedTheme);
+        }
+
+        // Update Mermaid theme
+        function updateMermaidTheme(theme) {
+            const mermaidTheme = theme === 'dark' ? 'dark' : 'default';
+            mermaid.initialize({ 
+                startOnLoad: false,
+                theme: mermaidTheme,
+                securityLevel: 'loose',
+                flowchart: {
+                    useMaxWidth: true,
+                    htmlLabels: true
+                }
+            });
+        }
+
+        // Documentation structure
+        const docStructure = {
+            'Getting Started': {
+                icon: '🚀',
+                items: [
+                    { title: 'Main Overview', file: 'index.md', icon: '🏠' },
+                    { title: 'Getting Started Guide', file: 'getting-started.md', icon: '📖' },
+                    { title: 'Docker Deployment', file: 'deployment.md', icon: '🐳' },
+                    { title: 'Meilisearch Integration', file: 'meilisearch-integration.md', icon: '🔍' },
+                    { title: 'Code Execution Integration', file: 'code-execution-integration.md', icon: '🚀' }
+                ]
+            },
+            'SDK Documentation': {
+                icon: '📦',
+                items: [
+                    { title: 'SDK Overview', file: 'sdk/index.md', icon: '📚' },
+                    { title: 'Authentication', file: 'sdk/authentication.md', icon: '🔐' },
+                    { title: 'Code Execution', file: 'sdk/code-execution.md', icon: '⚡' },
+                    { title: 'SDK CLI Tools', file: 'sdk/cli.md', icon: '⌨️' },
+                    { title: 'Event System', file: 'sdk/events.md', icon: '📡' },
+                    { title: 'Core Interfaces', file: 'sdk/interfaces.md', icon: '🔷' },
+                    { title: 'Configuration Manager', file: 'sdk/config-manager.md', icon: '⚙️' },
+                    { title: 'SDK Managers', file: 'sdk/managers.md', icon: '🎛️' },
+                    { title: 'SDK Handlers', file: 'sdk/handlers.md', icon: '🎮' },
+                    { title: 'MCP Integration', file: 'sdk/mcp.md', icon: '🔌' },
+                    { title: 'MXP 2.0 Configuration', file: 'sdk/mxp-config.md', icon: '🔧' }
+                ]
+            },
+            'Code Examples': {
+                icon: '💡',
+                items: [
+                    { title: 'Basic Examples', file: 'sdk/examples-basic.md', icon: '🔰' },
+                    { title: 'Code Execution Examples', file: 'sdk/examples-code-execution.md', icon: '⚡' },
+                    { title: 'Multi-Agent Coordination', file: 'sdk/examples-multi-agent.md', icon: '👥' },
+                    { title: 'Event Handling', file: 'sdk/examples-events.md', icon: '📡' },
+                    { title: 'Memory Operations', file: 'sdk/examples-memory.md', icon: '💾' },
+                    { title: 'Task Management', file: 'sdk/examples-tasks.md', icon: '✅' },
+                    { title: 'Complete Applications', file: 'sdk/examples-complete.md', icon: '🎯' }
+                ]
+            },
+            'API Reference': {
+                icon: '🔌',
+                items: [
+                    { title: 'API Overview', file: 'api/index.md', icon: '📋' },
+                    { title: 'Channels API', file: 'api/channels.md', icon: '📢' },
+                    { title: 'Agents API', file: 'api/agents.md', icon: '🤖' },
+                    { title: 'Tasks API', file: 'api/tasks.md', icon: '✅' },
+                    { title: 'Memory API', file: 'api/memory.md', icon: '💾' },
+                    { title: 'WebSocket Events', file: 'api/websocket.md', icon: '🔄' },
+                    { title: 'MCP API', file: 'api/mcp.md', icon: '🔧' },
+                    { title: 'Control Loop API', file: 'api/control-loop.md', icon: '🔁' },
+                    { title: 'Analytics API', file: 'api/analytics.md', icon: '📊' },
+                    { title: 'Proactive Validation', file: 'api/proactive-validation.md', icon: '✔️' },
+                    { title: 'Auto-Correction', file: 'api/auto-correction.md', icon: '🔧' },
+                    { title: 'Authentication API', file: 'api/auth.md', icon: '🔑' }
+                ]
+            },
+            'MXF Architecture': {
+                icon: '🏗️',
+                items: [
+                    { title: 'Architecture Overview', file: 'mxf/index.md', icon: '🗺️' },
+                    { title: 'Interactive Architecture', file: 'diagram/mxf-architecture.html', icon: '🎨', isHtml: true },
+                    { title: 'Server CLI Tools', file: 'mxf/server-cli.md', icon: '🖥️' },
+                    { title: 'Server Services', file: 'mxf/server-services.md', icon: '⚙️' },
+                    { title: 'System Overview', file: 'mxf/system-overview.md', icon: '🌐' },
+                    { title: 'Key Concepts', file: 'mxf/key-concepts.md', icon: '💡' },
+                    { title: 'ORPAR Cognitive Cycle', file: 'mxf/orpar.md', icon: '🔄' },
+                    { title: 'SystemLLM Service', file: 'mxf/system-llm.md', icon: '🤖' },
+                    { title: 'Code Execution Service', file: 'mxf/code-execution.md', icon: '⚡' },
+                    { title: 'Architecture Diagram', file: 'mxf/architecture-diagram.md', icon: '📐' },
+                    { title: 'Data Flow', file: 'mxf/data-flow.md', icon: '🌊' },
+                    { title: 'Security', file: 'mxf/security.md', icon: '🔒' },
+                    { title: 'Extensibility', file: 'mxf/extensibility.md', icon: '🔌' },
+                    { title: 'Validation System', file: 'mxf/validation-system.md', icon: '✔️' }
+                ]
+            },
+            'MXP 2.0 Protocol': {
+                icon: '⚡',
+                items: [
+                    { title: 'Technical Specification', file: 'mxf/mxp-technical-specification.md', icon: '📄' },
+                    { title: 'Enterprise Guide', file: 'mxf/mxp-enterprise.md', icon: '🏢' },
+                    { title: 'Monitoring', file: 'mxf/mxp-monitoring.md', icon: '📡' },
+                    { title: 'MXP Protocol', file: 'mxf/mxp-protocol.md', icon: '🔧' },
+                    { title: 'Troubleshooting', file: 'mxf/mxp-troubleshooting.md', icon: '🔍' }
+                ]
+            },
+            'Dashboard': {
+                icon: '📊',
+                items: [
+                    { title: 'Dashboard Overview', file: 'dashboard/index.md', icon: '🎨' },
+                    { title: 'Channels', file: 'dashboard/channels.md', icon: '📢' },
+                    { title: 'Agents', file: 'dashboard/agents.md', icon: '🤖' },
+                    { title: 'Tasks', file: 'dashboard/tasks.md', icon: '✅' },
+                    { title: 'Memory', file: 'dashboard/memory.md', icon: '💾' },
+                    { title: 'Analytics', file: 'dashboard/analytics.md', icon: '📈' }
+                ]
+            },
+            'Analytics': {
+                icon: '📈',
+                items: [
+                    { title: 'Analytics Overview', file: 'analytics/index.md', icon: '📊' },
+                    { title: 'Task Effectiveness', file: 'analytics/task-effectiveness.md', icon: '✅' },
+                    { title: 'MCP Tools', file: 'analytics/mcp-tools.md', icon: '🔧' },
+                    { title: 'Validation Analytics', file: 'analytics/validation-analytics.md', icon: '✔️' },
+                    { title: 'Code Execution Analytics', file: 'analytics/code-execution.md', icon: '⚡' }
+                ]
+            }
+        };
+
+        // Build TOC
+        function buildTOC() {
+            const tocElement = document.getElementById('toc');
+            
+            Object.entries(docStructure).forEach(([section, data]) => {
+                const sectionDiv = document.createElement('div');
+                sectionDiv.className = 'toc-section';
+                
+                const sectionTitle = document.createElement('div');
+                sectionTitle.className = 'toc-section-title';
+                sectionTitle.innerHTML = `
+                    <span>${data.icon} ${section}</span>
+                    <span class="icon">▼</span>
+                `;
+                sectionTitle.onclick = () => {
+                    sectionDiv.classList.toggle('collapsed');
+                };
+                
+                const itemsDiv = document.createElement('div');
+                itemsDiv.className = 'toc-items';
+                
+                data.items.forEach(item => {
+                    const itemDiv = document.createElement('div');
+                    itemDiv.className = 'toc-item';
+                    itemDiv.innerHTML = `
+                        <span class="toc-item-icon">${item.icon}</span>
+                        <span>${item.title}</span>
+                    `;
+                    itemDiv.onclick = () => loadDoc(item.file);
+                    itemDiv.dataset.file = item.file;
+                    if (item.isHtml) {
+                        itemDiv.dataset.isHtml = 'true';
+                    }
+                    itemsDiv.appendChild(itemDiv);
+                });
+                
+                sectionDiv.appendChild(sectionTitle);
+                sectionDiv.appendChild(itemsDiv);
+                tocElement.appendChild(sectionDiv);
+            });
+        }
+
+        // Load document
+        async function loadDoc(file, addToHistoryFlag = true) {
+            const content = document.getElementById('content');
+            
+            // Close sidebar on mobile
+            closeSidebarOnMobile();
+            
+            // Add to history if this is a new navigation (not back/forward)
+            if (addToHistoryFlag) {
+                addToHistory(file);
+            }
+            
+            // Show loading
+            content.innerHTML = `
+                <div class="loading">
+                    <div class="loading-spinner"></div>
+                    <p>Loading ${file}...</p>
+                </div>
+            `;
+            
+            // Update active state
+            document.querySelectorAll('.toc-item').forEach(item => {
+                item.classList.remove('active');
+                if (item.dataset.file === file) {
+                    item.classList.add('active');
+                }
+            });
+            
+            // Check if it's an HTML file - load in iframe
+            if (file.endsWith('.html')) {
+                content.innerHTML = `
+                    <iframe 
+                        src="${file}" 
+                        style="width: 100%; height: 100vh; border: none; display: block;"
+                        title="${file}"
+                    ></iframe>
+                `;
+                return;
+            }
+            
+            try {
+                const response = await fetch(file);
+                if (!response.ok) throw new Error('File not found');
+                
+                const markdown = await response.text();
+                
+                // Configure marked
+                marked.setOptions({
+                    highlight: function(code, lang) {
+                        if (lang && hljs.getLanguage(lang)) {
+                            return hljs.highlight(code, { language: lang }).value;
+                        }
+                        return hljs.highlightAuto(code).value;
+                    },
+                    breaks: true,
+                    gfm: true
+                });
+                
+                // Render markdown
+                const html = marked.parse(markdown);
+                content.innerHTML = `<div class="markdown-body">${html}</div>`;
+                
+                // Render Mermaid diagrams
+                const mermaidBlocks = content.querySelectorAll('pre code.language-mermaid');
+                mermaidBlocks.forEach((block, index) => {
+                    const mermaidCode = block.textContent;
+                    const pre = block.parentElement;
+                    const mermaidDiv = document.createElement('div');
+                    mermaidDiv.className = 'mermaid';
+                    mermaidDiv.id = `mermaid-${Date.now()}-${index}`;
+                    mermaidDiv.textContent = mermaidCode;
+                    pre.replaceWith(mermaidDiv);
+                });
+                
+                // Run Mermaid rendering
+                if (mermaidBlocks.length > 0) {
+                    mermaid.run({
+                        querySelector: '.mermaid'
+                    });
+                }
+                
+                // Fix relative links
+                content.querySelectorAll('a[href$=".md"]').forEach(link => {
+                    link.onclick = (e) => {
+                        e.preventDefault();
+                        let href = link.getAttribute('href');
+                        // Handle relative paths
+                        if (href.startsWith('./')) {
+                            href = href.substring(2);
+                        } else if (href.startsWith('../')) {
+                            const parts = file.split('/');
+                            parts.pop();
+                            while (href.startsWith('../')) {
+                                href = href.substring(3);
+                                parts.pop();
+                            }
+                            href = parts.join('/') + '/' + href;
+                        } else if (!href.startsWith('/') && file.includes('/')) {
+                            // Simple relative path (e.g., "authentication.md" from "sdk/index.md")
+                            // Prepend the directory of the current file
+                            const parts = file.split('/');
+                            parts.pop(); // Remove filename
+                            href = parts.join('/') + '/' + href;
+                        }
+                        loadDoc(href);
+                    };
+                });
+                
+                // Scroll to top
+                content.scrollTop = 0;
+                
+            } catch (error) {
+                content.innerHTML = `
+                    <div class="welcome">
+                        <h1>⚠️ Error Loading Document</h1>
+                        <p>Could not load <code>${file}</code></p>
+                        <p style="color: #999; font-size: 14px;">
+                            Make sure you're running a local server:<br>
+                            <code>python3 -m http.server 8000</code> or <code>npx serve</code>
+                        </p>
+                    </div>
+                `;
+            }
+        }
+
+        // Search functionality
+        document.getElementById('searchBox').addEventListener('input', (e) => {
+            const query = e.target.value.toLowerCase();
+            const items = document.querySelectorAll('.toc-item');
+            
+            items.forEach(item => {
+                const text = item.textContent.toLowerCase();
+                const match = text.includes(query);
+                item.style.display = match ? 'flex' : 'none';
+                
+                // Show section if any item matches
+                if (match) {
+                    item.closest('.toc-section').classList.remove('collapsed');
+                }
+            });
+        });
+
+        // Initialize
+        initTheme();
+        buildTOC();
+
+        // Handle hash navigation
+        if (window.location.hash) {
+            const file = window.location.hash.substring(1);
+            loadDoc(file);
+        }
+    </script>
+</body>
+</html>
