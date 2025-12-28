@@ -57,6 +57,8 @@ export const setupAdminEventHandlers = (): void => {
     EventBus.server.on(Events.Channel.CREATE, async (payload: BaseEventPayload<{
         name: string;
         metadata?: Record<string, any>;
+        systemLlmEnabled?: boolean;
+        allowedTools?: string[];
     }>) => {
         try {
             
@@ -66,9 +68,16 @@ export const setupAdminEventHandlers = (): void => {
             validator.assertIsNonEmptyString(payload.channelId, 'Channel ID is required');
             validator.assertIsNonEmptyString(payload.agentId, 'Agent ID is required');
             
-            const { name, metadata } = payload.data;
+            const { name, metadata, systemLlmEnabled, allowedTools } = payload.data;
             const channelId = payload.channelId;
             const createdBy = payload.agentId;
+            
+            // Merge systemLlmEnabled and allowedTools into metadata for ChannelService
+            const fullMetadata = {
+                ...metadata,
+                systemLlmEnabled,
+                allowedTools
+            };
             
             // Get ChannelService instance
             const channelService = ChannelService.getInstance();
@@ -78,7 +87,7 @@ export const setupAdminEventHandlers = (): void => {
                 channelId,
                 name,
                 createdBy,
-                metadata
+                fullMetadata
             );
             
             if (!channel) {

@@ -441,6 +441,6 @@ docker-compose up -d meilisearch
 ---
 
 **Next Steps:**
-1. Read [SEMANTIC_SEARCH.md](./SEMANTIC_SEARCH.md) for usage guide
+1. Read [meilisearch-integration.md](./meilisearch-integration.md) for semantic search usage guide
 2. Explore [examples/](./examples/) for implementation patterns
-3. Review [ARCHITECTURE.md](./ARCHITECTURE.md) for system design
+3. Review [mxf/index.md](./mxf/index.md) for system architecture

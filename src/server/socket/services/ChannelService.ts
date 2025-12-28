@@ -34,6 +34,8 @@ import { Server } from 'socket.io';
 import { IChannel } from '../../../shared/interfaces/Channel'; 
 import { lastValueFrom } from 'rxjs';
 import { Channel } from '../../../shared/models/channel';
+import { McpService } from './McpService';
+import { ConfigManager, ConfigEvents, ChannelSystemLlmChangeEvent } from '../../../sdk/config/ConfigManager';
 
 /**
  * ChannelService manages channel lifecycle and interactions.
@@ -249,6 +251,147 @@ export class ChannelService extends EventEmitter {
                 this.logger.error(`Error processing bulk message persistence: ${error instanceof Error ? error.message : String(error)}`);
             }
         });
+
+        // Listen for agent join/leave events to manage channel MCP servers
+        this.eventBus.on(Events.Channel.AGENT_JOINED, async (payload: any) => {
+            try {
+                const agentId = payload.agentId;
+                const channelId = payload.channelId;
+
+                // Notify ExternalMcpServerManager via ServerHybridMcpService
+                const { ServerHybridMcpService } = require('../../api/services/ServerHybridMcpService');
+                const hybridService = ServerHybridMcpService.getInstance();
+                const manager = hybridService.getExternalServerManager();
+                if (manager) {
+                    await manager.onAgentJoinChannel(agentId, channelId);
+                }
+            } catch (error) {
+                this.logger.error(`Error handling agent join for MCP servers: ${error instanceof Error ? error.message : String(error)}`);
+            }
+        });
+
+        this.eventBus.on(Events.Channel.AGENT_LEFT, async (payload: any) => {
+            try {
+                const agentId = payload.agentId;
+                const channelId = payload.channelId;
+
+                // Notify ExternalMcpServerManager via ServerHybridMcpService
+                const { ServerHybridMcpService } = require('../../api/services/ServerHybridMcpService');
+                const hybridService = ServerHybridMcpService.getInstance();
+                const manager = hybridService.getExternalServerManager();
+                if (manager) {
+                    await manager.onAgentLeaveChannel(agentId, channelId);
+                }
+            } catch (error) {
+                this.logger.error(`Error handling agent leave for MCP servers: ${error instanceof Error ? error.message : String(error)}`);
+            }
+        });
+
+        // Listen for channel MCP server registration events to persist to database
+        // This runs alongside ExternalMcpServerManager's handler (which starts the process)
+        const { McpEvents } = require('../../../shared/events/event-definitions/McpEvents');
+
+        this.eventBus.on(McpEvents.CHANNEL_SERVER_REGISTER, async (payload: any) => {
+            try {
+                const channelId = payload.data?.channelId || payload.channelId;
+                const serverConfig = payload.data;
+                const agentId = payload.agentId;
+
+                this.logger.info(`ChannelService handling CHANNEL_SERVER_REGISTER for ${serverConfig.id}`);
+
+                // Load channel from database
+                const channel = await Channel.findOne({ channelId });
+                if (!channel) {
+                    this.logger.error(`Channel ${channelId} not found for MCP server registration`);
+                    return;
+                }
+
+                // Initialize mcpServers if not exists
+                if (!channel.mcpServers) {
+                    channel.mcpServers = { servers: [], updatedAt: new Date() };
+                }
+
+                // Check if server already registered (avoid duplicates)
+                const existingServer = channel.mcpServers.servers.find(s => s.id === serverConfig.id);
+                if (existingServer) {
+                    this.logger.warn(`Server ${serverConfig.id} already in database for channel ${channelId}`);
+                    return;
+                }
+
+                // Add server to channel
+                channel.mcpServers.servers.push({
+                    id: serverConfig.id,
+                    name: serverConfig.name,
+                    config: serverConfig,
+                    registeredBy: agentId,
+                    registeredAt: new Date(),
+                    status: 'stopped',
+                    keepAliveMinutes: serverConfig.keepAliveMinutes || 5
+                });
+                channel.mcpServers.updatedAt = new Date();
+
+                this.logger.info(`Saving channel ${channelId} with MCP server ${serverConfig.id}`);
+                await channel.save();
+                this.logger.info(`Channel ${channelId} saved successfully with ${channel.mcpServers.servers.length} server(s)`);
+
+            } catch (error) {
+                this.logger.error(`Error persisting channel MCP server to database: ${error instanceof Error ? error.message : String(error)}`);
+            }
+        });
+
+        // Listen for channel MCP server unregistration events to remove from database
+        this.eventBus.on(McpEvents.CHANNEL_SERVER_UNREGISTER, async (payload: any) => {
+            try {
+                const channelId = payload.data?.channelId || payload.channelId;
+                const serverId = payload.data?.serverId;
+
+                this.logger.info(`ChannelService handling CHANNEL_SERVER_UNREGISTER for ${serverId}`);
+
+                // Load channel from database
+                const channel = await Channel.findOne({ channelId });
+                if (!channel || !channel.mcpServers) {
+                    this.logger.warn(`Channel ${channelId} not found or has no MCP servers`);
+                    return;
+                }
+
+                // Remove server from channel
+                const beforeCount = channel.mcpServers.servers.length;
+                channel.mcpServers.servers = channel.mcpServers.servers.filter(s => s.id !== serverId);
+                channel.mcpServers.updatedAt = new Date();
+
+                await channel.save();
+
+                this.logger.info(`Channel ${channelId} server removed (${beforeCount} -> ${channel.mcpServers.servers.length})`);
+
+            } catch (error) {
+                this.logger.error(`Error removing channel MCP server from database: ${error instanceof Error ? error.message : String(error)}`);
+            }
+        });
+
+        // Listen for systemLlmEnabled changes to persist to database (write-back sync)
+        this.eventBus.on(ConfigEvents.CHANNEL_SYSTEM_LLM_CHANGED, async (payload: BaseEventPayload<ChannelSystemLlmChangeEvent>) => {
+            try {
+                const data = payload.data;
+                const channelId = data?.channelId;
+                
+                // Only persist channel-specific changes (not global)
+                if (!channelId) {
+                    return;
+                }
+                
+                // Update database
+                const result = await Channel.updateOne(
+                    { channelId },
+                    { $set: { systemLlmEnabled: data.enabled } }
+                );
+                
+                if (result.modifiedCount > 0) {
+                    this.logger.info(`Channel ${channelId} systemLlmEnabled updated to ${data.enabled} in database`);
+                }
+            } catch (error) {
+                this.logger.error(`Error persisting systemLlmEnabled change: ${error instanceof Error ? error.message : String(error)}`);
+            }
+        });
     }
 
     /**
@@ -292,6 +435,21 @@ export class ChannelService extends EventEmitter {
                     this.channelParticipants.set(channelId, new Set(existingChannel.participants));
                 }
                 
+                // Sync systemLlmEnabled from database to ConfigManager
+                // Type assertion needed because Mongoose model type doesn't include schema extensions
+                const channelDoc = existingChannel as any;
+                if (channelDoc.systemLlmEnabled === false) {
+                    ConfigManager.getInstance().setChannelSystemLlmEnabled(false, channelId, 'Loaded from database');
+                }
+                
+                // Cache channel allowedTools in McpService for synchronous tool filtering
+                // Note: setChannelAllowedTools is async but we don't await since DB already has the value
+                if (channelDoc.allowedTools && channelDoc.allowedTools.length > 0) {
+                    McpService.getInstance().setChannelAllowedTools(channelId, channelDoc.allowedTools).catch(err => 
+                        this.logger.error(`Failed to cache allowedTools: ${err}`)
+                    );
+                }
+                
                 return channelObj;
             }
         } catch (error) {
@@ -319,7 +477,10 @@ export class ChannelService extends EventEmitter {
                 participants: [],
                 active: true,
                 isPrivate: metadata?.isPrivate || false,
-                metadata: newChannel.metadata
+                metadata: newChannel.metadata,
+                // New fields for channel-level access control
+                allowedTools: metadata?.allowedTools || [],
+                systemLlmEnabled: metadata?.systemLlmEnabled !== false // Default to true
             });
             await channelDoc.save();
         } catch (error) {
@@ -367,6 +528,21 @@ export class ChannelService extends EventEmitter {
             this.channelParticipants.set(channelId, new Set());
         }
         
+        // Cache channel allowedTools in McpService for synchronous tool filtering
+        // Note: setChannelAllowedTools persists to DB but we already saved above, so just cache
+        const channelAllowedTools = metadata?.allowedTools || [];
+        if (channelAllowedTools.length > 0) {
+            McpService.getInstance().setChannelAllowedTools(channelId, channelAllowedTools).catch(err => 
+                this.logger.error(`Failed to cache allowedTools: ${err}`)
+            );
+        }
+        
+        // Sync systemLlmEnabled to ConfigManager
+        this.logger.info(`[CREATE_CHANNEL] Channel ${channelId} systemLlmEnabled=${metadata?.systemLlmEnabled}`);
+        if (metadata?.systemLlmEnabled === false) {
+            this.logger.info(`[CREATE_CHANNEL] Disabling SystemLLM for channel ${channelId}`);
+            ConfigManager.getInstance().setChannelSystemLlmEnabled(false, channelId, 'Set at channel creation');
+        }
 
         this.notifyChannelEvent(Events.Channel.CREATED as EventName, {
             action: 'created', 
@@ -730,6 +906,115 @@ export class ChannelService extends EventEmitter {
         }
         this.logger.warn(`Attempted to remove participant from non-existent channel ${channelId}.`);
         return false;
+    }
+
+    /**
+     * Register a channel-scoped MCP server
+     * @param channelId Channel ID
+     * @param serverConfig Server configuration
+     * @param agentId Agent ID performing the registration
+     * @returns Promise resolving to success status and tools discovered
+     */
+    public async registerChannelMcpServer(
+        channelId: ChannelId,
+        serverConfig: any,
+        agentId: AgentId
+    ): Promise<{ success: boolean; toolsDiscovered?: string[] }> {
+        this.validator.assertIsNonEmptyString(channelId, 'channelId');
+        this.validator.assertIsNonEmptyString(agentId, 'agentId');
+
+        // Load channel from database to update mcpServers
+        const channel = await Channel.findOne({ channelId });
+        if (!channel) {
+            throw new Error(`Channel ${channelId} not found`);
+        }
+
+        // Initialize mcpServers if not exists
+        if (!channel.mcpServers) {
+            channel.mcpServers = { servers: [], updatedAt: new Date() };
+        }
+
+        // Check if server already registered
+        const existingServer = channel.mcpServers.servers.find(s => s.id === serverConfig.id);
+        if (existingServer) {
+            throw new Error(`Server ${serverConfig.id} already registered for channel ${channelId}`);
+        }
+
+        // Add server to channel
+        channel.mcpServers.servers.push({
+            id: serverConfig.id,
+            name: serverConfig.name,
+            config: serverConfig,
+            registeredBy: agentId,
+            registeredAt: new Date(),
+            status: 'stopped',
+            keepAliveMinutes: serverConfig.keepAliveMinutes || 5
+        });
+        channel.mcpServers.updatedAt = new Date();
+
+        this.logger.info(`Saving channel ${channelId} with MCP server ${serverConfig.id}`);
+        this.logger.debug(`Server count before save: ${channel.mcpServers.servers.length}`);
+
+        await channel.save();
+
+        this.logger.info(`Channel ${channelId} saved with MCP server ${serverConfig.id}`);
+
+        return { success: true };
+    }
+
+    /**
+     * Get channel-scoped MCP servers
+     * @param channelId Channel ID
+     * @returns List of channel MCP servers
+     */
+    public async getChannelMcpServers(channelId: ChannelId): Promise<any[]> {
+        this.validator.assertIsNonEmptyString(channelId, 'channelId');
+
+        const channel = await Channel.findOne({ channelId });
+
+        this.logger.debug(`Getting MCP servers for channel ${channelId}`);
+        this.logger.debug(`Channel found: ${!!channel}`);
+        this.logger.debug(`Channel has mcpServers: ${!!channel?.mcpServers}`);
+        this.logger.debug(`Servers count: ${channel?.mcpServers?.servers?.length || 0}`);
+
+        if (!channel || !channel.mcpServers) {
+            return [];
+        }
+
+        return channel.mcpServers.servers || [];
+    }
+
+    /**
+     * Unregister a channel-scoped MCP server
+     * @param channelId Channel ID
+     * @param serverId Server ID
+     * @param agentId Agent ID performing the unregistration
+     * @returns Promise resolving to true if successful
+     */
+    public async unregisterChannelMcpServer(
+        channelId: ChannelId,
+        serverId: string,
+        agentId: AgentId
+    ): Promise<boolean> {
+        this.validator.assertIsNonEmptyString(channelId, 'channelId');
+        this.validator.assertIsNonEmptyString(serverId, 'serverId');
+
+        // Load channel from database
+        const channel = await Channel.findOne({ channelId });
+        if (!channel || !channel.mcpServers) {
+            throw new Error(`Channel ${channelId} not found or has no MCP servers`);
+        }
+
+        // Remove server from channel
+        const beforeCount = channel.mcpServers.servers.length;
+        channel.mcpServers.servers = channel.mcpServers.servers.filter(s => s.id !== serverId);
+        channel.mcpServers.updatedAt = new Date();
+
+        await channel.save();
+
+        this.logger.info(`Channel ${channelId} server ${serverId} removed from database (${beforeCount} -> ${channel.mcpServers.servers.length})`);
+
+        return true;
     }
 
     /**

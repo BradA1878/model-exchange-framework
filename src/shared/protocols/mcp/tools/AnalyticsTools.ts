@@ -98,7 +98,7 @@ export const analytics_agent_performance: McpToolDefinition = {
                 metrics: performanceData,
                 summary: {
                     totalTasks: performanceData?.collaboration?.successfulCollaborations || 0,
-                    averageResponseTime: performanceData?.oraprTiming?.averageTotalCycleTime || 0,
+                    averageResponseTime: performanceData?.orparTiming?.averageTotalCycleTime || 0,
                     successRate: performanceData?.collaboration?.collaborationSuccessRate || 0,
                     efficiency: performanceData?.benchmark?.relativePerformance?.efficiency || 0
                 }

@@ -178,15 +178,41 @@ console.log('Search results:', result);
 ### List Available Tools
 
 ```typescript
-// Get all available tools
+// Get all available tools (includes global + channel-scoped tools)
 const tools = await agent.getAvailableTools();
 
 tools.forEach(tool => {
     console.log(`Tool: ${tool.name}`);
     console.log(`Description: ${tool.description}`);
     console.log(`Schema:`, tool.inputSchema);
+    console.log(`Scope: ${tool.scope}`);  // 'global' or 'channel'
 });
 ```
+
+### Channel-Scoped Tools
+
+Agents automatically see tools from channel-scoped MCP servers:
+
+```typescript
+// Register a channel-scoped MCP server
+await agent.registerChannelMcpServer({
+    id: 'game-tools',
+    name: 'Game Tools',
+    command: 'npx',
+    args: ['-y', '@mcp/chess'],
+    keepAliveMinutes: 10
+});
+
+// Tools from chess server now available (only to this channel)
+const tools = await agent.getAvailableTools();
+const gameTools = tools.filter(t => t.scope === 'channel');
+console.log('Game tools:', gameTools.map(t => t.name));
+
+// Execute channel tool (same as any other tool)
+await agent.executeTool('chess_move', { from: 'e2', to: 'e4' });
+```
+
+See [External MCP Servers](external-mcp-servers.md#server-scopes-global-vs-channel) for more details.
 
 ### Tool with Complex Arguments
 

@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document provides a complete guide for the code execution feature in MXF. This integration enables agents to execute JavaScript and TypeScript code in secure sandboxes, reducing multi-step workflow latency by 60-75% through elimination of model round-trips.
+This document provides a complete guide for the code execution feature in MXF. This integration enables agents to execute JavaScript and TypeScript code in secure sandboxes, reducing multi-step workflow latency through elimination of model round-trips.
 
 ## 🎯 What Was Added
 
@@ -150,17 +150,30 @@ npm run docker:up
 Create `tests/code-execution-demo.ts`:
 
 ```typescript
-import { MxfClient } from '../src/sdk/MxfClient';
+import { MxfSDK } from '@mxf/sdk';
 
 async function demo() {
-  // Create agent
-  const agent = new MxfClient({
+  // Initialize SDK
+  const sdk = new MxfSDK({
+    serverUrl: 'http://localhost:3001',
+    domainKey: process.env.MXF_DOMAIN_KEY!,
+    username: process.env.MXF_USERNAME!,
+    password: process.env.MXF_PASSWORD!
+  });
+  await sdk.connect();
+
+  // Create agent through SDK
+  const agent = await sdk.createAgent({
     agentId: 'CodeTestAgent',
-    apiKey: process.env.AGENT_API_KEY || 'test-key',
-    serverUrl: 'http://localhost:3001'
+    channelId: 'code-execution',
+    keyId: process.env.AGENT_KEY_ID!,
+    secretKey: process.env.AGENT_SECRET_KEY!,
+    llmProvider: 'openrouter',
+    defaultModel: 'anthropic/claude-3.5-sonnet',
+    apiKey: process.env.OPENROUTER_API_KEY!
   });
 
-  // Connect
+  // Connect agent
   await agent.connect();
   console.log('✅ Agent connected');
 
@@ -382,8 +395,8 @@ sandbox.updateConfig({
 
 | Operation | Latency | Notes |
 |-----------|---------|-------|
-| **Validation** | <50ms | BLOCKING - waits for approval |
-| **Pattern detection** | <10ms | AST analysis + regex |
+| **Validation** | Low latency | BLOCKING - waits for approval |
+| **Pattern detection** | Low latency | AST analysis + regex |
 | **Simple execution** | <20ms | No loops or complex operations |
 | **Data processing** | <100ms | Filtering/mapping arrays |
 | **Complex execution** | <500ms | Multiple operations |
@@ -469,22 +482,38 @@ npm test tests/code-execution.test.ts
 
 ```typescript
 // tests/code-execution-integration.test.ts
-import { MxfClient } from '../src/sdk/MxfClient';
+import { MxfSDK } from '@mxf/sdk';
+import type { MxfAgent } from '@mxf/sdk';
 import { CodeExecution } from '../src/shared/models/codeExecution';
 
 describe('Code Execution Integration', () => {
-  let agent: MxfClient;
+  let sdk: MxfSDK;
+  let agent: MxfAgent;
 
   beforeAll(async () => {
-    agent = new MxfClient({
+    sdk = new MxfSDK({
+      serverUrl: 'http://localhost:3001',
+      domainKey: process.env.MXF_DOMAIN_KEY!,
+      username: process.env.MXF_USERNAME!,
+      password: process.env.MXF_PASSWORD!
+    });
+    await sdk.connect();
+
+    agent = await sdk.createAgent({
       agentId: 'IntegrationTestAgent',
-      apiKey: process.env.AGENT_API_KEY
+      channelId: 'test-channel',
+      keyId: process.env.AGENT_KEY_ID!,
+      secretKey: process.env.AGENT_SECRET_KEY!,
+      llmProvider: 'openrouter',
+      defaultModel: 'anthropic/claude-3.5-sonnet',
+      apiKey: process.env.OPENROUTER_API_KEY!
     });
     await agent.connect();
   });
 
   afterAll(async () => {
     await agent.disconnect();
+    await sdk.disconnect();
   });
 
   test('should execute and persist to MongoDB', async () => {

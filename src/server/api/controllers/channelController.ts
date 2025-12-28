@@ -1107,3 +1107,104 @@ export const deleteChannel = async (req: Request, res: Response): Promise<void> 
         });
     }
 };
+
+/**
+ * Register a channel-scoped MCP server
+ */
+export const registerChannelMcpServer = async (req: Request, res: Response): Promise<void> => {
+    try {
+        const { channelId } = req.params;
+        const serverConfig = req.body;
+        const agentId = (req as any).agent?.agentId || (req as any).user?.userId || 'system';
+
+        const channelService = ChannelService.getInstance();
+
+        // Persist to database first
+        const result = await channelService.registerChannelMcpServer(channelId, serverConfig, agentId);
+
+        // Then emit event for ExternalMcpServerManager to start the server
+        const { McpEvents } = require('../../../shared/events/event-definitions/McpEvents');
+        EventBus.server.emit(McpEvents.CHANNEL_SERVER_REGISTER, {
+            eventId: require('uuid').v4(),
+            eventType: McpEvents.CHANNEL_SERVER_REGISTER,
+            timestamp: Date.now(),
+            agentId,
+            channelId,
+            data: { ...serverConfig, channelId }
+        });
+
+        res.status(200).json({
+            ...result,
+            message: 'Channel MCP server registered successfully'
+        });
+    } catch (error) {
+        logger.error('Error registering channel MCP server:', error);
+        const errorMessage = error instanceof Error ? error.message : 'Server error';
+        res.status(500).json({
+            success: false,
+            message: errorMessage
+        });
+    }
+};
+
+/**
+ * List channel-scoped MCP servers
+ */
+export const listChannelMcpServers = async (req: Request, res: Response): Promise<void> => {
+    try {
+        const { channelId } = req.params;
+
+        const channelService = ChannelService.getInstance();
+        const servers = await channelService.getChannelMcpServers(channelId);
+
+        res.status(200).json({
+            success: true,
+            servers
+        });
+    } catch (error) {
+        logger.error('Error listing channel MCP servers:', error);
+        const errorMessage = error instanceof Error ? error.message : 'Server error';
+        res.status(500).json({
+            success: false,
+            message: errorMessage
+        });
+    }
+};
+
+/**
+ * Unregister a channel-scoped MCP server
+ */
+export const unregisterChannelMcpServer = async (req: Request, res: Response): Promise<void> => {
+    try {
+        const { channelId, serverId } = req.params;
+        const agentId = (req as any).agent?.agentId || (req as any).user?.userId || 'system';
+
+        const channelService = ChannelService.getInstance();
+
+        // Remove from database first
+        const result = await channelService.unregisterChannelMcpServer(channelId, serverId, agentId);
+
+        // Then emit event for ExternalMcpServerManager to stop the server
+        const { McpEvents } = require('../../../shared/events/event-definitions/McpEvents');
+        EventBus.server.emit(McpEvents.CHANNEL_SERVER_UNREGISTER, {
+            eventId: require('uuid').v4(),
+            eventType: McpEvents.CHANNEL_SERVER_UNREGISTER,
+            timestamp: Date.now(),
+            agentId,
+            channelId,
+            data: { serverId, channelId }
+        });
+
+        res.status(200).json({
+            success: true,
+            message: 'Channel MCP server unregistered successfully'
+        });
+    } catch (error) {
+        logger.error('Error unregistering channel MCP server:', error);
+        const errorMessage = error instanceof Error ? error.message : 'Server error';
+        res.status(500).json({
+            success: false,
+            message: errorMessage
+        });
+    }
+};

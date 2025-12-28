@@ -144,6 +144,8 @@ export interface ValidationResult {
         expected?: any;
         actual?: any;
     }>;
+    // Coerced input after LLM type corrections (string→boolean, string→number, etc.)
+    coercedInput?: any;
 }
 
 /**
@@ -265,6 +267,61 @@ export const createToolDefinition = (
 };
 
 /**
+ * Coerce common LLM type errors before validation
+ * LLMs often return "true"/"false" strings instead of booleans
+ * @param schema - JSON schema with property types
+ * @param input - Tool input to coerce
+ * @returns Coerced input object
+ */
+const coerceLlmTypes = (schema: Record<string, any>, input: any): any => {
+    if (!input || typeof input !== 'object' || !schema.properties) {
+        return input;
+    }
+    
+    const coerced = { ...input };
+    
+    for (const [key, propSchema] of Object.entries(schema.properties as Record<string, any>)) {
+        if (!(key in coerced)) continue;
+        
+        const value = coerced[key];
+        const expectedType = propSchema.type;
+        
+        // Coerce string "true"/"false" to boolean
+        if (expectedType === 'boolean' && typeof value === 'string') {
+            const lowerValue = value.toLowerCase().trim();
+            if (lowerValue === 'true' || lowerValue === '1' || lowerValue === 'yes') {
+                coerced[key] = true;
+            } else if (lowerValue === 'false' || lowerValue === '0' || lowerValue === 'no') {
+                coerced[key] = false;
+            }
+        }
+        
+        // Coerce string numbers to numbers
+        if ((expectedType === 'number' || expectedType === 'integer') && typeof value === 'string') {
+            const num = Number(value);
+            if (!isNaN(num)) {
+                coerced[key] = expectedType === 'integer' ? Math.floor(num) : num;
+            }
+        }
+        
+        // Coerce JSON string to object/array
+        if ((expectedType === 'object' || expectedType === 'array') && typeof value === 'string') {
+            try {
+                const parsed = JSON.parse(value);
+                if ((expectedType === 'object' && typeof parsed === 'object' && !Array.isArray(parsed)) ||
+                    (expectedType === 'array' && Array.isArray(parsed))) {
+                    coerced[key] = parsed;
+                }
+            } catch {
+                // Keep original value if parsing fails
+            }
+        }
+    }
+    
+    return coerced;
+};
+
+/**
  * Validate tool input against schema with detailed error reporting
  * @param schema - JSON schema
  * @param input - Tool input to validate
@@ -272,8 +329,11 @@ export const createToolDefinition = (
  */
 export const validateToolInput = (schema: Record<string, any>, input: any): ValidationResult => {
     try {
+        // Pre-validation type coercion to handle common LLM type errors
+        const coercedInput = coerceLlmTypes(schema, input);
+        
         const validate = ajv.compile(schema);
-        const valid = validate(input);
+        const valid = validate(coercedInput);
         
         if (!valid && validate.errors) {
             const errors: string[] = [];
@@ -377,10 +437,10 @@ export const validateToolInput = (schema: Record<string, any>, input: any): Vali
                 errors.push(errorMessage);
             }
             
-            return { valid: false, errors, errorDetails };
+            return { valid: false, errors, errorDetails, coercedInput };
         }
         
-        return { valid: true };
+        return { valid: true, coercedInput };
     } catch (error) {
         return { 
             valid: false, 

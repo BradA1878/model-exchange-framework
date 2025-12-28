@@ -141,8 +141,8 @@ export class MxfAgent extends MxfClient {
     private readonly MAX_CONSECUTIVE_SAME_TOOL = 3; // Max consecutive calls to same tool across iterations
     private readonly MAX_CONSECUTIVE_SAME_TOOL_WITH_DIFFERENT_PARAMS = 15; // Allow more if params are different (e.g., multiple API calls, creating multiple tasks)
 
-    // Tools that legitimately need multiple consecutive calls with different params (exempt from strict loop detection)
-    private readonly MULTI_CALL_EXEMPT_TOOLS = [
+    // Default MXF tools that legitimately need multiple consecutive calls (exempt from strict loop detection)
+    private readonly DEFAULT_EXEMPT_TOOLS = [
         'web_navigate',      // Fetching from multiple URLs
         'web_search',        // Multiple search queries
         'task_create',       // Creating multiple tasks
@@ -150,6 +150,8 @@ export class MxfAgent extends MxfClient {
         'read_file',         // Reading multiple files
         'filesystem_read'    // Reading multiple files
     ];
+    // Combined list of exempt tools (default + injected via config)
+    private circuitBreakerExemptTools: string[] = [];
     private lastToolName: string | null = null;
     private consecutiveSameToolCount: number = 0;
     private lastToolParamsHash: string | null = null;
@@ -194,6 +196,12 @@ export class MxfAgent extends MxfClient {
             enableTooling: config.enableTooling ?? true
         };
         
+        // Initialize circuit breaker exempt tools (combine defaults with any injected from config)
+        this.circuitBreakerExemptTools = [
+            ...this.DEFAULT_EXEMPT_TOOLS,
+            ...(config.circuitBreakerExemptTools || [])
+        ];
+        
         // Initialize logger
         this.modelLogger = new Logger('debug', `MxfAgent:${this.agentId}`, 'client');
         
@@ -214,7 +222,8 @@ export class MxfAgent extends MxfClient {
             channelId: this.channelId!,
             maxHistory: this.modelConfig.maxHistory!,
             maxObservations: this.modelConfig.maxObservations!,
-            enablePersistence: true
+            enablePersistence: true,
+            maxMessageSize: this.modelConfig.maxMessageSize
         };
         this.memoryManager = new MxfMemoryManager(memoryConfig);
         
@@ -249,9 +258,12 @@ export class MxfAgent extends MxfClient {
             getCachedTools: () => this.toolService?.getCachedTools() || [],
             setCurrentTask: (task) => { 
                 this.currentTask = task; 
-                // Reset completion flag when new task starts
+                // Reset completion flag, circuit breaker, and action history when new task starts
                 if (task) {
                     this.taskCompleted = false;
+                    this.resetCircuitBreaker();
+                    // Clear action history so agent doesn't see old actions from previous turns
+                    this.contextBuilder?.actionHistoryService?.clearHistory(this.agentId);
                     this.modelLogger.debug('🔄 TASK FLAG: Reset completion flag for new task');
                 }
             },
@@ -336,7 +348,7 @@ export class MxfAgent extends MxfClient {
             const hasTaskComplete = tools.some(tool => tool.name === 'task_complete');
 
             if (!hasTaskComplete) {
-                this.modelLogger.warn(`MISSING TOOL: task_complete not found in loaded tools. Available tools: ${tools.map(t => t.name).join(', ')}`);
+                // this.modelLogger.warn(`MISSING TOOL: task_complete not found in loaded tools. Available tools: ${tools.map(t => t.name).join(', ')}`);
             }
 
             // Set up persistent listener for tool updates (e.g., after Meilisearch backfill)
@@ -371,7 +383,7 @@ export class MxfAgent extends MxfClient {
             return 'Task already completed - agent is idle';
         }
         
-        const maxIterations = 10;
+        const maxIterations = this.modelConfig.maxIterations ?? 10;
         
         // Notify aggregator that agent is starting to process
         if (this.messageAggregator) {
@@ -402,6 +414,12 @@ export class MxfAgent extends MxfClient {
         while (iteration < maxIterations && !taskComplete) {
             iteration++;
 
+            // Check if task was canceled externally
+            if (!this.currentTask && !taskPrompt) {
+                this.modelLogger.debug('🛑 Task canceled externally - stopping LLM loop');
+                break;
+            }
+
             // Recalculate contextual tools each iteration
             const updatedConversation = this.memoryManager.getConversationHistory();
             
@@ -422,7 +440,8 @@ export class MxfAgent extends MxfClient {
             const buildTaskDesc = (task: any): string => {
                 if (taskPrompt) return taskPrompt;
                 const title = task.title || task.task?.title || task.taskRequest?.task?.title || 'Untitled Task';
-                const desc = task.description || task.task?.description || task.taskRequest?.task?.description || '';
+                // SimpleTaskRequest now has both 'description' and 'content' (same value)
+                const desc = task.description || task.content || task.task?.description || task.taskRequest?.task?.description || '';
                 return desc ? `${title}\n\n${desc}` : title;
             };
             
@@ -435,15 +454,20 @@ export class MxfAgent extends MxfClient {
                 assignedBy: this.currentTask.assignedBy
             } : null;
             
-            // Get system prompt from conversation history
+            // Get system prompt from conversation history (but don't include it in the history)
+            // System prompts are dynamically generated and passed separately via context.systemPrompt
+            // Including them in conversationHistory causes redundancy and Meilisearch indexing waste
             const systemMessage = baseConversation.find(msg => msg.role === 'system');
             const systemPrompt = systemMessage?.content || this.systemPromptManager.generateMinimalPrompt();
-            
+
+            // Filter out system messages - they're passed separately via systemPrompt
+            const conversationWithoutSystem = baseConversation.filter(msg => msg.role !== 'system');
+
             // Build complete context with channel config and active agents
             const agentContext: AgentContext = await this.contextBuilder.buildContext(
                 systemPrompt,
                 this.modelConfig,
-                baseConversation,
+                conversationWithoutSystem,
                 taskContext,
                 toolsToSend,
                 this.config.channelId,
@@ -547,7 +571,7 @@ export class MxfAgent extends MxfClient {
             // Handle tool calls first to include them in conversation message
             let toolCalls = response.content.filter((content: any) => content.type === McpContentType.TOOL_USE);
             
-            // Add response to conversation as assistant message WITH tool_calls if present
+            // Create assistant message object (but DON'T store yet - wait for JSON parsing)
             const assistantMessage: any = {
                 role: 'assistant',
                 content: responseText,
@@ -555,20 +579,6 @@ export class MxfAgent extends MxfClient {
                     agentId: this.agentId
                 }
             };
-            
-            // Include tool_calls in assistant message for proper OpenRouter conversation structure
-            if (toolCalls.length > 0) {
-                assistantMessage.tool_calls = toolCalls.map((toolCall: any) => ({
-                    id: toolCall.id,
-                    type: 'function',
-                    function: {
-                        name: toolCall.name,
-                        arguments: JSON.stringify(toolCall.input)
-                    }
-                }));
-            }
-            
-            this.memoryManager.addConversationMessage(assistantMessage);
             
             // Enhance intents for structured tool calls
             toolCalls = toolCalls.map((toolCall: any) => {
@@ -633,6 +643,20 @@ export class MxfAgent extends MxfClient {
                     }
                 }
             }
+            
+            // NOW store the assistant message with ALL tool_calls (structured + JSON-parsed)
+            // This ensures tool_calls and tool_results are properly paired for OpenRouter
+            if (toolCalls.length > 0) {
+                assistantMessage.tool_calls = toolCalls.map((toolCall: any) => ({
+                    id: toolCall.id,
+                    type: 'function',
+                    function: {
+                        name: toolCall.name,
+                        arguments: JSON.stringify(toolCall.input)
+                    }
+                }));
+            }
+            this.memoryManager.addConversationMessage(assistantMessage);
 
             if (toolCalls.length > 0) {
                 // Reset no-tool iterations counter
@@ -727,7 +751,7 @@ export class MxfAgent extends MxfClient {
                 } else {
                     this.modelLogger.warn(`⚠️ NO TOOL RESULTS: Tool execution returned no results for ${toolCalls.length} tool calls`);
                     
-                    // CRITICAL FIX: Create synthetic error results for all tool calls that didn't get results
+                    // Create synthetic error results for all tool calls that didn't get results
                     // This ensures every tool_call has a matching tool_result to satisfy OpenRouter/Bedrock requirements
                     for (const toolCall of toolCalls) {
                         // Cast to McpToolUseContent to access properties
@@ -811,10 +835,15 @@ export class MxfAgent extends MxfClient {
      * Handle tool execution with helpers support
      */
     private async handleToolExecutionWithHelpers(toolCalls: any[], availableTools: any[], iteration: number): Promise<{ taskComplete: boolean; toolResults?: McpToolResultContent[] }> {
-        // CRITICAL FIX: Execute ALL tool calls to ensure every tool_call has a corresponding tool_result
+        // Execute ALL tool calls to ensure every tool_call has a corresponding tool_result
         // This prevents OpenRouter/Bedrock errors about missing tool results
         const allToolResults: McpToolResultContent[] = [];
         let anyTaskComplete = false;
+        
+        // CRITICAL: Collect feedback messages to add AFTER all tool results
+        // Adding user messages between tool_calls and tool results breaks conversation structure
+        // Required order: assistant(tool_calls) → tool → tool → ... → user (feedback)
+        const deferredFeedbackMessages: Array<{role: string; content: string; metadata?: Record<string, any>}> = [];
         
         for (const toolCall of toolCalls) {
             // Track tool call for circuit breaker pattern (include params for better stuck detection)
@@ -828,8 +857,8 @@ export class MxfAgent extends MxfClient {
                     `Recent calls: ${JSON.stringify(stats.toolCallFrequency)}`
                 );
                 
-                // Add forceful system intervention to conversation
-                this.memoryManager.addConversationMessage({
+                // DEFERRED: Add system intervention AFTER tool results to maintain conversation structure
+                deferredFeedbackMessages.push({
                     role: 'user',
                     content: `SYSTEM INTERVENTION: You are stuck in a loop calling the same tool repeatedly (${toolCall.name}). This tool call has been BLOCKED.
 
@@ -902,7 +931,8 @@ This iteration has been skipped. Choose a different action or complete the task.
                         
                         errorMessage += '\n🔧 FIX: Send a natural language message to a valid agent ID.';
                         
-                        this.memoryManager.addConversationMessage({
+                        // DEFERRED: Add error feedback AFTER tool results to maintain conversation structure
+                        deferredFeedbackMessages.push({
                             role: 'user',
                             content: errorMessage
                         });
@@ -925,8 +955,8 @@ This iteration has been skipped. Choose a different action or complete the task.
                 const isSuccess = ToolExecutionHelpers.isToolExecutionSuccessful(toolResult);
                 
                 if (!isSuccess) {
-                    // For failed tool execution, add error message to conversation
-                    this.memoryManager.addConversationMessage({
+                    // DEFERRED: Add error feedback AFTER tool results to maintain conversation structure
+                    deferredFeedbackMessages.push({
                         role: 'user',
                         content: `🚫 TOOL ERROR: ${toolCall.name} failed - ${toolResult?.error || 'Unknown error'}`
                     });
@@ -982,16 +1012,14 @@ This iteration has been skipped. Choose a different action or complete the task.
                     
                     // Clear task context to prevent further tool gatekeeping issues
                     this.taskExecutionManager.cancelCurrentTask('Task completed via task_complete');
-
-                    this.memoryManager.addConversationMessage({
-                        role: 'user',
-                        content: `Task completed successfully: ${toolResult.result || 'No details provided'}
-
-TASK COMPLETE: This task has been successfully completed. No further tool calls are needed or allowed. The task is now finished.`
-                    });
                     
                     anyTaskComplete = true;
                     allToolResults.push(toolResultContent);
+                    
+                    // NOTE: Do NOT add user feedback message here - it would break conversation structure
+                    // The tool result itself contains completion info, and no further LLM calls happen
+                    // after task completion anyway
+                    
                     return { taskComplete: true, toolResults: allToolResults };
                 }
                 
@@ -1012,9 +1040,11 @@ TASK COMPLETE: This task has been successfully completed. No further tool calls 
                 };
                 allToolResults.push(errorResult);
 
-                this.memoryManager.addConversationMessage({
-                    role: 'assistant',
-                    content: `Tool execution failed: ${toolCall.name}`,
+                // DEFERRED: Add error context AFTER tool results to maintain conversation structure
+                // Using 'user' role instead of 'assistant' to avoid consecutive assistant messages
+                deferredFeedbackMessages.push({
+                    role: 'user',
+                    content: `⚠️ Tool execution error for ${toolCall.name}: ${error instanceof Error ? error.message : String(error)}`,
                     metadata: {
                         toolName: toolCall.name,
                         input: toolCall.input,
@@ -1024,6 +1054,12 @@ TASK COMPLETE: This task has been successfully completed. No further tool calls 
                 });
             }
         } // End of for loop
+        
+        // NOW add all deferred feedback messages AFTER tool results are complete
+        // This maintains proper conversation structure: assistant(tool_calls) → tool → ... → user
+        for (const feedbackMsg of deferredFeedbackMessages) {
+            this.memoryManager.addConversationMessage(feedbackMsg);
+        }
         
         // Return all collected results
         return { taskComplete: anyTaskComplete, toolResults: allToolResults };
@@ -1385,12 +1421,21 @@ TASK COMPLETE: This task has been successfully completed. No further tool calls 
         const conversationCopy = [...conversation];
         const formatting = this.getContextTypeFormatting(type);
         
-        // Find injection point (after last system message, or at beginning)
-        let injectionIndex = 0;
-        for (let i = conversationCopy.length - 1; i >= 0; i--) {
-            if (conversationCopy[i].role === 'system') {
-                injectionIndex = i + 1;
-                break;
+        // Determine injection point based on type
+        let injectionIndex: number;
+        
+        if (type === 'task') {
+            // Tasks should be appended at the END of conversation for chronological ordering
+            // This ensures subsequent task assignments appear after existing conversation
+            injectionIndex = conversationCopy.length;
+        } else {
+            // Other types (system, prompt, tool, conversation) inject after last system message
+            injectionIndex = 0;
+            for (let i = conversationCopy.length - 1; i >= 0; i--) {
+                if (conversationCopy[i].role === 'system') {
+                    injectionIndex = i + 1;
+                    break;
+                }
             }
         }
         
@@ -1402,7 +1447,7 @@ TASK COMPLETE: This task has been successfully completed. No further tool calls 
             timestamp: Date.now()
         };
         
-        // Insert the context message
+        // Insert the context message at the determined index
         conversationCopy.splice(injectionIndex, 0, contextMessage);
         
         this.modelLogger.debug(`✅ ${formatting.label} injected into conversation context for agent ${this.agentId}`);
@@ -1841,8 +1886,13 @@ TASK COMPLETE: This task has been successfully completed. No further tool calls 
     private checkForStuckBehavior(): boolean {
         const now = Date.now();
         
-        // Check #1: Consecutive same tool calls with SAME parameters (true stuck loop)
-        if (this.consecutiveSameParamsCount >= this.MAX_CONSECUTIVE_SAME_TOOL) {
+        // Check if current tool is exempt (game tools, etc.)
+        const isExemptTool = this.lastToolName && this.circuitBreakerExemptTools.includes(this.lastToolName);
+        
+        // Check #1a: Consecutive same tool calls with SAME parameters (true stuck loop)
+        // For exempt tools, use a much higher threshold (10 instead of 3)
+        const sameParamsThreshold = isExemptTool ? 10 : this.MAX_CONSECUTIVE_SAME_TOOL;
+        if (this.consecutiveSameParamsCount >= sameParamsThreshold) {
             this.stuckLoopDetections++;
             this.modelLogger.warn(
                 `CIRCUIT BREAKER: Agent stuck calling ${this.lastToolName} with SAME parameters ${this.consecutiveSameParamsCount} consecutive times (detection #${this.stuckLoopDetections})`
@@ -1851,8 +1901,6 @@ TASK COMPLETE: This task has been successfully completed. No further tool calls 
         }
         
         // Check #1b: Consecutive same tool calls with DIFFERENT parameters (might be legitimate, higher threshold)
-        // EXEMPT certain tools that legitimately need multiple calls (e.g., web_navigate for multi-source fetching)
-        const isExemptTool = this.lastToolName && this.MULTI_CALL_EXEMPT_TOOLS.includes(this.lastToolName);
 
         if (!isExemptTool && this.consecutiveSameToolCount >= this.MAX_CONSECUTIVE_SAME_TOOL_WITH_DIFFERENT_PARAMS) {
             this.stuckLoopDetections++;
@@ -1872,18 +1920,23 @@ TASK COMPLETE: This task has been successfully completed. No further tool calls 
         }
         
         // Check #2: Same tool called too frequently within time window with same params
+        // Skip exempt tools (game tools, etc.) which legitimately need repeated calls
         const recentCalls = this.recentToolCalls.filter(
             call => now - call.timestamp <= this.CIRCUIT_BREAKER_WINDOW_MS
         );
         
-        // Count occurrences of each tool + params combination
+        // Count occurrences of each tool + params combination (excluding exempt tools)
         const toolParamsCounts = recentCalls.reduce((acc, call) => {
+            // Skip exempt tools - they can be called frequently during valid gameplay
+            if (this.circuitBreakerExemptTools.includes(call.toolName)) {
+                return acc;
+            }
             const key = `${call.toolName}:${call.paramsHash}`;
             acc[key] = (acc[key] || 0) + 1;
             return acc;
         }, {} as Record<string, number>);
         
-        // Check if any tool+params combination is called too frequently
+        // Check if any non-exempt tool+params combination is called too frequently
         for (const [key, count] of Object.entries(toolParamsCounts)) {
             if (count >= this.MAX_SAME_TOOL_CALLS) {
                 const [toolName] = key.split(':');
@@ -1921,6 +1974,19 @@ TASK COMPLETE: This task has been successfully completed. No further tool calls 
             stuckLoopDetections: this.stuckLoopDetections,
             toolCallFrequency: frequency
         };
+    }
+
+    /**
+     * Reset circuit breaker state for new task
+     * Called when a new task starts to give the agent a fresh context
+     */
+    private resetCircuitBreaker(): void {
+        this.recentToolCalls = [];
+        this.lastToolName = null;
+        this.lastToolParamsHash = null;
+        this.consecutiveSameToolCount = 0;
+        this.consecutiveSameParamsCount = 0;
+        // Note: Don't reset stuckLoopDetections - keep it for debugging/monitoring
     }
 
     // Service getters for advanced usage and testing

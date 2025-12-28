@@ -69,16 +69,19 @@ export interface AgentConfig {
     reconnectDelay?: number;
     requestTimeoutMs?: number; // Added missing property
     useMessageAggregate?: boolean; // Enable message aggregation for high-volume agents
+    disableTaskHandling?: boolean; // Disable automatic task handling (for admin/utility agents that only register MCP servers)
     
     // Control loop properties
     maxObservations?: number;
     cycleInterval?: number;
-    
+    maxIterations?: number;                  // Max LLM iterations per task (default: 10, increase for game scenarios)
+
     // LLM properties
     agentConfigPrompt: string;              // Agent's identity and role configuration prompt (renamed from systemPrompt)
     temperature?: number;
     maxTokens?: number;
     maxHistory?: number;
+    maxMessageSize?: number;                // Max size in bytes for a single message (default: 100KB) - prevents MongoDB 16MB limit errors
     defaultModel?: string;
     llmProvider?: string;                   // e.g., 'openrouter', 'azure-openai', 'openai', 'anthropic'
     enableTooling?: boolean;
@@ -95,6 +98,7 @@ export interface AgentConfig {
     
     // Tool access control
     allowedTools?: string[];
+    circuitBreakerExemptTools?: string[];    // Tools exempt from circuit breaker detection (for game tools, etc.)
     
     // Name resolution and interpretation settings
     commonNames?: string[];                                        // Alternative names/aliases for this agent

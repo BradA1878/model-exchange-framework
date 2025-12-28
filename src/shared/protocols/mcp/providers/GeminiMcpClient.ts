@@ -39,6 +39,9 @@ import {
 } from '../IMcpClient';
 import * as genai from '@google/genai';
 import { extractToolCalls, extractToolCallId, extractTextFromContent, convertContentToText } from '../utils/MessageConverters';
+import { Observable } from 'rxjs';
+import { AgentContext } from '../../../interfaces/AgentContext';
+import { ConversationMessage } from '../../../interfaces/ConversationMessage';
 
 // Import types from Google Gen AI SDK
 // These types are dynamically imported in the initializeProvider method
@@ -506,5 +509,169 @@ export class GeminiMcpClient extends BaseMcpClient {
         } catch (error) {
             throw new Error(`Error sending message to Gemini: ${error instanceof Error ? error.message : String(error)}`);
         }
+    }
+
+    /**
+     * Send message using full agent context
+     * 
+     * This method structures messages for Gemini based on semantic metadata,
+     * ensuring proper chronological ordering of tasks and conversation history.
+     * 
+     * @param context - Complete agent context from SDK
+     * @param options - Additional Gemini-specific options
+     * @returns Observable with Gemini response
+     */
+    public sendWithContext(
+        context: AgentContext,
+        options?: Record<string, any>
+    ): Observable<McpApiResponse> {
+        return new Observable<McpApiResponse>(subscriber => {
+            this.sendWithContextImpl(context, options)
+                .then(response => {
+                    subscriber.next(response);
+                    subscriber.complete();
+                })
+                .catch(error => subscriber.error(error));
+        });
+    }
+
+    /**
+     * Implementation of context-based sending for Gemini
+     */
+    private async sendWithContextImpl(
+        context: AgentContext,
+        options?: Record<string, any>
+    ): Promise<McpApiResponse> {
+        if (!this.genAiClient) {
+            throw new Error('Google Gen AI client not initialized');
+        }
+
+        // Structure messages for Gemini based on context
+        const { systemPrompt, contents } = this.structureMessagesFromContext(context);
+
+        // Model name
+        const modelName = options?.model || this.config.defaultModel || 'gemini-2.0-flash';
+
+        // Set up the request parameters
+        const requestParams: GenerateContentRequest = {
+            model: modelName,
+            contents: contents,
+            systemInstruction: systemPrompt,
+            generationConfig: {
+                temperature: options?.temperature || this.config.temperature || 0.7,
+                maxOutputTokens: options?.maxTokens || this.config.maxTokens || 4096,
+                topK: options?.topK || 40,
+                topP: options?.topP || 0.95
+            }
+        };
+
+        // Add tools if provided
+        if (context.availableTools && context.availableTools.length > 0) {
+            const functionDeclarations = this.convertToFunctionDeclarations(context.availableTools as McpTool[]);
+
+            requestParams.config = {
+                toolConfig: {
+                    functionCallingConfig: {
+                        mode: this.FunctionCallingConfigMode.AUTO,
+                        allowedFunctionNames: functionDeclarations.map((fn: any) => fn.name)
+                    }
+                },
+                tools: [{
+                    functionDeclarations: functionDeclarations
+                }]
+            };
+        }
+
+        // Generate content
+        const response = await this.genAiClient.models.generateContent(requestParams);
+
+        // Convert response to MCP format
+        return this.convertToMcpResponse(response, modelName);
+    }
+
+    /**
+     * Structure messages from AgentContext for Gemini
+     * 
+     * Gemini uses systemInstruction separately, so we return both.
+     * Message ordering:
+     * 1. Conversation history (chronological)
+     * 2. Task prompt (if present) - AFTER conversation for proper ordering
+     * 3. Recent actions (if needed)
+     */
+    private structureMessagesFromContext(context: AgentContext): { systemPrompt: string; contents: Content[] } {
+        // Build system prompt
+        const systemPrompt = [
+            context.systemPrompt,
+            '',
+            `## Your Agent Identity`,
+            `**You are**: ${(context.agentConfig as any).purpose || context.agentConfig.agentId}`,
+            `**Your Agent ID**: ${context.agentId}`,
+            ...(context.agentConfig.capabilities ? [`**Capabilities**: ${context.agentConfig.capabilities.join(', ')}`] : [])
+        ].join('\n');
+
+        const contents: Content[] = [];
+
+        // 1. Conversation history: Filter to actual dialogue and tool results
+        const dialogueMessages = context.conversationHistory.filter(msg => {
+            const layer = msg.metadata?.contextLayer;
+
+            // INCLUDE: SystemLLM messages - they are "held" until the next real prompt
+            // and should be bundled with that prompt to provide coordination insights
+            // (Previously these were skipped, breaking the SystemLLM flow)
+
+            // INCLUDE: Messages with conversation or tool-result layer
+            if (layer === 'conversation' || layer === 'tool-result') {
+                return true;
+            }
+
+            // INCLUDE: Tool role messages
+            if (msg.role === 'tool') {
+                return true;
+            }
+
+            // SKIP: Messages with system/identity/task/action layers
+            if (layer === 'system' || layer === 'identity' || layer === 'task' || layer === 'action') {
+                return false;
+            }
+
+            // INCLUDE: Messages without contextLayer (legacy or direct additions)
+            if (!layer && msg.role !== 'system') {
+                return true;
+            }
+
+            return false;
+        });
+
+        // Convert to Gemini format
+        for (const msg of dialogueMessages) {
+            const role = msg.role === 'assistant' ? 'model' : 'user';
+            contents.push({
+                role,
+                parts: [{ text: msg.content }]
+            });
+        }
+
+        // 2. Task message (if present) - Added AFTER conversation history for chronological ordering
+        if (context.currentTask) {
+            contents.push({
+                role: 'user',
+                parts: [{ text: `## Current Task\n${context.currentTask.description}` }]
+            });
+        }
+
+        // 3. Recent actions (if needed for context)
+        if (context.recentActions.length > 0) {
+            const actionsContent = [
+                `## Your Recent Actions`,
+                ...context.recentActions.map(a => `- ${a.action}${a.result ? `: ${a.result}` : ''}`)
+            ].join('\n');
+
+            contents.push({
+                role: 'user',
+                parts: [{ text: actionsContent }]
+            });
+        }
+
+        return { systemPrompt, contents };
     }
 }

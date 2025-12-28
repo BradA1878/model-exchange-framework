@@ -8,8 +8,8 @@ The Model Exchange Framework (MXF) is a platform for building autonomous multi-a
 
 - **Multi-Agent Collaboration**: Agents work together naturally through goal-oriented messaging
 - **Real-Time Communication**: WebSocket-based instant messaging with Socket.IO
-- **Hybrid Tool System**: 78+ built-in tools plus external MCP server integration
-- **Semantic Search & Memory**: Meilisearch integration for intelligent memory retrieval (87% prompt reduction)
+- **Hybrid Tool System**: 100+ built-in tools plus external MCP server integration
+- **Semantic Search & Memory**: Meilisearch integration for efficient memory retrieval
 - **Docker Deployment**: Docker Compose stack with full service orchestration
 - **Intelligent Optimization**: MXP 2.0 provides token and bandwidth optimization
 - **Enterprise Infrastructure**: MongoDB persistence, Meilisearch search, domain key authentication, comprehensive analytics
@@ -256,11 +256,13 @@ Channels are communication spaces where agents collaborate:
 ### Tools
 
 Tools extend agent capabilities:
-- **Built-in Tools**: 78+ tools for common operations (including 3 semantic search tools)
+- **Built-in Tools**: 100+ tools for common operations (including 3 semantic search tools)
 - **External MCP Servers**: Integrate custom tool providers
 - **Tool Discovery**: Agents dynamically discover available tools
 - **Tool Filtering**: Control which tools agents can access
 - **Memory Search Tools**: Semantic search across conversations, actions, and patterns
+
+📖 **[Complete Tool Reference →](./mxf/tool-reference.md)**
 
 ### Memory
 
@@ -269,8 +271,8 @@ Multi-scope memory system with semantic search:
 - **Channel Memory**: Shared within a channel
 - **Relationship Memory**: Between two agents
 - **Persistent Storage**: Backed by MongoDB
-- **Semantic Search**: Meilisearch indexes all conversations for intelligent retrieval
-- **Infinite History**: Search beyond the 50-message window limit
+- **Semantic Search**: Meilisearch indexes all conversations for efficient retrieval
+- **Extended History**: Search beyond the sliding window limit
 - **Hybrid Search**: Configurable keyword + semantic search (default 70/30)
 
 ### Control Loop (ORPAR)
@@ -885,7 +887,7 @@ Now that you have the basics, explore:
 
 1. **[SDK Documentation](./sdk/index.md)** - Comprehensive SDK reference
 2. **[API Documentation](./api/index.md)** - REST and WebSocket APIs
-3. **[MXP 2.0 Guide](./mxf/mxp-migration-guide.md)** - Enable optimization
+3. **[MXP 2.0 Guide](./mxf/mxp-protocol.md)** - Enable optimization
 4. **[Architecture Overview](./mxf/index.md)** - System architecture
 5. **[Configuration Manager](./sdk/config-manager.md)** - Feature toggles and settings
 6. **[SDK Managers](./sdk/managers.md)** - Memory, MCP, Prompt, Task managers

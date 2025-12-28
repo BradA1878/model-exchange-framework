@@ -1,0 +1,1 @@
+../external-mcp-registration/simple-custom-mcp-server.ts

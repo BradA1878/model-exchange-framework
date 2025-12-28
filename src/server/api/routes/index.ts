@@ -90,6 +90,11 @@ router.get('/channels/domain/:domain', channelController.listChannelsByDomain);
 router.get('/channels/memory/:channelId', channelController.getOrCreateChannelMemory);
 router.patch('/channels/memory/:channelId', channelController.updateChannelMemory);
 
+// Channel MCP server management routes
+router.post('/channels/:channelId/mcp-servers', channelController.registerChannelMcpServer);
+router.get('/channels/:channelId/mcp-servers', channelController.listChannelMcpServers);
+router.delete('/channels/:channelId/mcp-servers/:serverId', channelController.unregisterChannelMcpServer);
+
 // Task management routes
 router.use('/tasks', taskRoutes);
 

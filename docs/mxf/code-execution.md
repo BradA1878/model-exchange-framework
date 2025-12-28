@@ -2,7 +2,7 @@
 
 ## Overview
 
-The **CodeExecutionSandboxService** enables agents to execute JavaScript and TypeScript code in secure, isolated sandboxes. This feature reduces multi-step workflow latency by 60-75% by eliminating model round-trips for data transformations, calculations, and complex control flow operations.
+The **CodeExecutionSandboxService** enables agents to execute JavaScript and TypeScript code in secure, isolated sandboxes. This feature reduces multi-step workflow latency by eliminating model round-trips for data transformations, calculations, and complex control flow operations.
 
 ## Architecture
 
@@ -284,8 +284,8 @@ sandbox.updateConfig({
 
 | Operation | Latency | Notes |
 |-----------|---------|-------|
-| Validation | <50ms | BLOCKING |
-| Pattern detection | <10ms | AST analysis |
+| Validation | Low latency | BLOCKING |
+| Pattern detection | Low latency | AST analysis |
 | Simple execution | <20ms | No complex operations |
 | Data processing | <100ms | Array operations |
 | Complex execution | <500ms | Multiple operations |

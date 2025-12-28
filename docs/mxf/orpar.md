@@ -177,15 +177,15 @@ interface Reflection {
 
 ## Context Persistence
 
-ORPAR maintains context across all phases through `OraprContext`:
+ORPAR maintains context across all phases through `OrparContext`:
 
 ```typescript
-interface OraprContext {
+interface OrparContext {
     id: string;
     agentId: string;
     channelId: string;
     cycleId: string;
-    phase: OraprOperationType;
+    phase: OrparOperationType;
     timestamp: number;
     previousPhaseResults?: {
         observation?: any;
@@ -203,8 +203,8 @@ interface OraprContext {
     };
     metadata: {
         startTime: number;
-        phaseCompletionTimes: Map<OraprOperationType, number>;
-        modelUsage: Map<OraprOperationType, string>;
+        phaseCompletionTimes: Map<OrparOperationType, number>;
+        modelUsage: Map<OrparOperationType, string>;
         errors: string[];
     };
 }
@@ -284,12 +284,12 @@ ORPAR integrates with MXF's pattern learning system:
 
 ```typescript
 // Complete ORPAR cycles are tracked for pattern analysis
-if (phase === 'reflection' && hasCompleteOrapr) {
+if (phase === 'reflection' && hasCompleteOrpar) {
     patternMemoryService.analyzeSequenceForPatterns(
         channelId,
         agentId,
         ['observation', 'reasoning', 'planning', 'action', 'reflection'],
-        { cycle: 'complete_orapr', timestamp: Date.now() }
+        { cycle: 'complete_orpar', timestamp: Date.now() }
     );
 }
 ```

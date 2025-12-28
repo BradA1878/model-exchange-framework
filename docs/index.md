@@ -11,6 +11,7 @@ Welcome to the comprehensive technical documentation for the Model Exchange Fram
 ### 📚 **Core Documentation**
 - **[SDK Reference](./sdk/index.md)** - TypeScript SDK for building agents
 - **[API Reference](./api/index.md)** - REST and WebSocket APIs
+- **[Tool Reference](./mxf/tool-reference.md)** - Complete guide to 100+ built-in tools
 - **[Core Architecture](./mxf/index.md)** - System design and patterns
 - **[Dashboard Guide](./dashboard/index.md)** - Web interface documentation (⚠️ in development)
 
@@ -30,7 +31,7 @@ Welcome to the comprehensive technical documentation for the Model Exchange Fram
 - **[Configuration Management](./sdk/config-manager.md)** - Feature toggles, LLM selection
 - **[SDK Managers](./sdk/managers.md)** - MCP, Memory, Prompt, Task managers
 - **[SDK Handlers](./sdk/handlers.md)** - Control loop, tools, messaging
-- **[Event System](./eventbus-singleton-architecture.md)** - Event-driven architecture
+- **[Event System](./sdk/events.md)** - Event-driven architecture
 
 ---
 
@@ -42,9 +43,9 @@ The **Model Exchange Framework (MXF)** is a framework for building autonomous mu
 
 - **🤖 Multi-Agent Collaboration**: Agents work together naturally through goal-oriented task prompting
 - **⚡ Real-Time Communication**: WebSocket-based messaging with Socket.IO
-- **🛠️ Hybrid Tool System**: 81+ built-in tools plus external MCP server integration (including 3 new memory search tools)
-- **🔍 Semantic Search**: Meilisearch integration for intelligent memory retrieval and 87% prompt reduction
-- **🧠 ORPAR Control Loop**: Structured cognitive cycle (Observation, Reasoning, Action, Planning, Reflection)
+- **Hybrid Tool System**: 100+ built-in tools plus external MCP server integration (including 3 memory search tools)
+- **🔍 Semantic Search**: Meilisearch integration for intelligent memory retrieval
+- **🧠 ORPAR Control Loop**: Structured cognitive cycle (Observation, Reasoning, Planning, Action, Reflection)
 - **💾 Multi-Scope Memory**: Agent-private, channel-shared, and relationship memory with semantic search
 - **🐳 Docker Deployment**: Docker Compose stack with full service orchestration
 - **📊 Enterprise Infrastructure**: MongoDB persistence, Meilisearch search, Redis caching, JWT authentication, comprehensive analytics, optional n8n workflow integration
@@ -54,9 +55,9 @@ The **Model Exchange Framework (MXF)** is a framework for building autonomous mu
 - **MXP 2.0 Protocol**: Token and bandwidth optimization
 - **SystemLLM Integration**: AI-powered task assignment and reasoning
 - **Pattern Learning**: Cross-agent knowledge sharing with ML-based predictions
-- **Proactive Validation**: Pre-execution validation with <50ms latency, risk assessment, and multi-level caching
-- **Auto-Correction System**: Intelligent parameter correction with >80% success rate and safety guards
-- **Error Prediction**: ML-based error prediction with >70% accuracy using ensemble models
+- **Proactive Validation**: Pre-execution validation with low latency, risk assessment, and multi-level caching
+- **Auto-Correction System**: Intelligent parameter correction with safety guards
+- **Error Prediction**: ML-based error prediction using ensemble models
 - **Configurable Security**: Four security levels (standard → enhanced → regulated → classified)
 
 ## Documentation Structure
@@ -106,11 +107,11 @@ The **Model Exchange Framework (MXF)** is a framework for building autonomous mu
 MXF now includes **Meilisearch integration** for semantic search capabilities:
 
 **Key Features:**
-- **3 New Memory Search Tools**: `memory_search_conversations`, `memory_search_actions`, `memory_search_patterns`
-- **87% Prompt Reduction**: Intelligent context retrieval reduces token usage dramatically
+- **Memory Search Tools**: `memory_search_conversations`, `memory_search_actions`, `memory_search_patterns`
+- **Intelligent Context Retrieval**: Semantic search reduces token usage by retrieving only relevant context
 - **Hybrid Search**: Configurable keyword + semantic search (default 70% semantic)
 - **OpenAI Embeddings**: Using text-embedding-3-small for semantic understanding
-- **Sub-50ms Latency**: Optimized for real-time agent queries
+- **Fast Queries**: Optimized for real-time agent queries
 - **Automatic Indexing**: All conversations and tool executions indexed in real-time
 
 📖 **[Learn about Meilisearch Integration →](./meilisearch-integration.md)**
@@ -135,11 +136,11 @@ Comprehensive error prevention and correction system:
 
 **Capabilities:**
 - **Proactive Validation**: Pre-execution checks with risk assessment
-- **Auto-Correction**: >80% success rate in fixing parameter errors
-- **ML Error Prediction**: >70% accuracy in predicting failures
+- **Auto-Correction**: Intelligent parameter correction with pattern learning
+- **ML Error Prediction**: Machine learning models predict and prevent failures
 - **Pattern Learning**: Cross-agent knowledge sharing
 - **Multi-Level Caching**: Memory → Redis → MongoDB
-- **Performance Optimization**: <50ms validation latency
+- **Performance Optimization**: Low-latency validation
 
 📖 **[Proactive Validation API →](./api/proactive-validation.md)** | **[Auto-Correction API →](./api/auto-correction.md)**
 
@@ -148,8 +149,8 @@ Comprehensive error prevention and correction system:
 MXF includes **MXP 2.0**, a modular optimization suite that delivers measurable performance improvements:
 
 **Benefits:**
-- **60-80% reduction in LLM token usage** through AI-powered context compression
-- **70-90% reduction in network bandwidth** via binary encoding and enhanced aggregation
+- **Token optimization** through AI-powered context compression
+- **Bandwidth optimization** via binary encoding and enhanced aggregation
 - **Progressive security architecture** with four security levels
 - **Zero breaking changes** with full backward compatibility
 - **Real-time analytics** with cost calculation and performance tracking
@@ -259,9 +260,9 @@ await agent.connect();
 
 📖 **[Complete Getting Started Guide →](./getting-started.md)**
 
-## Example Demos
+## Example Projects
 
-MXF includes comprehensive demos:
+MXF includes comprehensive demos and examples:
 
 ```bash
 # First Contact Demo - 6 agents in first contact scenario
@@ -269,7 +270,16 @@ npm run demo:first-contact
 
 # Interview Scheduling - Multi-agent coordination
 npm run demo:interview
+
+# Fog of War Strategy Game - 8 agents in competitive game
+npm run demo:fog-of-war
+
+# AI Game Demos - Tic-Tac-Toe and Go Fish
+npm run demo:tic-tac-toe
+npm run demo:go-fish
 ```
+
+📖 **[View All Example Documentation →](./examples/first-contact.md)**
 
 ## Architecture Highlights
 
@@ -326,7 +336,7 @@ handler: async (input, context): Promise<McpToolHandlerResult> => {
 
 - **📖 Full Documentation**: Browse sections above
 - **💻 GitHub Repository**: [Create an issue](https://github.com/BradA1878/model-exchange-framework/issues)
-- **🎯 Examples**: See `/examples` directory
+- **🎯 Examples**: See [Example Projects](./examples/first-contact.md) documentation
 - **📝 Getting Started**: [Complete guide](./getting-started.md)
 
 ## Next Steps

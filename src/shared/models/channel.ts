@@ -83,7 +83,21 @@ export interface IChannel extends Document {
         customData?: Record<string, any>; // Any custom shared data
         updatedAt?: Date;                 // When memory was last updated
     };
-    
+
+    // Channel-scoped MCP servers (shared by all agents in channel)
+    mcpServers?: {
+        servers: Array<{
+            id: string;                   // Unique server ID
+            name: string;                 // Display name
+            config: Record<string, any>;  // Full server configuration
+            registeredBy: string;         // Agent ID who registered
+            registeredAt: Date;           // When registered
+            status: 'stopped' | 'starting' | 'running' | 'error';
+            keepAliveMinutes?: number;    // Keep alive after last agent leaves
+        }>;
+        updatedAt?: Date;                 // When server list was last updated
+    };
+
     // Verification details (migration from channelRegistry)
     verified: boolean;
     verificationMethod?: 'dns' | 'email' | 'file' | 'token';
@@ -186,7 +200,47 @@ const ChannelSchema: Schema = new Schema(
                 default: Date.now
             }
         },
-        
+
+        // Channel-scoped MCP servers
+        mcpServers: {
+            servers: [{
+                id: {
+                    type: String,
+                    required: true
+                },
+                name: {
+                    type: String,
+                    required: true
+                },
+                config: {
+                    type: Schema.Types.Mixed,
+                    required: true
+                },
+                registeredBy: {
+                    type: String,
+                    required: true,
+                    ref: 'Agent'
+                },
+                registeredAt: {
+                    type: Date,
+                    default: Date.now
+                },
+                status: {
+                    type: String,
+                    enum: ['stopped', 'starting', 'running', 'error'],
+                    default: 'stopped'
+                },
+                keepAliveMinutes: {
+                    type: Number,
+                    default: 5
+                }
+            }],
+            updatedAt: {
+                type: Date,
+                default: Date.now
+            }
+        },
+
         // Verification fields (from channelRegistry)
         verified: {
             type: Boolean,
@@ -209,6 +263,20 @@ const ChannelSchema: Schema = new Schema(
         metadata: {
             type: Schema.Types.Mixed,
             default: {}
+        },
+        
+        // Channel-level tool access control
+        // Empty array means no restrictions (agents can use any tool in their allowedTools)
+        // Non-empty array restricts agents to only use tools that are in BOTH the channel's and agent's allowedTools
+        allowedTools: {
+            type: [String],
+            default: []
+        },
+        
+        // Disable SystemLLM for this channel (game channels, custom orchestration, etc.)
+        systemLlmEnabled: {
+            type: Boolean,
+            default: true
         }
     },
     {

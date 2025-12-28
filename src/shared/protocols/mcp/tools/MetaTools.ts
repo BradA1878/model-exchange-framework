@@ -688,6 +688,10 @@ export const task_complete = {
                 type: 'string',
                 description: 'Summary of the work completed and results achieved'
             },
+            result: {
+                type: 'string',
+                description: 'Alternative to summary - the result of the completed work'
+            },
             success: {
                 type: 'boolean',
                 description: 'Whether the task was completed successfully (true) or failed (false)',
@@ -703,10 +707,12 @@ export const task_complete = {
                 description: 'Optional suggestions for follow-up work or next steps'
             }
         },
-        required: ['summary']
+        // No required fields - accept any reasonable input
+        required: []
     },
     handler: async (input: {
-        summary: string;
+        summary?: string;
+        result?: string;
         success?: boolean;
         details?: Record<string, any>;
         nextSteps?: string;
@@ -717,15 +723,17 @@ export const task_complete = {
     }) => {
         const startTime = Date.now();
         
+        // Accept either 'summary' or 'result' parameter (LLMs may use either)
+        // Fall back to a default if neither is provided
+        const summaryText = input.summary || input.result || 'Task completed';
         
-        // Validate inputs
-        validator.assertIsNonEmptyString(input.summary, 'summary is required');
+        // Validate context (but be forgiving on input)
         validator.assertIsNonEmptyString(context.agentId, 'agentId is required');
         validator.assertIsNonEmptyString(context.channelId, 'channelId is required');
         
         // Prepare completion data
         const completionData = {
-            summary: input.summary,
+            summary: summaryText,
             success: input.success !== false, // Default to true
             details: input.details || {},
             nextSteps: input.nextSteps,

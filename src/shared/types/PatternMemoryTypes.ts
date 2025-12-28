@@ -39,7 +39,7 @@ export enum MemoryLayer {
 /**
  * Types of patterns that can be recognized and stored
  */
-export type PatternType = 'orapr_sequence' | 'tool_chain' | 'collaboration_flow' | 'error_recovery';
+export type PatternType = 'orpar_sequence' | 'tool_chain' | 'collaboration_flow' | 'error_recovery';
 
 /**
  * Pattern memory entry for successful workflows within channels
@@ -137,7 +137,7 @@ export interface WorkflowMemoryEntry {
     description: string;
     
     /** ORPAR sequence definition */
-    oraprSequence: {
+    orparSequence: {
         /** Observation patterns */
         observation: {
             expectedInputs: string[];

@@ -28,7 +28,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import { ConnectionStatus } from '../shared/types/types';
 import { ChannelConnectionConfig } from '../shared/interfaces/ChannelConnectionConfig';
-import { buildServerUrl } from './config';
+import { buildServerUrl, getServerConfig } from './config';
 import { Logger } from '../shared/utils/Logger';
 import { Events } from '../shared/events/EventNames';
 import { EventBus } from '../shared/events/EventBus';
@@ -164,10 +164,10 @@ export class MxfClient {
             sdkDomainKey: config.sdkDomainKey,
             
             // Optional fields with defaults
-            host: config.host || 'localhost',
-            port: config.port || 3001,
-            secure: config.secure ?? false,
-            apiUrl: config.apiUrl || process.env.API_URL || `${buildServerUrl()}/api`,
+            host: config.host || getServerConfig().host,
+            port: config.port || getServerConfig().port,
+            secure: config.secure ?? getServerConfig().secure,
+            apiUrl: config.apiUrl || process.env.MXF_API_URL || `${buildServerUrl()}/api`,
             apiKey: config.apiKey || '',
             autoReconnect: config.autoReconnect ?? true,
             reconnectAttempts: config.reconnectAttempts ?? 5,
@@ -255,8 +255,10 @@ export class MxfClient {
         this.mcpToolHandlers = new McpToolHandlers(this.channelId, this.agentId, this.mxfService);
         this.mcpResourceHandlers = new McpResourceHandlers(this.channelId, this.agentId);
         
-        // Initialize task handlers
-        this.taskHandlers = new TaskHandlers(this.channelId, this.agentId);
+        // Initialize task handlers (unless disabled for utility agents)
+        if (!config.disableTaskHandling) {
+            this.taskHandlers = new TaskHandlers(this.channelId, this.agentId);
+        }
         
         // Initialize tool service
         this.toolService = new MxfToolService(this.agentId, this.channelId);
@@ -1627,6 +1629,239 @@ export class MxfClient {
 
             } catch (error) {
                 this.logger.error(`Error unregistering external server: ${error}`);
+                reject(error);
+            }
+        });
+    }
+
+    /**
+     * Register a channel-scoped MCP server
+     *
+     * This allows all agents in a channel to share the same MCP server instance.
+     * The server is automatically started when the first agent joins and stopped
+     * after a keepAlive period when the last agent leaves.
+     *
+     * @param serverConfig Channel server configuration
+     * @returns Promise resolving to registration result
+     * @public
+     *
+     * @example
+     * ```typescript
+     * await client.registerChannelMcpServer({
+     *   id: 'chess-game',
+     *   name: 'Chess Game Server',
+     *   command: 'npx',
+     *   args: ['-y', '@mcp/chess'],
+     *   keepAliveMinutes: 10
+     * });
+     * ```
+     */
+    public async registerChannelMcpServer(serverConfig: {
+        id: string;
+        name: string;
+        command?: string;
+        args?: string[];
+        transport?: 'stdio' | 'http';
+        url?: string;
+        autoStart?: boolean;
+        environmentVariables?: Record<string, string>;
+        restartOnCrash?: boolean;
+        maxRestartAttempts?: number;
+        keepAliveMinutes?: number;
+    }): Promise<{ success: boolean; toolsDiscovered?: string[] }> {
+        await this.ensureConnected();
+
+        if (!this.channelId) {
+            throw new Error('Cannot register channel MCP server: agent not in a channel');
+        }
+
+        return new Promise((resolve, reject) => {
+            try {
+                const { McpEvents } = require('../shared/events/event-definitions/McpEvents');
+
+                let registrationCompleted = false;
+
+                // Set up handler for registration response
+                const registrationSubscription = EventBus.client.on(McpEvents.CHANNEL_SERVER_REGISTERED, (payload: any) => {
+                    if (payload.data?.serverId === serverConfig.id &&
+                        payload.data?.scopeId === this.channelId &&
+                        !registrationCompleted) {
+
+                        if (!payload.data?.success) {
+                            registrationSubscription.unsubscribe();
+                            errorSubscription.unsubscribe();
+                            toolsSubscription.unsubscribe();
+                            this.logger.error(`Failed to register channel server ${serverConfig.name}`);
+                            resolve({ success: false });
+                        }
+                        // Don't resolve yet - wait for tools to be discovered
+                    }
+                });
+
+                // Set up handler for tool discovery
+                const toolsSubscription = EventBus.client.on(Events.Mcp.EXTERNAL_SERVER_TOOLS_DISCOVERED, (payload: any) => {
+                    if (!registrationCompleted) {
+                        const discoveredTools = payload.data?.tools?.map((t: any) => t.name) || [];
+
+                        registrationCompleted = true;
+                        registrationSubscription.unsubscribe();
+                        errorSubscription.unsubscribe();
+                        toolsSubscription.unsubscribe();
+
+                        // Reload tool cache
+                        if (this.toolService) {
+                            this.toolService.loadTools(undefined, true).then(() => {
+                                resolve({ success: true, toolsDiscovered: discoveredTools });
+                            }).catch(err => {
+                                this.logger.error(`❌ Failed to refresh tool cache: ${err}`);
+                                resolve({ success: true, toolsDiscovered: discoveredTools });
+                            });
+                        } else {
+                            resolve({ success: true, toolsDiscovered: discoveredTools });
+                        }
+                    }
+                });
+
+                // Set up error handler
+                const errorSubscription = EventBus.client.on(McpEvents.CHANNEL_SERVER_REGISTRATION_FAILED, (payload: any) => {
+                    if (payload.data?.serverId === serverConfig.id &&
+                        payload.data?.scopeId === this.channelId &&
+                        !registrationCompleted) {
+
+                        registrationCompleted = true;
+                        registrationSubscription.unsubscribe();
+                        errorSubscription.unsubscribe();
+                        toolsSubscription.unsubscribe();
+
+                        this.logger.error(`Channel server registration failed: ${payload.data?.error || 'Unknown error'}`);
+                        reject(new Error(payload.data?.error || 'Channel server registration failed'));
+                    }
+                });
+
+                // Emit registration request
+                const registrationPayload = {
+                    eventId: uuidv4(),
+                    eventType: McpEvents.CHANNEL_SERVER_REGISTER,
+                    timestamp: Date.now(),
+                    agentId: this.config.agentId || 'sdk-user',
+                    channelId: this.channelId,
+                    data: {
+                        ...serverConfig,
+                        channelId: this.channelId
+                    }
+                };
+
+                EventBus.client.emit(McpEvents.CHANNEL_SERVER_REGISTER, registrationPayload);
+
+                // Timeout after 30 seconds
+                setTimeout(() => {
+                    if (!registrationCompleted) {
+                        registrationCompleted = true;
+                        registrationSubscription.unsubscribe();
+                        errorSubscription.unsubscribe();
+                        toolsSubscription.unsubscribe();
+                        reject(new Error('Channel server registration timeout after 30 seconds'));
+                    }
+                }, 30000);
+
+            } catch (error) {
+                this.logger.error(`Error registering channel server: ${error}`);
+                reject(error);
+            }
+        });
+    }
+
+    /**
+     * List channel-scoped MCP servers
+     *
+     * Returns all MCP servers registered for the current channel.
+     * Uses REST API for simple read operation.
+     *
+     * @param channelId Optional channel ID (defaults to current channel)
+     * @returns Promise resolving to list of channel servers
+     * @public
+     */
+    public async listChannelMcpServers(channelId?: string): Promise<any[]> {
+        await this.ensureConnected();
+
+        const targetChannelId = channelId || this.channelId;
+        if (!targetChannelId) {
+            throw new Error('Cannot list channel MCP servers: no channel specified');
+        }
+
+        if (!this.apiService) {
+            throw new Error('API service not initialized');
+        }
+
+        try {
+            // Use REST API for read operation
+            const response = await this.apiService.get(`/channels/${targetChannelId}/mcp-servers`);
+            return response.servers || [];
+        } catch (error) {
+            this.logger.error(`Error listing channel servers: ${error}`);
+            throw error;
+        }
+    }
+
+    /**
+     * Unregister a channel-scoped MCP server
+     *
+     * Stops and removes a channel-scoped MCP server from MXF.
+     *
+     * @param serverId ID of the server to unregister
+     * @param channelId Optional channel ID (defaults to current channel)
+     * @returns Promise resolving to true if unregistration was successful
+     * @public
+     */
+    public async unregisterChannelMcpServer(serverId: string, channelId?: string): Promise<boolean> {
+        await this.ensureConnected();
+
+        const targetChannelId = channelId || this.channelId;
+        if (!targetChannelId) {
+            throw new Error('Cannot unregister channel MCP server: no channel specified');
+        }
+
+        return new Promise((resolve, reject) => {
+            try {
+                const { McpEvents } = require('../shared/events/event-definitions/McpEvents');
+
+                // Set up one-time handler for response
+                const subscription = EventBus.client.on(McpEvents.CHANNEL_SERVER_UNREGISTERED, (payload: any) => {
+                    if (payload.data?.serverId === serverId && payload.data?.scopeId === targetChannelId) {
+                        subscription.unsubscribe();
+
+                        if (payload.data?.success) {
+                            resolve(true);
+                        } else {
+                            this.logger.error(`Failed to unregister channel server ${serverId}: ${payload.data?.error || 'Unknown error'}`);
+                            resolve(false);
+                        }
+                    }
+                });
+
+                // Emit unregistration request
+                const unregistrationPayload = {
+                    eventId: uuidv4(),
+                    eventType: McpEvents.CHANNEL_SERVER_UNREGISTER,
+                    timestamp: Date.now(),
+                    agentId: this.config.agentId || 'sdk-user',
+                    channelId: targetChannelId,
+                    data: {
+                        serverId,
+                        channelId: targetChannelId
+                    }
+                };
+
+                EventBus.client.emit(McpEvents.CHANNEL_SERVER_UNREGISTER, unregistrationPayload);
+
+                // Timeout after 30 seconds
+                setTimeout(() => {
+                    subscription.unsubscribe();
+                    reject(new Error('Channel server unregistration timeout after 30 seconds'));
+                }, 30000);
+
+            } catch (error) {
+                this.logger.error(`Error unregistering channel server: ${error}`);
                 reject(error);
             }
         });

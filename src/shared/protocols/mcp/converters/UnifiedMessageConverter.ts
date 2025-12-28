@@ -56,7 +56,7 @@ export class UnifiedMessageConverter implements IMessageConverter {
     public registerAdapter(adapter: IMessageAdapter): void {
         const format = adapter.getFormat();
         if (this.adapters.has(format)) {
-            this.logger.warn(`Overwriting existing adapter for format: ${format}`);
+            //this.logger.warn(`Overwriting existing adapter for format: ${format}`);
         }
         this.adapters.set(format, adapter);
     }

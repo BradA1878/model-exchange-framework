@@ -114,7 +114,12 @@ export interface AgentCreationConfig {
     maxTokens?: number;
     reasoning?: LlmReasoningConfig;  // Claude extended thinking: { enabled: true, effort: 'medium', maxTokens: 10000 }
     allowedTools?: string[];
+    circuitBreakerExemptTools?: string[];  // Tools exempt from circuit breaker detection (for game tools, etc.)
     useMessageAggregate?: boolean;
+    maxIterations?: number;  // Max LLM iterations per task (default: 10, increase for game scenarios)
+    
+    // Optional behavioral settings
+    disableTaskHandling?: boolean;  // Disable automatic task handling (for utility agents that only register MCP servers)
     
     // Optional MXP settings
     mxpEnabled?: boolean;
@@ -127,7 +132,7 @@ export interface AgentCreationConfig {
  */
 export class MxfSDK {
     private config: MxfSDKConfig;
-    private socket: SocketIOClient.Socket | null = null;
+    private socket: ReturnType<typeof socketIO> | null = null;
     private authenticated: boolean = false;
     private userToken: string | null = null;
     private agents: Map<string, MxfAgent> = new Map();
@@ -271,7 +276,11 @@ export class MxfSDK {
             maxTokens: config.maxTokens,
             reasoning: config.reasoning,
             allowedTools: config.allowedTools,
+            circuitBreakerExemptTools: config.circuitBreakerExemptTools,
             useMessageAggregate: config.useMessageAggregate,
+            maxIterations: config.maxIterations,
+            // Pass through behavioral settings
+            disableTaskHandling: config.disableTaskHandling,
             // Pass through MXP settings
             mxpEnabled: config.mxpEnabled,
             mxpPreferredFormat: config.mxpPreferredFormat,
@@ -326,7 +335,10 @@ export class MxfSDK {
             requireApproval = false,
             maxAgents = 100,
             allowAnonymous = false,
-            metadata = {}
+            metadata = {},
+            allowedTools = [],
+            systemLlmEnabled = true,
+            mcpServers = []
         } = config;
 
         return new Promise((resolve, reject) => {
@@ -335,11 +347,22 @@ export class MxfSDK {
             }, 10000);
 
             // Listen for success
-            const onCreated = (payload: any) => {
+            const onCreated = async (payload: any) => {
                 if (payload.channelId === channelId) {
                     clearTimeout(timeout);
                     this.socket?.off(Events.Channel.CREATED, onCreated);
                     this.socket?.off(Events.Channel.CREATION_FAILED, onFailed);
+                    
+                    // Register MCP servers if provided
+                    if (mcpServers.length > 0) {
+                        for (const serverConfig of mcpServers) {
+                            try {
+                                await this.registerChannelMcpServer(channelId, serverConfig);
+                            } catch (error) {
+                                moduleLogger.error(`Failed to register MCP server ${serverConfig.id}: ${error}`);
+                            }
+                        }
+                    }
                     
                     // Create and return channel monitor
                     const channelMonitor = new MxfChannelMonitor(channelId);
@@ -360,7 +383,7 @@ export class MxfSDK {
             this.socket!.on(Events.Channel.CREATED, onCreated);
             this.socket!.on(Events.Channel.CREATION_FAILED, onFailed);
 
-            // Emit channel creation event with full config
+            // Emit channel creation event with full config including new fields
             const payloadData = {
                 name,
                 description,
@@ -368,7 +391,9 @@ export class MxfSDK {
                 requireApproval,
                 maxAgents,
                 allowAnonymous,
-                metadata
+                metadata,
+                allowedTools,
+                systemLlmEnabled
             };
 
             const payload = createBaseEventPayload(
@@ -379,6 +404,134 @@ export class MxfSDK {
             );
 
             this.socket!.emit(Events.Channel.CREATE, payload);
+        });
+    }
+
+    /**
+     * Register an MCP server for a channel via EventBus
+     * 
+     * This allows registering MCP servers at the SDK level without requiring an agent.
+     * 
+     * @param channelId Channel identifier
+     * @param serverConfig MCP server configuration
+     * @returns Promise resolving to registration result
+     */
+    async registerChannelMcpServer(channelId: string, serverConfig: {
+        id: string;
+        name: string;
+        command?: string;
+        args?: string[];
+        transport?: 'stdio' | 'http';
+        url?: string;
+        autoStart?: boolean;
+        environmentVariables?: Record<string, string>;
+        restartOnCrash?: boolean;
+        keepAliveMinutes?: number;
+    }): Promise<{ success: boolean; toolsDiscovered?: string[] }> {
+        if (!this.socket || !this.socket.connected) {
+            throw new Error('SDK socket not connected. Call sdk.connect() first.');
+        }
+
+        const { McpEvents } = require('../shared/events/event-definitions/McpEvents');
+        const socket = this.socket;
+
+        return new Promise((resolve, reject) => {
+            let registrationCompleted = false;
+
+            // Handler for successful registration
+            const registrationHandler = (payload: any) => {
+                if (payload.data?.serverId === serverConfig.id &&
+                    payload.data?.scopeId === channelId &&
+                    !registrationCompleted) {
+                    registrationCompleted = true;
+                    socket.off(McpEvents.CHANNEL_SERVER_REGISTERED, registrationHandler);
+                    socket.off(McpEvents.CHANNEL_SERVER_REGISTRATION_FAILED, errorHandler);
+
+                    const discoveredTools = payload.data?.tools?.map((t: any) => t.name) || [];
+                    resolve({ success: true, toolsDiscovered: discoveredTools });
+                }
+            };
+
+            // Handler for registration failure
+            const errorHandler = (payload: any) => {
+                if (payload.data?.serverId === serverConfig.id && !registrationCompleted) {
+                    registrationCompleted = true;
+                    socket.off(McpEvents.CHANNEL_SERVER_REGISTERED, registrationHandler);
+                    socket.off(McpEvents.CHANNEL_SERVER_REGISTRATION_FAILED, errorHandler);
+
+                    reject(new Error(payload.data?.error || 'Channel server registration failed'));
+                }
+            };
+
+            socket.on(McpEvents.CHANNEL_SERVER_REGISTERED, registrationHandler);
+            socket.on(McpEvents.CHANNEL_SERVER_REGISTRATION_FAILED, errorHandler);
+
+            // Emit registration request via socket (EventBus pattern)
+            const registrationPayload = {
+                eventId: uuidv4(),
+                eventType: McpEvents.CHANNEL_SERVER_REGISTER,
+                timestamp: Date.now(),
+                agentId: this.userId,
+                channelId: channelId,
+                data: {
+                    ...serverConfig,
+                    channelId: channelId
+                }
+            };
+
+            socket.emit(McpEvents.CHANNEL_SERVER_REGISTER, registrationPayload);
+
+            // Timeout after 30 seconds
+            setTimeout(() => {
+                if (!registrationCompleted) {
+                    registrationCompleted = true;
+                    socket.off(McpEvents.CHANNEL_SERVER_REGISTERED, registrationHandler);
+                    socket.off(McpEvents.CHANNEL_SERVER_REGISTRATION_FAILED, errorHandler);
+                    reject(new Error('Channel server registration timeout after 30 seconds'));
+                }
+            }, 30000);
+        });
+    }
+
+    /**
+     * Unregister an MCP server from a channel
+     * 
+     * @param channelId Channel identifier
+     * @param serverId Server identifier
+     * @returns Promise resolving to true if successful
+     */
+    async unregisterChannelMcpServer(channelId: string, serverId: string): Promise<boolean> {
+        if (!this.socket || !this.socket.connected) {
+            throw new Error('SDK socket not connected. Call sdk.connect() first.');
+        }
+
+        const { McpEvents } = require('../shared/events/event-definitions/McpEvents');
+        const socket = this.socket;
+
+        return new Promise((resolve, reject) => {
+            const responseHandler = (payload: any) => {
+                if (payload.data?.serverId === serverId) {
+                    socket.off(McpEvents.CHANNEL_SERVER_UNREGISTERED, responseHandler);
+                    resolve(payload.data?.success ?? true);
+                }
+            };
+
+            socket.on(McpEvents.CHANNEL_SERVER_UNREGISTERED, responseHandler);
+
+            socket.emit(McpEvents.CHANNEL_SERVER_UNREGISTER, {
+                eventId: uuidv4(),
+                eventType: McpEvents.CHANNEL_SERVER_UNREGISTER,
+                timestamp: Date.now(),
+                agentId: this.userId,
+                channelId: channelId,
+                data: { serverId, channelId }
+            });
+
+            // Timeout after 30 seconds
+            setTimeout(() => {
+                socket.off(McpEvents.CHANNEL_SERVER_UNREGISTERED, responseHandler);
+                reject(new Error('Channel server unregistration timeout'));
+            }, 30000);
         });
     }
 

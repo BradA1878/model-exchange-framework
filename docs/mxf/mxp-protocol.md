@@ -6,9 +6,9 @@ MXP 2.0 is an optimization suite within the MXF that enhances multi-agent commun
 
 MXP 2.0 addresses optimization challenges through a modular approach:
 
-**Token Optimization**: AI-driven context compression using SystemLLM and PatternLearningService integration, delivering 60-80% token reduction while preserving conversation quality and agent reasoning capabilities.
+**Token Optimization**: AI-driven context compression using SystemLLM and PatternLearningService integration, designed to reduce token usage while preserving conversation quality and agent reasoning capabilities.
 
-**Bandwidth Optimization**: Enhanced MxfMessageAggregator with binary encoding and priority-aware compression, achieving 70-90% bandwidth reduction while maintaining the existing 3-minute failsafe and 80% similarity threshold.
+**Bandwidth Optimization**: Enhanced MxfMessageAggregator with binary encoding and priority-aware compression, designed to reduce bandwidth usage while maintaining the existing 3-minute failsafe and similarity threshold.
 
 **Progressive Security**: Four-tier security architecture (Standard → Enhanced → Regulated → Classified) that maintains server-decryptable encryption for analytics while providing enterprise-grade protection.
 
@@ -404,33 +404,36 @@ mxpManager.createChannelConfig('channel-4', {
 
 ```typescript
 // Agents inherit channel configuration by default
-const agent = new MxfAgent({
-    serverUrl: 'http://localhost:3001',
-    apiKey: 'your-agent-key',
+// Create agent through MxfSDK with optional MXP overrides
+const agent = await sdk.createAgent({
     agentId: 'production-agent',
     channelId: 'production-channel',
-    // Optional overrides:
+    keyId: 'your-key-id',
+    secretKey: 'your-secret-key',
+    llmProvider: 'openrouter',
+    defaultModel: 'anthropic/claude-3.5-sonnet',
+    apiKey: process.env.OPENROUTER_API_KEY!,
+    // Optional MXP overrides:
     mxpEnabled: true,                        // Override channel setting
     mxpPreferredFormat: 'natural-language', // Force natural language
     mxpForceEncryption: true                 // Force encryption
 });
 ```
 
-## Performance Benchmarks
+## Performance Characteristics
 
-### MXP 2.0 Performance Results
+### MXP 2.0 Optimization Areas
 
-| Optimization Type | Before MXP 2.0 | After MXP 2.0 | Improvement |
-|-------------------|-----------------|---------------|-------------|
-| **Token Usage** | 15,000 tokens | 3,000 tokens | 80% reduction |
-| **Network Bandwidth** | 2.5MB | 0.75MB | 70% reduction |
-| **API Costs** | $150/month | $30/month | 80% savings |
-| **Processing Latency** | 200ms | 190ms | <5% overhead |
-| **Memory Usage** | Baseline | +2% | Minimal overhead |
+| Optimization Type | Description |
+|-------------------|-------------|
+| **Token Usage** | Reduced through context compression and pattern matching |
+| **Network Bandwidth** | Reduced through binary encoding and message aggregation |
+| **API Costs** | Reduced through efficient token usage |
+| **Processing Overhead** | Minimal overhead with optimized implementation |
+| **Memory Usage** | Minimal additional memory requirements |
 
-### Real-World Impact
-- **High-traffic deployment**: 1M messages/month → $10,000 monthly savings
-- **Enterprise compliance**: Zero security compromise with enhanced features
+### Benefits
+- **Enterprise compliance**: Enhanced security features available
 - **Developer productivity**: Seamless integration requiring no agent code changes
 - **Operational efficiency**: Real-time monitoring and automatic optimization
 
@@ -459,19 +462,19 @@ securityLevel: SecurityLevel.ENHANCED
 // Continuous monitoring
 setInterval(async () => {
     const stats = mxpManager.getChannelStats('production-channel');
-    
-    // Validate performance targets
-    if (stats.tokenOptimization.averageCompressionRatio < 0.6) {
-        console.warn('Token optimization below target (60%)');
+
+    // Validate performance metrics
+    if (stats.tokenOptimization.averageCompressionRatio < yourTargetRatio) {
+        console.warn('Token optimization below target');
     }
-    
-    if (stats.bandwidthOptimization.compressionEffectiveness < 0.7) {
-        console.warn('Bandwidth optimization below target (70%)');
+
+    if (stats.bandwidthOptimization.compressionEffectiveness < yourTargetEffectiveness) {
+        console.warn('Bandwidth optimization below target');
     }
-    
+
     // Monitor for issues
-    if (stats.analytics.errorRate > 0.05) {
-        console.error('Error rate above 5% threshold');
+    if (stats.analytics.errorRate > yourErrorThreshold) {
+        console.error('Error rate above threshold');
     }
 }, 300000); // Check every 5 minutes
 ```

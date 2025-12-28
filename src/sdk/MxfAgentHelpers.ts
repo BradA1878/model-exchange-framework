@@ -98,7 +98,7 @@ export class ToolHelpers {
                 return isAllowed;
             });
             
-            // CRITICAL FIX: When allowedTools is explicitly set, skip contextual filtering
+            // When allowedTools is explicitly set, skip contextual filtering
             // The server has already done the filtering, and contextual filtering would
             // exclude tools like task_create that don't match specific patterns
             return filteredTools;

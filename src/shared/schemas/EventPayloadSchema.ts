@@ -447,6 +447,24 @@ export type McpResourceListEventPayload = BaseEventPayload<McpResourceEventData 
 export type McpResourceResultEventPayload = BaseEventPayload<McpResourceEventData & { requestId: string; data: any }>;
 export type McpResourceErrorEventPayload = BaseEventPayload<McpResourceEventData & { requestId: string; error: any }>;
 
+/**
+ * Data for external MCP server events (global and channel-scoped)
+ */
+export interface ExternalMcpServerEventData {
+    serverId: string;
+    serverName?: string;
+    scope: 'global' | 'channel' | 'agent';
+    scopeId?: string; // channelId for channel scope, agentId for agent scope
+    success?: boolean;
+    error?: string;
+    message?: string;
+    toolsDiscovered?: string[];
+    status?: 'stopped' | 'starting' | 'running' | 'error';
+    connectedAgents?: number;
+    [key: string]: any;
+}
+export type ExternalMcpServerEventPayload = BaseEventPayload<ExternalMcpServerEventData>;
+
 
 // --- Event Payloads Carrying Standard Messages ---
 
@@ -1583,6 +1601,31 @@ export const createMcpResourceErrorPayload = (
 });
 
 /**
+ * Creates a payload for an external MCP server event (global or channel-scoped).
+ * @param eventType - The specific event type.
+ * @param agentId - The ID of the agent initiating or responsible for the event.
+ * @param channelId - The ID of the channel associated with the event.
+ * @param serverData - The specific data for the external MCP server event.
+ * @param options - Optional base event payload options.
+ * @returns The complete event payload.
+ */
+export function createExternalMcpServerEventPayload(
+    eventType: EventName | string,
+    agentId: AgentId,
+    channelId: ChannelId,
+    serverData: ExternalMcpServerEventData,
+    options: { source?: string; eventId?: string; timestamp?: number } = {}
+): ExternalMcpServerEventPayload {
+    return createBaseEventPayload<ExternalMcpServerEventData>(
+        eventType,
+        agentId,
+        channelId,
+        serverData,
+        options
+    );
+}
+
+/**
  * Creates a payload for an MCP tool registry changed event.
  * @param eventType - The specific event type.
  * @param agentId - The ID of the agent initiating or responsible for the event.
@@ -2089,17 +2132,6 @@ export type AgentStateChangeEventPayload = BaseEventPayload<AgentStateChangeEven
 // === MCP Event Payloads ===
 
 /**
- * Data for external MCP server events
- */
-export interface ExternalMcpServerEventData {
-    name: string;
-    version: string;
-    description?: string;
-}
-
-export type ExternalMcpServerEventPayload = BaseEventPayload<ExternalMcpServerEventData>;
-
-/**
  * Data for external MCP server error events
  */
 export interface ExternalMcpServerErrorEventData {
@@ -2136,26 +2168,6 @@ export interface ExternalMcpServerToolsDiscoveredEventData {
 }
 
 export type ExternalMcpServerToolsDiscoveredEventPayload = BaseEventPayload<ExternalMcpServerToolsDiscoveredEventData>;
-
-/**
- * Creates an external MCP server event payload.
- */
-export const createExternalMcpServerEventPayload = (
-    eventType: string,
-    agentId: AgentId,
-    channelId: ChannelId,
-    data: ExternalMcpServerEventData,
-    options: { source?: string; isRecursionProtection?: boolean; eventId?: string; timestamp?: number; } = {}
-): ExternalMcpServerEventPayload => ({
-    eventId: options.eventId || uuidv4(),
-    eventType,
-    timestamp: options.timestamp || Date.now(),
-    agentId,
-    channelId,
-    source: options.source || 'ExternalMcpServerManager',
-    isRecursionProtection: options.isRecursionProtection,
-    data,
-});
 
 /**
  * Creates an external MCP server error event payload.

@@ -45,8 +45,8 @@ export const SystemEvents = {
     TEMPORAL_PATTERN_DETECTED: 'system:temporal:pattern:detected',
     
     // ORPAR phase-specific events
-    PRE_REASONING_HINT: 'system:orapr:pre:reasoning:hint',
-    POST_ACTION_ANALYSIS: 'system:orapr:post:action:analysis',
+    PRE_REASONING_HINT: 'system:orpar:pre:reasoning:hint',
+    POST_ACTION_ANALYSIS: 'system:orpar:post:action:analysis',
     COORDINATION_OPPORTUNITY: 'system:coordination:opportunity',
     PATTERN_RECOGNITION: 'system:pattern:recognition',
     
@@ -127,7 +127,7 @@ export interface SystemEphemeralEventData {
         /** Related tools that might be relevant */
         suggestedTools?: string[];
         /** ORPAR phase this event relates to */
-        oraprPhase?: 'observation' | 'reasoning' | 'action' | 'planning' | 'reflection';
+        orparPhase?: 'observation' | 'reasoning' | 'planning' | 'action' | 'reflection';
     };
     
     /** Event visibility scope */

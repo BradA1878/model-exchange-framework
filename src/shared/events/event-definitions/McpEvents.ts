@@ -36,6 +36,13 @@ export const McpEvents = {
     EXTERNAL_SERVER_UNREGISTERED: 'mcp:external:server:unregistered',
     EXTERNAL_SERVER_REGISTRATION_FAILED: 'mcp:external:server:registration:failed',
 
+    // Channel-scoped server management
+    CHANNEL_SERVER_REGISTER: 'mcp:channel:server:register',
+    CHANNEL_SERVER_REGISTERED: 'mcp:channel:server:registered',
+    CHANNEL_SERVER_UNREGISTER: 'mcp:channel:server:unregister',
+    CHANNEL_SERVER_UNREGISTERED: 'mcp:channel:server:unregistered',
+    CHANNEL_SERVER_REGISTRATION_FAILED: 'mcp:channel:server:registration:failed',
+
     // External server lifecycle
     EXTERNAL_SERVER_SPAWN: 'mcp:external:server:spawn',
     EXTERNAL_SERVER_STARTED: 'mcp:external:server:started',
@@ -122,6 +129,50 @@ export interface McpPayloads {
     };
     'mcp:external:server:registration:failed': {
         serverId?: string;
+        success: false;
+        error: string;
+    };
+
+    // Channel-scoped server management events
+    'mcp:channel:server:register': {
+        id: string;
+        name: string;
+        channelId: string;
+        version?: string;
+        command?: string;
+        args?: string[];
+        transport?: 'stdio' | 'http';
+        url?: string;
+        autoStart?: boolean;
+        restartOnCrash?: boolean;
+        maxRestartAttempts?: number;
+        healthCheckInterval?: number;
+        startupTimeout?: number;
+        environmentVariables?: Record<string, string>;
+        keepAliveMinutes?: number;
+    };
+    'mcp:channel:server:registered': {
+        serverId: string;
+        channelId: string;
+        success: boolean;
+        message?: string;
+        error?: string;
+        toolsDiscovered?: string[];
+    };
+    'mcp:channel:server:unregister': {
+        serverId: string;
+        channelId: string;
+    };
+    'mcp:channel:server:unregistered': {
+        serverId: string;
+        channelId: string;
+        success: boolean;
+        message?: string;
+        error?: string;
+    };
+    'mcp:channel:server:registration:failed': {
+        serverId?: string;
+        channelId: string;
         success: false;
         error: string;
     };

@@ -89,9 +89,9 @@ class ConfigService {
                 },
                 secrets: [],
                 endpoints: {
-                    api: 'http://localhost:3001/api',
-                    websocket: 'ws://localhost:3001',
-                    health: 'http://localhost:3001/health'
+                    api: `http://localhost:${process.env.MXF_PORT || 3001}/api`,
+                    websocket: `ws://localhost:${process.env.MXF_PORT || 3001}`,
+                    health: `http://localhost:${process.env.MXF_PORT || 3001}/health`
                 },
                 validation: {
                     validated: true
@@ -938,7 +938,7 @@ export const getAgentConfigOptions = async (req: Request, res: Response): Promis
                     temperature: 0.7,
                     maxTokens: 2048,
                     host: 'localhost',
-                    port: 3001,
+                    port: parseInt(process.env.MXF_PORT || '3001'),
                     secure: false
                 }
             }

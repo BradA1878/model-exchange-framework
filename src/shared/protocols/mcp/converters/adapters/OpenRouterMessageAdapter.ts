@@ -141,15 +141,14 @@ export class OpenRouterMessageAdapter implements IMessageAdapter {
     /**
      * Transform messages for OpenRouter's strict requirements
      * CRITICAL: Reorders tool results to immediately follow their tool calls
+     * NOTE: Orphaned tool results (with no matching tool call) are dropped to prevent API errors
      */
     public transform(messages: any[]): any[] {
 
         const reordered = this.reorderMessagesForOpenRouter(messages);
 
-        if (reordered.length !== messages.length) {
-            this.logger.warn(`⚠️ Message count changed during reordering: ${messages.length} → ${reordered.length}`);
-            this.logger.warn(`This should NOT happen - all messages should be preserved`);
-        }
+        // Message count may differ if orphaned tool results were dropped - this is expected
+        // and prevents Azure/OpenRouter API errors
 
         return reordered;
     }
@@ -248,7 +247,7 @@ export class OpenRouterMessageAdapter implements IMessageAdapter {
                     }
                     toolResultsMap.get(toolCallId)!.push(message);
                 } else {
-                    // CRITICAL FIX: Preserve orphaned tool results (no tool_call_id)
+                    // Preserve orphaned tool results (no tool_call_id)
                     // These might be from previous conversation turns or malformed responses
                     orphanedToolResults.push(message);
                 }
@@ -284,27 +283,31 @@ export class OpenRouterMessageAdapter implements IMessageAdapter {
             }
         }
 
-        // Pass 3: Add any remaining tool results that didn't match a tool call
-        // This handles edge cases like:
+        // Pass 3: DROP any remaining tool results that didn't match a tool call
+        // These cause API errors with Azure/OpenRouter because they expect tool results
+        // to have a matching tool call in the conversation history.
+        // This can happen when:
+        // - Conversation history was cleared between turns
         // - Tool results from aborted/error tool calls
-        // - Tool results that arrived out of order
-        // - Legacy messages from different conversation formats
-        for (const [toolCallId, toolResults] of toolResultsMap.entries()) {
-            this.logger.warn(`⚠️ Tool result(s) for ${toolCallId} had no matching tool call - appending at end`);
-            reorderedMessages.push(...toolResults);
+        // - Race conditions during history updates
+        const droppedCount = toolResultsMap.size;
+        if (droppedCount > 0) {
+            const droppedIds = Array.from(toolResultsMap.keys()).join(', ');
+            this.logger.warn(`⚠️ Dropping ${droppedCount} orphaned tool result(s) with no matching tool call: ${droppedIds}`);
+            this.logger.warn(`   This is expected after clearing conversation history between turns.`);
         }
 
-        // Pass 4: Add orphaned tool results (no tool_call_id at all)
-        // CRITICAL: This prevents silent message loss
+        // Pass 4: DROP orphaned tool results (no tool_call_id at all)
+        // Same reasoning - these cause API errors
         if (orphanedToolResults.length > 0) {
-            this.logger.warn(`⚠️ ${orphanedToolResults.length} orphaned tool results (no tool_call_id) - appending at end`);
-            reorderedMessages.push(...orphanedToolResults);
+            this.logger.warn(`⚠️ Dropping ${orphanedToolResults.length} orphaned tool results (no tool_call_id)`);
         }
 
-        // Validation: Ensure all messages were preserved
-        if (reorderedMessages.length !== messages.length) {
-            this.logger.error(`❌ CRITICAL: Message loss during reordering! ${messages.length} → ${reorderedMessages.length}`);
-            this.logger.error(`This is a bug - all messages should be preserved during reordering`);
+        // Note: Message count will differ if we dropped orphaned results - this is intentional
+        const expectedDropped = droppedCount + orphanedToolResults.length;
+        const actualDropped = messages.length - reorderedMessages.length;
+        if (actualDropped !== expectedDropped) {
+            this.logger.error(`❌ CRITICAL: Unexpected message loss! Expected to drop ${expectedDropped}, actually dropped ${actualDropped}`);
         }
 
         return reorderedMessages;

@@ -47,7 +47,7 @@ export interface PromptConfig {
      * Include ORPAR guidance
      * @default true
      */
-    includeOraprGuidance?: boolean;
+    includeOrparGuidance?: boolean;
 
     /**
      * Focus on core MXF tools only (not external tools)
@@ -60,7 +60,7 @@ export const DEFAULT_PROMPT_CONFIG: PromptConfig = {
     useDiscoveryPrompts: true,  // New default: use discovery approach
     includeToolSchemas: true,
     includeUsageExamples: false,
-    includeOraprGuidance: true,
+    includeOrparGuidance: true,
     coreToolsOnly: true
 };
 

@@ -138,7 +138,7 @@ export class MxfSystemPromptManager {
                 { 
                     includeToolSchemas: true,
                     includeUsageExamples: false,
-                    includeOraprGuidance: true,   
+                    includeOrparGuidance: true,   
                     includeErrorHandling: false,
                     coreToolsOnly: true
                 },
@@ -172,7 +172,7 @@ export class MxfSystemPromptManager {
                 completePrompt = `${completePrompt}\n\n${mxpContext}`;
             }
             
-            // CRITICAL FIX: Add agent-specific configuration prompt
+            // Add agent-specific configuration prompt
             if (this.agentConfig.agentConfigPrompt) {
                 const agentIdentityPrompt = MxfAgentSystemPrompt.buildAgentIdentityPrompt(this.agentConfig);
                 const customPromptSection = this.buildCustomPromptSection(this.agentConfig.agentConfigPrompt);
@@ -208,7 +208,7 @@ export class MxfSystemPromptManager {
                 { 
                     includeToolSchemas: true,
                     includeUsageExamples: false,
-                    includeOraprGuidance: true,   
+                    includeOrparGuidance: true,   
                     includeErrorHandling: false,
                     coreToolsOnly: true
                 },

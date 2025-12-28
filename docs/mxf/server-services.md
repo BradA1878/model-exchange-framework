@@ -272,7 +272,7 @@ const manager = SystemLlmServiceManager.getInstance();
 const service = manager.getServiceForChannel('channel-1', {
     providerType: LlmProviderType.OPENROUTER,
     defaultModel: 'anthropic/claude-3.5-sonnet',
-    oraprModels: {
+    orparModels: {
         reasoning: 'anthropic/claude-3.5-sonnet',
         planning: 'openai/o1-preview'
     }
@@ -800,7 +800,7 @@ EventBus.server.emit('service:metrics', {
 ## Related Documentation
 
 - [Architecture Overview](./index.md) - Overall system architecture
-- [Event System](./eventbus-singleton-architecture.md) - Event-driven patterns
+- [Event System](../sdk/events.md) - Event-driven patterns and SDK events
 - [API Reference](../api/index.md) - REST and WebSocket APIs
 - [SDK Documentation](../sdk/index.md) - Client-side SDK
 - [Validation System](./validation-system.md) - Validation services

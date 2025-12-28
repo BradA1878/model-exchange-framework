@@ -17,7 +17,8 @@
     "demo:first-contact": "NODE_ENV=test ts-node examples/first-contact-demo/first-contact-demo.ts",
     "demo:interview": "NODE_ENV=test ts-node examples/interview-scheduling-demo/interview-scheduling-demo.ts",
     "demo:external-mcp": "NODE_ENV=test ts-node examples/external-mcp-registration/sdk-external-mcp-server-registration.ts",
-    "demo:fog-of-war": "NODE_ENV=test ts-node examples/fog-of-war-game/connect-agents.ts",
+    "demo:channel-mcp": "NODE_ENV=test ts-node examples/channel-mcp-registration/channel-mcp-demo.ts",
+    "demo:fog-of-war": "NODE_ENV=test ts-node --project tsconfig.json examples/fog-of-war-game/connect-agents.ts",
     "test:meilisearch": "NODE_ENV=test ts-node tests/meilisearch-integration.test.ts",
     "test:code-execution": "NODE_ENV=test npx tsx tests/code-execution-demo.ts",
     "sdk:cli": "ts-node src/sdk/cli/mxf-cli.ts",
@@ -38,7 +39,7 @@
     "docker:infra:down": "docker-compose stop mongodb meilisearch redis",
     "docker:meilisearch:stats": "curl -X GET http://localhost:7700/stats -H \"Authorization: Bearer ${MEILISEARCH_MASTER_KEY}\"",
     "cleanup:db": "npm run cleanup:db",
-    "sync-public": "./sync-to-public.sh"
+    "sync-public": "bash sync-to-public.sh"
   },
   "keywords": [
     "ai",

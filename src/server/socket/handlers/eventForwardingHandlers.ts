@@ -733,10 +733,18 @@ export const setupEventBusToSocketForwarding = (socketService: ISocketService): 
             Events.Mcp.RESOURCE_ERROR,
             Events.Mcp.EXTERNAL_SERVER_REGISTERED,
             Events.Mcp.EXTERNAL_SERVER_UNREGISTERED,
-            Events.Mcp.EXTERNAL_SERVER_REGISTRATION_FAILED
+            Events.Mcp.EXTERNAL_SERVER_REGISTRATION_FAILED,
+            Events.Mcp.CHANNEL_SERVER_REGISTERED,
+            Events.Mcp.CHANNEL_SERVER_UNREGISTERED,
+            Events.Mcp.CHANNEL_SERVER_REGISTRATION_FAILED
         ].forEach(eventName => {
             EventBus.server.on(eventName, (payload) => {
                 try {
+                    // Log channel server events for debugging
+                    if (eventName.includes('channel:server')) {
+                        moduleLogger.info(`[MCP-RESPONSE] Forwarding ${eventName} to socket for agent ${payload.agentId}`);
+                    }
+                    
                     const validator = createStrictValidator(`EventForwarding:${eventName}`);
                     
                     // Validate payload structure with fail-fast
@@ -1046,7 +1054,10 @@ export const setupMcpSocketToEventBusForwarding = (socket: Socket, agentId: stri
                     validator.assertIsNonEmptyString(agentId, 'agentId');
                     // channelId can be empty for some contexts, so we don't validate it as non-empty
 
-                    // ;
+                    // Log channel server events for debugging
+                    if (eventName.includes('channel:server')) {
+                        moduleLogger.info(`[MCP-FORWARD] Received ${eventName} from socket, forwarding to EventBus.server`);
+                    }
                     
                     // Check if payload is already a structured EventPayload
                     if (payload.eventId && payload.eventType && payload.data) {

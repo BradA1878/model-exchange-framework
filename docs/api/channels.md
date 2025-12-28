@@ -645,12 +645,112 @@ Revoke an invitation.
 }
 ```
 
+---
+
+## Channel MCP Server Management
+
+### Register Channel MCP Server
+
+**POST** `/api/channels/:channelId/mcp-servers`
+
+Register a channel-scoped MCP server that is shared by all agents in the channel.
+
+**Path Parameters:**
+- `channelId` - Channel ID
+
+**Request Body:**
+```json
+{
+    "id": "chess-game",
+    "name": "Chess Game Server",
+    "command": "npx",
+    "args": ["-y", "@mcp/chess"],
+    "transport": "stdio",
+    "autoStart": true,
+    "restartOnCrash": false,
+    "keepAliveMinutes": 10,
+    "environmentVariables": {
+        "GAME_MODE": "tournament"
+    }
+}
+```
+
+**Response:**
+```json
+{
+    "success": true,
+    "message": "Channel MCP server registered successfully",
+    "toolsDiscovered": ["chess_move", "chess_board", "chess_validate"]
+}
+```
+
+### List Channel MCP Servers
+
+**GET** `/api/channels/:channelId/mcp-servers`
+
+Get all MCP servers registered for a channel.
+
+**Path Parameters:**
+- `channelId` - Channel ID
+
+**Response:**
+```json
+{
+    "success": true,
+    "servers": [
+        {
+            "id": "chess-game",
+            "name": "Chess Game Server",
+            "status": "running",
+            "registeredBy": "agent-123",
+            "registeredAt": "2024-01-20T10:00:00Z",
+            "keepAliveMinutes": 10,
+            "config": {
+                "command": "npx",
+                "args": ["-y", "@mcp/chess"],
+                "transport": "stdio"
+            }
+        }
+    ]
+}
+```
+
+### Unregister Channel MCP Server
+
+**DELETE** `/api/channels/:channelId/mcp-servers/:serverId`
+
+Stop and remove a channel-scoped MCP server.
+
+**Path Parameters:**
+- `channelId` - Channel ID
+- `serverId` - Server ID (not the full `channelId:serverId` format, just the server ID)
+
+**Response:**
+```json
+{
+    "success": true,
+    "message": "Channel MCP server unregistered successfully"
+}
+```
+
+**Error Responses:**
+
+```json
+{
+    "success": false,
+    "message": "Channel not found or has no MCP servers"
+}
+```
+
+---
+
 ## Rate Limiting
 
 - **Create Channel**: 5 per hour
 - **Update Operations**: 30 per minute
 - **Read Operations**: 100 per minute
 - **Analytics**: 10 per minute
+- **MCP Server Registration**: 10 per hour per channel
 
 ## Best Practices
 
@@ -660,6 +760,11 @@ Revoke an invitation.
 4. **Context Management**: Keep shared context organized
 5. **Analytics Review**: Regularly review channel analytics
 6. **Cleanup**: Archive inactive channels
+7. **MCP Server Management**:
+   - Use channel-scoped servers for channel-specific tools (games, collaborative tools)
+   - Set appropriate keepAlive values (shorter for resources, longer for stateful servers)
+   - Unregister servers when channel is archived
+   - Monitor server status for health issues
 
 ## Next Steps
 
@@ -667,3 +772,4 @@ Revoke an invitation.
 - Review [Agents API](agents.md) for participant management
 - Check [Tasks API](tasks.md) for channel task operations
 - Explore [Memory API](memory.md) for context storage
+- Learn about [MCP Integration](mcp.md) for external tool servers

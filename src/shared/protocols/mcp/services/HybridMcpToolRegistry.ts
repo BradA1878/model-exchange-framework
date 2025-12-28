@@ -50,6 +50,12 @@ export interface HybridMcpTool extends ExtendedMcpToolDefinition {
     category: string;
     /** Whether the tool is from an external server */
     isExternal: boolean;
+    /** Scope of the tool: global, channel, or agent */
+    scope: 'global' | 'channel' | 'agent';
+    /** Scope identifier (channelId for channel scope, agentId for agent scope) */
+    scopeId?: string;
+    /** List of channels this tool is available to (for channel-scoped tools) */
+    availableToChannels?: string[];
 }
 
 /**
@@ -160,21 +166,29 @@ export class HybridMcpToolRegistry {
     private combineTools(internalTools: ExtendedMcpToolDefinition[], externalTools: ExternalMcpTool[]): HybridMcpTool[] {
         const hybridTools: HybridMcpTool[] = [];
 
-        // Add internal tools with 'internal' source
+        // Add internal tools with 'internal' source (global scope)
         for (const tool of internalTools) {
             hybridTools.push({
                 ...tool,
                 source: 'internal',
                 category: this.getInternalToolCategory(tool.name),
-                isExternal: false
+                isExternal: false,
+                scope: 'global' as 'global' | 'channel' | 'agent',
+                scopeId: undefined,
+                availableToChannels: undefined
             });
         }
 
-        // Add external tools with server ID as source
+        // Add external tools with server ID as source and scope metadata
         for (const tool of externalTools) {
             // Enhance the tool schema with examples and additional details
             const enhancedSchema = enhanceToolSchema(tool.name, tool.serverId, tool.inputSchema);
-            
+
+            // Determine scope from server ID format (channelId:serverId for channel scope)
+            const isChannelScoped = tool.serverId.includes(':');
+            const scope: 'global' | 'channel' | 'agent' = isChannelScoped ? 'channel' : 'global';
+            const scopeId = isChannelScoped ? tool.serverId.split(':')[0] : undefined;
+
             hybridTools.push({
                 name: tool.name,
                 description: tool.description,
@@ -183,6 +197,9 @@ export class HybridMcpToolRegistry {
                 category: getExternalServerCategory(tool.serverId),
                 isExternal: true,
                 enabled: true,
+                scope,
+                scopeId,
+                availableToChannels: scopeId ? [scopeId] : undefined,
                 handler: async (input: any, context: any) => {
                     // Execute tool on external MCP server using the sendMcpToolCall method
                     try {
@@ -287,9 +304,53 @@ export class HybridMcpToolRegistry {
      * Get tools filtered by source (internal, or specific server ID)
      */
     public getToolsBySource(sources: string[]): HybridMcpTool[] {
-        return this.hybridToolsSubject.value.filter(tool => 
+        return this.hybridToolsSubject.value.filter(tool =>
             sources.includes(tool.source)
         );
+    }
+
+    /**
+     * Get tools available to a specific channel
+     * Returns global tools + channel-scoped tools for this channel
+     */
+    public getToolsForChannel(channelId: string): HybridMcpTool[] {
+        return this.hybridToolsSubject.value.filter(tool => {
+            // Include global tools
+            if (tool.scope === 'global') {
+                return true;
+            }
+
+            // Include channel-scoped tools for this specific channel
+            if (tool.scope === 'channel' && tool.scopeId === channelId) {
+                return true;
+            }
+
+            return false;
+        });
+    }
+
+    /**
+     * Get tools available to a specific agent based on their channel memberships
+     */
+    public getToolsForAgent(agentId: string, channelIds: string[]): HybridMcpTool[] {
+        return this.hybridToolsSubject.value.filter(tool => {
+            // Include global tools
+            if (tool.scope === 'global') {
+                return true;
+            }
+
+            // Include channel-scoped tools for channels the agent is in
+            if (tool.scope === 'channel' && tool.scopeId && channelIds.includes(tool.scopeId)) {
+                return true;
+            }
+
+            // Include agent-scoped tools for this specific agent
+            if (tool.scope === 'agent' && tool.scopeId === agentId) {
+                return true;
+            }
+
+            return false;
+        });
     }
 
     /**

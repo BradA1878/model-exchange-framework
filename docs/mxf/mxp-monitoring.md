@@ -310,11 +310,11 @@ export class MXP2ExecutiveDashboard {
         const recommendations: string[] = [];
         
         if (aggregated.avgTokenReduction < 0.6) {
-            recommendations.push("Enable additional token optimization strategies to reach 60-80% reduction target");
+            recommendations.push("Enable additional token optimization strategies to improve reduction");
         }
         
         if (aggregated.avgBandwidthReduction < 0.7) {
-            recommendations.push("Review bandwidth optimization settings to achieve 70-90% reduction target");
+            recommendations.push("Review bandwidth optimization settings to improve reduction");
         }
         
         if (aggregated.systemLlmSuccessRate < 0.95) {

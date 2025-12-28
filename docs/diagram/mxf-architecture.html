@@ -4,8 +4,32 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>MXF Architecture - Interactive Diagram</title>
-    <script src="https://d3js.org/d3.v7.min.js"></script>
+    
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Carlito:wght@400;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    
     <style>
+        :root {
+            --bg-primary: #0a0f1a;
+            --bg-secondary: #111827;
+            --bg-card: #1a2234;
+            --bg-card-hover: #232d42;
+            --text-primary: #f0f4f8;
+            --text-secondary: #94a3b8;
+            --text-muted: #64748b;
+            --border-color: #2d3a4f;
+            --accent-blue: #3b82f6;
+            --accent-purple: #8b5cf6;
+            --accent-cyan: #06b6d4;
+            --accent-green: #10b981;
+            --accent-orange: #f59e0b;
+            --accent-pink: #ec4899;
+            --accent-red: #ef4444;
+            --glow-blue: rgba(59, 130, 246, 0.3);
+            --glow-purple: rgba(139, 92, 246, 0.3);
+        }
+
         * {
             margin: 0;
             padding: 0;
@@ -13,916 +37,1236 @@
         }
 
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            overflow: hidden;
+            font-family: 'Carlito', Calibri, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+            overflow-x: hidden;
         }
 
-        #container {
-            width: 100vw;
-            height: 100vh;
-            position: relative;
+        /* Animated background grid */
+        .bg-grid {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-image: 
+                linear-gradient(rgba(59, 130, 246, 0.03) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(59, 130, 246, 0.03) 1px, transparent 1px);
+            background-size: 60px 60px;
+            pointer-events: none;
+            z-index: 0;
         }
 
-        #controls {
-            position: absolute;
-            top: 20px;
-            left: 20px;
-            background: rgba(255, 255, 255, 0.95);
-            padding: 15px 20px;
-            border-radius: 12px;
-            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
-            z-index: 1000;
-            backdrop-filter: blur(10px);
+        .bg-glow {
+            position: fixed;
+            width: 600px;
+            height: 600px;
+            border-radius: 50%;
+            filter: blur(120px);
+            opacity: 0.15;
+            pointer-events: none;
+            z-index: 0;
         }
 
-        #controls h1 {
-            font-size: 1.5em;
-            margin-bottom: 10px;
-            color: #2d3748;
+        .bg-glow-1 {
+            top: -200px;
+            right: -100px;
+            background: var(--accent-blue);
         }
 
-        .control-buttons {
+        .bg-glow-2 {
+            bottom: -200px;
+            left: -100px;
+            background: var(--accent-purple);
+        }
+
+        /* Header */
+        .header {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 64px;
+            background: rgba(10, 15, 26, 0.9);
+            backdrop-filter: blur(20px);
+            border-bottom: 1px solid var(--border-color);
             display: flex;
-            gap: 10px;
-            margin-top: 10px;
+            align-items: center;
+            padding: 0 32px;
+            z-index: 100;
+        }
+
+        .header-logo {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .header-logo img {
+            height: 36px;
+            width: auto;
+        }
+
+        .header-title {
+            font-size: 18px;
+            font-weight: 700;
+            background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .header-subtitle {
+            font-size: 13px;
+            color: var(--text-muted);
+            margin-left: 16px;
+        }
+
+        .header-spacer {
+            flex: 1;
+        }
+
+        .header-controls {
+            display: flex;
+            gap: 8px;
         }
 
         .control-btn {
             padding: 8px 16px;
-            background: linear-gradient(135deg, #667eea, #764ba2);
-            color: white;
-            border: none;
-            border-radius: 6px;
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            border-radius: 8px;
+            font-family: inherit;
+            font-size: 13px;
+            font-weight: 500;
             cursor: pointer;
-            font-size: 14px;
-            transition: transform 0.2s, box-shadow 0.2s;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            gap: 6px;
         }
 
         .control-btn:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+            background: var(--bg-card-hover);
+            color: var(--text-primary);
+            border-color: var(--accent-blue);
         }
 
-        #legend {
+        .control-btn.active {
+            background: var(--accent-blue);
+            border-color: var(--accent-blue);
+            color: white;
+        }
+
+        /* Main container */
+        .main {
+            padding-top: 64px;
+            min-height: 100vh;
+            position: relative;
+            z-index: 1;
+        }
+
+        /* Architecture diagram */
+        .architecture {
+            padding: 48px 32px;
+            max-width: 1600px;
+            margin: 0 auto;
+        }
+
+        .section-title {
+            text-align: center;
+            margin-bottom: 48px;
+        }
+
+        .section-title h1 {
+            font-size: 32px;
+            font-weight: 700;
+            margin-bottom: 8px;
+        }
+
+        .section-title p {
+            color: var(--text-secondary);
+            font-size: 16px;
+        }
+
+        /* Architecture layers */
+        .arch-layer {
+            margin-bottom: 24px;
+            position: relative;
+        }
+
+        .layer-label {
             position: absolute;
-            bottom: 20px;
-            left: 20px;
-            background: rgba(255, 255, 255, 0.95);
-            padding: 15px;
-            border-radius: 12px;
-            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
-            backdrop-filter: blur(10px);
+            left: -120px;
+            top: 50%;
+            transform: translateY(-50%) rotate(-90deg);
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            color: var(--text-muted);
+            white-space: nowrap;
         }
 
-        #legend h3 {
-            margin-bottom: 10px;
-            color: #2d3748;
+        .layer-content {
+            display: flex;
+            gap: 16px;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+
+        /* Component cards */
+        .component {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 20px 24px;
+            min-width: 200px;
+            max-width: 280px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .component::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 3px;
+            background: var(--component-color, var(--accent-blue));
+            opacity: 0.8;
+        }
+
+        .component:hover {
+            transform: translateY(-4px);
+            border-color: var(--component-color, var(--accent-blue));
+            box-shadow: 0 12px 40px -12px var(--component-glow, var(--glow-blue));
+        }
+
+        .component.highlighted {
+            border-color: var(--component-color, var(--accent-blue));
+            box-shadow: 0 0 30px var(--component-glow, var(--glow-blue));
+        }
+
+        .component-icon {
+            font-size: 28px;
+            margin-bottom: 12px;
+        }
+
+        .component-name {
+            font-size: 15px;
+            font-weight: 700;
+            margin-bottom: 6px;
+            color: var(--text-primary);
+        }
+
+        .component-desc {
+            font-size: 12px;
+            color: var(--text-secondary);
+            line-height: 1.5;
+        }
+
+        .component-features {
+            margin-top: 12px;
+            padding-top: 12px;
+            border-top: 1px solid var(--border-color);
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+        }
+
+        .feature-tag {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 10px;
+            padding: 3px 8px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 4px;
+            color: var(--text-muted);
+        }
+
+        /* Color variants */
+        .component.sdk { --component-color: var(--accent-green); --component-glow: rgba(16, 185, 129, 0.3); }
+        .component.server { --component-color: var(--accent-blue); --component-glow: rgba(59, 130, 246, 0.3); }
+        .component.mcp { --component-color: var(--accent-orange); --component-glow: rgba(245, 158, 11, 0.3); }
+        .component.data { --component-color: var(--accent-purple); --component-glow: rgba(139, 92, 246, 0.3); }
+        .component.control { --component-color: var(--accent-cyan); --component-glow: rgba(6, 182, 212, 0.3); }
+        .component.analytics { --component-color: var(--accent-pink); --component-glow: rgba(236, 72, 153, 0.3); }
+
+        /* Connection lines */
+        .connections {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        /* Data flow arrows between layers */
+        .flow-arrows {
+            display: flex;
+            justify-content: center;
+            padding: 12px 0;
+            gap: 40px;
+        }
+
+        .flow-arrow {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 4px;
+            opacity: 0.4;
+            transition: opacity 0.3s ease;
+        }
+
+        .flow-arrow:hover {
+            opacity: 1;
+        }
+
+        .flow-arrow svg {
+            width: 24px;
+            height: 24px;
+            color: var(--accent-blue);
+        }
+
+        .flow-arrow span {
+            font-size: 10px;
+            color: var(--text-muted);
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        /* ORPAR visualization */
+        .orpar-section {
+            margin-top: 48px;
+            padding: 40px;
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .orpar-section::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 4px;
+            background: linear-gradient(90deg, var(--accent-cyan), var(--accent-blue), var(--accent-purple), var(--accent-pink), var(--accent-orange));
+        }
+
+        .orpar-title {
+            text-align: center;
+            margin-bottom: 32px;
+        }
+
+        .orpar-title h2 {
+            font-size: 24px;
+            font-weight: 700;
+            margin-bottom: 8px;
+        }
+
+        .orpar-title p {
+            color: var(--text-secondary);
+            font-size: 14px;
+        }
+
+        .orpar-loop {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 16px;
+            flex-wrap: wrap;
+        }
+
+        .orpar-step {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 24px 28px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            min-width: 140px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            position: relative;
+        }
+
+        .orpar-step:hover {
+            transform: scale(1.05);
+            border-color: var(--step-color);
+            box-shadow: 0 8px 32px -8px var(--step-glow);
+        }
+
+        .orpar-step.active {
+            border-color: var(--step-color);
+            box-shadow: 0 0 24px var(--step-glow);
+        }
+
+        .orpar-step.active .step-icon {
+            animation: pulse 2s ease-in-out infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.1); }
+        }
+
+        .step-icon {
+            font-size: 32px;
+            margin-bottom: 12px;
+        }
+
+        .step-name {
+            font-size: 14px;
+            font-weight: 700;
+            color: var(--text-primary);
+            margin-bottom: 4px;
+        }
+
+        .step-desc {
+            font-size: 11px;
+            color: var(--text-muted);
+            text-align: center;
+        }
+
+        .orpar-step:nth-child(1) { --step-color: var(--accent-cyan); --step-glow: rgba(6, 182, 212, 0.3); }
+        .orpar-step:nth-child(3) { --step-color: var(--accent-blue); --step-glow: rgba(59, 130, 246, 0.3); }
+        .orpar-step:nth-child(5) { --step-color: var(--accent-purple); --step-glow: rgba(139, 92, 246, 0.3); }
+        .orpar-step:nth-child(7) { --step-color: var(--accent-pink); --step-glow: rgba(236, 72, 153, 0.3); }
+        .orpar-step:nth-child(9) { --step-color: var(--accent-orange); --step-glow: rgba(245, 158, 11, 0.3); }
+
+        .orpar-arrow {
+            font-size: 20px;
+            color: var(--text-muted);
+            opacity: 0.5;
+        }
+
+        /* Info panel */
+        .info-panel {
+            position: fixed;
+            right: -420px;
+            top: 64px;
+            bottom: 0;
+            width: 400px;
+            background: var(--bg-secondary);
+            border-left: 1px solid var(--border-color);
+            padding: 32px;
+            overflow-y: auto;
+            transition: right 0.3s ease;
+            z-index: 99;
+        }
+
+        .info-panel.active {
+            right: 0;
+        }
+
+        .info-panel-close {
+            position: absolute;
+            top: 16px;
+            right: 16px;
+            width: 32px;
+            height: 32px;
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            color: var(--text-muted);
+            font-size: 18px;
+            transition: all 0.2s ease;
+        }
+
+        .info-panel-close:hover {
+            background: var(--bg-card-hover);
+            color: var(--text-primary);
+        }
+
+        .info-panel h2 {
+            font-size: 22px;
+            font-weight: 700;
+            margin-bottom: 8px;
+            padding-right: 40px;
+        }
+
+        .info-panel-type {
+            display: inline-block;
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            padding: 4px 10px;
+            background: var(--accent-blue);
+            color: white;
+            border-radius: 4px;
+            margin-bottom: 20px;
+        }
+
+        .info-panel p {
+            color: var(--text-secondary);
+            font-size: 14px;
+            line-height: 1.7;
+            margin-bottom: 24px;
+        }
+
+        .info-section {
+            margin-bottom: 24px;
+        }
+
+        .info-section h3 {
+            font-size: 13px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--text-muted);
+            margin-bottom: 12px;
+        }
+
+        .info-section ul {
+            list-style: none;
+        }
+
+        .info-section li {
+            font-size: 13px;
+            color: var(--text-secondary);
+            padding: 8px 0;
+            padding-left: 20px;
+            position: relative;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .info-section li:last-child {
+            border-bottom: none;
+        }
+
+        .info-section li::before {
+            content: '→';
+            position: absolute;
+            left: 0;
+            color: var(--accent-blue);
+        }
+
+        /* Stats bar */
+        .stats-bar {
+            display: flex;
+            justify-content: center;
+            gap: 48px;
+            padding: 32px;
+            margin-top: 32px;
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+        }
+
+        .stat-item {
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 36px;
+            font-weight: 700;
+            background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .stat-label {
+            font-size: 12px;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-top: 4px;
+        }
+
+        /* Legend */
+        .legend {
+            display: flex;
+            justify-content: center;
+            gap: 24px;
+            margin-top: 32px;
+            flex-wrap: wrap;
         }
 
         .legend-item {
             display: flex;
             align-items: center;
-            margin: 5px 0;
-            font-size: 14px;
+            gap: 8px;
+            font-size: 12px;
+            color: var(--text-secondary);
         }
 
         .legend-color {
-            width: 20px;
-            height: 20px;
-            margin-right: 10px;
-            border-radius: 4px;
-            border: 1px solid #e2e8f0;
+            width: 12px;
+            height: 12px;
+            border-radius: 3px;
         }
 
-        #tooltip {
-            position: absolute;
-            padding: 12px;
-            background: rgba(45, 55, 72, 0.95);
-            color: white;
-            border-radius: 8px;
-            font-size: 14px;
-            pointer-events: none;
-            opacity: 0;
-            transition: opacity 0.3s;
-            max-width: 300px;
-            line-height: 1.5;
-            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
-            backdrop-filter: blur(10px);
+        /* Responsive */
+        @media (max-width: 1200px) {
+            .layer-label {
+                display: none;
+            }
+            
+            .architecture {
+                padding: 32px 16px;
+            }
         }
 
-        #tooltip h4 {
-            margin-bottom: 5px;
-            color: #a0aec0;
-            font-size: 12px;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
+        @media (max-width: 768px) {
+            .header {
+                padding: 0 16px;
+            }
 
-        #tooltip p {
-            margin: 5px 0;
-        }
+            .header-subtitle {
+                display: none;
+            }
 
-        #info-panel {
-            position: absolute;
-            top: 200px;
-            right: 20px;
-            width: 320px;
-            max-height: calc(100vh - 220px);
-            background: rgba(255, 255, 255, 0.95);
-            padding: 20px;
-            border-radius: 12px;
-            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
-            backdrop-filter: blur(10px);
-            overflow-y: auto;
-            opacity: 0;
-            transform: translateX(100%);
-            transition: all 0.3s ease;
-        }
+            .control-btn span {
+                display: none;
+            }
 
-        #info-panel.active {
-            opacity: 1;
-            transform: translateX(0);
-        }
+            .orpar-loop {
+                flex-direction: column;
+            }
 
-        #info-panel h2 {
-            color: #2d3748;
-            margin-bottom: 15px;
-            font-size: 1.3em;
-        }
+            .orpar-arrow {
+                transform: rotate(90deg);
+            }
 
-        #info-panel .info-section {
-            margin-bottom: 15px;
-            padding-bottom: 15px;
-            border-bottom: 1px solid #e2e8f0;
-        }
+            .stats-bar {
+                flex-wrap: wrap;
+                gap: 24px;
+            }
 
-        #info-panel .info-section:last-child {
-            border-bottom: none;
-        }
-
-        #info-panel h3 {
-            color: #4a5568;
-            font-size: 1em;
-            margin-bottom: 8px;
-        }
-
-        #info-panel ul {
-            list-style: none;
-            padding-left: 10px;
-        }
-
-        #info-panel li {
-            color: #718096;
-            font-size: 0.9em;
-            margin: 4px 0;
-            padding-left: 15px;
-            position: relative;
-        }
-
-        #info-panel li:before {
-            content: '▸';
-            position: absolute;
-            left: 0;
-            color: #a0aec0;
-        }
-
-        .close-btn {
-            position: absolute;
-            top: 15px;
-            right: 15px;
-            width: 30px;
-            height: 30px;
-            background: #f7fafc;
-            border: 1px solid #e2e8f0;
-            border-radius: 50%;
-            cursor: pointer;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            transition: all 0.2s;
-        }
-
-        .close-btn:hover {
-            background: #edf2f7;
-            transform: rotate(90deg);
-        }
-
-        .close-btn:before {
-            content: '✕';
-            color: #718096;
-        }
-
-        svg {
-            width: 100%;
-            height: 100%;
-        }
-
-        .node {
-            cursor: pointer;
-            transition: all 0.3s ease;
-        }
-
-        .node:hover {
-            filter: brightness(1.1);
-        }
-
-        .node-label {
-            pointer-events: none;
-            font-size: 12px;
-            font-weight: 600;
-            fill: white;
-            text-anchor: middle;
-            dominant-baseline: middle;
-        }
-
-        .link {
-            fill: none;
-            stroke-opacity: 0.6;
-            transition: all 0.3s ease;
-        }
-
-        .link:hover {
-            stroke-opacity: 1;
-            stroke-width: 3;
-        }
-
-        .link-label {
-            font-size: 10px;
-            fill: #4a5568;
-            text-anchor: middle;
-            dominant-baseline: middle;
-            opacity: 0;
-            transition: opacity 0.3s;
-        }
-
-        .link:hover + .link-label {
-            opacity: 1;
-        }
-
-        @keyframes pulse {
-            0% { transform: scale(1); }
-            50% { transform: scale(1.05); }
-            100% { transform: scale(1); }
-        }
-
-        .node.highlight {
-            animation: pulse 2s infinite;
-        }
-
-        .arrow {
-            fill: #718096;
+            .info-panel {
+                width: 100%;
+                right: -100%;
+            }
         }
     </style>
 </head>
 <body>
-    <div id="container">
-        <div id="controls">
-            <h1>🚀 Model Exchange Framework Architecture</h1>
-            <p style="color: #718096; font-size: 14px; margin-bottom: 10px;">Interactive system diagram - Click nodes for details</p>
-            <div class="control-buttons">
-                <button class="control-btn" onclick="resetZoom()">Reset View</button>
-                <button class="control-btn" onclick="toggleLabels()">Toggle Labels</button>
-                <button class="control-btn" onclick="highlightFlow('agent')">Agent Flow</button>
-                <button class="control-btn" onclick="highlightFlow('tool')">Tool Flow</button>
-                <button class="control-btn" onclick="highlightFlow('data')">Data Flow</button>
-            </div>
-        </div>
+    <div class="bg-grid"></div>
+    <div class="bg-glow bg-glow-1"></div>
+    <div class="bg-glow bg-glow-2"></div>
 
-        <div id="legend">
-            <h3>Component Types</h3>
-            <div class="legend-item">
-                <div class="legend-color" style="background: linear-gradient(135deg, #48bb78, #38a169);"></div>
-                <span>SDK/Client Layer</span>
-            </div>
-            <div class="legend-item">
-                <div class="legend-color" style="background: linear-gradient(135deg, #4299e1, #3182ce);"></div>
-                <span>Server Layer</span>
-            </div>
-            <div class="legend-item">
-                <div class="legend-color" style="background: linear-gradient(135deg, #ed8936, #dd6b20);"></div>
-                <span>MCP/Tools</span>
-            </div>
-            <div class="legend-item">
-                <div class="legend-color" style="background: linear-gradient(135deg, #9f7aea, #805ad5);"></div>
-                <span>Data/Storage</span>
-            </div>
-            <div class="legend-item">
-                <div class="legend-color" style="background: linear-gradient(135deg, #f687b3, #ed64a6);"></div>
-                <span>Analytics/ML</span>
-            </div>
-            <div class="legend-item">
-                <div class="legend-color" style="background: linear-gradient(135deg, #fbb6ce, #f687b3);"></div>
-                <span>Dashboard/UI</span>
-            </div>
+    <header class="header">
+        <div class="header-logo">
+            <img src="../mxf-logo-small.png" alt="MXF" onerror="this.style.display='none'">
+            <span class="header-title">MXF Architecture</span>
         </div>
+        <span class="header-subtitle">Interactive System Diagram</span>
+        <div class="header-spacer"></div>
+        <div class="header-controls">
+            <button class="control-btn" onclick="highlightFlow('agent')">
+                <span>🤖</span> <span>Agent Flow</span>
+            </button>
+            <button class="control-btn" onclick="highlightFlow('data')">
+                <span>💾</span> <span>Data Flow</span>
+            </button>
+            <button class="control-btn" onclick="highlightFlow('tool')">
+                <span>🔧</span> <span>Tool Flow</span>
+            </button>
+            <button class="control-btn" onclick="resetHighlight()">
+                <span>↺</span> <span>Reset</span>
+            </button>
+        </div>
+    </header>
 
-        <div id="tooltip"></div>
-        
-        <div id="info-panel">
-            <button class="close-btn" onclick="closeInfoPanel()"></button>
-            <h2 id="info-title"></h2>
-            <div id="info-content"></div>
+    <main class="main">
+        <div class="architecture">
+            <div class="section-title">
+                <h1>System Architecture</h1>
+                <p>Multi-agent AI orchestration with intelligent tool execution and semantic memory</p>
+            </div>
+
+            <!-- Client Layer -->
+            <div class="arch-layer">
+                <div class="layer-content">
+                    <div class="component sdk" data-id="sdk-client" onclick="showInfo(this)">
+                        <div class="component-icon">📦</div>
+                        <div class="component-name">Agent SDK</div>
+                        <div class="component-desc">TypeScript client library for building intelligent agents</div>
+                        <div class="component-features">
+                            <span class="feature-tag">TypeScript</span>
+                            <span class="feature-tag">RxJS</span>
+                            <span class="feature-tag">Socket.IO</span>
+                        </div>
+                    </div>
+                    <div class="component sdk" data-id="tool-executor" onclick="showInfo(this)">
+                        <div class="component-icon">⚡</div>
+                        <div class="component-name">Tool Executor</div>
+                        <div class="component-desc">Unified execution engine for 100+ built-in tools</div>
+                        <div class="component-features">
+                            <span class="feature-tag">Validation</span>
+                            <span class="feature-tag">Auto-correct</span>
+                        </div>
+                    </div>
+                    <div class="component control" data-id="orpar-client" onclick="showInfo(this)">
+                        <div class="component-icon">🧠</div>
+                        <div class="component-name">Control Loop</div>
+                        <div class="component-desc">ORPAR cognitive cycle for autonomous reasoning</div>
+                        <div class="component-features">
+                            <span class="feature-tag">ORPAR</span>
+                            <span class="feature-tag">LLM</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Flow arrows -->
+            <div class="flow-arrows">
+                <div class="flow-arrow">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M12 5v14M5 12l7 7 7-7"/>
+                    </svg>
+                    <span>Socket.IO</span>
+                </div>
+                <div class="flow-arrow">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M12 5v14M5 12l7 7 7-7"/>
+                    </svg>
+                    <span>REST API</span>
+                </div>
+                <div class="flow-arrow">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M12 5v14M5 12l7 7 7-7"/>
+                    </svg>
+                    <span>MXP Protocol</span>
+                </div>
+            </div>
+
+            <!-- Server Layer -->
+            <div class="arch-layer">
+                <div class="layer-content">
+                    <div class="component server" data-id="socket-server" onclick="showInfo(this)">
+                        <div class="component-icon">🔌</div>
+                        <div class="component-name">Socket Server</div>
+                        <div class="component-desc">Real-time agent communication and event routing</div>
+                        <div class="component-features">
+                            <span class="feature-tag">WebSocket</span>
+                            <span class="feature-tag">Events</span>
+                        </div>
+                    </div>
+                    <div class="component server" data-id="rest-api" onclick="showInfo(this)">
+                        <div class="component-icon">🌐</div>
+                        <div class="component-name">REST API</div>
+                        <div class="component-desc">HTTP endpoints for agents, tasks, and memory</div>
+                        <div class="component-features">
+                            <span class="feature-tag">Express</span>
+                            <span class="feature-tag">JWT</span>
+                        </div>
+                    </div>
+                    <div class="component server" data-id="tool-registry" onclick="showInfo(this)">
+                        <div class="component-icon">📋</div>
+                        <div class="component-name">Tool Registry</div>
+                        <div class="component-desc">Hybrid registry for internal and MCP tools</div>
+                        <div class="component-features">
+                            <span class="feature-tag">100+ Tools</span>
+                            <span class="feature-tag">MCP</span>
+                        </div>
+                    </div>
+                    <div class="component server" data-id="system-llm" onclick="showInfo(this)">
+                        <div class="component-icon">🤖</div>
+                        <div class="component-name">SystemLLM</div>
+                        <div class="component-desc">Multi-provider LLM integration service</div>
+                        <div class="component-features">
+                            <span class="feature-tag">OpenRouter</span>
+                            <span class="feature-tag">Multi-model</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Flow arrows -->
+            <div class="flow-arrows">
+                <div class="flow-arrow">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M12 5v14M5 12l7 7 7-7"/>
+                    </svg>
+                    <span>MCP Stdio</span>
+                </div>
+                <div class="flow-arrow">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M12 5v14M5 12l7 7 7-7"/>
+                    </svg>
+                    <span>Persistence</span>
+                </div>
+                <div class="flow-arrow">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M12 5v14M5 12l7 7 7-7"/>
+                    </svg>
+                    <span>Search</span>
+                </div>
+            </div>
+
+            <!-- External & Data Layer -->
+            <div class="arch-layer">
+                <div class="layer-content">
+                    <div class="component mcp" data-id="mcp-servers" onclick="showInfo(this)">
+                        <div class="component-icon">🔗</div>
+                        <div class="component-name">MCP Servers</div>
+                        <div class="component-desc">External tool servers via Model Context Protocol</div>
+                        <div class="component-features">
+                            <span class="feature-tag">Calculator</span>
+                            <span class="feature-tag">Memory</span>
+                            <span class="feature-tag">Filesystem</span>
+                        </div>
+                    </div>
+                    <div class="component data" data-id="mongodb" onclick="showInfo(this)">
+                        <div class="component-icon">🍃</div>
+                        <div class="component-name">MongoDB</div>
+                        <div class="component-desc">Primary persistence for agents, tasks, and history</div>
+                        <div class="component-features">
+                            <span class="feature-tag">Documents</span>
+                            <span class="feature-tag">Indexes</span>
+                        </div>
+                    </div>
+                    <div class="component data" data-id="meilisearch" onclick="showInfo(this)">
+                        <div class="component-icon">🔍</div>
+                        <div class="component-name">Meilisearch</div>
+                        <div class="component-desc">Semantic search with OpenAI embeddings</div>
+                        <div class="component-features">
+                            <span class="feature-tag">Embeddings</span>
+                            <span class="feature-tag">Hybrid</span>
+                        </div>
+                    </div>
+                    <div class="component data" data-id="redis" onclick="showInfo(this)">
+                        <div class="component-icon">⚡</div>
+                        <div class="component-name">Redis</div>
+                        <div class="component-desc">Multi-level caching for high performance</div>
+                        <div class="component-features">
+                            <span class="feature-tag">Cache</span>
+                            <span class="feature-tag">Pub/Sub</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ORPAR Section -->
+            <div class="orpar-section">
+                <div class="orpar-title">
+                    <h2>🧠 ORPAR Control Loop</h2>
+                    <p>Cognitive cycle powering autonomous agent reasoning and decision making</p>
+                </div>
+                <div class="orpar-loop">
+                    <div class="orpar-step" onclick="activateStep(this, 0)">
+                        <div class="step-icon">👁️</div>
+                        <div class="step-name">Observe</div>
+                        <div class="step-desc">Context gathering</div>
+                    </div>
+                    <div class="orpar-arrow">→</div>
+                    <div class="orpar-step" onclick="activateStep(this, 1)">
+                        <div class="step-icon">💭</div>
+                        <div class="step-name">Reason</div>
+                        <div class="step-desc">LLM analysis</div>
+                    </div>
+                    <div class="orpar-arrow">→</div>
+                    <div class="orpar-step" onclick="activateStep(this, 2)">
+                        <div class="step-icon">📋</div>
+                        <div class="step-name">Plan</div>
+                        <div class="step-desc">Goal decomposition</div>
+                    </div>
+                    <div class="orpar-arrow">→</div>
+                    <div class="orpar-step" onclick="activateStep(this, 3)">
+                        <div class="step-icon">⚡</div>
+                        <div class="step-name">Act</div>
+                        <div class="step-desc">Execute tools</div>
+                    </div>
+                    <div class="orpar-arrow">→</div>
+                    <div class="orpar-step" onclick="activateStep(this, 4)">
+                        <div class="step-icon">🔄</div>
+                        <div class="step-name">Reflect</div>
+                        <div class="step-desc">Learn & improve</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Stats -->
+            <div class="stats-bar">
+                <div class="stat-item">
+                    <div class="stat-value">100+</div>
+                    <div class="stat-label">Built-in Tools</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value">MXP</div>
+                    <div class="stat-label">Bandwidth Optimization</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value">Semantic</div>
+                    <div class="stat-label">Context Retrieval</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value">&lt;50ms</div>
+                    <div class="stat-label">Validation Latency</div>
+                </div>
+            </div>
+
+            <!-- Legend -->
+            <div class="legend">
+                <div class="legend-item">
+                    <div class="legend-color" style="background: var(--accent-green)"></div>
+                    <span>SDK Layer</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background: var(--accent-blue)"></div>
+                    <span>Server Core</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background: var(--accent-orange)"></div>
+                    <span>MCP Integration</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background: var(--accent-purple)"></div>
+                    <span>Data Layer</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background: var(--accent-cyan)"></div>
+                    <span>Control Loop</span>
+                </div>
+            </div>
         </div>
+    </main>
+
+    <!-- Info Panel -->
+    <div class="info-panel" id="infoPanel">
+        <div class="info-panel-close" onclick="closeInfo()">×</div>
+        <h2 id="infoPanelTitle">Component Name</h2>
+        <div class="info-panel-type" id="infoPanelType">Type</div>
+        <p id="infoPanelDesc">Description goes here.</p>
+        <div id="infoPanelContent"></div>
     </div>
 
     <script>
-        // Architecture data
-        const architectureData = {
-            nodes: [
-                // SDK Layer
-                {
-                    id: 'mxf-client',
-                    label: 'MxfClient',
-                    type: 'sdk',
-                    x: 150,
-                    y: 200,
-                    description: 'Main agent client with lazy connection and retry logic',
-                    details: {
-                        handlers: ['MessageHandlers', 'ControlLoopHandlers', 'MemoryHandlers', 'McpToolHandlers', 'TaskHandlers'],
-                        managers: ['MxfMcpClientManager', 'MxfMemoryManager', 'MxfTaskExecutionManager'],
-                        features: ['Lazy connection', 'Exponential backoff', 'Auto-reconnection', 'State tracking']
-                    }
-                },
-                {
-                    id: 'sdk-handlers',
-                    label: 'SDK Handlers',
-                    type: 'sdk',
-                    x: 150,
-                    y: 300,
-                    description: 'Modular handler system for separation of concerns',
-                    details: {
-                        components: ['Message & MXP Protocol', 'ORPAR Control Loop', 'Memory Operations', 'Tool Discovery', 'Task Management'],
-                        patterns: ['Event-driven', 'Observable streams', 'Error recovery']
-                    }
-                },
-                {
-                    id: 'sdk-services',
-                    label: 'SDK Services',
-                    type: 'sdk',
-                    x: 150,
-                    y: 400,
-                    description: 'Client-side service layer',
-                    details: {
-                        services: ['MxfApiService', 'MxfEventHandlerService', 'MxfToolService', 'MxfLayeredPromptAssembler'],
-                        capabilities: ['REST API calls', 'Event processing', 'Tool loading', 'Prompt generation']
-                    }
-                },
-
-                // Server Layer
-                {
-                    id: 'socket-server',
-                    label: 'Socket.IO Server',
-                    type: 'server',
-                    x: 400,
-                    y: 200,
-                    description: 'Real-time WebSocket server with fallback',
-                    details: {
-                        transport: ['WebSocket primary', 'HTTP long-polling fallback'],
-                        config: ['120s ping timeout', '60s ping interval', '100MB buffer', '30s heartbeat'],
-                        tracking: ['Agent-Socket mapping', 'Room management', 'Connection health']
-                    }
-                },
-                {
-                    id: 'rest-api',
-                    label: 'REST API',
-                    type: 'server',
-                    x: 400,
-                    y: 300,
-                    description: 'Comprehensive REST endpoints',
-                    details: {
-                        endpoints: ['/api/agents', '/api/channels', '/api/tasks', '/api/mcp', '/api/dashboard'],
-                        auth: ['JWT for users', 'API keys for agents', 'Dual authentication'],
-                        features: ['CRUD operations', 'Analytics', 'Monitoring']
-                    }
-                },
-                {
-                    id: 'event-bus',
-                    label: 'EventBus',
-                    type: 'server',
-                    x: 400,
-                    y: 400,
-                    description: 'Three-layer event architecture',
-                    details: {
-                        layers: ['EventBusImplementation (RxJS)', 'ClientEventBus', 'ServerEventBus'],
-                        categories: ['Agent', 'Channel', 'Message', 'ControlLoop', 'Task', 'System'],
-                        patterns: ['Observable streams', 'Room broadcasting', 'Event forwarding']
-                    }
-                },
-                {
-                    id: 'auth-service',
-                    label: 'Authentication',
-                    type: 'server',
-                    x: 400,
-                    y: 500,
-                    description: 'Dual authentication system',
-                    details: {
-                        methods: ['JWT (RS256) for users', 'API keys for agents', 'Combined middleware'],
-                        security: ['Token refresh', 'Session management', 'Role-based access'],
-                        encryption: ['AES-256-GCM for MXP', 'TLS for network', 'Secure key storage']
-                    }
-                },
-
-                // MCP/Tools Layer
-                {
-                    id: 'hybrid-registry',
-                    label: 'HybridMcpRegistry',
-                    type: 'mcp',
-                    x: 650,
-                    y: 200,
-                    description: 'Unified tool interface',
-                    details: {
-                        components: ['McpToolRegistry (75+ internal)', 'ExternalMcpServerManager', 'Circuit breakers'],
-                        categories: ['Meta Tools', 'Communication', 'Control Loop', 'Infrastructure', 'Analytics'],
-                        features: ['AI-powered discovery', 'Graceful fallback', 'Health monitoring']
-                    }
-                },
-                {
-                    id: 'validation-system',
-                    label: 'Validation System',
-                    type: 'mcp',
-                    x: 650,
-                    y: 300,
-                    description: 'Advanced validation and auto-correction',
-                    details: {
-                        services: ['ProactiveValidationService', 'AutoCorrectionService', 'PredictiveAnalyticsService'],
-                        metrics: ['<50ms latency', '>80% correction rate', '>70% prediction accuracy'],
-                        levels: ['ASYNC', 'BLOCKING', 'STRICT']
-                    }
-                },
-                {
-                    id: 'system-llm',
-                    label: 'SystemLLM',
-                    type: 'mcp',
-                    x: 650,
-                    y: 400,
-                    description: 'ORPAR-optimized LLM service',
-                    details: {
-                        models: ['claude-3-haiku (observation)', 'claude-3-opus (reasoning)', 'gpt-4-turbo (action)', 'claude-3-sonnet (planning)'],
-                        features: ['Phase-optimized selection', 'Structured output', 'Pattern recognition'],
-                        operations: ['Topic extraction', 'Reasoning analysis', 'Plan generation', 'Tool recommendation']
-                    }
-                },
-                {
-                    id: 'orpar-loop',
-                    label: 'ORPAR Control',
-                    type: 'mcp',
-                    x: 650,
-                    y: 500,
-                    description: 'Cognitive cycle management',
-                    details: {
-                        phases: ['Observation', 'Reasoning', 'Planning', 'Action', 'Reflection'],
-                        features: ['State management', 'Error recovery', 'Performance tracking', 'Structured parsing'],
-                        patterns: ['BehaviorSubject', 'Exponential backoff', 'Timing metrics']
-                    }
-                },
-
-                // Data Layer
-                {
-                    id: 'mongodb',
-                    label: 'MongoDB',
-                    type: 'data',
-                    x: 900,
-                    y: 200,
-                    description: 'Primary data persistence',
-                    details: {
-                        models: ['agent', 'channel', 'task', 'memory', 'toolExecution', 'auditLog'],
-                        features: ['TTL indexes', 'Semantic search', 'Pattern storage', 'Analytics data'],
-                        optimization: ['Connection pooling', 'Batch operations', 'Index optimization']
-                    }
-                },
-                {
-                    id: 'memory-service',
-                    label: 'Memory Service',
-                    type: 'data',
-                    x: 900,
-                    y: 300,
-                    description: 'Three-scope memory management',
-                    details: {
-                        scopes: ['Agent memory', 'Channel memory', 'Relationship memory'],
-                        caching: ['In-process cache', 'Redis layer', 'MongoDB persistence'],
-                        features: ['Semantic retrieval', 'Context windows', 'Pattern memory']
-                    }
-                },
-                {
-                    id: 'cache-layer',
-                    label: 'Cache System',
-                    type: 'data',
-                    x: 900,
-                    y: 400,
-                    description: 'Multi-level caching strategy',
-                    details: {
-                        levels: ['Memory (in-process)', 'Redis (distributed)', 'MongoDB (persistent)'],
-                        strategies: ['LRU eviction', 'TTL management', 'Pattern caching'],
-                        optimization: ['Lazy loading', 'Batch processing', 'Stream processing']
-                    }
-                },
-
-                // Analytics/ML Layer
-                {
-                    id: 'analytics-service',
-                    label: 'Analytics Services',
-                    type: 'analytics',
-                    x: 1150,
-                    y: 200,
-                    description: 'Comprehensive analytics system',
-                    details: {
-                        services: ['ValidationAnalyticsService', 'PerformanceOptimizationService', 'AgentPerformanceService'],
-                        metrics: ['ORPAR timings', 'Tool usage', 'Success rates', 'Error patterns'],
-                        features: ['Trend analysis', 'A/B testing', 'ROI calculation', 'Bottleneck detection']
-                    }
-                },
-                {
-                    id: 'ml-prediction',
-                    label: 'ML Prediction',
-                    type: 'analytics',
-                    x: 1150,
-                    y: 300,
-                    description: 'Machine learning prediction system',
-                    details: {
-                        models: ['Random Forest', 'Gradient Boosting', 'Ensemble methods'],
-                        capabilities: ['Error prediction (>70%)', 'Anomaly detection', 'Pattern learning'],
-                        features: ['Real-time updates', 'Model retraining', 'Cross-agent learning']
-                    }
-                },
-                {
-                    id: 'pattern-learning',
-                    label: 'Pattern Learning',
-                    type: 'analytics',
-                    x: 1150,
-                    y: 400,
-                    description: 'AI-powered pattern detection',
-                    details: {
-                        services: ['PatternMemoryService', 'PatternLearningService', 'Learning progression'],
-                        features: ['Success pattern recognition', 'Knowledge sharing', 'Adaptive behavior'],
-                        optimization: ['Workflow patterns', 'Tool selection', 'Task routing']
-                    }
-                },
-
-                // Dashboard Layer
-                {
-                    id: 'vue-dashboard',
-                    label: 'Vue.js Dashboard',
-                    type: 'dashboard',
-                    x: 1150,
-                    y: 500,
-                    description: 'Real-time monitoring interface',
-                    details: {
-                        components: ['Agent metrics', 'Channel activity', 'Task completion', 'System health'],
-                        stores: ['Pinia state management', 'Real-time updates', 'Data persistence'],
-                        features: ['Responsive UI', 'Data visualization', 'Export functionality']
-                    }
-                },
-
-                // Task Management
-                {
-                    id: 'task-service',
-                    label: 'Task Service',
-                    type: 'server',
-                    x: 550,
-                    y: 600,
-                    description: 'Autonomous task coordination',
-                    details: {
-                        workflow: ['Goal-oriented prompting', 'Capability matching', 'Progress tracking'],
-                        states: ['pending', 'assigned', 'in_progress', 'completed'],
-                        features: ['SystemLLM analysis', 'Completion detection', 'Effectiveness metrics']
-                    }
-                },
-
-                // Channel System
-                {
-                    id: 'channel-service',
-                    label: 'Channel Service',
-                    type: 'server',
-                    x: 250,
-                    y: 600,
-                    description: 'Channel-based collaboration',
-                    details: {
-                        features: ['Room management', 'Context sharing', 'MXP protocol', 'Broadcast messaging'],
-                        coordination: ['Formal workflows', 'State tracking', 'Knowledge sharing'],
-                        security: ['Channel isolation', 'Key management', 'Access control']
-                    }
+        // Component data
+        const componentData = {
+            'sdk-client': {
+                name: 'Agent SDK',
+                type: 'SDK',
+                description: 'The MXF Agent SDK is a TypeScript client library that enables developers to create intelligent, autonomous agents. It provides a complete toolkit for agent communication, tool execution, and control loop integration.',
+                sections: {
+                    'Key Features': [
+                        'Real-time Socket.IO communication',
+                        'RxJS-based reactive event system',
+                        'Automatic reconnection handling',
+                        'Built-in authentication (JWT + API keys)',
+                        'TypeScript-first with full type safety'
+                    ],
+                    'Capabilities': [
+                        'Channel-based agent organization',
+                        'Peer-to-peer agent messaging',
+                        'Tool discovery and execution',
+                        'ORPAR control loop integration'
+                    ]
                 }
-            ],
-
-            links: [
-                // Client to Server connections
-                { source: 'mxf-client', target: 'socket-server', label: 'WebSocket', type: 'primary' },
-                { source: 'mxf-client', target: 'rest-api', label: 'HTTP', type: 'secondary' },
-                { source: 'sdk-handlers', target: 'mxf-client', label: 'Events', type: 'data' },
-                { source: 'sdk-services', target: 'sdk-handlers', label: 'Service calls', type: 'data' },
-                
-                // Server internal connections
-                { source: 'socket-server', target: 'event-bus', label: 'Events', type: 'primary' },
-                { source: 'rest-api', target: 'auth-service', label: 'Auth', type: 'secondary' },
-                { source: 'event-bus', target: 'channel-service', label: 'Channel events', type: 'data' },
-                { source: 'event-bus', target: 'task-service', label: 'Task events', type: 'data' },
-                
-                // MCP/Tool connections
-                { source: 'socket-server', target: 'hybrid-registry', label: 'Tool calls', type: 'primary' },
-                { source: 'rest-api', target: 'hybrid-registry', label: 'Tool API', type: 'secondary' },
-                { source: 'hybrid-registry', target: 'validation-system', label: 'Validation', type: 'primary' },
-                { source: 'validation-system', target: 'system-llm', label: 'AI analysis', type: 'secondary' },
-                { source: 'system-llm', target: 'orpar-loop', label: 'Control', type: 'primary' },
-                
-                // Data connections
-                { source: 'event-bus', target: 'mongodb', label: 'Persistence', type: 'data' },
-                { source: 'memory-service', target: 'mongodb', label: 'Storage', type: 'data' },
-                { source: 'memory-service', target: 'cache-layer', label: 'Caching', type: 'secondary' },
-                { source: 'cache-layer', target: 'mongodb', label: 'Fallback', type: 'secondary' },
-                
-                // Analytics connections
-                { source: 'orpar-loop', target: 'analytics-service', label: 'Metrics', type: 'data' },
-                { source: 'analytics-service', target: 'ml-prediction', label: 'Training data', type: 'secondary' },
-                { source: 'ml-prediction', target: 'pattern-learning', label: 'Patterns', type: 'data' },
-                { source: 'pattern-learning', target: 'memory-service', label: 'Storage', type: 'secondary' },
-                
-                // Dashboard connections
-                { source: 'analytics-service', target: 'vue-dashboard', label: 'Real-time data', type: 'primary' },
-                { source: 'rest-api', target: 'vue-dashboard', label: 'API', type: 'secondary' },
-                
-                // Task and Channel connections
-                { source: 'task-service', target: 'system-llm', label: 'Analysis', type: 'primary' },
-                { source: 'task-service', target: 'mongodb', label: 'Persistence', type: 'data' },
-                { source: 'channel-service', target: 'memory-service', label: 'Context', type: 'primary' },
-                { source: 'channel-service', target: 'socket-server', label: 'Broadcasting', type: 'secondary' }
-            ]
-        };
-
-        // Color schemes for different node types
-        const colorSchemes = {
-            sdk: 'linear-gradient(135deg, #48bb78, #38a169)',
-            server: 'linear-gradient(135deg, #4299e1, #3182ce)',
-            mcp: 'linear-gradient(135deg, #ed8936, #dd6b20)',
-            data: 'linear-gradient(135deg, #9f7aea, #805ad5)',
-            analytics: 'linear-gradient(135deg, #f687b3, #ed64a6)',
-            dashboard: 'linear-gradient(135deg, #fbb6ce, #f687b3)'
-        };
-
-        // Initialize D3
-        const width = window.innerWidth;
-        const height = window.innerHeight;
-
-        const svg = d3.select('#container')
-            .append('svg')
-            .attr('width', width)
-            .attr('height', height);
-
-        // Add zoom behavior
-        const g = svg.append('g');
-        const zoom = d3.zoom()
-            .scaleExtent([0.5, 3])
-            .on('zoom', (event) => {
-                g.attr('transform', event.transform);
-            });
-        
-        svg.call(zoom);
-
-        // Create arrow markers
-        svg.append('defs').selectAll('marker')
-            .data(['primary', 'secondary', 'data'])
-            .enter().append('marker')
-            .attr('id', d => `arrow-${d}`)
-            .attr('viewBox', '0 -5 10 10')
-            .attr('refX', 25)
-            .attr('refY', 0)
-            .attr('markerWidth', 8)
-            .attr('markerHeight', 8)
-            .attr('orient', 'auto')
-            .append('path')
-            .attr('d', 'M0,-5L10,0L0,5')
-            .attr('class', 'arrow')
-            .style('fill', d => {
-                if (d === 'primary') return '#4299e1';
-                if (d === 'secondary') return '#718096';
-                return '#9f7aea';
-            });
-
-        // Create links
-        const links = g.append('g')
-            .selectAll('.link')
-            .data(architectureData.links)
-            .enter().append('path')
-            .attr('class', 'link')
-            .attr('stroke', d => {
-                if (d.type === 'primary') return '#4299e1';
-                if (d.type === 'secondary') return '#718096';
-                return '#9f7aea';
-            })
-            .attr('stroke-width', 2)
-            .attr('marker-end', d => `url(#arrow-${d.type})`);
-
-        // Create link labels
-        const linkLabels = g.append('g')
-            .selectAll('.link-label')
-            .data(architectureData.links)
-            .enter().append('text')
-            .attr('class', 'link-label')
-            .text(d => d.label);
-
-        // Create nodes
-        const nodes = g.append('g')
-            .selectAll('.node')
-            .data(architectureData.nodes)
-            .enter().append('g')
-            .attr('class', 'node')
-            .attr('transform', d => `translate(${d.x}, ${d.y})`)
-            .on('click', showNodeInfo)
-            .on('mouseover', showTooltip)
-            .on('mouseout', hideTooltip);
-
-        // Add rectangles to nodes
-        nodes.append('rect')
-            .attr('x', -60)
-            .attr('y', -25)
-            .attr('width', 120)
-            .attr('height', 50)
-            .attr('rx', 8)
-            .style('fill', d => {
-                const gradient = svg.append('defs')
-                    .append('linearGradient')
-                    .attr('id', `gradient-${d.id}`)
-                    .attr('x1', '0%')
-                    .attr('y1', '0%')
-                    .attr('x2', '100%')
-                    .attr('y2', '100%');
-
-                if (d.type === 'sdk') {
-                    gradient.append('stop').attr('offset', '0%').attr('stop-color', '#48bb78');
-                    gradient.append('stop').attr('offset', '100%').attr('stop-color', '#38a169');
-                } else if (d.type === 'server') {
-                    gradient.append('stop').attr('offset', '0%').attr('stop-color', '#4299e1');
-                    gradient.append('stop').attr('offset', '100%').attr('stop-color', '#3182ce');
-                } else if (d.type === 'mcp') {
-                    gradient.append('stop').attr('offset', '0%').attr('stop-color', '#ed8936');
-                    gradient.append('stop').attr('offset', '100%').attr('stop-color', '#dd6b20');
-                } else if (d.type === 'data') {
-                    gradient.append('stop').attr('offset', '0%').attr('stop-color', '#9f7aea');
-                    gradient.append('stop').attr('offset', '100%').attr('stop-color', '#805ad5');
-                } else if (d.type === 'analytics') {
-                    gradient.append('stop').attr('offset', '0%').attr('stop-color', '#f687b3');
-                    gradient.append('stop').attr('offset', '100%').attr('stop-color', '#ed64a6');
-                } else if (d.type === 'dashboard') {
-                    gradient.append('stop').attr('offset', '0%').attr('stop-color', '#fbb6ce');
-                    gradient.append('stop').attr('offset', '100%').attr('stop-color', '#f687b3');
+            },
+            'tool-executor': {
+                name: 'Tool Executor',
+                type: 'SDK',
+                description: 'The unified execution engine that handles all tool invocations across 100+ built-in tools and external MCP servers. Features intelligent pre-validation and auto-correction.',
+                sections: {
+                    'Execution Pipeline': [
+                        'Pre-execution validation with low latency',
+                        'Parameter auto-correction',
+                        'Error prediction with pattern learning',
+                        'Pattern-based learning',
+                        'Cross-agent intelligence sharing'
+                    ],
+                    'Tool Categories': [
+                        'Communication & Discovery (8 tools)',
+                        'Control Loop Operations (4 tools)',
+                        'Task Management (9 tools)',
+                        'Context & Memory (9 tools)',
+                        'Infrastructure (6 tools)'
+                    ]
                 }
-
-                return `url(#gradient-${d.id})`;
-            })
-            .style('filter', 'drop-shadow(0 4px 8px rgba(0, 0, 0, 0.1))');
-
-        // Add labels to nodes
-        nodes.append('text')
-            .attr('class', 'node-label')
-            .text(d => d.label)
-            .style('font-size', '11px');
-
-        // Update link paths
-        function updateLinks() {
-            links.attr('d', d => {
-                const sourceNode = architectureData.nodes.find(n => n.id === d.source);
-                const targetNode = architectureData.nodes.find(n => n.id === d.target);
-                
-                const dx = targetNode.x - sourceNode.x;
-                const dy = targetNode.y - sourceNode.y;
-                const dr = Math.sqrt(dx * dx + dy * dy) * 0.7;
-                
-                return `M${sourceNode.x},${sourceNode.y}A${dr},${dr} 0 0,1 ${targetNode.x},${targetNode.y}`;
-            });
-
-            linkLabels
-                .attr('x', d => {
-                    const sourceNode = architectureData.nodes.find(n => n.id === d.source);
-                    const targetNode = architectureData.nodes.find(n => n.id === d.target);
-                    return (sourceNode.x + targetNode.x) / 2;
-                })
-                .attr('y', d => {
-                    const sourceNode = architectureData.nodes.find(n => n.id === d.source);
-                    const targetNode = architectureData.nodes.find(n => n.id === d.target);
-                    return (sourceNode.y + targetNode.y) / 2 - 5;
-                });
-        }
-
-        updateLinks();
-
-        // Tooltip functions
-        function showTooltip(event, d) {
-            const tooltip = document.getElementById('tooltip');
-            tooltip.innerHTML = `
-                <h4>${d.type.toUpperCase()}</h4>
-                <p><strong>${d.label}</strong></p>
-                <p>${d.description}</p>
-            `;
-            tooltip.style.left = event.pageX + 10 + 'px';
-            tooltip.style.top = event.pageY - 10 + 'px';
-            tooltip.style.opacity = 1;
-        }
-
-        function hideTooltip() {
-            document.getElementById('tooltip').style.opacity = 0;
-        }
-
-        // Info panel functions
-        function showNodeInfo(event, d) {
-            const panel = document.getElementById('info-panel');
-            const title = document.getElementById('info-title');
-            const content = document.getElementById('info-content');
-            
-            title.textContent = d.label;
-            
-            let html = `<div class="info-section">
-                <h3>Description</h3>
-                <p style="color: #718096; font-size: 14px;">${d.description}</p>
-            </div>`;
-            
-            if (d.details) {
-                for (const [key, value] of Object.entries(d.details)) {
-                    html += `<div class="info-section">
-                        <h3>${key.charAt(0).toUpperCase() + key.slice(1)}</h3>
-                        <ul>`;
-                    
-                    if (Array.isArray(value)) {
-                        value.forEach(item => {
-                            html += `<li>${item}</li>`;
-                        });
-                    } else {
-                        html += `<li>${value}</li>`;
-                    }
-                    
-                    html += `</ul></div>`;
+            },
+            'orpar-client': {
+                name: 'ORPAR Control Loop',
+                type: 'Control',
+                description: 'The cognitive cycle that powers autonomous agent reasoning. Each cycle moves through Observe → Reason → Plan → Act → Reflect phases, enabling sophisticated decision-making.',
+                sections: {
+                    'Phases': [
+                        'Observe: Environmental awareness and context gathering',
+                        'Reason: LLM-powered logical analysis',
+                        'Plan: Goal decomposition and workflow creation',
+                        'Act: Strategic action with dependency tracking',
+                        'Reflect: Deep analytical review and learning'
+                    ],
+                    'Integration': [
+                        'SystemLLM for cognitive operations',
+                        'Memory service for context persistence',
+                        'Pattern learning for improvement over time'
+                    ]
+                }
+            },
+            'socket-server': {
+                name: 'Socket Server',
+                type: 'Server',
+                description: 'The real-time communication backbone powered by Socket.IO. Handles agent connections, message routing, channel management, and event distribution.',
+                sections: {
+                    'Features': [
+                        'Bi-directional real-time messaging',
+                        'Channel-based message routing',
+                        'Agent presence and discovery',
+                        'Event-driven architecture (RxJS)',
+                        'MXP protocol support (80% bandwidth reduction)'
+                    ],
+                    'Events': [
+                        'Agent connect/disconnect',
+                        'Message send/receive',
+                        'Tool execution notifications',
+                        'Task lifecycle events'
+                    ]
+                }
+            },
+            'rest-api': {
+                name: 'REST API',
+                type: 'Server',
+                description: 'Comprehensive HTTP API for framework management. Provides complete CRUD operations for all system entities with JWT and API key authentication.',
+                sections: {
+                    'API Categories': [
+                        'Channels API - Workspace management',
+                        'Agents API - Agent lifecycle',
+                        'Tasks API - Task orchestration',
+                        'Memory API - Context storage',
+                        'MCP API - External tools'
+                    ],
+                    'Features': [
+                        'JWT authentication for users',
+                        'API key authentication for agents',
+                        'Role-based access control',
+                        'Rate limiting and validation'
+                    ]
+                }
+            },
+            'tool-registry': {
+                name: 'Hybrid Tool Registry',
+                type: 'Server',
+                description: 'The unified registry that manages both internal MXF tools and external MCP server tools. Provides dynamic discovery, capability broadcasting, and intelligent routing.',
+                sections: {
+                    'Built-in Tools': [
+                        '100+ tools across 7 categories',
+                        'Meta-tools for intelligent discovery',
+                        'Validation and analytics tools',
+                        'Memory search tools'
+                    ],
+                    'MCP Integration': [
+                        'Calculator Server',
+                        'Memory Server (knowledge graph)',
+                        'Filesystem Server',
+                        'MongoDB Lens',
+                        'Sequential Thinking'
+                    ]
+                }
+            },
+            'system-llm': {
+                name: 'SystemLLM Service',
+                type: 'Server',
+                description: 'Multi-provider LLM integration service that powers the ORPAR cognitive cycle. Supports dynamic model selection based on task complexity.',
+                sections: {
+                    'Providers': [
+                        'OpenRouter (200+ models)',
+                        'OpenAI (GPT models)',
+                        'Anthropic (Claude)',
+                        'Google AI (Gemini)',
+                        'xAI (Grok)',
+                        'Ollama (local models)'
+                    ],
+                    'Features': [
+                        'Dynamic model selection',
+                        'Complexity-based switching',
+                        'Observable-based streaming',
+                        'Fallback mechanisms'
+                    ]
+                }
+            },
+            'mcp-servers': {
+                name: 'MCP Servers',
+                type: 'MCP',
+                description: 'External tool servers integrated via the Model Context Protocol. Extend MXF capabilities with specialized functionality through a standardized interface.',
+                sections: {
+                    'Available Servers': [
+                        'Calculator - Advanced math operations',
+                        'Memory - Knowledge graph storage',
+                        'Filesystem - File system interactions',
+                        'MongoDB Lens - Database analysis',
+                        'Sequential Thinking - Structured reasoning'
+                    ],
+                    'Protocol Features': [
+                        'Stdio-based communication',
+                        'Schema-validated parameters',
+                        'Automatic capability discovery',
+                        '43+ external tools'
+                    ]
+                }
+            },
+            'mongodb': {
+                name: 'MongoDB',
+                type: 'Data',
+                description: 'Primary persistence layer for all MXF entities. Stores agents, tasks, conversations, tool usage patterns, and system configuration.',
+                sections: {
+                    'Collections': [
+                        'agents - Agent profiles and state',
+                        'tasks - Task lifecycle data',
+                        'conversations - Message history',
+                        'patterns - Learned tool patterns',
+                        'analytics - Performance metrics'
+                    ],
+                    'Features': [
+                        'Indexing for fast queries',
+                        'Change streams for real-time sync',
+                        'Aggregation for analytics',
+                        'Docker deployment ready'
+                    ]
+                }
+            },
+            'meilisearch': {
+                name: 'Meilisearch',
+                type: 'Data',
+                description: 'Semantic search engine with OpenAI embeddings. Enables intelligent memory retrieval, achieving 87% prompt reduction through context-aware search.',
+                sections: {
+                    'Indexes': [
+                        'Conversations - Full history search',
+                        'Actions - Tool usage patterns',
+                        'Patterns - Cross-channel learnings',
+                        'Observations - Environmental data'
+                    ],
+                    'Features': [
+                        'Hybrid search (70% semantic / 30% keyword)',
+                        'OpenAI text-embedding-3-small',
+                        '<50ms search latency',
+                        'Cross-channel intelligence'
+                    ]
+                }
+            },
+            'redis': {
+                name: 'Redis',
+                type: 'Data',
+                description: 'High-performance caching layer for multi-level caching strategy. Reduces database load and improves response times across the framework.',
+                sections: {
+                    'Cache Layers': [
+                        'L1: In-memory (fastest)',
+                        'L2: Redis (distributed)',
+                        'L3: MongoDB (persistent)'
+                    ],
+                    'Use Cases': [
+                        'Tool validation cache',
+                        'Agent session state',
+                        'Pattern matching cache',
+                        'API response caching'
+                    ]
                 }
             }
-            
-            content.innerHTML = html;
-            panel.classList.add('active');
+        };
+
+        // Show component info
+        function showInfo(element) {
+            const id = element.dataset.id;
+            const data = componentData[id];
+            if (!data) return;
+
+            document.getElementById('infoPanelTitle').textContent = data.name;
+            document.getElementById('infoPanelType').textContent = data.type;
+            document.getElementById('infoPanelDesc').textContent = data.description;
+
+            let html = '';
+            for (const [section, items] of Object.entries(data.sections)) {
+                html += `<div class="info-section">
+                    <h3>${section}</h3>
+                    <ul>${items.map(item => `<li>${item}</li>`).join('')}</ul>
+                </div>`;
+            }
+            document.getElementById('infoPanelContent').innerHTML = html;
+            document.getElementById('infoPanel').classList.add('active');
         }
 
-        function closeInfoPanel() {
-            document.getElementById('info-panel').classList.remove('active');
+        // Close info panel
+        function closeInfo() {
+            document.getElementById('infoPanel').classList.remove('active');
         }
 
-        // Control functions
-        function resetZoom() {
-            svg.transition().duration(750).call(
-                zoom.transform,
-                d3.zoomIdentity
-            );
-        }
-
-        let labelsVisible = true;
-        function toggleLabels() {
-            labelsVisible = !labelsVisible;
-            d3.selectAll('.node-label').style('opacity', labelsVisible ? 1 : 0);
-            d3.selectAll('.link-label').style('opacity', 0);
-        }
-
+        // Highlight flows
         function highlightFlow(type) {
-            // Reset all highlights
-            d3.selectAll('.node').classed('highlight', false);
-            d3.selectAll('.link').style('stroke-width', 2).style('stroke-opacity', 0.6);
+            resetHighlight();
+            const components = document.querySelectorAll('.component');
             
-            if (type === 'agent') {
-                // Highlight agent flow
-                const agentNodes = ['mxf-client', 'sdk-handlers', 'socket-server', 'event-bus', 'channel-service'];
-                agentNodes.forEach(id => {
-                    d3.select(`[transform*="${architectureData.nodes.find(n => n.id === id).x}"]`)
-                        .classed('highlight', true);
-                });
-            } else if (type === 'tool') {
-                // Highlight tool flow
-                const toolNodes = ['hybrid-registry', 'validation-system', 'system-llm', 'orpar-loop'];
-                toolNodes.forEach(id => {
-                    d3.select(`[transform*="${architectureData.nodes.find(n => n.id === id).x}"]`)
-                        .classed('highlight', true);
-                });
-            } else if (type === 'data') {
-                // Highlight data flow
-                const dataNodes = ['mongodb', 'memory-service', 'cache-layer', 'analytics-service'];
-                dataNodes.forEach(id => {
-                    d3.select(`[transform*="${architectureData.nodes.find(n => n.id === id).x}"]`)
-                        .classed('highlight', true);
-                });
-            }
+            const flows = {
+                agent: ['sdk-client', 'socket-server', 'tool-registry'],
+                data: ['mongodb', 'meilisearch', 'redis'],
+                tool: ['tool-executor', 'tool-registry', 'mcp-servers']
+            };
+
+            components.forEach(comp => {
+                if (flows[type].includes(comp.dataset.id)) {
+                    comp.classList.add('highlighted');
+                } else {
+                    comp.style.opacity = '0.3';
+                }
+            });
+
+            // Update button states
+            document.querySelectorAll('.control-btn').forEach(btn => btn.classList.remove('active'));
+            event.target.closest('.control-btn').classList.add('active');
         }
 
-        // Initial zoom to fit
-        window.addEventListener('load', () => {
-            const bounds = g.node().getBBox();
-            const fullWidth = width;
-            const fullHeight = height;
-            const widthScale = fullWidth / bounds.width;
-            const heightScale = fullHeight / bounds.height;
-            const scale = 0.8 * Math.min(widthScale, heightScale);
+        // Reset highlights
+        function resetHighlight() {
+            document.querySelectorAll('.component').forEach(comp => {
+                comp.classList.remove('highlighted');
+                comp.style.opacity = '1';
+            });
+            document.querySelectorAll('.control-btn').forEach(btn => btn.classList.remove('active'));
+        }
+
+        // Activate ORPAR step
+        let activeStepIndex = -1;
+        function activateStep(element, index) {
+            document.querySelectorAll('.orpar-step').forEach(step => step.classList.remove('active'));
+            element.classList.add('active');
+            activeStepIndex = index;
+        }
+
+        // Auto-animate ORPAR
+        let orparInterval;
+        function startOrparAnimation() {
+            const steps = document.querySelectorAll('.orpar-step');
+            let currentStep = 0;
             
-            const translate = [
-                fullWidth / 2 - scale * (bounds.x + bounds.width / 2),
-                fullHeight / 2 - scale * (bounds.y + bounds.height / 2)
-            ];
-            
-            svg.call(
-                zoom.transform,
-                d3.zoomIdentity.translate(translate[0], translate[1]).scale(scale)
-            );
+            orparInterval = setInterval(() => {
+                steps.forEach(s => s.classList.remove('active'));
+                steps[currentStep].classList.add('active');
+                currentStep = (currentStep + 1) % steps.length;
+            }, 2000);
+        }
+
+        // Start animation on load
+        setTimeout(startOrparAnimation, 1000);
+
+        // Pause on hover
+        document.querySelector('.orpar-loop').addEventListener('mouseenter', () => {
+            clearInterval(orparInterval);
+        });
+
+        document.querySelector('.orpar-loop').addEventListener('mouseleave', () => {
+            startOrparAnimation();
+        });
+
+        // Close panel on escape
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') closeInfo();
         });
     </script>
 </body>

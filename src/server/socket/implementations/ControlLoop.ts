@@ -1016,7 +1016,7 @@ export class ControlLoop implements IControlLoop {
                     // Use SystemLlmService for strategic planning with advanced planning model
                     
                     // Create or get ORPAR context for this cycle
-                    const oraprContext = systemLlmService.createOrUpdateContext(
+                    const orparContext = systemLlmService.createOrUpdateContext(
                         this.loopId,
                         this.agentId,
                         this.getChannelId(),
@@ -1024,9 +1024,9 @@ export class ControlLoop implements IControlLoop {
                         reasoning
                     );
                     const previousPlans: Plan[] = []; // TODO: Implement previous plans tracking
-                    
+
                     plan = await lastValueFrom(
-                        systemLlmService.createPlan(reasoning, oraprContext, previousPlans)
+                        systemLlmService.createPlan(reasoning, orparContext, previousPlans)
                     );
                     
                     // Enhance plan with metadata

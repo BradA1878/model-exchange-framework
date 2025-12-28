@@ -351,7 +351,7 @@ export class MxfMeilisearchService {
 
             return embedding;
         } catch (error) {
-            this.logger.error(`Embedding generation failed:`, error);
+            //this.logger.error(`Embedding generation failed:`, error);
             return undefined;
         }
     }

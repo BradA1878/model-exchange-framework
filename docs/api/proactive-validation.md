@@ -1,13 +1,13 @@
 # Proactive Validation API
 
-The Proactive Validation API provides pre-execution validation capabilities, real-time parameter hints, and advanced error prediction. This system operates with <50ms latency while providing comprehensive validation for all tool executions.
+The Proactive Validation API provides pre-execution validation capabilities, real-time parameter hints, and advanced error prediction. This system is designed for low-latency operation while providing comprehensive validation for all tool executions.
 
 ## Overview
 
 The Proactive Validation System includes:
 - Pre-execution validation with risk assessment
 - Real-time parameter hints and auto-completion
-- ML-based error prediction (>70% accuracy)
+- ML-based error prediction with pattern learning
 - Multi-level caching for optimal performance
 - Risk-based validation levels (ASYNC, BLOCKING, STRICT)
 

@@ -1,0 +1,14 @@
+{
+    "name": "MXF Documentation",
+    "short_name": "MXF Docs",
+    "icons": [
+       {
+          "src": "android-chrome-192x192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+       }
+    ],
+    "theme_color": "#1a1a1a",
+    "background_color": "#f6fefe",
+    "display": "standalone"
+}

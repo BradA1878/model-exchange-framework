@@ -42,7 +42,7 @@ This document provides a complete guide for the Meilisearch semantic search inte
 - **Semantic search**: Vector embeddings via `text-embedding-3-small`
 - **Hybrid mode**: Configurable semantic/keyword ratio (default: 0.7)
 - **Filtering**: By agentId, channelId, timestamp, etc.
-- **Performance**: <50ms search latency for most queries
+- **Fast Search**: Optimized for real-time agent queries
 
 ### 3. **Memory Search Tools** (MCP Tools)
 
@@ -163,14 +163,27 @@ npm run docker:meilisearch:stats
 Create a test agent and index some data:
 
 ```typescript
-import { MxfClient } from './src/sdk/MxfClient';
+import { MxfSDK } from '@mxf/sdk';
 
-const agent = new MxfClient({
-  agentId: 'TestAgent',
-  apiKey: process.env.AGENT_API_KEY,
-  serverUrl: 'http://localhost:3001'
+// Initialize SDK
+const sdk = new MxfSDK({
+  serverUrl: 'http://localhost:3001',
+  domainKey: process.env.MXF_DOMAIN_KEY!,
+  username: process.env.MXF_USERNAME!,
+  password: process.env.MXF_PASSWORD!
 });
+await sdk.connect();
 
+// Create agent through SDK
+const agent = await sdk.createAgent({
+  agentId: 'TestAgent',
+  channelId: 'dev-channel',
+  keyId: process.env.AGENT_KEY_ID!,
+  secretKey: process.env.AGENT_SECRET_KEY!,
+  llmProvider: 'openrouter',
+  defaultModel: 'anthropic/claude-3.5-sonnet',
+  apiKey: process.env.OPENROUTER_API_KEY!
+});
 await agent.connect();
 
 // Send some messages to index
@@ -273,28 +286,24 @@ MEILI_MAX_INDEXING_THREADS=4
 
 ## 📈 Performance Characteristics
 
-### Expected Metrics
+### Operations
 
-| Operation | Latency | Notes |
-|-----------|---------|-------|
-| **Index write** | <10ms | Async, non-blocking |
-| **Keyword search** | <20ms | Simple filter queries |
-| **Semantic search** | <50ms | With embeddings cached |
-| **Hybrid search** | <100ms | Combines both modes |
-| **Embedding generation** | ~50ms | Via OpenAI API |
+| Operation | Type | Notes |
+|-----------|------|-------|
+| **Index write** | Async | Non-blocking indexing |
+| **Keyword search** | Fast | Simple filter queries |
+| **Semantic search** | Fast | With embeddings cached |
+| **Hybrid search** | Fast | Combines both modes |
+| **Embedding generation** | External API | Via OpenAI API |
 
 ### Resource Usage
 
-**Typical deployment (1000 agents, 100K messages):**
-- **Meilisearch**: 500MB-1GB RAM
-- **MongoDB**: 1GB RAM
-- **Redis**: 100MB RAM
-- **MXF Server**: 500MB RAM
+Resource requirements will vary based on:
+- Number of agents and messages
+- Index sizes and retention policies
+- Search query complexity and frequency
 
-**Index sizes:**
-- Conversations: ~500 bytes/message
-- Actions: ~300 bytes/action
-- Patterns: ~1KB/pattern
+Meilisearch, MongoDB, and Redis each have their own memory requirements. Monitor your deployment to right-size resources.
 
 ---
 

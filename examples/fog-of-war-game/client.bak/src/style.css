@@ -1,0 +1,64 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+:root {
+  --color-bg-primary: #0f172a;
+  --color-bg-secondary: #1e293b;
+  --color-bg-tertiary: #334155;
+  --color-text-primary: #f1f5f9;
+  --color-text-secondary: #cbd5e1;
+  --color-red: #ef4444;
+  --color-blue: #3b82f6;
+  --color-neutral: #64748b;
+  --color-success: #10b981;
+  --color-warning: #f59e0b;
+  --color-border: #475569;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background: var(--color-bg-primary);
+  color: var(--color-text-primary);
+  overflow-x: hidden;
+}
+
+#app {
+  min-height: 100vh;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--color-bg-secondary);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-bg-tertiary);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-border);
+}
+
+/* Utility classes */
+.text-red { color: var(--color-red); }
+.text-blue { color: var(--color-blue); }
+.text-neutral { color: var(--color-neutral); }
+.text-success { color: var(--color-success); }
+.text-warning { color: var(--color-warning); }
+
+.bg-red { background-color: var(--color-red); }
+.bg-blue { background-color: var(--color-blue); }
+.bg-neutral { background-color: var(--color-neutral); }

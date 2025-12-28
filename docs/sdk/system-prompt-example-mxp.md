@@ -26,7 +26,7 @@ The SystemLLM works alongside you to:
 
 ## MXP Protocol (Model Exchange Protocol)
 
-MXF supports MXP, an efficient binary protocol that reduces message size by 80%+ and **LLM token usage by 60-70%** in collaborative workflows. When MXP is enabled:
+MXF supports MXP, an efficient binary protocol that reduces message size and **LLM token usage** in collaborative workflows. When MXP is enabled:
 
 - **Automatic Optimization**: Your messages are automatically optimized for token efficiency
 - **Context Compression**: Previous conversations are compressed to reduce repeated context

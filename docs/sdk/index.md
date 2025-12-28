@@ -40,12 +40,12 @@ The SDK has **ONE** main entry point:
 - **Agent Management**: Register, authenticate, and manage agent lifecycle
 - **Channel Operations**: Join channels, send messages, receive broadcasts
 - **Memory System**: Agent, channel, and relationship memory with MongoDB persistence
-- **Semantic Search**: Meilisearch-powered memory search with 87% prompt reduction
+- **Semantic Search**: Meilisearch-powered memory search for intelligent context retrieval
 - **Memory Search Tools**: 3 specialized tools for searching conversations, actions, and patterns
 - **Task Management**: Receive, execute, and report on assigned tasks
-- **MCP Tool Integration**: 81+ built-in tools plus external MCP server integration
+- **MCP Tool Integration**: 100+ built-in tools plus external MCP server integration (global and channel-scoped) - See [Tool Reference](../mxf/tool-reference.md)
 - **Control Loop Support**: ORPAR (Observe-Reason-Act-Progress-Reflect) cycle
-- **MXP Protocol**: Efficient binary messaging with 80%+ bandwidth reduction
+- **MXP Protocol**: Efficient binary messaging with bandwidth optimization
 - **Validation & Auto-Correction**: Proactive error prevention with intelligent fixes
 
 ## Installation
@@ -179,12 +179,16 @@ const llmAgent = await sdk.createAgent({
     
     // Optional: Tool access control
     allowedTools: ['messaging_send', 'messaging_coordinate', 'task_complete'],
-    
+    circuitBreakerExemptTools: ['game_move', 'game_action'],  // Tools exempt from loop detection
+
+    // Optional: Behavioral settings
+    maxIterations: 15,                 // Max LLM iterations per task (default: 10)
+
     // Optional: MXP settings
     mxpEnabled: false,                 // Enable efficient binary messaging
     mxpPreferredFormat: 'auto',        // auto | mxp | natural-language
     mxpForceEncryption: false,         // Force encryption for all messages
-    
+
     // Optional: Metadata
     metadata: { department: 'support', priority: 'high' }
 });
@@ -579,9 +583,32 @@ The SDK provides methods for channel and key management:
 
 ```typescript
 // Create a channel programmatically
-await sdk.createChannel('new-channel', 'New Channel Name', {
+const channel = await sdk.createChannel('new-channel', {
+    name: 'New Channel Name',                // REQUIRED
     description: 'Channel for specific project',
     metadata: { project: 'ProjectX' }
+});
+
+// Create a channel with tool restrictions
+const restrictedChannel = await sdk.createChannel('restricted-channel', {
+    name: 'Restricted Channel',
+    description: 'Channel with limited tool access',
+    allowedTools: ['messaging_send', 'task_complete'],  // Channel-level tool restrictions
+    systemLlmEnabled: true,                             // Enable SystemLLM (default: true)
+    metadata: { access: 'limited' }
+});
+
+// Create a channel with pre-registered MCP servers
+const gameChannel = await sdk.createChannel('game-channel', {
+    name: 'Game Channel',
+    description: 'Channel for game interactions',
+    mcpServers: [{                                       // Pre-register MCP servers
+        id: 'game-server',
+        name: 'Game Server',
+        command: 'npx',
+        args: ['-y', '@mcp/game-tools'],
+        keepAliveMinutes: 30
+    }]
 });
 
 // Generate agent keys for a channel
@@ -706,7 +733,7 @@ const orchestratorAgent = await sdk.createAgent({
 
 ### Tool Categories
 
-Common MXF tools can be grouped by function:
+Common MXF tools can be grouped by function. For the complete reference, see the **[Tool Reference](../mxf/tool-reference.md)**.
 
 #### **Communication Tools**
 - `messaging_send` - Send direct messages

@@ -38,6 +38,8 @@ import {
     McpResourceContent
 } from '../IMcpClient';
 import { extractToolCalls, extractToolCallId, extractToolResult } from '../utils/MessageConverters';
+import { AgentContext } from '../../../interfaces/AgentContext';
+import { ConversationMessage } from '../../../interfaces/ConversationMessage';
 
 // Extended MCP Message with optional name field
 interface ExtendedMcpMessage extends McpMessage {
@@ -566,6 +568,185 @@ export class OpenAiMcpClient extends BaseMcpClient {
             }
             throw new Error(`Error sending message to OpenAI: ${error instanceof Error ? error.message : String(error)}`);
         }
+    }
+
+    /**
+     * Send message using full agent context
+     * 
+     * This method structures messages for OpenAI based on semantic metadata,
+     * ensuring proper chronological ordering of tasks and conversation history.
+     * 
+     * @param context - Complete agent context from SDK
+     * @param options - Additional OpenAI-specific options
+     * @returns Observable with OpenAI response
+     */
+    public sendWithContext(
+        context: AgentContext,
+        options?: Record<string, any>
+    ): Observable<McpApiResponse> {
+        return new Observable<McpApiResponse>(subscriber => {
+            this.sendWithContextImpl(context, options)
+                .then(response => {
+                    subscriber.next(response);
+                    subscriber.complete();
+                })
+                .catch(error => subscriber.error(error));
+        });
+    }
+
+    /**
+     * Implementation of context-based sending for OpenAI
+     */
+    private async sendWithContextImpl(
+        context: AgentContext,
+        options?: Record<string, any>
+    ): Promise<McpApiResponse> {
+        // Structure messages for OpenAI based on context
+        const openAiMessages = this.structureMessagesFromContext(context);
+
+        // Convert to OpenAI ChatCompletionMessageParam format
+        const params: OpenAI.ChatCompletionCreateParams = {
+            model: options?.model || this.config.defaultModel || 'gpt-4o',
+            messages: openAiMessages as OpenAI.ChatCompletionMessageParam[],
+            temperature: options?.temperature ?? this.config.temperature ?? 0.7,
+            max_tokens: options?.maxTokens ?? this.config.maxTokens ?? 4096
+        };
+
+        // Add tools if available
+        if (context.availableTools && context.availableTools.length > 0) {
+            const openAiTools = this.convertToOpenAiTools(context.availableTools as McpTool[]);
+            if (openAiTools && openAiTools.length > 0) {
+                params.tools = openAiTools;
+                params.tool_choice = 'auto';
+            }
+        }
+
+        // Add JSON response format if requested
+        if (options?.responseFormat === 'json') {
+            params.response_format = { type: 'json_object' };
+        }
+
+        // Ensure the API client is initialized
+        if (!this.apiClient) {
+            await this.initializeProvider();
+            if (!this.apiClient) {
+                throw new Error('Failed to initialize OpenAI API client');
+            }
+        }
+
+        // Make the API request
+        const response = await this.apiClient.chat.completions.create(params);
+        return this.convertToMcpResponse(response);
+    }
+
+    /**
+     * Structure messages from AgentContext for OpenAI
+     * 
+     * Message ordering:
+     * 1. System message (framework rules + agent identity)
+     * 2. Conversation history (chronological)
+     * 3. Task prompt (if present) - AFTER conversation for proper ordering
+     * 4. Recent actions (if needed)
+     */
+    private structureMessagesFromContext(context: AgentContext): any[] {
+        const messages: any[] = [];
+
+        // 1. System message: Combine framework rules + agent identity
+        const systemContent = [
+            context.systemPrompt,
+            '',
+            `## Your Agent Identity`,
+            `**You are**: ${(context.agentConfig as any).purpose || context.agentConfig.agentId}`,
+            `**Your Agent ID**: ${context.agentId}`,
+            ...(context.agentConfig.capabilities ? [`**Capabilities**: ${context.agentConfig.capabilities.join(', ')}`] : [])
+        ].join('\n');
+
+        messages.push({
+            role: 'system',
+            content: systemContent
+        });
+
+        // 2. Conversation history: Filter to actual dialogue and tool results
+        const dialogueMessages = context.conversationHistory.filter(msg => {
+            const layer = msg.metadata?.contextLayer;
+
+            // INCLUDE: SystemLLM messages - they are "held" until the next real prompt
+            // and should be bundled with that prompt to provide coordination insights
+            // (Previously these were skipped, breaking the SystemLLM flow)
+
+            // INCLUDE: Messages with conversation or tool-result layer
+            if (layer === 'conversation' || layer === 'tool-result') {
+                return true;
+            }
+
+            // INCLUDE: Tool role messages
+            if (msg.role === 'tool') {
+                return true;
+            }
+
+            // SKIP: Messages with system/identity/task/action layers
+            if (layer === 'system' || layer === 'identity' || layer === 'task' || layer === 'action') {
+                return false;
+            }
+
+            // INCLUDE: Messages without contextLayer (legacy or direct additions)
+            if (!layer && msg.role !== 'system') {
+                return true;
+            }
+
+            return false;
+        });
+
+        // Convert to OpenAI format
+        const openAiDialogue = dialogueMessages.map(msg => this.convertConversationToOpenAi(msg));
+        messages.push(...openAiDialogue);
+
+        // 3. Task message (if present) - Added AFTER conversation history for chronological ordering
+        if (context.currentTask) {
+            messages.push({
+                role: 'user',
+                content: `## Current Task\n${context.currentTask.description}`
+            });
+        }
+
+        // 4. Recent actions (if needed for context)
+        if (context.recentActions.length > 0) {
+            const actionsContent = [
+                `## Your Recent Actions`,
+                ...context.recentActions.map(a => `- ${a.action}${a.result ? `: ${a.result}` : ''}`)
+            ].join('\n');
+
+            messages.push({
+                role: 'user',
+                content: actionsContent
+            });
+        }
+
+        return messages;
+    }
+
+    /**
+     * Convert ConversationMessage to OpenAI format
+     */
+    private convertConversationToOpenAi(msg: ConversationMessage): any {
+        const openAiMsg: any = {
+            role: msg.role === 'assistant' ? 'assistant' : 
+                  msg.role === 'tool' ? 'tool' : 
+                  msg.role === 'system' ? 'system' : 'user',
+            content: msg.content
+        };
+
+        // Add tool_call_id for tool messages
+        if (msg.role === 'tool' && msg.metadata?.tool_call_id) {
+            openAiMsg.tool_call_id = msg.metadata.tool_call_id;
+        }
+
+        // Preserve tool_calls for assistant messages
+        if (msg.role === 'assistant' && (msg as any).tool_calls) {
+            openAiMsg.tool_calls = (msg as any).tool_calls;
+        }
+
+        return openAiMsg;
     }
 
     /**

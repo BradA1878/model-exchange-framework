@@ -31,9 +31,9 @@ import { v4 as uuidv4 } from 'uuid';
 import { Logger } from '../utils/Logger';
 import { AgentId } from '../types/Agent';
 import { ChannelId } from '../types/ChannelContext';
-import { 
+import {
     AgentPerformanceMetrics,
-    OraprTimingMetrics,
+    OrparTimingMetrics,
     ToolUsageMetrics,
     CollaborationMetrics,
     AgentPerformanceAnalysis,
@@ -229,7 +229,7 @@ export class AgentPerformanceService {
         
         if (startTime) {
             const duration = Date.now() - startTime;
-            await this.updateOraprTiming(agentId, channelId, fromPhase, duration);
+            await this.updateOrparTiming(agentId, channelId, fromPhase, duration);
             this.phaseStartTimes.delete(fromKey);
         }
         
@@ -237,7 +237,7 @@ export class AgentPerformanceService {
         await this.trackPhaseStart(agentId, channelId, toPhase);
     }
 
-    private async updateOraprTiming(
+    private async updateOrparTiming(
         agentId: AgentId,
         channelId: ChannelId,
         phase: string,
@@ -249,7 +249,7 @@ export class AgentPerformanceService {
             
             if (!metrics) return;
             
-            const timing = metrics.oraprTiming;
+            const timing = metrics.orparTiming;
             
             // Update the specific phase timing using running average
             switch (phase) {
@@ -382,7 +382,7 @@ export class AgentPerformanceService {
         return {
             agentId,
             channelId,
-            oraprTiming: {
+            orparTiming: {
                 averageObservationTime: 0,
                 averageReasoningTime: 0,
                 averagePlanningTime: 0,
@@ -497,7 +497,7 @@ export class AgentPerformanceService {
 
     private createSimplifiedAnalysis(metrics: AgentPerformanceMetrics): AgentPerformanceAnalysis {
         // Simple analysis based on available metrics
-        const cycleCount = metrics.oraprTiming.cycleCount;
+        const cycleCount = metrics.orparTiming.cycleCount;
         const toolsUsed = metrics.toolUsage.totalToolsUsed;
         const messages = metrics.collaboration.messagesSentInChannel + metrics.collaboration.messagesReceivedInChannel;
         
@@ -508,7 +508,7 @@ export class AgentPerformanceService {
         
         const optimizations: PerformanceOptimizationSuggestion[] = [];
         
-        if (metrics.oraprTiming.averageTotalCycleTime > 30000) { // More than 30 seconds
+        if (metrics.orparTiming.averageTotalCycleTime > 30000) { // More than 30 seconds
             optimizations.push({
                 category: 'timing',
                 priority: 'medium',
@@ -578,7 +578,7 @@ export class AgentPerformanceService {
         return ((currentAverage * count) + newValue) / (count + 1);
     }
 
-    private getPhaseAverage(timing: OraprTimingMetrics, phase: string): number {
+    private getPhaseAverage(timing: OrparTimingMetrics, phase: string): number {
         switch (phase) {
             case 'observation': return timing.averageObservationTime;
             case 'reasoning': return timing.averageReasoningTime;

@@ -524,19 +524,17 @@ export class AzureOpenAiMcpClient extends BaseMcpClient {
             content: systemContent
         });
         
-        // 2. Task message (if present)
-        if (context.currentTask) {
-            messages.push({
-                role: 'user',
-                content: `## Current Task\n${context.currentTask.description}`
-            });
-        }
-        
-        // 3. Conversation history: ONLY actual dialogue and tool results
+        // 2. Conversation history: ONLY actual dialogue and tool results
+        // NOTE: Task message is now added AFTER conversation history to maintain chronological order
+        // This fixes the bug where subsequent tasks appeared above existing conversation
         // This is the KEY FIX - we filter using metadata to avoid duplicates
         const dialogueMessages = context.conversationHistory.filter(msg => {
             const layer = msg.metadata?.contextLayer;
             
+            // INCLUDE: SystemLLM messages - they are "held" until the next real prompt
+            // and should be bundled with that prompt to provide coordination insights
+            // (Previously these were skipped, breaking the SystemLLM flow)
+
             // INCLUDE: Messages with conversation or tool-result layer
             if (layer === 'conversation' || layer === 'tool-result') {
                 return true;
@@ -572,6 +570,15 @@ export class AzureOpenAiMcpClient extends BaseMcpClient {
         // Convert to Azure format
         const azureDialogue = this.convertToAzureOpenAiMessages(filteredMessages);
         messages.push(...azureDialogue);
+        
+        // 3. Task message (if present) - Added AFTER conversation history for chronological ordering
+        // This ensures subsequent task assignments appear after existing conversation
+        if (context.currentTask) {
+            messages.push({
+                role: 'user',
+                content: `## Current Task\n${context.currentTask.description}`
+            });
+        }
         
         // 4. Recent actions (if needed for context)
         if (context.recentActions.length > 0) {

@@ -48,7 +48,7 @@ const validator = createStrictValidator('MxfAgentSystemPrompt');
 export interface MxfSystemPromptConfig {
     includeToolSchemas?: boolean;
     includeUsageExamples?: boolean;
-    includeOraprGuidance?: boolean;
+    includeOrparGuidance?: boolean;
     includeErrorHandling?: boolean;
     coreToolsOnly?: boolean;
     customSections?: string[];
@@ -58,7 +58,7 @@ export class MxfAgentSystemPrompt {
     private static readonly DEFAULT_CONFIG: MxfSystemPromptConfig = {
         includeToolSchemas: true,
         includeUsageExamples: true,
-        includeOraprGuidance: true,
+        includeOrparGuidance: true,
         includeErrorHandling: true,
         coreToolsOnly: true,
         customSections: []
@@ -100,7 +100,7 @@ export class MxfAgentSystemPrompt {
             await this.buildToolSchemas(config, availableTools, toolNames, agentConfig),
             this.buildToolUsagePatterns(agentConfig, toolNames),
             this.buildMetaToolGuidance(toolNames, agentConfig.mxpEnabled),
-            this.buildOraprGuidelines(config, toolNames),
+            this.buildOrparGuidelines(config, toolNames),
             this.buildCollaborationPatterns(toolNames, agentConfig),
             this.buildErrorHandling(config, toolNames, agentConfig.mxpEnabled),
             this.buildContextAwarenessNotice(),
@@ -809,8 +809,8 @@ When you need capabilities beyond your core tools:
     /**
      * ORPAR Operational Guidelines
      */
-    private static buildOraprGuidelines(config: MxfSystemPromptConfig, availableTools?: string[]): string {
-        if (!config.includeOraprGuidance) return '';
+    private static buildOrparGuidelines(config: MxfSystemPromptConfig, availableTools?: string[]): string {
+        if (!config.includeOrparGuidance) return '';
         
         // Only include ORPAR if control loop tools are available
         const toolSet = availableTools || [];

@@ -119,7 +119,23 @@ export class ExternalMcpServerManager extends EventEmitter {
         healthCheckTimer?: NodeJS.Timeout;
         startupTimer?: NodeJS.Timeout;
     }> = new Map();
-    
+
+    // Scope tracking for channel/agent-scoped servers
+    private serverScopes: Map<string, {
+        scope: 'global' | 'channel' | 'agent';
+        scopeId?: string;
+        connectedAgents: Set<string>;
+        keepAliveMinutes?: number;
+        keepAliveTimer?: NodeJS.Timeout;
+        // Registration context for deferred success emission after tool discovery
+        registrationContext?: {
+            agentId: string;
+            channelId: string;
+            originalServerId: string;
+            serverName: string;
+        };
+    }> = new Map();
+
     private autoCorrectionService: AutoCorrectionService;
 
     constructor() {
@@ -237,12 +253,140 @@ export class ExternalMcpServerManager extends EventEmitter {
             }
         });
 
+        // Handle channel-scoped server registration requests
+        EventBus.server.on(Events.Mcp.CHANNEL_SERVER_REGISTER, async (payload: any) => {
+            try {
+                logger.info(`[CHANNEL_SERVER_REGISTER] Received registration request: ${JSON.stringify({ agentId: payload.agentId, channelId: payload.channelId, serverId: payload.data?.id })}`);
+                
+                const { createExternalMcpServerEventPayload } = require('../../../schemas/EventPayloadSchema');
+                const { McpEvents } = require('../../../events/event-definitions/McpEvents');
+
+                const channelId = payload.data.channelId || payload.channelId;
+                const serverId = `${channelId}:${payload.data.id}`;
+
+                const serverConfig = {
+                    id: serverId,
+                    name: payload.data.name,
+                    version: payload.data.version || '1.0.0',
+                    command: payload.data.command || '',
+                    args: payload.data.args || [],
+                    transport: (payload.data.transport || 'stdio') as 'stdio' | 'http',
+                    url: payload.data.url,
+                    autoStart: payload.data.autoStart !== false,
+                    restartOnCrash: payload.data.restartOnCrash !== false,
+                    maxRestartAttempts: payload.data.maxRestartAttempts || 3,
+                    healthCheckInterval: payload.data.healthCheckInterval || 30000,
+                    startupTimeout: payload.data.startupTimeout || 10000,
+                    environmentVariables: payload.data.environmentVariables || {}
+                };
+
+                // Track scope BEFORE registration so we can store the registration context
+                // Note: connectedAgents starts empty - only actual game agents are counted, not the admin who registers
+                this.serverScopes.set(serverId, {
+                    scope: 'channel',
+                    scopeId: channelId,
+                    connectedAgents: new Set(),
+                    keepAliveMinutes: payload.data.keepAliveMinutes || 5,
+                    // Store registration context for deferred success emission
+                    registrationContext: {
+                        agentId: payload.agentId,
+                        channelId,
+                        originalServerId: payload.data.id,
+                        serverName: payload.data.name
+                    }
+                });
+
+                // Register the server (this starts the process and tool discovery)
+                // Success event will be emitted after tool discovery completes
+                await this.registerServer(serverConfig);
+                
+                logger.info(`[CHANNEL_SERVER_REGISTER] Server ${serverId} registered, waiting for tool discovery before emitting success`);
+
+            } catch (error) {
+                const { createExternalMcpServerEventPayload } = require('../../../schemas/EventPayloadSchema');
+                const { McpEvents } = require('../../../events/event-definitions/McpEvents');
+
+                logger.error(`Error registering channel server:`, error);
+
+                // Emit error response
+                EventBus.server.emit(McpEvents.CHANNEL_SERVER_REGISTRATION_FAILED,
+                    createExternalMcpServerEventPayload(
+                        McpEvents.CHANNEL_SERVER_REGISTRATION_FAILED,
+                        payload.agentId,
+                        payload.data?.channelId || payload.channelId,
+                        {
+                            serverId: payload.data?.id,
+                            scope: 'channel',
+                            scopeId: payload.data?.channelId || payload.channelId,
+                            success: false,
+                            error: error instanceof Error ? error.message : String(error)
+                        }
+                    )
+                );
+            }
+        });
+
+        // Handle channel server unregistration requests
+        EventBus.server.on(Events.Mcp.CHANNEL_SERVER_UNREGISTER, async (payload: any) => {
+            try {
+                const { createExternalMcpServerEventPayload } = require('../../../schemas/EventPayloadSchema');
+                const { McpEvents } = require('../../../events/event-definitions/McpEvents');
+
+                const channelId = payload.data.channelId || payload.channelId;
+                const serverId = `${channelId}:${payload.data.serverId}`;
+
+                await this.stopServer(serverId);
+                this.servers.delete(serverId);
+                this.serverScopes.delete(serverId);
+
+                // Emit success response
+                EventBus.server.emit(McpEvents.CHANNEL_SERVER_UNREGISTERED,
+                    createExternalMcpServerEventPayload(
+                        McpEvents.CHANNEL_SERVER_UNREGISTERED,
+                        payload.agentId,
+                        channelId,
+                        {
+                            serverId: payload.data.serverId,
+                            scope: 'channel',
+                            scopeId: channelId,
+                            success: true,
+                            message: `Channel server ${payload.data.serverId} unregistered successfully`
+                        }
+                    )
+                );
+
+            } catch (error) {
+                const { createExternalMcpServerEventPayload } = require('../../../schemas/EventPayloadSchema');
+                const { McpEvents } = require('../../../events/event-definitions/McpEvents');
+
+                logger.error(`Error unregistering channel server:`, error);
+
+                // Emit error response
+                EventBus.server.emit(McpEvents.CHANNEL_SERVER_UNREGISTERED,
+                    createExternalMcpServerEventPayload(
+                        McpEvents.CHANNEL_SERVER_UNREGISTERED,
+                        payload.agentId,
+                        payload.data?.channelId || payload.channelId,
+                        {
+                            serverId: payload.data?.serverId,
+                            scope: 'channel',
+                            scopeId: payload.data?.channelId || payload.channelId,
+                            success: false,
+                            error: error instanceof Error ? error.message : String(error)
+                        }
+                    )
+                );
+            }
+        });
+
     }
 
     /**
      * Register a new external server configuration
      */
     public async registerServer(config: ExternalServerConfig): Promise<void> {
+        logger.info(`[REGISTER_SERVER] Registering server ${config.id}: command="${config.command}", args=${JSON.stringify(config.args)}, autoStart=${config.autoStart}`);
+        
         // Validate configuration
         validator.assertIsNonEmptyString(config.id, 'Server ID must be a non-empty string');
         validator.assertIsNonEmptyString(config.name, 'Server name must be a non-empty string');
@@ -273,6 +417,7 @@ export class ExternalMcpServerManager extends EventEmitter {
 
         // Auto-start if configured
         if (config.autoStart) {
+            logger.info(`[REGISTER_SERVER] Auto-starting server ${config.id}`);
             await this.startServer(config.id);
         }
     }
@@ -281,14 +426,19 @@ export class ExternalMcpServerManager extends EventEmitter {
      * Start an external server process
      */
     public async startServer(serverId: string, agentId?: AgentId, channelId?: ChannelId): Promise<void> {
+        logger.info(`[START_SERVER] Starting server ${serverId}`);
+        
         const serverData = this.servers.get(serverId);
         if (!serverData) {
-            throw new Error(`Server ${serverId} not found`);
+            // Server was unregistered (e.g., during cleanup) - log warning and return gracefully
+            logger.warn(`⚠️  Cannot start server ${serverId} - server not found (likely unregistered)`);
+            return;
         }
 
         const { config, status } = serverData;
 
         if (status.status === 'running') {
+            logger.info(`[START_SERVER] Server ${serverId} already running`);
             return;
         }
 
@@ -299,8 +449,11 @@ export class ExternalMcpServerManager extends EventEmitter {
 
         try {
             // Spawn the process
+            const cwd = config.workingDirectory || process.cwd();
+            logger.info(`[START_SERVER] Spawning: ${config.command} ${config.args.join(' ')} in ${cwd}`);
+            
             const childProcess = spawn(config.command, config.args, {
-                cwd: config.workingDirectory || process.cwd(),
+                cwd,
                 env: { ...process.env, ...config.environmentVariables },
                 stdio: ['pipe', 'pipe', 'pipe']
             });
@@ -308,6 +461,7 @@ export class ExternalMcpServerManager extends EventEmitter {
             // Store process reference
             serverData.process = childProcess;
             status.pid = childProcess.pid;
+            logger.info(`[START_SERVER] Process spawned with PID ${childProcess.pid}`);
 
             // Set up process event handlers
             this.setupProcessEventHandlers(serverId, childProcess);
@@ -329,6 +483,92 @@ export class ExternalMcpServerManager extends EventEmitter {
             logger.error(`❌ Failed to start server ${config.name}: ${errorMessage}`);
             this.handleServerError(serverId, errorMessage, agentId, channelId);
         }
+    }
+
+    /**
+     * Handle agent joining a channel - start channel servers and track connection
+     */
+    public async onAgentJoinChannel(agentId: string, channelId: string): Promise<void> {
+        logger.info(`Agent ${agentId} joining channel ${channelId} - checking for channel servers`);
+
+        // Find all channel-scoped servers for this channel
+        for (const [serverId, scopeData] of this.serverScopes.entries()) {
+            if (scopeData.scope === 'channel' && scopeData.scopeId === channelId) {
+                // Add agent to connected agents
+                scopeData.connectedAgents.add(agentId);
+
+                // Clear any pending keepAlive timer
+                if (scopeData.keepAliveTimer) {
+                    clearTimeout(scopeData.keepAliveTimer);
+                    scopeData.keepAliveTimer = undefined;
+                }
+
+                // Start server if not already running
+                const serverData = this.servers.get(serverId);
+                if (serverData && serverData.status.status !== 'running') {
+                    logger.info(`Starting channel server ${serverId} for agent ${agentId}`);
+                    await this.startServer(serverId);
+                }
+
+                logger.info(`Agent ${agentId} connected to channel server ${serverId} (${scopeData.connectedAgents.size} agents)`);
+            }
+        }
+    }
+
+    /**
+     * Handle agent leaving a channel - implement reference counting and keepAlive
+     */
+    public async onAgentLeaveChannel(agentId: string, channelId: string): Promise<void> {
+        logger.info(`Agent ${agentId} leaving channel ${channelId} - checking channel servers`);
+
+        // Find all channel-scoped servers for this channel
+        for (const [serverId, scopeData] of this.serverScopes.entries()) {
+            if (scopeData.scope === 'channel' && scopeData.scopeId === channelId) {
+                // Remove agent from connected agents
+                scopeData.connectedAgents.delete(agentId);
+
+                logger.info(`Agent ${agentId} disconnected from channel server ${serverId} (${scopeData.connectedAgents.size} agents remaining)`);
+
+                // If no more agents connected, start keepAlive timer
+                if (scopeData.connectedAgents.size === 0) {
+                    const keepAliveMs = (scopeData.keepAliveMinutes || 5) * 60 * 1000;
+
+                    logger.info(`Last agent left channel server ${serverId}, starting ${scopeData.keepAliveMinutes}min keepAlive timer`);
+
+                    scopeData.keepAliveTimer = setTimeout(async () => {
+                        logger.info(`KeepAlive expired for server ${serverId}, stopping server`);
+                        try {
+                            await this.stopServer(serverId);
+                        } catch (error) {
+                            logger.error(`Error stopping server ${serverId} after keepAlive:`, error);
+                        }
+                    }, keepAliveMs);
+                }
+            }
+        }
+    }
+
+    /**
+     * Get servers by scope
+     */
+    public getServersByScope(scope: 'global' | 'channel' | 'agent', scopeId?: string): ExternalServerStatus[] {
+        const servers: ExternalServerStatus[] = [];
+
+        for (const [serverId, scopeData] of this.serverScopes.entries()) {
+            if (scopeData.scope === scope) {
+                // For channel/agent scope, match scopeId
+                if ((scope === 'channel' || scope === 'agent') && scopeData.scopeId !== scopeId) {
+                    continue;
+                }
+
+                const serverData = this.servers.get(serverId);
+                if (serverData) {
+                    servers.push(serverData.status);
+                }
+            }
+        }
+
+        return servers;
     }
 
     /**
@@ -448,7 +688,11 @@ export class ExternalMcpServerManager extends EventEmitter {
                 status.restartCount++;
                 
                 setTimeout(() => {
-                    this.startServer(serverId);
+                    // Check if server still exists before attempting restart
+                    // (it may have been unregistered during the delay)
+                    if (this.servers.has(serverId)) {
+                        this.startServer(serverId);
+                    }
                 }, 2000); // Wait 2 seconds before restart
             }
 
@@ -482,6 +726,7 @@ export class ExternalMcpServerManager extends EventEmitter {
 
         // Mark as started when process is spawned successfully
         process.on('spawn', () => {
+            logger.info(`[SPAWN] Server ${serverId} process spawned successfully`);
             status.status = 'running';
             
             // Clear startup timer
@@ -493,6 +738,7 @@ export class ExternalMcpServerManager extends EventEmitter {
             this.emitServerEvent(McpEvents.EXTERNAL_SERVER_STARTED, serverId);
             
             // Initialize MCP connection first, then discover tools
+            logger.info(`[SPAWN] Will initialize MCP connection for ${serverId} in 2 seconds...`);
             setTimeout(() => {
                 this.initializeMcpConnection(serverId);
             }, 2000); // Wait 2 seconds for server to fully start
@@ -593,6 +839,36 @@ export class ExternalMcpServerManager extends EventEmitter {
 
         // Emit tools discovered event
         this.emitServerToolsDiscovered(serverId, serverData.status.tools);
+        
+        // Emit deferred CHANNEL_SERVER_REGISTERED for channel-scoped servers
+        const scopeData = this.serverScopes.get(serverId);
+        if (scopeData?.scope === 'channel' && scopeData.registrationContext) {
+            const { createExternalMcpServerEventPayload } = require('../../../schemas/EventPayloadSchema');
+            const { McpEvents } = require('../../../events/event-definitions/McpEvents');
+            const ctx = scopeData.registrationContext;
+            
+            logger.info(`[CHANNEL_SERVER_REGISTER] Tool discovery complete for ${serverId}, emitting CHANNEL_SERVER_REGISTERED with ${serverData.status.tools.length} tools`);
+            
+            EventBus.server.emit(McpEvents.CHANNEL_SERVER_REGISTERED,
+                createExternalMcpServerEventPayload(
+                    McpEvents.CHANNEL_SERVER_REGISTERED,
+                    ctx.agentId,
+                    ctx.channelId,
+                    {
+                        serverId: ctx.originalServerId,
+                        serverName: ctx.serverName,
+                        scope: 'channel',
+                        scopeId: ctx.channelId,
+                        success: true,
+                        tools: serverData.status.tools,
+                        message: `Channel server ${ctx.serverName} registered with ${serverData.status.tools.length} tools`
+                    }
+                )
+            );
+            
+            // Clear registration context after emission
+            scopeData.registrationContext = undefined;
+        }
 
     }
 
@@ -845,15 +1121,22 @@ export class ExternalMcpServerManager extends EventEmitter {
         const defaultAgentId = agentId || 'SYSTEM' as AgentId;
         const defaultChannelId = channelId || 'SYSTEM' as ChannelId;
 
+        // Determine scope from server ID
+        const scopeData = this.serverScopes.get(serverId);
+        const scope = scopeData?.scope || 'global';
+        const scopeId = scopeData?.scopeId;
+
         // Create event payload using EventBus
         EventBus.server.emit(eventType, createExternalMcpServerEventPayload(
             eventType,
             defaultAgentId,
             defaultChannelId,
             {
-                name: config.name,
-                version: config.version,
-                description: config.description
+                serverId: serverId,
+                serverName: config.name,
+                scope: scope,
+                scopeId: scopeId,
+                status: 'running'
             }
         ));
     }

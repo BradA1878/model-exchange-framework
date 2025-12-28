@@ -19,13 +19,27 @@ Complete examples showing how to use the `code_execute` tool for various use cas
 ### Example 1: Filter and Transform Array
 
 ```typescript
-import { MxfClient } from 'mxf-sdk';
+import { MxfSDK } from '@mxf/sdk';
 
-const agent = new MxfClient({
-    agentId: 'DataProcessor',
-    apiKey: process.env.AGENT_API_KEY
+// Initialize SDK
+const sdk = new MxfSDK({
+    serverUrl: 'http://localhost:3001',
+    domainKey: process.env.MXF_DOMAIN_KEY!,
+    username: process.env.MXF_USERNAME!,
+    password: process.env.MXF_PASSWORD!
 });
+await sdk.connect();
 
+// Create agent through SDK
+const agent = await sdk.createAgent({
+    agentId: 'DataProcessor',
+    channelId: 'data-processing',
+    keyId: process.env.AGENT_KEY_ID!,
+    secretKey: process.env.AGENT_SECRET_KEY!,
+    llmProvider: 'openrouter',
+    defaultModel: 'anthropic/claude-3.5-sonnet',
+    apiKey: process.env.OPENROUTER_API_KEY!
+});
 await agent.connect();
 
 // Get data from search or other source
@@ -827,9 +841,10 @@ const safeResult = await validateAndExecute(agent, myCode);
 ### Example 13: Data Processing Pipeline
 
 ```typescript
-import { MxfClient } from 'mxf-sdk';
+import { MxfSDK } from '@mxf/sdk';
+import type { MxfAgent } from '@mxf/sdk';
 
-async function processUserFeedback(agent: MxfClient) {
+async function processUserFeedback(agent: MxfAgent) {
     console.log('Starting feedback processing pipeline...\n');
 
     // Step 1: Search for feedback
@@ -930,7 +945,23 @@ async function processUserFeedback(agent: MxfClient) {
 }
 
 // Run the pipeline
-const agent = new MxfClient({ agentId: 'FeedbackAnalyzer', apiKey: '...' });
+const sdk = new MxfSDK({
+    serverUrl: 'http://localhost:3001',
+    domainKey: process.env.MXF_DOMAIN_KEY!,
+    username: process.env.MXF_USERNAME!,
+    password: process.env.MXF_PASSWORD!
+});
+await sdk.connect();
+
+const agent = await sdk.createAgent({
+    agentId: 'FeedbackAnalyzer',
+    channelId: 'feedback-analysis',
+    keyId: process.env.AGENT_KEY_ID!,
+    secretKey: process.env.AGENT_SECRET_KEY!,
+    llmProvider: 'openrouter',
+    defaultModel: 'anthropic/claude-3.5-sonnet',
+    apiKey: process.env.OPENROUTER_API_KEY!
+});
 await agent.connect();
 const results = await processUserFeedback(agent);
 ```
@@ -971,7 +1002,7 @@ const result = await agent.callTool('code_execute', {
 });
 
 // Total: ~7-12 seconds, 1 API call
-// Savings: 60-75% latency, 67% API calls
+// Benefits: Significant latency reduction, fewer API calls
 ```
 
 ---

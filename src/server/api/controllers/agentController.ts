@@ -20,6 +20,7 @@
 
 import { Request, Response } from 'express';
 import { Agent } from '../../../shared/models/agent';
+import { AgentMemory } from '../../../shared/models/memory';
 import { createStrictValidator } from '../../../shared/utils/validation';
 import { Logger } from '../../../shared/utils/Logger';
 import { EventBus } from '../../../shared/events/EventBus';
@@ -234,15 +235,16 @@ export const deleteAgent = async (req: Request, res: Response): Promise<void> =>
     try {
         // Get user from authentication middleware
         const user = (req as any).user;
-        
+
         // Validate user authentication
         validate.assertIsObject(user, 'User authentication required');
         validate.assertIsObject(user.id, 'User ID is required');
-        
+
         const userId = user.id.toString();
-        
-        const agent = await Agent.findOneAndDelete({ agentId: req.params.agentId, createdBy: userId });
-        
+        const agentId = req.params.agentId;
+
+        const agent = await Agent.findOneAndDelete({ agentId: agentId, createdBy: userId });
+
         if (!agent) {
             res.status(404).json({
                 success: false,
@@ -250,7 +252,16 @@ export const deleteAgent = async (req: Request, res: Response): Promise<void> =>
             });
             return;
         }
-        
+
+        // Clean up agent memory
+        try {
+            const memoryDeleteResult = await AgentMemory.deleteMany({ agentId: agentId });
+            logger.info(`Deleted ${memoryDeleteResult.deletedCount} memory document(s) for agent ${agentId}`);
+        } catch (memoryError) {
+            logger.error(`Error deleting memory for agent ${agentId}: ${memoryError}`);
+            // Continue - agent is already deleted, just log the error
+        }
+
         res.status(200).json({
             success: true,
             message: 'Agent deleted successfully'

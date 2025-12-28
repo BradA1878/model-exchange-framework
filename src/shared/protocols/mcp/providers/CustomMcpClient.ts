@@ -35,6 +35,9 @@ import {
     McpContentType,
     McpRole
 } from '../IMcpClient';
+import { Observable } from 'rxjs';
+import { AgentContext } from '../../../interfaces/AgentContext';
+import { ConversationMessage } from '../../../interfaces/ConversationMessage';
 
 /**
  * Custom implementation of the MCP client
@@ -180,5 +183,137 @@ export class CustomMcpClient extends BaseMcpClient {
             
             return toolText;
         }).join('\n\n');
+    }
+
+    /**
+     * Send message using full agent context
+     * Override this method to implement context-based sending for your custom provider.
+     * 
+     * The default implementation throws an error - subclasses must implement this method.
+     * 
+     * @param context - Complete agent context from SDK
+     * @param options - Additional provider-specific options
+     * @returns Observable with API response
+     */
+    public sendWithContext(
+        context: AgentContext,
+        options?: Record<string, any>
+    ): Observable<McpApiResponse> {
+        return new Observable<McpApiResponse>(subscriber => {
+            this.sendWithContextImpl(context, options)
+                .then(response => {
+                    subscriber.next(response);
+                    subscriber.complete();
+                })
+                .catch(error => subscriber.error(error));
+        });
+    }
+
+    /**
+     * Implementation of context-based sending
+     * Override this method for your custom provider implementation.
+     * 
+     * This method should:
+     * 1. Structure messages using structureMessagesFromContext() or custom logic
+     * 2. Send to your custom API
+     * 3. Return MCP-formatted response
+     */
+    protected async sendWithContextImpl(
+        context: AgentContext,
+        options?: Record<string, any>
+    ): Promise<McpApiResponse> {
+        // Default implementation throws an error
+        // Subclasses should override this method
+        throw new Error('sendWithContextImpl must be implemented by the subclass');
+    }
+
+    /**
+     * Helper method to structure messages from AgentContext
+     * 
+     * This provides the standard message ordering:
+     * 1. System message (framework rules + agent identity)
+     * 2. Conversation history (chronological)
+     * 3. Task prompt (if present) - AFTER conversation for proper ordering
+     * 4. Recent actions (if needed)
+     * 
+     * Subclasses can use this helper or implement custom structuring.
+     */
+    protected structureMessagesFromContext(context: AgentContext): Array<{
+        role: 'system' | 'user' | 'assistant';
+        content: string;
+    }> {
+        const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [];
+
+        // 1. System message: Combine framework rules + agent identity
+        const systemContent = [
+            context.systemPrompt,
+            '',
+            `## Your Agent Identity`,
+            `**You are**: ${(context.agentConfig as any).purpose || context.agentConfig.agentId}`,
+            `**Your Agent ID**: ${context.agentId}`,
+            ...(context.agentConfig.capabilities ? [`**Capabilities**: ${context.agentConfig.capabilities.join(', ')}`] : [])
+        ].join('\n');
+
+        messages.push({
+            role: 'system',
+            content: systemContent
+        });
+
+        // 2. Conversation history: Filter to actual dialogue and tool results
+        const dialogueMessages = context.conversationHistory.filter(msg => {
+            const layer = msg.metadata?.contextLayer;
+
+            // INCLUDE: SystemLLM messages - they are "held" until the next real prompt
+            // and should be bundled with that prompt to provide coordination insights
+            // (Previously these were skipped, breaking the SystemLLM flow)
+
+            // INCLUDE: Messages with conversation or tool-result layer
+            if (layer === 'conversation' || layer === 'tool-result') {
+                return true;
+            }
+
+            // SKIP: Messages with system/identity/task/action layers
+            if (layer === 'system' || layer === 'identity' || layer === 'task' || layer === 'action') {
+                return false;
+            }
+
+            // INCLUDE: Messages without contextLayer (legacy or direct additions)
+            if (!layer && msg.role !== 'system') {
+                return true;
+            }
+
+            return false;
+        });
+
+        // Convert to simple format
+        for (const msg of dialogueMessages) {
+            messages.push({
+                role: msg.role === 'assistant' ? 'assistant' : msg.role === 'system' ? 'system' : 'user',
+                content: msg.content
+            });
+        }
+
+        // 3. Task message (if present) - Added AFTER conversation history for chronological ordering
+        if (context.currentTask) {
+            messages.push({
+                role: 'user',
+                content: `## Current Task\n${context.currentTask.description}`
+            });
+        }
+
+        // 4. Recent actions (if needed for context)
+        if (context.recentActions.length > 0) {
+            const actionsContent = [
+                `## Your Recent Actions`,
+                ...context.recentActions.map(a => `- ${a.action}${a.result ? `: ${a.result}` : ''}`)
+            ].join('\n');
+
+            messages.push({
+                role: 'user',
+                content: actionsContent
+            });
+        }
+
+        return messages;
     }
 }

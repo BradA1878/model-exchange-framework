@@ -99,7 +99,7 @@ export class MxfStructuredPromptBuilder {
         // Build agent identity prompt
         const agentIdentity = await this.buildAgentIdentity();
 
-        // CRITICAL FIX: Don't exclude assistant messages with tool_calls from conversation history
+        // Don't exclude assistant messages with tool_calls from conversation history
         // Only exclude USER messages from current processing to avoid duplication
         const lastMessage = dialogue[dialogue.length - 1];
         const shouldExcludeLast = lastMessage?.type === 'received' && !lastMessage.toolCallId;
@@ -162,18 +162,10 @@ export class MxfStructuredPromptBuilder {
             metadata: { layer: 'agentConfig' }
         });
         
-        // 3. Task prompt
-        if (structure.taskPrompt) {
-            messages.push({
-                id: `task-${Date.now()}`,
-                role: 'user',
-                content: `## Current Task\n${structure.taskPrompt}`,
-                timestamp: Date.now(),
-                metadata: { layer: 'task' }
-            });
-        }
+        // NOTE: Task prompt moved to AFTER conversation history for chronological ordering
+        // This fixes the bug where subsequent tasks appeared above existing conversation
         
-        // 4. Recent actions context (keep as single message for context)
+        // 3. Recent actions context (keep as single message for context)
         if (structure.recentActions.length > 0) {
             const actionsContent = [
                 '## Your Recent Actions',
@@ -196,7 +188,7 @@ export class MxfStructuredPromptBuilder {
                 role: 'user',
                 content: `## Current SystemLLM Insight\n[SystemLLM]: ${structure.systemLLMInsight}`,
                 timestamp: Date.now(),
-                metadata: { layer: 'systemllm', isSystemLLM: true }
+                metadata: { layer: 'systemLLM', isSystemLLM: true }
             });
         }
 
@@ -226,12 +218,12 @@ export class MxfStructuredPromptBuilder {
             });
         }
 
-        // 6. CRITICAL FIX: Add conversation history as proper turns WITH agent attribution
+        // 6. Add conversation history as proper turns WITH agent attribution
         // Instead of text blob, each message becomes its own role-based message
         // IMPORTANT: Include agent ID so LLM knows who said what
         if (structure.conversationHistory.length > 0) {
             structure.conversationHistory.forEach((dialogueMsg, index) => {
-                // CRITICAL FIX: Handle tool results specially - they need to become TOOL role messages
+                // Handle tool results specially - they need to become TOOL role messages
                 if (dialogueMsg.toolCallId) {
                     // This is a tool result - use proper TOOL role directly
                     const toolResultMessage: ConversationMessage = {
@@ -253,7 +245,7 @@ export class MxfStructuredPromptBuilder {
                 // Map dialogue messages to proper roles based on who sent them
                 const role = dialogueMsg.type === 'sent' ? 'assistant' : 'user';
                 
-                // CRITICAL FIX: Don't add agent attribution to assistant messages - it breaks tool_calls
+                // Don't add agent attribution to assistant messages - it breaks tool_calls
                 // Only add attribution to user messages for context
                 const content = role === 'assistant' 
                     ? dialogueMsg.content  // Keep assistant content as-is to preserve tool_calls structure
@@ -279,6 +271,18 @@ export class MxfStructuredPromptBuilder {
                 }
                 
                 messages.push(message);
+            });
+        }
+        
+        // 6.5. Task prompt (if present) - Added AFTER conversation history for chronological ordering
+        // This ensures subsequent task assignments appear after existing conversation
+        if (structure.taskPrompt) {
+            messages.push({
+                id: `task-${Date.now()}`,
+                role: 'user',
+                content: `## Current Task\n${structure.taskPrompt}`,
+                timestamp: Date.now(),
+                metadata: { layer: 'task' }
             });
         }
         
@@ -395,7 +399,7 @@ export class MxfStructuredPromptBuilder {
         // Look for the most recent SystemLLM message
         for (let i = history.length - 1; i >= 0; i--) {
             const msg = history[i];
-            if (msg.metadata?.isSystemLLM || msg.metadata?.source === 'SystemLLM') {
+            if (msg.metadata?.isSystemLLM) {
                 // Return clean content without prefixes
                 return msg.metadata?.insight || msg.content;
             }
@@ -504,7 +508,6 @@ export class MxfStructuredPromptBuilder {
             timestamp: Date.now(),
             metadata: {
                 isSystemLLM: true,
-                source: 'SystemLLM',
                 insight: insight,
                 ephemeral: true
             }

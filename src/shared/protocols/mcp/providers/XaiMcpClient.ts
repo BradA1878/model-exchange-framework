@@ -43,6 +43,9 @@ import {
 import { Logger } from '../../../utils/Logger';
 import { extractToolCalls, extractToolCallId, extractToolResultText } from '../utils/MessageConverters';
 import { convertToolsToProviderFormat } from '../utils/ToolHandlers';
+import { Observable } from 'rxjs';
+import { AgentContext } from '../../../interfaces/AgentContext';
+import { ConversationMessage } from '../../../interfaces/ConversationMessage';
 
 // Create logger instance for Xai MCP client
 const logger = new Logger('warn', 'XaiMcpClient', 'server');
@@ -385,10 +388,207 @@ export class XaiMcpClient extends BaseMcpClient {
             }
             
             // Parse and convert response
-            const xaiResponse: XaiResponse = await response.json();
+            const xaiResponse = await response.json() as XaiResponse;
             return this.convertToMcpResponse(xaiResponse);
         } catch (error) {
             throw new Error(`Error sending message to X.ai: ${error instanceof Error ? error.message : String(error)}`);
         }
+    }
+
+    /**
+     * Send message using full agent context
+     * 
+     * This method structures messages for X.ai based on semantic metadata,
+     * ensuring proper chronological ordering of tasks and conversation history.
+     * 
+     * @param context - Complete agent context from SDK
+     * @param options - Additional X.ai-specific options
+     * @returns Observable with X.ai response
+     */
+    public sendWithContext(
+        context: AgentContext,
+        options?: Record<string, any>
+    ): Observable<McpApiResponse> {
+        return new Observable<McpApiResponse>(subscriber => {
+            this.sendWithContextImpl(context, options)
+                .then(response => {
+                    subscriber.next(response);
+                    subscriber.complete();
+                })
+                .catch(error => subscriber.error(error));
+        });
+    }
+
+    /**
+     * Implementation of context-based sending for X.ai
+     */
+    private async sendWithContextImpl(
+        context: AgentContext,
+        options?: Record<string, any>
+    ): Promise<McpApiResponse> {
+        // Structure messages for X.ai based on context
+        const xaiMessages = this.structureMessagesFromContext(context);
+
+        // Convert tools - X.ai uses OpenAI-compatible format
+        const xaiTools = context.availableTools && context.availableTools.length > 0
+            ? convertToolsToProviderFormat(context.availableTools as McpTool[], 'xai')
+            : undefined;
+
+        // Prepare request parameters
+        const model = options?.model || this.config.defaultModel || 'grok-beta';
+        const temperature = options?.temperature || this.config.temperature || 0.7;
+        const maxTokens = options?.maxTokens || this.config.maxTokens || 4096;
+
+        // Prepare request body
+        const requestBody: Record<string, any> = {
+            model,
+            messages: xaiMessages,
+            temperature,
+            max_tokens: maxTokens
+        };
+
+        // Add tools if provided
+        if (xaiTools && xaiTools.length > 0) {
+            requestBody.tools = xaiTools;
+            requestBody.tool_choice = 'auto';
+        }
+
+        // Make the API request
+        const response = await fetch(`${this.baseUrl}/chat/completions`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${this.config.apiKey}`
+            },
+            body: JSON.stringify(requestBody)
+        });
+
+        // Check for errors
+        if (!response.ok) {
+            let errorText = await response.text();
+            try {
+                const errorJson = JSON.parse(errorText);
+                errorText = errorJson.error?.message || errorText;
+            } catch (e) {
+                // Use error text as is if not JSON
+            }
+            throw new Error(`X.ai API error [${response.status}]: ${errorText}`);
+        }
+
+        // Parse and convert response
+        const xaiResponse = await response.json() as XaiResponse;
+        return this.convertToMcpResponse(xaiResponse);
+    }
+
+    /**
+     * Structure messages from AgentContext for X.ai
+     * 
+     * Message ordering:
+     * 1. System message (framework rules + agent identity)
+     * 2. Conversation history (chronological)
+     * 3. Task prompt (if present) - AFTER conversation for proper ordering
+     * 4. Recent actions (if needed)
+     */
+    private structureMessagesFromContext(context: AgentContext): XaiMessage[] {
+        const messages: XaiMessage[] = [];
+
+        // 1. System message: Combine framework rules + agent identity
+        const systemContent = [
+            context.systemPrompt,
+            '',
+            `## Your Agent Identity`,
+            `**You are**: ${(context.agentConfig as any).purpose || context.agentConfig.agentId}`,
+            `**Your Agent ID**: ${context.agentId}`,
+            ...(context.agentConfig.capabilities ? [`**Capabilities**: ${context.agentConfig.capabilities.join(', ')}`] : [])
+        ].join('\n');
+
+        messages.push({
+            role: 'system',
+            content: systemContent
+        });
+
+        // 2. Conversation history: Filter to actual dialogue and tool results
+        const dialogueMessages = context.conversationHistory.filter(msg => {
+            const layer = msg.metadata?.contextLayer;
+
+            // INCLUDE: SystemLLM messages - they are "held" until the next real prompt
+            // and should be bundled with that prompt to provide coordination insights
+            // (Previously these were skipped, breaking the SystemLLM flow)
+
+            // INCLUDE: Messages with conversation or tool-result layer
+            if (layer === 'conversation' || layer === 'tool-result') {
+                return true;
+            }
+
+            // INCLUDE: Tool role messages
+            if (msg.role === 'tool') {
+                return true;
+            }
+
+            // SKIP: Messages with system/identity/task/action layers
+            if (layer === 'system' || layer === 'identity' || layer === 'task' || layer === 'action') {
+                return false;
+            }
+
+            // INCLUDE: Messages without contextLayer (legacy or direct additions)
+            if (!layer && msg.role !== 'system') {
+                return true;
+            }
+
+            return false;
+        });
+
+        // Convert to X.ai format
+        for (const msg of dialogueMessages) {
+            const xaiMsg = this.convertConversationToXai(msg);
+            messages.push(xaiMsg);
+        }
+
+        // 3. Task message (if present) - Added AFTER conversation history for chronological ordering
+        if (context.currentTask) {
+            messages.push({
+                role: 'user',
+                content: `## Current Task\n${context.currentTask.description}`
+            });
+        }
+
+        // 4. Recent actions (if needed for context)
+        if (context.recentActions.length > 0) {
+            const actionsContent = [
+                `## Your Recent Actions`,
+                ...context.recentActions.map(a => `- ${a.action}${a.result ? `: ${a.result}` : ''}`)
+            ].join('\n');
+
+            messages.push({
+                role: 'user',
+                content: actionsContent
+            });
+        }
+
+        return messages;
+    }
+
+    /**
+     * Convert ConversationMessage to X.ai format
+     */
+    private convertConversationToXai(msg: ConversationMessage): XaiMessage {
+        const xaiMsg: XaiMessage = {
+            role: msg.role === 'assistant' ? 'assistant' : 
+                  msg.role === 'tool' ? 'tool' : 
+                  msg.role === 'system' ? 'system' : 'user',
+            content: msg.content
+        };
+
+        // Add tool_call_id for tool messages
+        if (msg.role === 'tool' && msg.metadata?.tool_call_id) {
+            xaiMsg.tool_call_id = msg.metadata.tool_call_id;
+        }
+
+        // Preserve tool_calls for assistant messages
+        if (msg.role === 'assistant' && (msg as any).tool_calls) {
+            xaiMsg.tool_calls = (msg as any).tool_calls;
+        }
+
+        return xaiMsg;
     }
 }

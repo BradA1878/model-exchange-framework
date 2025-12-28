@@ -44,7 +44,8 @@ import prompts from 'prompts';
 dotenv.config();
 
 // Default API URL
-const DEFAULT_API_URL = process.env.MXF_API_URL || 'http://localhost:3001/api';
+const DEFAULT_PORT = process.env.MXF_PORT || '3001';
+const DEFAULT_API_URL = process.env.MXF_API_URL || `http://localhost:${DEFAULT_PORT}/api`;
 
 // API Response types
 interface ApiResponse {

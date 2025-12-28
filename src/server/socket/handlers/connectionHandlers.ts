@@ -84,7 +84,7 @@ const initializeEventBusHandlers = (): void => {
 
 /**
  * Setup admin event forwarding for password/JWT authenticated users
- * Forwards admin socket events (channel:create, key:generate) to EventBus
+ * Forwards admin socket events (channel:create, key:generate, MCP server registration) to EventBus
  */
 const setupAdminSocketForwarding = (socket: Socket, userId: string): void => {
     
@@ -104,6 +104,23 @@ const setupAdminSocketForwarding = (socket: Socket, userId: string): void => {
         } catch (error) {
             moduleLogger.error(`Error forwarding key:generate event: ${error}`);
         }
+    });
+    
+    // Forward MCP channel server events to EventBus (for SDK-level MCP server registration)
+    const mcpChannelServerEvents = [
+        Events.Mcp.CHANNEL_SERVER_REGISTER,
+        Events.Mcp.CHANNEL_SERVER_UNREGISTER
+    ];
+    
+    mcpChannelServerEvents.forEach(eventName => {
+        socket.on(eventName, (payload: any) => {
+            try {
+                moduleLogger.info(`[ADMIN-MCP] Forwarding ${eventName} from admin socket to EventBus.server`);
+                EventBus.server.emit(eventName, payload);
+            } catch (error) {
+                moduleLogger.error(`Error forwarding ${eventName} event: ${error}`);
+            }
+        });
     });
 };
 
@@ -276,7 +293,7 @@ export const completeSocketConnection = async (
             }
         }
         
-        // CRITICAL FIX: Add socket to agent in AgentService for proper tracking (AFTER agent exists)
+        // Add socket to agent in AgentService for proper tracking (AFTER agent exists)
         getAgentService().addSocketToAgent(agentId, socket.id);
         
         // Mark agent as connected in agent service
@@ -295,24 +312,12 @@ export const completeSocketConnection = async (
                 socket.join(roomName);
                 //;
                 
-                // CRITICAL FIX: Add participant to ChannelService for proper tracking
+                // Add participant to ChannelService for proper tracking
+                // Note: addParticipant internally emits AGENT_JOINED event via notifyChannelEvent
                 const channelService = ChannelService.getInstance();
                 await channelService.addParticipant(channelId, agentId, agentId);
                 
-                // Emit the agent joined event to the EventBus
-                const joinedEventPayload = createBaseEventPayload(
-                    Events.Channel.AGENT_JOINED,
-                    agentId,
-                    channelId,
-                    {
-                        action: ChannelActionTypes.JOIN,
-                        timestamp: Date.now()
-                    }
-                );
-                EventBus.server.emit(Events.Channel.AGENT_JOINED, joinedEventPayload);
-                
-                
-                // Also emit the channel:joined event needed by the SDK
+                // Emit the channel:joined event needed by the SDK
                 const channelJoinedPayload = createBaseEventPayload(
                     Events.Agent.JOIN_CHANNEL,
                     agentId,
@@ -546,7 +551,7 @@ export const handleSocketDisconnect = async (
         // Unregister the socket - this will also clear associated data
         socketService.unregisterSocket(socketId, agentId);
         
-        // CRITICAL FIX: Remove socket from agent in AgentService for proper tracking
+        // Remove socket from agent in AgentService for proper tracking
         // Access AgentService through the socketService parameter
         const socketAgentService = (socketService as any).agentService;
         if (socketAgentService) {
@@ -559,7 +564,7 @@ export const handleSocketDisconnect = async (
             }
         }
         
-        // CRITICAL FIX: Remove agent from channel to trigger SystemLLM cleanup
+        // Remove agent from channel to trigger SystemLLM cleanup
         // This is required for proper cleanup of SystemLlmService when all agents disconnect
         if (channelId) {
             try {

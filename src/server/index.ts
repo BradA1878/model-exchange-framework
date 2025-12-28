@@ -149,10 +149,18 @@ const initializeServer = async () => {
                             throw new Error('OPENROUTER_API_KEY not set');
                         }
 
+                        const headers: Record<string, string> = {
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${process.env.OPENROUTER_API_KEY}`,
+                            'HTTP-Referer': 'https://mxf.dev',
+                            'X-Title': 'MXF (Meilisearch)'
+                        };
+
                         const OpenAI = require('openai').default;
                         const client = new OpenAI({
                             apiKey: process.env.OPENROUTER_API_KEY,
-                            baseURL: 'https://openrouter.ai/api/v1'
+                            baseURL: 'https://openrouter.ai/api/v1',
+                            headers: headers
                         });
 
                         const response = await client.embeddings.create({
@@ -312,25 +320,40 @@ const initializeServer = async () => {
             
             // Final count
             const finalTools = await firstValueFrom(mcpToolRegistry.listTools());
-            
+            const toolCount = finalTools.length;
+
+            // Store tool count for server startup message
+            (server as any)._mxfToolCount = toolCount;
+
         } catch (error) {
             logger.error(`❌ Failed to initialize MXF MCP tools: ${error}`);
+            // Store 0 if tool loading failed
+            (server as any)._mxfToolCount = 0;
         }
-        
+
         // Step 6: Verify all services are ready
         if (serverReflectionService) {
         }
-        
+
         // Step 7: Mount API routes AFTER all services are initialized
         setupApiRoutes();
-        
+
         // Step 8: Start the server
-        const PORT = process.env.AGENT_FRAMEWORK_PORT || DEFAULT_SERVER_CONFIG.port;
+        const PORT = process.env.MXF_PORT || DEFAULT_SERVER_CONFIG.port;
+        const toolCount = (server as any)._mxfToolCount || 0;
+
         server.listen(PORT, () => {
+            console.info('╔════════════════════════════════════════════════════════════════╗');
+            console.info('║              MXF Server Ready                                  ║');
+            console.info('╠════════════════════════════════════════════════════════════════╣');
+            console.info(`║  Port:           ${PORT}`.padEnd(66) + '║');
+            console.info(`║  Tools Loaded:   ${toolCount}`.padEnd(66) + '║');
+            console.info(`║  Environment:    ${process.env.NODE_ENV || 'development'}`.padEnd(66) + '║');
+            console.info('╚════════════════════════════════════════════════════════════════╝');
         });
         
     } catch (error) {
-        logger.error('❌ Server initialization failed:', error);
+        console.error('❌ Server initialization failed:', error);
         process.exit(1);
     }
 };
@@ -356,11 +379,11 @@ const setupApiRoutes = () => {
             servers: {
                 api: {
                     status: 'running',
-                    port: process.env.AGENT_FRAMEWORK_PORT || DEFAULT_SERVER_CONFIG.port
+                    port: process.env.MXF_PORT || DEFAULT_SERVER_CONFIG.port
                 },
                 socket: {
                     status: socketServerRunning ? 'running' : 'not_running',
-                    port: process.env.AGENT_FRAMEWORK_PORT || DEFAULT_SERVER_CONFIG.port
+                    port: process.env.MXF_PORT || DEFAULT_SERVER_CONFIG.port
                 }
             }
         });

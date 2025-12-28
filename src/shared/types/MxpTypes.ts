@@ -29,6 +29,14 @@ import { AgentId, ChannelId } from './ChannelContext';
 import { ContentFormat } from '../schemas/MessageSchemas';
 
 /**
+ * Cross-environment CryptoKeyPair type (works in both Node.js and browser)
+ */
+export interface MxpCryptoKeyPair {
+    publicKey: unknown;
+    privateKey: unknown;
+}
+
+/**
  * MXP Version and Security Levels
  */
 export const MXP_VERSION = '2.0' as const;
@@ -280,7 +288,7 @@ export interface EnhancedKeyPair {
     
     // Progressive security features
     escrowCopy?: string;
-    e2eKeyPair?: CryptoKeyPair;
+    e2eKeyPair?: MxpCryptoKeyPair;
     functionalityImpact?: {
         messageAggregation: boolean;
         patternLearning: boolean;

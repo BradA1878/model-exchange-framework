@@ -47,11 +47,11 @@ export const DEFAULT_SERVER_CONFIG: ServerConfig = {
  */
 export function getServerConfig(): ServerConfig {
     return {
-        host: process.env.AGENT_FRAMEWORK_HOST || DEFAULT_SERVER_CONFIG.host,
-        port: process.env.AGENT_FRAMEWORK_PORT ? 
-            parseInt(process.env.AGENT_FRAMEWORK_PORT, 10) : 
+        host: process.env.MXF_HOST || DEFAULT_SERVER_CONFIG.host,
+        port: process.env.MXF_PORT ?
+            parseInt(process.env.MXF_PORT, 10) :
             DEFAULT_SERVER_CONFIG.port,
-        secure: process.env.AGENT_FRAMEWORK_SECURE === 'true' || DEFAULT_SERVER_CONFIG.secure
+        secure: process.env.MXF_SECURE === 'true' || DEFAULT_SERVER_CONFIG.secure
     };
 }
 

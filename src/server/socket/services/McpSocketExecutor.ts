@@ -456,8 +456,8 @@ export class McpSocketExecutor {
                         );
                     }
                     
-                    // Validation passed, continue with original input
-                    return of({ tool, correctedInput: input });
+                    // Validation passed, use coerced input (handles LLM type errors like "true" → true)
+                    return of({ tool, correctedInput: validationResult.coercedInput || input });
                     
                 }),
                 mergeMap(({ tool, correctedInput }) => {
@@ -468,9 +468,10 @@ export class McpSocketExecutor {
                         channelId: context.channelId as string,
                         agentId: context.agentId as string
                     });
-                    
+
                     // Log execution
-                    
+                    this.logger.info(`🔧 Tool called: "${toolName}" by Agent: ${context.agentId}`);
+
                     // Execute the tool handler with the potentially corrected input
                     return from(tool.handler(correctedInput, context)).pipe(
                         tap(result => {

@@ -33,6 +33,8 @@ export interface SimpleTaskRequest {
     fromAgentId: string;
     toAgentId: string;
     content: string;
+    title?: string; // Task title for display and context
+    description?: string; // Full task description (same as content, for compatibility)
     metadata?: any; // Task metadata including completion agent designation
 }
 

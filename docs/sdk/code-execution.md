@@ -9,13 +9,27 @@ The `code_execute` tool enables agents to run JavaScript and TypeScript code in 
 ### Simple Execution
 
 ```typescript
-import { MxfClient } from 'mxf-sdk';
+import { MxfSDK } from '@mxf/sdk';
 
-const agent = new MxfClient({
-    agentId: 'MyAgent',
-    apiKey: process.env.AGENT_API_KEY
+// Initialize SDK
+const sdk = new MxfSDK({
+    serverUrl: 'http://localhost:3001',
+    domainKey: process.env.MXF_DOMAIN_KEY!,
+    username: process.env.MXF_USERNAME!,
+    password: process.env.MXF_PASSWORD!
 });
+await sdk.connect();
 
+// Create agent through SDK
+const agent = await sdk.createAgent({
+    agentId: 'MyAgent',
+    channelId: 'my-channel',
+    keyId: process.env.AGENT_KEY_ID!,
+    secretKey: process.env.AGENT_SECRET_KEY!,
+    llmProvider: 'openrouter',
+    defaultModel: 'anthropic/claude-3.5-sonnet',
+    apiKey: process.env.OPENROUTER_API_KEY!
+});
 await agent.connect();
 
 // Execute simple code
@@ -365,7 +379,7 @@ Agent → Model → code_execute (search + filter + sort)
 Time: 5-10s model + <2s execution = 7-12s total
 ```
 
-**Savings: 60-75% latency reduction**
+**Benefit: Significant latency reduction**
 
 ## Advanced Usage
 

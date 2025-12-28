@@ -11,24 +11,65 @@ This document provides comprehensive type definitions and interfaces for the MXF
 
 ## Core Agent Interfaces
 
+### AgentCreationConfig (SDK Usage)
+
+This is the interface used when creating agents via `MxfSDK.createAgent()`:
+
 ```typescript
-// Agent configuration
-{{ ... }}
-export interface AgentConfig {
-    serverUrl: string;
-    apiKey: string;
-    agentId: string;
-    name?: string;
-    description?: string;
-    role?: string;
-    model?: string;
-    capabilities?: string[];
-    metadata?: Record<string, any>;
-    
-    // MXP Protocol Configuration
-    mxpEnabled?: boolean;                    // Enable MXP protocol (default: false)
-    mxpPreferredFormat?: MxpFormat;         // Preferred message format
-    mxpForceEncryption?: boolean;           // Force encryption for all messages
+// Agent creation via SDK - simplified interface
+export interface AgentCreationConfig {
+    // Required fields
+    agentId: string;                         // Unique agent identifier
+    name: string;                            // Agent display name (REQUIRED)
+    channelId: string;                       // Channel to join
+    keyId: string;                           // Authentication key ID
+    secretKey: string;                       // Authentication secret
+    llmProvider: LlmProviderType;           // e.g., 'openrouter', 'anthropic', 'openai'
+    defaultModel: string;                    // e.g., 'anthropic/claude-3.5-sonnet'
+
+    // Optional: Agent identity
+    agentConfigPrompt?: string;              // Agent's identity/role prompt
+    description?: string;                    // Agent description
+    capabilities?: string[];                 // Agent capabilities
+    metadata?: Record<string, any>;          // Custom metadata
+
+    // Optional: LLM settings
+    apiKey?: string;                         // LLM provider API key
+    temperature?: number;                    // LLM temperature (default: 0.7)
+    maxTokens?: number;                      // Max tokens per response
+    reasoning?: LlmReasoningConfig;          // Extended thinking config
+
+    // Optional: Tool access control
+    allowedTools?: string[];                 // Restrict to specific tools only
+    circuitBreakerExemptTools?: string[];   // Tools exempt from loop detection
+
+    // Optional: Behavioral settings
+    useMessageAggregate?: boolean;           // Enable message aggregation
+    maxIterations?: number;                  // Max LLM iterations per task (default: 10)
+    disableTaskHandling?: boolean;           // Disable automatic task handling
+
+    // Optional: MXP settings
+    mxpEnabled?: boolean;                    // Enable MXP protocol
+    mxpPreferredFormat?: 'auto' | 'mxp' | 'natural-language';
+    mxpForceEncryption?: boolean;            // Force encryption
+}
+
+// LLM Provider types
+export type LlmProviderType =
+    | 'openrouter'
+    | 'anthropic'
+    | 'openai'
+    | 'azure-openai'
+    | 'google'
+    | 'xai'
+    | 'ollama';
+
+// Extended thinking configuration
+export interface LlmReasoningConfig {
+    enabled?: boolean;                       // Enable extended thinking
+    effort?: 'low' | 'medium' | 'high';     // OpenAI style: effort level
+    maxTokens?: number;                      // Anthropic style: token allocation
+    exclude?: boolean;                       // Exclude reasoning from response
 }
 
 // MXP Format options
@@ -533,85 +574,118 @@ export enum ErrorCode {
 }
 ```
 
-## Client Configuration
+## SDK Configuration
+
+### MxfSDKConfig
+
+Configuration for initializing the SDK:
 
 ```typescript
-// MXF Client options
-export interface MxfClientOptions {
-    serverUrl: string;
-    apiKey: string;
-    agentId: string;
-    
-    // Agent configuration
-    name?: string;
-    description?: string;
-    role?: string;
-    model?: string;
-    capabilities?: string[];
-    metadata?: Record<string, any>;
-    
-    // MXP configuration
-    mxpEnabled?: boolean;
-    mxpPreferredFormat?: MxpFormat;
-    mxpForceEncryption?: boolean;
-    
-    // Connection options
-    autoConnect?: boolean;
-    reconnect?: boolean;
-    reconnectDelay?: number;
-    maxReconnectAttempts?: number;
-    
-    // Performance options
-    batchMessages?: boolean;
-    batchSize?: number;
-    batchDelay?: number;
-    
-    // Debug options
-    debug?: boolean;
-    logLevel?: 'debug' | 'info' | 'warn' | 'error';
+export interface MxfSDKConfig {
+    // Server connection
+    serverUrl: string;                       // MXF server URL
+    domainKey: string;                       // Domain key for SDK authentication
+
+    // User authentication (one of these sets is required)
+    userId?: string;                         // User ID (with JWT)
+    userToken?: string;                      // JWT token
+    username?: string;                       // Username (with password)
+    password?: string;                       // Password
+
+    // Optional settings
+    secure?: boolean;                        // Force HTTPS
+    reconnection?: boolean;                  // Enable reconnection (default: true)
+    reconnectionAttempts?: number;          // Max reconnection attempts (default: 5)
+}
+```
+
+### Channel Creation Config
+
+Configuration for creating channels via `sdk.createChannel()`:
+
+```typescript
+interface ChannelCreationConfig {
+    name: string;                            // Channel display name (REQUIRED)
+    description?: string;                    // Channel description
+    isPrivate?: boolean;                     // Private channel (default: false)
+    requireApproval?: boolean;               // Require approval to join
+    maxAgents?: number;                      // Max agents (default: 100)
+    allowAnonymous?: boolean;                // Allow anonymous agents
+    metadata?: Record<string, any>;          // Custom metadata
+
+    // NEW: Channel-level tool access control
+    allowedTools?: string[];                 // Restrict tools available in this channel
+    systemLlmEnabled?: boolean;              // Enable/disable SystemLLM (default: true)
+    mcpServers?: ChannelMcpServerConfig[];  // Pre-register MCP servers for channel
+}
+
+interface ChannelMcpServerConfig {
+    id: string;
+    name: string;
+    command?: string;
+    args?: string[];
+    transport?: 'stdio' | 'http';
+    url?: string;
+    autoStart?: boolean;
+    environmentVariables?: Record<string, string>;
+    keepAliveMinutes?: number;
 }
 ```
 
 ## Usage Example
 
 ```typescript
-import { 
-    MxfClient, 
-    MxfClientOptions, 
-    Task, 
-    Message,
-    MxpStatistics 
-} from '@mxf-framework/js-sdk';
+import { MxfSDK, Events } from '@mxf/sdk';
+import type { MxfAgent } from '@mxf/sdk';
 
-// Configure client with MXP
-const options: MxfClientOptions = {
+// Initialize SDK
+const sdk = new MxfSDK({
     serverUrl: 'http://localhost:3001',
-    apiKey: 'your-api-key',
+    domainKey: process.env.MXF_DOMAIN_KEY!,
+    username: process.env.MXF_USERNAME!,
+    password: process.env.MXF_PASSWORD!
+});
+await sdk.connect();
+
+// Create agent with full configuration
+const agent = await sdk.createAgent({
+    // Required fields
     agentId: 'my-agent',
+    name: 'My Analysis Agent',               // REQUIRED
+    channelId: 'my-channel',
+    keyId: process.env.AGENT_KEY_ID!,
+    secretKey: process.env.AGENT_SECRET_KEY!,
+    llmProvider: 'openrouter',
+    defaultModel: 'anthropic/claude-3.5-sonnet',
+
+    // Optional: LLM settings
+    apiKey: process.env.OPENROUTER_API_KEY!,
+    temperature: 0.7,
+    maxTokens: 100000,
+
+    // Optional: Agent identity
+    agentConfigPrompt: 'You are an analysis agent specialized in data processing.',
     capabilities: ['analysis', 'communication'],
+
+    // Optional: Tool access control
+    allowedTools: ['messaging_send', 'task_complete'],
+
+    // Optional: Behavioral settings
+    maxIterations: 15,                       // Increase for complex tasks
+
+    // Optional: MXP settings
     mxpEnabled: true,
     mxpPreferredFormat: 'auto'
-};
+});
+await agent.connect();
 
-// Create client
-const client = new MxfClient(options);
+// Send message via channel service
+await agent.channelService.sendMessage('Hello, I am ready to help!');
 
-// Connect and use
-await client.connect();
-
-// Send MXP-enabled message
-const message: MessageOptions = {
-    receiverId: 'other-agent',
-    content: 'Calculate the sum of 10, 20, and 30',
-    enableMxp: true,
-    forceEncryption: true
-};
-
-await client.sendMessage(message);
-
-// Get MXP statistics
-const stats: MxpStatistics = await client.getMxpStats();
-console.log(`MXP usage: ${stats.mxpPercentage}%`);
+// Listen for messages
+agent.on(Events.Message.AGENT_MESSAGE, (payload) => {
+    console.log('Received:', payload.data.content);
+});
 ```
 
 ## Next Steps

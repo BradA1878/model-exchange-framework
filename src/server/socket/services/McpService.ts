@@ -42,6 +42,7 @@ import {
     BaseEventPayload 
 } from '../../../shared/schemas/EventPayloadSchema';
 import { CORE_MXF_TOOLS, getCoreToolsArray } from '../../../shared/constants/CoreTools';
+import { Channel } from '../../../shared/models/channel';
 
 /**
  * Simplified tool definition for socket communication
@@ -69,6 +70,9 @@ export class McpService {
     private tools: Map<string, SocketMcpTool> = new Map();
     private databaseLoaded = false;
     private loadingPromise: Promise<void> | null = null;
+    
+    // Channel allowedTools cache for synchronous access
+    private channelAllowedTools: Map<string, string[]> = new Map();
 
     private constructor() {
         this.logger = new Logger('debug', 'McpService', 'server');
@@ -175,9 +179,10 @@ export class McpService {
                     this.logger.warn(`Failed to lookup agent config for ${payload.agentId}: ${error}`);
                 }
 
-                // Get tools with optional filter including allowedTools and agentId from agent config
+                // Get tools with optional filter including channelId, allowedTools, and agentId
                 const filter = {
                     ...payload.data?.filter || {},
+                    channelId: payload.channelId, // Pass channelId for channel-level tool filtering
                     allowedTools: allowedTools,
                     agentId: payload.agentId // Pass agentId for Meilisearch readiness check
                 };
@@ -193,7 +198,7 @@ export class McpService {
 
                 const responsePayload = createMxfToolListResultPayload(
                     Events.Mcp.MXF_TOOL_LIST_RESULT,
-                    payload.agentId,  // CRITICAL FIX: Use actual agent ID, not 'SYSTEM_AGENT'
+                    payload.agentId,  // Use actual agent ID, not 'SYSTEM_AGENT'
                     payload.channelId,
                     responseData
                 );
@@ -270,9 +275,13 @@ export class McpService {
                 allTools = allTools.filter(tool => tool.name.includes(filter.name!));
             }
             if (filter.channelId) {
-                // Don't filter external tools by channelId as they're global
+                // Global-scoped tools (internal or external) are available to all channels
+                // 'global' = hybrid registry tools, 'system' = database tools (fallback)
                 allTools = allTools.filter(tool => 
-                    tool.metadata?.isExternal || tool.channelId === filter.channelId
+                    tool.metadata?.isExternal ||  // External tools are global
+                    tool.channelId === 'global' ||  // Hybrid registry internal tools
+                    tool.channelId === 'system' ||  // Database system tools (fallback path)
+                    tool.channelId === filter.channelId  // Channel-specific tools
                 );
             }
         }
@@ -302,6 +311,20 @@ export class McpService {
             }
             allTools = allTools.filter(tool => !tool.name.startsWith('memory_search_'));
             if (beforeCount > allTools.length) {
+            }
+        }
+
+        // 🚨 SECURITY: Apply channel-level tool restrictions FIRST
+        // If channel has non-empty allowedTools, restrict to those tools only
+        if (filter?.channelId) {
+            const channelAllowedTools = this.channelAllowedTools.get(filter.channelId);
+            if (channelAllowedTools && channelAllowedTools.length > 0) {
+                // Channel has tool restrictions - filter to only allowed tools
+                const beforeChannelFilter = allTools.length;
+                allTools = allTools.filter(tool => channelAllowedTools.includes(tool.name));
+                if (beforeChannelFilter !== allTools.length) {
+                    this.logger.debug(`Channel ${filter.channelId} tool filter: ${beforeChannelFilter} -> ${allTools.length} tools`);
+                }
             }
         }
 
@@ -423,5 +446,42 @@ export class McpService {
             return tools.length;
         }
         return this.tools.size;
+    }
+
+    /**
+     * Set channel allowed tools for synchronous filtering in getTools
+     * Called when channel is created or updated
+     * Also persists to database for write-back sync
+     */
+    public async setChannelAllowedTools(channelId: string, allowedTools: string[]): Promise<void> {
+        // Update in-memory cache
+        this.channelAllowedTools.set(channelId, allowedTools);
+        
+        // Persist to database (write-back sync)
+        try {
+            const result = await Channel.updateOne(
+                { channelId },
+                { $set: { allowedTools } }
+            );
+            if (result.modifiedCount > 0) {
+                this.logger.info(`Channel ${channelId} allowedTools updated in database (${allowedTools.length} tools)`);
+            }
+        } catch (error) {
+            this.logger.error(`Error persisting allowedTools for channel ${channelId}: ${error}`);
+        }
+    }
+
+    /**
+     * Get channel allowed tools from cache
+     */
+    public getChannelAllowedTools(channelId: string): string[] | undefined {
+        return this.channelAllowedTools.get(channelId);
+    }
+
+    /**
+     * Clear channel allowed tools cache entry
+     */
+    public clearChannelAllowedTools(channelId: string): void {
+        this.channelAllowedTools.delete(channelId);
     }
 }

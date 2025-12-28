@@ -151,23 +151,23 @@ export class ControlLoopService {
     private setupPhase2EventListeners(): void {
         // Listen for all ORPAR lifecycle events to track patterns
         EventBus.server.on(ControlLoopEvents.OBSERVATION, (payload) => {
-            this.trackOraprPhase('observation', payload);
+            this.trackOrparPhase('observation', payload);
         });
         
         EventBus.server.on(ControlLoopEvents.REASONING, (payload) => {
-            this.trackOraprPhase('reasoning', payload);
+            this.trackOrparPhase('reasoning', payload);
         });
         
         EventBus.server.on(ControlLoopEvents.PLAN, (payload) => {
-            this.trackOraprPhase('planning', payload);
+            this.trackOrparPhase('planning', payload);
         });
         
         EventBus.server.on(ControlLoopEvents.ACTION, (payload) => {
-            this.trackOraprPhase('action', payload);
+            this.trackOrparPhase('action', payload);
         });
         
         EventBus.server.on(ControlLoopEvents.REFLECTION, (payload) => {
-            this.trackOraprPhase('reflection', payload);
+            this.trackOrparPhase('reflection', payload);
         });
         
     }
@@ -175,7 +175,7 @@ export class ControlLoopService {
     /**
      * Track ORPAR phase for pattern analysis
      */
-    private trackOraprPhase(phase: string, payload: any): void {
+    private trackOrparPhase(phase: string, payload: any): void {
         try {
             if (!payload.agentId || !payload.channelId) {
                 return; // Skip tracking if missing required fields
@@ -192,19 +192,19 @@ export class ControlLoopService {
             // Check for complete ORPAR cycles for pattern analysis
             if (phase === 'reflection' && agentSequence.length >= 5) {
                 const recentSequence = agentSequence.slice(-5);
-                const hasCompleteOrapr = recentSequence.includes('observation') && 
-                                       recentSequence.includes('reasoning') && 
-                                       recentSequence.includes('planning') && 
-                                       recentSequence.includes('action') && 
+                const hasCompleteOrpar = recentSequence.includes('observation') &&
+                                       recentSequence.includes('reasoning') &&
+                                       recentSequence.includes('planning') &&
+                                       recentSequence.includes('action') &&
                                        recentSequence.includes('reflection');
-                
-                if (hasCompleteOrapr) {
+
+                if (hasCompleteOrpar) {
                     // Analyze complete ORPAR cycle pattern
                     this.patternMemoryService.analyzeSequenceForPatterns(
                         channelId,
                         agentId,
                         recentSequence,
-                        { cycle: 'complete_orapr', timestamp: Date.now() }
+                        { cycle: 'complete_orpar', timestamp: Date.now() }
                     ).then(analysis => {
                         if (analysis.patternDetected && analysis.confidence > 0.6) {
                             // Store successful ORPAR pattern
@@ -213,10 +213,10 @@ export class ControlLoopService {
                                 agentId,
                                 {
                                     channelId,
-                                    type: 'orapr_sequence',
+                                    type: 'orpar_sequence',
                                     pattern: {
                                         sequence: recentSequence.slice(),
-                                        conditions: { cycleType: 'complete_orapr' },
+                                        conditions: { cycleType: 'complete_orpar' },
                                         outcomes: { success: true, completedCycle: true },
                                         toolsUsed: analysis.metadata.toolsInvolved || [],
                                         executionTime: Date.now(),
@@ -225,7 +225,7 @@ export class ControlLoopService {
                                     effectiveness: analysis.metadata.estimatedEffectiveness,
                                     agentParticipants: [agentId],
                                     similarPatterns: [],
-                                    tags: ['orapr', 'complete_cycle'],
+                                    tags: ['orpar', 'complete_cycle'],
                                     metadata: {
                                         channelContext: `Complete ORPAR cycle in channel ${channelId}`,
                                         systemState: { phase, completedCycle: true },
@@ -974,7 +974,7 @@ export class ControlLoopService {
                                     agentId,
                                     {
                                         channelId,
-                                        type: analysis.patternType || 'orapr_sequence',
+                                        type: analysis.patternType || 'orpar_sequence',
                                         pattern: {
                                             sequence: agentSequence.slice(),
                                             conditions: { loopId, actionType: data.type },
@@ -986,7 +986,7 @@ export class ControlLoopService {
                                         effectiveness: analysis.metadata.estimatedEffectiveness,
                                         agentParticipants: [agentId],
                                         similarPatterns: [],
-                                        tags: ['orapr', 'action_sequence'],
+                                        tags: ['orpar', 'action_sequence'],
                                         metadata: {
                                             channelContext: `Control loop ${loopId} in channel ${channelId}`,
                                             systemState: { loopId, actionData: data },

@@ -12,6 +12,7 @@ The MXF SDK now supports **dynamic external MCP server registration**, allowing 
 ✅ **Dynamic Registration**: Add/remove servers at runtime
 ✅ **Auto-Discovery**: Tools from registered servers become available immediately
 ✅ **Lifecycle Management**: Automatic startup, health checks, and crash recovery
+✅ **Channel-Scoped Servers**: Share MCP server instances per channel (NEW!)
 
 ---
 
@@ -84,6 +85,63 @@ await sdk.registerExternalMcpServer({
     startupTimeout?: number;          // Startup timeout ms (default: 10000)
 }
 ```
+
+---
+
+## Server Scopes: Global vs Channel
+
+MXF supports two scopes for external MCP servers:
+
+### Global Scope (Default)
+
+Servers registered with `registerExternalMcpServer()` are **globally available** to all agents:
+
+```typescript
+// Global server - available to ALL agents
+await sdk.registerExternalMcpServer({
+    id: 'global-calculator',
+    name: 'Global Calculator',
+    command: 'npx',
+    args: ['-y', '@mcp/calculator']
+});
+
+// Any agent in any channel can use these tools
+```
+
+**Use Cases**:
+- System-wide utilities (calculators, converters, etc.)
+- Shared services (weather, time, etc.)
+- Company-wide integrations (Slack, email, etc.)
+
+### Channel Scope (NEW!)
+
+Servers registered with `registerChannelMcpServer()` are **channel-specific**:
+
+```typescript
+// Channel server - only for agents in THIS channel
+await agent.registerChannelMcpServer({
+    id: 'chess-game',
+    name: 'Chess Game Server',
+    command: 'npx',
+    args: ['-y', '@mcp/chess'],
+    keepAliveMinutes: 10  // Keep alive 10min after last agent leaves
+});
+
+// Only agents in this channel can use chess tools
+```
+
+**Use Cases**:
+- Game servers (chess, tic-tac-toe, etc.)
+- Project-specific databases
+- Collaborative design tools (Figma, Miro)
+- Team-specific integrations
+
+**Key Benefits**:
+- **Shared Instance**: All channel agents use the same server process
+- **Auto-Start**: Server starts when first agent joins channel
+- **Auto-Stop**: Server stops after keepAlive when last agent leaves
+- **Resource Efficient**: One server per channel (not per agent)
+- **Tool Isolation**: Tools only visible to channel members
 
 ---
 
@@ -185,6 +243,94 @@ await sdk.unregisterExternalMcpServer('my-custom-server');
 
 console.log('Server stopped and removed');
 // Tools from this server are no longer available
+```
+
+### Example 6: Channel-Scoped Game Server
+
+```typescript
+// Create a game channel
+const channel = await sdk.createChannel('chess-room', {
+    name: 'Chess Championship',
+    description: 'Chess game with AI opponents'
+});
+
+// Create player agents
+const player1 = await sdk.createAgent({
+    agentId: 'player-1',
+    channelId: 'chess-room',
+    // ... config ...
+});
+
+await player1.connect();
+
+// Register channel-scoped chess server
+await player1.registerChannelMcpServer({
+    id: 'chess-game',
+    name: 'Chess Server',
+    command: 'npx',
+    args: ['-y', '@mcp/chess'],
+    keepAliveMinutes: 30,  // Keep game state for 30 minutes
+    environmentVariables: {
+        GAME_MODE: 'tournament'
+    }
+});
+
+// Player 2 joins and can use the same chess server
+const player2 = await sdk.createAgent({
+    agentId: 'player-2',
+    channelId: 'chess-room',
+    // ... config ...
+});
+
+await player2.connect();
+
+// Both players use the same chess server instance
+await player1.executeTool('chess_move', { from: 'e2', to: 'e4' });
+await player2.executeTool('chess_move', { from: 'e7', to: 'e5' });
+
+// List channel servers
+const servers = await player1.listChannelMcpServers();
+console.log(`Channel has ${servers.length} MCP server(s)`);
+
+// When both players leave, server stops after 30 min keepAlive
+```
+
+### Example 7: Multi-Channel Isolation
+
+```typescript
+// Channel 1: Chess game
+const chessAgent = await sdk.createAgent({
+    agentId: 'chess-player',
+    channelId: 'chess-room',
+    // ... config ...
+});
+
+await chessAgent.connect();
+await chessAgent.registerChannelMcpServer({
+    id: 'chess-server',
+    name: 'Chess',
+    command: 'npx',
+    args: ['-y', '@mcp/chess']
+});
+
+// Channel 2: Tic-tac-toe game
+const tttAgent = await sdk.createAgent({
+    agentId: 'ttt-player',
+    channelId: 'tictactoe-room',
+    // ... config ...
+});
+
+await tttAgent.connect();
+await tttAgent.registerChannelMcpServer({
+    id: 'tictactoe-server',
+    name: 'Tic-Tac-Toe',
+    command: 'npx',
+    args: ['-y', '@mcp/tictactoe']
+});
+
+// chessAgent sees: chess_move, chess_board, etc.
+// tttAgent sees: ttt_move, ttt_check_winner, etc.
+// No overlap! Complete isolation.
 ```
 
 ---
@@ -379,26 +525,82 @@ await sdk.registerExternalMcpServer({
 
 ---
 
+## API Reference
+
+### Global Server Methods
+
+```typescript
+// Register global MCP server (available to all agents)
+await sdk.registerExternalMcpServer(config: ExternalServerConfig): Promise<{ success: boolean; toolsDiscovered?: string[] }>
+
+// Unregister global MCP server
+await sdk.unregisterExternalMcpServer(serverId: string): Promise<boolean>
+```
+
+### Channel Server Methods
+
+```typescript
+// Register channel-scoped MCP server (agent must be in a channel)
+await agent.registerChannelMcpServer(config: ChannelServerConfig): Promise<{ success: boolean; toolsDiscovered?: string[] }>
+
+// List channel MCP servers
+await agent.listChannelMcpServers(channelId?: string): Promise<ChannelMcpServer[]>
+
+// Unregister channel MCP server
+await agent.unregisterChannelMcpServer(serverId: string, channelId?: string): Promise<boolean>
+```
+
+### Configuration Interfaces
+
+```typescript
+interface ExternalServerConfig {
+    id: string;
+    name: string;
+    command?: string;
+    args?: string[];
+    transport?: 'stdio' | 'http';
+    url?: string;
+    autoStart?: boolean;
+    environmentVariables?: Record<string, string>;
+    restartOnCrash?: boolean;
+    maxRestartAttempts?: number;
+}
+
+interface ChannelServerConfig extends ExternalServerConfig {
+    keepAliveMinutes?: number;  // Keep server alive after last agent leaves (default: 5)
+}
+```
+
+---
+
 ## Limitations & Future Enhancements
 
 ### Current Limitations
 
-1. **No Agent-Private Servers**: Registered servers are available to all agents in MXF
-2. **No Per-Channel Servers**: Servers are global, not channel-specific
-3. **No Handler Upload**: Can't upload JavaScript handler code, must use external process
+1. **No Agent-Private Servers**: Can't create servers exclusive to a single agent (use channel with one member as workaround)
+2. **No Handler Upload**: Can't upload JavaScript handler code, must use external process
+3. **No Cross-Channel Sharing**: Channel servers can't be shared across multiple channels (register separately if needed)
+
+### Recently Added
+
+✅ **Channel-Scoped Servers**: Share MCP server instances per channel (v1.1.0)
+✅ **Reference Counting**: Automatic lifecycle based on connected agents
+✅ **KeepAlive Cleanup**: Graceful shutdown with configurable delay
 
 ### Planned Enhancements
 
-- Agent-private server registration
-- Channel-scoped server visibility
+- Agent-private server registration (agent scope)
 - Server health monitoring API
 - Tool usage analytics per server
+- Cross-channel server sharing (multi-channel scope)
 
 ---
 
 ## Troubleshooting
 
-### Server Won't Start
+### Global Servers
+
+#### Server Won't Start
 
 ```
 Error: External server registration timeout after 30 seconds
@@ -410,7 +612,7 @@ Error: External server registration timeout after 30 seconds
 - Check environment variables are set
 - Review server logs in MXF output
 
-### Tools Not Appearing
+#### Tools Not Appearing
 
 ```
 Tools from my-server not showing up
@@ -422,7 +624,7 @@ Tools from my-server not showing up
 - Verify server implements MCP protocol correctly
 - List tools with `agent.listTools()` to debug
 
-### Registration Fails
+#### Registration Fails
 
 ```
 Error: Server ID already registered
@@ -433,6 +635,42 @@ Error: Server ID already registered
 - Unregister old server first: `await sdk.unregisterExternalMcpServer(id)`
 - Check server isn't pre-configured in `ExternalServerConfigs.ts`
 
+### Channel Servers
+
+#### Agent Not in Channel
+
+```
+Error: Cannot register channel MCP server: agent not in a channel
+```
+
+**Solutions**:
+- Ensure agent has joined a channel first
+- Check `agent.channelId` is set
+- Call `await agent.connect()` after creating agent with channelId
+
+#### Tools Only Visible to Channel Members
+
+```
+Why can't agents in other channels see my tools?
+```
+
+**This is by design!** Channel-scoped servers are intentionally isolated:
+- Tools only visible to agents in the same channel
+- Use `registerExternalMcpServer()` for global tools
+- Use separate channel servers for each channel
+
+#### Server Not Auto-Starting
+
+```
+Channel server registered but not starting when agent joins
+```
+
+**Solutions**:
+- Check `autoStart: true` in config (default)
+- Verify agent successfully joined channel (listen for AGENT_JOINED event)
+- Check server logs for startup errors
+- Ensure command/args are valid
+
 ---
 
 ## Additional Resources
@@ -442,8 +680,32 @@ Error: Server ID already registered
 - [MCP SDK Repository](https://github.com/modelcontextprotocol/typescript-sdk)
 - [Example MCP Servers](https://github.com/modelcontextprotocol/servers)
 
+### Working Examples
+
+- **Global Servers**: `examples/external-mcp-registration/`
+  - Run: `npm run demo:external-mcp`
+  - Shows global server registration and tool usage
+
+- **Channel Servers**: `examples/channel-mcp-registration/`
+  - Run: `npm run demo:channel-mcp`
+  - Shows channel-scoped servers, multi-agent sharing, lifecycle management
+
 ---
 
-**Status**: ✅ Feature Complete - SDK-based external MCP server registration fully implemented
+## Decision Matrix: When to Use Each Scope
+
+| Scenario | Use Global Server | Use Channel Server |
+|----------|------------------|-------------------|
+| System utilities (calculator, time, etc.) | ✅ | ❌ |
+| Company-wide integrations (Slack, email) | ✅ | ❌ |
+| Game servers (chess, poker, etc.) | ❌ | ✅ |
+| Project-specific databases | ❌ | ✅ |
+| Collaborative tools (Figma, Miro) | ❌ | ✅ |
+| Shared state across agents | ❌ | ✅ |
+| One-off tool for single agent | ❌ | ✅ (or global) |
+
+---
+
+**Status**: ✅ **Feature Complete** - Global and channel-scoped MCP server registration fully implemented (v1.1.0)
 
 For questions or issues, see the main SDK documentation or open an issue on GitHub.

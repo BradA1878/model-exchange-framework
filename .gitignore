@@ -1,5 +1,7 @@
 # Dependency directories
 node_modules/
+examples/fog-of-war-game/node_modules/
+examples/fog-of-war-game/client/node_modules/
 venv/
 __pycache__/
 .venv/
@@ -9,6 +11,12 @@ __pycache__/
 dist/
 build/
 trial-dist/
+
+# Compiled files in src/ (should go to dist/ or dist-sdk/)
+src/**/*.js
+src/**/*.js.map
+src/**/*.d.ts
+src/**/*.d.ts.map
 *.pyc
 *.pyo
 *.pyd
@@ -17,6 +25,7 @@ trial-dist/
 # Logs
 logs/
 *.log
+examples/fog-of-war-game/logs/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
@@ -71,3 +80,5 @@ CLAUDE.md
 .env.bak
 build-config/
 presentation/
+sync-to-public.sh
+src/**/*.md

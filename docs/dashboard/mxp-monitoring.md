@@ -50,15 +50,15 @@ MXP monitoring in the dashboard helps you:
 ### Performance Metrics
 
 #### Efficiency Improvements
-- **Bandwidth Savings**: Percentage reduction in network traffic
-  - *Typical Range*: 70-85% reduction compared to natural language
-  - *Calculation*: `(Natural Language Size - MXP Size) / Natural Language Size × 100%`
+- **Bandwidth Savings**: Reduction in network traffic from structured messaging
+  - *Measurement*: `(Natural Language Size - MXP Size) / Natural Language Size × 100%`
+  - *Improvement varies by message type and content*
 - **Processing Speed**: Message parsing and processing time improvements
-  - *Typical Range*: 90-95% faster parsing
+  - *Benefit*: Faster parsing due to structured format
   - *Measurement*: Average processing time in milliseconds
 - **Token Usage Reduction**: LLM token consumption savings
-  - *Typical Range*: 75-85% fewer tokens
-  - *Impact*: Direct cost savings for LLM API usage
+  - *Benefit*: Reduced tokens through efficient message encoding
+  - *Impact*: Cost savings for LLM API usage
 
 #### Throughput Metrics
 - **Messages per Second**: Protocol throughput capacity
@@ -152,17 +152,17 @@ MXP monitoring in the dashboard helps you:
 ### Conversion Rate Analysis
 
 #### Healthy Conversion Rates
-- **Excellent**: 80%+ conversion rate
+- **Excellent**: High conversion rate
   - Indicates optimal pattern detection
   - Most operations are structured and predictable
   - High bandwidth and processing savings
-  
-- **Good**: 60-80% conversion rate
+
+- **Good**: Moderate conversion rate
   - Moderate pattern detection success
   - Mix of structured and natural language communication
   - Significant efficiency improvements
-  
-- **Needs Improvement**: <60% conversion rate
+
+- **Needs Improvement**: Low conversion rate
   - Low pattern detection confidence
   - Mostly natural language communication
   - Limited protocol benefits
@@ -177,13 +177,14 @@ MXP monitoring in the dashboard helps you:
 
 #### Bandwidth Efficiency
 ```javascript
-// Expected bandwidth savings
-const expectedSavings = {
-  'calc.sum': '85-90%',      // Simple arithmetic operations
-  'data.fetch': '70-80%',    // Data retrieval operations
-  'tool.execute': '75-85%',  // Tool execution commands
-  'coord.sync': '80-90%'     // Coordination messages
+// Operation type impacts bandwidth savings differently
+const operationTypes = {
+  'calc.sum': 'high',      // Simple arithmetic operations - high savings
+  'data.fetch': 'moderate', // Data retrieval operations - moderate savings
+  'tool.execute': 'high',  // Tool execution commands - high savings
+  'coord.sync': 'high'     // Coordination messages - high savings
 };
+// Actual savings vary by message complexity and content
 ```
 
 #### Processing Speed Improvements
@@ -194,13 +195,13 @@ const expectedSavings = {
 ### Security Performance Analysis
 
 #### Encryption Impact
-- **Overhead**: 2-5ms additional processing time per message
-- **Success Rate**: Should maintain >99.9% encryption success
-- **Key Performance**: Key operations should complete within 1ms
+- **Overhead**: Minimal additional processing time per message
+- **Success Rate**: Should maintain high encryption success rate
+- **Key Performance**: Key operations should complete quickly
 
 #### Security Event Patterns
-- **Normal**: Occasional authentication failures (<0.1%)
-- **Warning**: Increasing encryption failures (>1%)
+- **Normal**: Occasional authentication failures (very low rate)
+- **Warning**: Increasing encryption failures
 - **Critical**: Replay attack detections or key compromise indicators
 
 ## Exporting MXP Analytics Data
@@ -255,12 +256,12 @@ const streamConfig = {
 
 #### Alert Integration
 ```javascript
-// Configure performance alerts
+// Configure performance alerts (thresholds are configurable)
 const alertConfig = {
-  conversionRateThreshold: 70,     // Alert if below 70%
-  errorRateThreshold: 5,           // Alert if errors exceed 5%
-  responseTimeThreshold: 10,       // Alert if response time >10ms
-  encryptionFailureThreshold: 1    // Alert on any encryption failures
+  conversionRateThreshold: 70,     // Alert if below threshold (adjust based on your needs)
+  errorRateThreshold: 5,           // Alert if errors exceed threshold
+  responseTimeThreshold: 10,       // Alert if response time exceeds threshold (ms)
+  encryptionFailureThreshold: 1    // Alert on encryption failures
 };
 ```
 

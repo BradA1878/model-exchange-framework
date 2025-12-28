@@ -263,11 +263,11 @@ Ready to implement MXF for your use case?
 
 1. **[Review System Overview](./mxf/system-overview.md)** - Understand core architecture
 2. **[Explore Key Concepts](./mxf/key-concepts.md)** - Learn fundamental principles
-3. **[Contact Sales](mailto:sales@example.com)** - Discuss your specific requirements
-4. **[Schedule Demo](mailto:demo@example.com)** - See MXF in action with your use case
+3. **[GitHub Discussions](https://github.com/BradA1878/model-exchange-framework/discussions)** - Discuss your specific requirements
+4. **[Getting Started Guide](./getting-started.md)** - Begin implementing MXF for your use case
 
 ---
 
 ## Custom Use Case Development
 
-Have a unique use case not listed here? MXF's flexible architecture supports custom implementations across virtually any industry. Contact our solutions team to discuss your specific requirements.
+Have a unique use case not listed here? MXF's flexible architecture supports custom implementations across virtually any industry. [Open a GitHub Discussion](https://github.com/BradA1878/model-exchange-framework/discussions) to share your requirements and get guidance from the community.

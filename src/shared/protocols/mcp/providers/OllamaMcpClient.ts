@@ -39,6 +39,9 @@ import {
 import { Logger } from '../../../utils/Logger';
 import { extractToolCalls, extractToolCallId, convertContentToText } from '../utils/MessageConverters';
 import { convertToolsToProviderFormat } from '../utils/ToolHandlers';
+import { Observable } from 'rxjs';
+import { AgentContext } from '../../../interfaces/AgentContext';
+import { ConversationMessage } from '../../../interfaces/ConversationMessage';
 
 // Type definitions for Ollama API
 interface OllamaMessage {
@@ -180,11 +183,11 @@ export class OllamaMcpClient extends BaseMcpClient {
             clearTimeout(timeoutId);
 
             if (!response.ok) {
-                const errorData: OllamaErrorResponse = await response.json();
+                const errorData = await response.json() as OllamaErrorResponse;
                 throw new Error(`Ollama API error: ${response.status} - ${errorData.error}`);
             }
 
-            const data: OllamaResponse = await response.json();
+            const data = await response.json() as OllamaResponse;
             return data;
         } catch (error) {
             clearTimeout(timeoutId);
@@ -310,8 +313,8 @@ export class OllamaMcpClient extends BaseMcpClient {
                 throw new Error(`Failed to get models: ${response.status}`);
             }
             
-            const data = await response.json();
-            return data.models?.map((model: any) => model.name) || [];
+            const data = await response.json() as { models?: Array<{ name: string }> };
+            return data.models?.map((model) => model.name) || [];
         } catch (error) {
             logger.error('Error getting available models:', error);
             return [];
@@ -338,5 +341,217 @@ export class OllamaMcpClient extends BaseMcpClient {
      */
     getProviderName(): string {
         return 'ollama';
+    }
+
+    /**
+     * Send message using full agent context
+     * 
+     * This method structures messages for Ollama based on semantic metadata,
+     * ensuring proper chronological ordering of tasks and conversation history.
+     * 
+     * @param context - Complete agent context from SDK
+     * @param options - Additional Ollama-specific options
+     * @returns Observable with Ollama response
+     */
+    public sendWithContext(
+        context: AgentContext,
+        options?: Record<string, any>
+    ): Observable<McpApiResponse> {
+        return new Observable<McpApiResponse>(subscriber => {
+            this.sendWithContextImpl(context, options)
+                .then(response => {
+                    subscriber.next(response);
+                    subscriber.complete();
+                })
+                .catch(error => subscriber.error(error));
+        });
+    }
+
+    /**
+     * Implementation of context-based sending for Ollama
+     */
+    private async sendWithContextImpl(
+        context: AgentContext,
+        options?: Record<string, any>
+    ): Promise<McpApiResponse> {
+        // Structure messages for Ollama based on context
+        const ollamaMessages = this.structureMessagesFromContext(context);
+
+        // Convert tools - Ollama uses OpenAI-compatible format
+        const ollamaTools = context.availableTools && context.availableTools.length > 0
+            ? convertToolsToProviderFormat(context.availableTools as McpTool[], 'openai')
+            : undefined;
+
+        // Prepare request
+        const request: OllamaRequest = {
+            model: options?.model || this.config.defaultModel || 'llama3.2',
+            messages: ollamaMessages,
+            stream: false,
+            options: {
+                temperature: options?.temperature || this.config.temperature || 0.7,
+                max_tokens: options?.maxTokens || this.config.maxTokens || 4096
+            }
+        };
+
+        // Add tools if provided
+        if (ollamaTools) {
+            request.tools = ollamaTools as OllamaRequest['tools'];
+        }
+
+        // Make request
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+
+        try {
+            const response = await fetch(`${this.baseUrl}/api/chat`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(request),
+                signal: controller.signal
+            });
+
+            clearTimeout(timeoutId);
+
+            if (!response.ok) {
+                const errorData = await response.json() as OllamaErrorResponse;
+                throw new Error(`Ollama API error: ${errorData.error || response.statusText}`);
+            }
+
+            const ollamaResponse = await response.json() as OllamaResponse;
+
+            // Convert to MCP response
+            return {
+                id: `ollama-${Date.now()}`,
+                type: 'completion',
+                role: 'assistant',
+                content: [{
+                    type: McpContentType.TEXT,
+                    text: ollamaResponse.message.content
+                }],
+                model: ollamaResponse.model,
+                stop_reason: ollamaResponse.done ? 'stop' : null,
+                stop_sequence: null,
+                usage: {
+                    input_tokens: ollamaResponse.prompt_eval_count || 0,
+                    output_tokens: ollamaResponse.eval_count || 0,
+                    total_tokens: (ollamaResponse.prompt_eval_count || 0) + (ollamaResponse.eval_count || 0)
+                }
+            };
+        } catch (error) {
+            clearTimeout(timeoutId);
+            throw new Error(`Error sending message to Ollama: ${error instanceof Error ? error.message : String(error)}`);
+        }
+    }
+
+    /**
+     * Structure messages from AgentContext for Ollama
+     * 
+     * Message ordering:
+     * 1. System message (framework rules + agent identity)
+     * 2. Conversation history (chronological)
+     * 3. Task prompt (if present) - AFTER conversation for proper ordering
+     * 4. Recent actions (if needed)
+     */
+    private structureMessagesFromContext(context: AgentContext): OllamaMessage[] {
+        const messages: OllamaMessage[] = [];
+
+        // 1. System message: Combine framework rules + agent identity
+        const systemContent = [
+            context.systemPrompt,
+            '',
+            `## Your Agent Identity`,
+            `**You are**: ${(context.agentConfig as any).purpose || context.agentConfig.agentId}`,
+            `**Your Agent ID**: ${context.agentId}`,
+            ...(context.agentConfig.capabilities ? [`**Capabilities**: ${context.agentConfig.capabilities.join(', ')}`] : [])
+        ].join('\n');
+
+        messages.push({
+            role: 'system',
+            content: systemContent
+        });
+
+        // 2. Conversation history: Filter to actual dialogue and tool results
+        const dialogueMessages = context.conversationHistory.filter(msg => {
+            const layer = msg.metadata?.contextLayer;
+
+            // INCLUDE: SystemLLM messages - they are "held" until the next real prompt
+            // and should be bundled with that prompt to provide coordination insights
+            // (Previously these were skipped, breaking the SystemLLM flow)
+
+            // INCLUDE: Messages with conversation or tool-result layer
+            if (layer === 'conversation' || layer === 'tool-result') {
+                return true;
+            }
+
+            // INCLUDE: Tool role messages
+            if (msg.role === 'tool') {
+                return true;
+            }
+
+            // SKIP: Messages with system/identity/task/action layers
+            if (layer === 'system' || layer === 'identity' || layer === 'task' || layer === 'action') {
+                return false;
+            }
+
+            // INCLUDE: Messages without contextLayer (legacy or direct additions)
+            if (!layer && msg.role !== 'system') {
+                return true;
+            }
+
+            return false;
+        });
+
+        // Convert to Ollama format
+        for (const msg of dialogueMessages) {
+            const ollamaMsg = this.convertConversationToOllama(msg);
+            messages.push(ollamaMsg);
+        }
+
+        // 3. Task message (if present) - Added AFTER conversation history for chronological ordering
+        if (context.currentTask) {
+            messages.push({
+                role: 'user',
+                content: `## Current Task\n${context.currentTask.description}`
+            });
+        }
+
+        // 4. Recent actions (if needed for context)
+        if (context.recentActions.length > 0) {
+            const actionsContent = [
+                `## Your Recent Actions`,
+                ...context.recentActions.map(a => `- ${a.action}${a.result ? `: ${a.result}` : ''}`)
+            ].join('\n');
+
+            messages.push({
+                role: 'user',
+                content: actionsContent
+            });
+        }
+
+        return messages;
+    }
+
+    /**
+     * Convert ConversationMessage to Ollama format
+     */
+    private convertConversationToOllama(msg: ConversationMessage): OllamaMessage {
+        const ollamaMsg: OllamaMessage = {
+            role: msg.role === 'assistant' ? 'assistant' : 
+                  msg.role === 'tool' ? 'tool' : 
+                  msg.role === 'system' ? 'system' : 'user',
+            content: msg.content
+        };
+
+        // Add tool_call_id for tool messages
+        if (msg.role === 'tool' && msg.metadata?.tool_call_id) {
+            ollamaMsg.tool_call_id = msg.metadata.tool_call_id;
+        }
+
+        // Preserve tool_calls for assistant messages
+        if (msg.role === 'assistant' && (msg as any).tool_calls) {
+            ollamaMsg.tool_calls = (msg as any).tool_calls;
+        }
+
+        return ollamaMsg;
     }
 }

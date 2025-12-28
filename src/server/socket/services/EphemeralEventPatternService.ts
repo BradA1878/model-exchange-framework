@@ -57,7 +57,7 @@ interface AgentActivity {
     agentId: AgentId;
     channelId: ChannelId;
     lastSeen: number;
-    currentOraprPhase?: 'observation' | 'reasoning' | 'planning' | 'action' | 'reflection';
+    currentOrparPhase?: 'observation' | 'reasoning' | 'planning' | 'action' | 'reflection';
     recentMessages: ChannelMessage[];
     toolUsage: string[];
     strugglingWith?: string;
@@ -140,7 +140,7 @@ export class EphemeralEventPatternService {
                 this.validator.assertIsNonEmptyString(channelId, 'channelId is required');
 
                 await this.updateAgentActivity(agentId, channelId, 'reasoning');
-                await this.detectOraprTransitionPatterns(agentId, channelId, 'pre_reasoning');
+                await this.detectOrparTransitionPatterns(agentId, channelId, 'pre_reasoning');
                 
             } catch (error) {
                 this.logger.error(`Error handling reasoning event: ${error}`);
@@ -170,7 +170,7 @@ export class EphemeralEventPatternService {
                 this.validator.assertIsNonEmptyString(channelId, 'channelId is required');
 
                 await this.updateAgentActivity(agentId, channelId, 'action');
-                await this.detectOraprTransitionPatterns(agentId, channelId, 'post_action');
+                await this.detectOrparTransitionPatterns(agentId, channelId, 'post_action');
                 
             } catch (error) {
                 this.logger.error(`Error handling action event: ${error}`);
@@ -264,7 +264,7 @@ export class EphemeralEventPatternService {
     /**
      * Detect patterns during ORPAR phase transitions
      */
-    private async detectOraprTransitionPatterns(
+    private async detectOrparTransitionPatterns(
         agentId: AgentId, 
         channelId: ChannelId, 
         trigger: 'pre_reasoning' | 'post_action'
@@ -779,13 +779,13 @@ Respond with JSON format:
     private async updateAgentActivity(
         agentId: AgentId, 
         channelId: ChannelId, 
-        oraprPhase: 'observation' | 'reasoning' | 'planning' | 'action' | 'reflection'
+        orparPhase: 'observation' | 'reasoning' | 'planning' | 'action' | 'reflection'
     ): Promise<void> {
         const existing = this.agentActivities.get(agentId);
-        
+
         if (existing) {
             existing.lastSeen = Date.now();
-            existing.currentOraprPhase = oraprPhase;
+            existing.currentOrparPhase = orparPhase;
         } else {
             await this.initializeAgentActivity(agentId, channelId);
         }

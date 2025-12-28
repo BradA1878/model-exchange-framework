@@ -168,12 +168,12 @@ graph TB
 
 ## Performance Characteristics
 
-- **Latency**: Sub-second message delivery (P95 < 500ms)
-- **Throughput**: 10K+ messages/second per server instance
-- **Concurrency**: 1000+ concurrent WebSocket connections
+- **Latency**: Sub-second message delivery for typical operations
+- **Throughput**: Designed for high-volume message processing
+- **Concurrency**: Supports many concurrent WebSocket connections
 - **Memory**: Efficient memory usage with garbage collection
 - **Storage**: Optimized MongoDB queries with indexing
-- **MXP Efficiency**: 80%+ bandwidth reduction, 95% faster parsing vs natural language
+- **MXP Efficiency**: Bandwidth optimization through structured messaging
 
 ## Deployment Architecture
 

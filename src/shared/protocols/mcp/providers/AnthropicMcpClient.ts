@@ -42,6 +42,9 @@ import {
 } from '../IMcpClient';
 import { extractToolCalls, extractToolCallId, extractToolResultText } from '../utils/MessageConverters';
 import { convertToolsToProviderFormat } from '../utils/ToolHandlers';
+import { Observable } from 'rxjs';
+import { AgentContext } from '../../../interfaces/AgentContext';
+import { ConversationMessage } from '../../../interfaces/ConversationMessage';
 
 // Type definitions for Anthropic API
 interface AnthropicContentBlock {
@@ -424,10 +427,196 @@ export class AnthropicMcpClient extends BaseMcpClient {
             }
             
             // Parse and convert response
-            const anthropicResponse: AnthropicResponse = await response.json();
+            const anthropicResponse = await response.json() as AnthropicResponse;
             return this.convertToMcpResponse(anthropicResponse);
         } catch (error) {
             throw new Error(`Error sending message to Anthropic: ${error instanceof Error ? error.message : String(error)}`);
         }
+    }
+
+    /**
+     * Send message using full agent context
+     * 
+     * This method structures messages for Anthropic based on semantic metadata,
+     * ensuring proper chronological ordering of tasks and conversation history.
+     * 
+     * @param context - Complete agent context from SDK
+     * @param options - Additional Anthropic-specific options
+     * @returns Observable with Anthropic response
+     */
+    public sendWithContext(
+        context: AgentContext,
+        options?: Record<string, any>
+    ): Observable<McpApiResponse> {
+        return new Observable<McpApiResponse>(subscriber => {
+            this.sendWithContextImpl(context, options)
+                .then(response => {
+                    subscriber.next(response);
+                    subscriber.complete();
+                })
+                .catch(error => subscriber.error(error));
+        });
+    }
+
+    /**
+     * Implementation of context-based sending for Anthropic
+     */
+    private async sendWithContextImpl(
+        context: AgentContext,
+        options?: Record<string, any>
+    ): Promise<McpApiResponse> {
+        // Structure messages for Anthropic based on context
+        const { systemPrompt, messages } = this.structureMessagesFromContext(context);
+
+        // Convert tools
+        const anthropicTools = context.availableTools && context.availableTools.length > 0
+            ? convertToolsToProviderFormat(context.availableTools as McpTool[], 'anthropic') as AnthropicTool[]
+            : undefined;
+
+        // Prepare request parameters
+        const model = options?.model || this.config.defaultModel || 'claude-3-opus-20240229';
+        const temperature = options?.temperature || this.config.temperature || 0.7;
+        const maxTokens = options?.maxTokens || this.config.maxTokens || 4096;
+
+        // Prepare request body - Anthropic uses system as a top-level parameter
+        const requestBody: Record<string, any> = {
+            model,
+            system: systemPrompt,
+            messages,
+            temperature,
+            max_tokens: maxTokens
+        };
+
+        // Add tools if provided
+        if (anthropicTools && anthropicTools.length > 0) {
+            requestBody.tools = anthropicTools;
+        }
+
+        // Make the API request
+        const response = await fetch(`${this.baseUrl}/messages`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'x-api-key': this.config.apiKey,
+                'anthropic-version': this.apiVersion
+            },
+            body: JSON.stringify(requestBody)
+        });
+
+        // Check for errors
+        if (!response.ok) {
+            let errorText = await response.text();
+            try {
+                const errorJson = JSON.parse(errorText);
+                errorText = errorJson.error?.message || errorText;
+            } catch (e) {
+                // Use error text as is if not JSON
+            }
+            throw new Error(`Anthropic API error [${response.status}]: ${errorText}`);
+        }
+
+        // Parse and convert response
+        const anthropicResponse = await response.json() as AnthropicResponse;
+        return this.convertToMcpResponse(anthropicResponse);
+    }
+
+    /**
+     * Structure messages from AgentContext for Anthropic
+     * 
+     * Anthropic uses a separate system parameter, so we return both.
+     * Message ordering:
+     * 1. Conversation history (chronological)
+     * 2. Task prompt (if present) - AFTER conversation for proper ordering
+     * 3. Recent actions (if needed)
+     */
+    private structureMessagesFromContext(context: AgentContext): { systemPrompt: string; messages: AnthropicMessage[] } {
+        // Build system prompt
+        const systemContent = [
+            context.systemPrompt,
+            '',
+            `## Your Agent Identity`,
+            `**You are**: ${(context.agentConfig as any).purpose || context.agentConfig.agentId}`,
+            `**Your Agent ID**: ${context.agentId}`,
+            ...(context.agentConfig.capabilities ? [`**Capabilities**: ${context.agentConfig.capabilities.join(', ')}`] : [])
+        ].join('\n');
+
+        const messages: AnthropicMessage[] = [];
+
+        // 1. Conversation history: Filter to actual dialogue and tool results
+        const dialogueMessages = context.conversationHistory.filter(msg => {
+            const layer = msg.metadata?.contextLayer;
+
+            // INCLUDE: SystemLLM messages - they are "held" until the next real prompt
+            // and should be bundled with that prompt to provide coordination insights
+            // (Previously these were skipped, breaking the SystemLLM flow)
+
+            // INCLUDE: Messages with conversation or tool-result layer
+            if (layer === 'conversation' || layer === 'tool-result') {
+                return true;
+            }
+
+            // INCLUDE: Tool role messages
+            if (msg.role === 'tool') {
+                return true;
+            }
+
+            // SKIP: Messages with system/identity/task/action layers
+            if (layer === 'system' || layer === 'identity' || layer === 'task' || layer === 'action') {
+                return false;
+            }
+
+            // INCLUDE: Messages without contextLayer (legacy or direct additions)
+            if (!layer && msg.role !== 'system') {
+                return true;
+            }
+
+            return false;
+        });
+
+        // Convert to Anthropic format
+        for (const msg of dialogueMessages) {
+            const anthropicMsg = this.convertConversationToAnthropic(msg);
+            if (anthropicMsg) {
+                messages.push(anthropicMsg);
+            }
+        }
+
+        // 2. Task message (if present) - Added AFTER conversation history for chronological ordering
+        if (context.currentTask) {
+            messages.push({
+                role: 'user',
+                content: [{ type: 'text', text: `## Current Task\n${context.currentTask.description}` }]
+            });
+        }
+
+        // 3. Recent actions (if needed for context)
+        if (context.recentActions.length > 0) {
+            const actionsContent = [
+                `## Your Recent Actions`,
+                ...context.recentActions.map(a => `- ${a.action}${a.result ? `: ${a.result}` : ''}`)
+            ].join('\n');
+
+            messages.push({
+                role: 'user',
+                content: [{ type: 'text', text: actionsContent }]
+            });
+        }
+
+        return { systemPrompt: systemContent, messages };
+    }
+
+    /**
+     * Convert ConversationMessage to Anthropic format
+     */
+    private convertConversationToAnthropic(msg: ConversationMessage): AnthropicMessage | null {
+        // Skip system messages - they go in the system parameter
+        if (msg.role === 'system') {
+            return null;
+        }
+
+        const role: 'user' | 'assistant' = msg.role === 'assistant' ? 'assistant' : 'user';
+        const content: AnthropicContentBlock[] = [{ type: 'text', text: msg.content }];
+
+        return { role, content };
     }
 }

@@ -22,7 +22,7 @@ A sophisticated framework for **autonomous multi-agent collaboration**, communic
 ### 🎉 **Autonomous Multi-Agent Collaboration** 🚀
 - **Goal-Oriented Task Prompting**: Simplified, natural task descriptions that encourage agent creativity and autonomy
 - **Intelligent Messaging Protocols**: Clear messaging_send patterns for reliable problem distribution and solution exchange
-- **MXP Protocol Support**: 80%+ bandwidth reduction with encrypted, structured agent communication
+- **MXP Protocol Support**: Efficient bandwidth usage with encrypted, structured agent communication
 - **Natural Task Completion**: Agents recognize completion conditions and signal task completion decisively
 - **Cross-Agent Tool Discovery**: Agents dynamically discover and recommend tools for collaborative problem-solving
 - **Autonomous Math Collaboration**: System for complex mathematical problem solving across multiple agents
@@ -35,19 +35,21 @@ A sophisticated framework for **autonomous multi-agent collaboration**, communic
 - **Rich Agent Profiles**: Detailed agent metadata, capabilities, and role definitions
 
 ### 🛠️ **Hybrid Tool System**
-- **81+ Built-in Tools**: Comprehensive tool library including 3 new memory search tools
+- **100+ Built-in Tools**: Comprehensive tool library across 11 categories including memory search, analytics, coordination, and more - See [Tool Reference](docs/mxf/tool-reference.md)
 - **External MCP Server Integration**: Support for Model Context Protocol servers
+- **Channel-Scoped MCP Servers**: Register MCP servers available only within specific channels
+- **Channel-Level Tool Access Control**: Restrict which tools are available per channel using `allowedTools`
 - **Dynamic Tool Discovery**: Real-time tool registration and capability updates
 - **Unified Tool Execution**: Routing between internal and external tools
-- **Intelligent Validation**: Pre-execution validation with <50ms latency
+- **Intelligent Validation**: Pre-execution validation with low latency
 - **Auto-Correction Engine**: Automatic parameter correction and error recovery
-- **ML-based Error Prediction**: Proactive error prevention with >70% accuracy
+- **ML-based Error Prediction**: Proactive error prevention and pattern learning
 
 ### 🧠 **ORPAR Control Loop**
 - **Observation**: Environmental awareness and context gathering
 - **Reasoning**: LLM-powered logical analysis and decision making
-- **Action**: Strategic action planning with dependency tracking  
 - **Planning**: Comprehensive goal decomposition and workflow creation
+- **Action**: Strategic action planning with dependency tracking  
 - **Reflection**: Deep analytical review of completed actions
 
 ### 🔌 **LLM Integration**
@@ -58,22 +60,22 @@ A sophisticated framework for **autonomous multi-agent collaboration**, communic
 
 ### 📊 **Infrastructure**
 - **MongoDB Integration**: Persistent storage for tools, agents, and conversations
-- **Meilisearch Integration**: Semantic search engine with OpenAI embeddings for 87% prompt reduction
+- **Meilisearch Integration**: Semantic search engine with OpenAI embeddings for efficient context retrieval
 - **Redis Caching**: High-performance multi-level caching (Memory → Redis → MongoDB)
 - **n8n Workflow Automation**: Optional integration (requires self-hosted or n8n Cloud instance)
-- **Docker Deployment**: Complete Docker Compose stack with core services
+- **Docker Deployment**: Docker Compose stack with core services
 - **Event-Driven Architecture**: RxJS-powered reactive event system
 - **Authentication**: Dual authentication (JWT for users, key-based for agents)
 - **Production Monitoring**: Comprehensive logging and performance tracking
 - **Advanced Analytics**: Real-time validation metrics, trend analysis, and ROI calculation
 - **Performance Optimization**: Automated bottleneck detection and parameter tuning
-- **Proactive Validation**: Pre-execution validation middleware with <50ms latency
-- **Error Recovery System**: Intelligent auto-correction with >80% success rate
+- **Proactive Validation**: Pre-execution validation middleware with low latency
+- **Error Recovery System**: Intelligent auto-correction with pattern learning
 - **MXP Protocol**: Efficient binary protocol with AES-256-GCM encryption for secure agent communication
 
 ### 🧠 **SystemLLM & ORPAR Integration**
 
-The SystemLlmService is a cornerstone of MXF's intelligent agent capabilities, providing sophisticated LLM integration throughout the ORPAR (Observation, Reasoning, Action, Planning, Reflection) cognitive cycle:
+The SystemLlmService is a cornerstone of MXF's intelligent agent capabilities, providing sophisticated LLM integration throughout the ORPAR (Observation, Reasoning, Planning, Action, Reflection) cognitive cycle:
 
 #### **ORPAR Lifecycle Integration**
 - **Observation**: Generates contextual environmental analysis using agent conversation history and channel state
@@ -100,7 +102,7 @@ MXF includes sophisticated meta-tools that provide intelligent tool discovery an
 
 #### **`tools_recommend` - Intelligent Tool Selection**
 - **Context Analysis**: Analyzes agent objectives, conversation history, and current task context
-- **Capability Matching**: Maps agent needs to optimal tool combinations from the 81+ available tools
+- **Capability Matching**: Maps agent needs to optimal tool combinations from available tools
 - **Cross-Domain Intelligence**: Discovers tool synergies across communication, control loop, memory, and infrastructure categories
 - **LLM-Powered Insights**: Uses SystemLlmService to generate contextual recommendations with confidence scoring
 
@@ -116,7 +118,7 @@ MXF includes sophisticated meta-tools that provide intelligent tool discovery an
 MXF includes a comprehensive validation and auto-correction system that prevents errors before they occur and automatically recovers from failures:
 
 #### **Proactive Validation Engine**
-- **Pre-execution Validation**: All tool calls validated before execution with <50ms latency
+- **Pre-execution Validation**: All tool calls validated before execution with low latency
 - **Risk-based Validation Levels**: ASYNC, BLOCKING, and STRICT validation modes based on operation risk
 - **Multi-layer Caching**: Memory, Redis, and MongoDB caching for optimal performance
 - **Pattern-based Validation**: Uses successful patterns from other agents for validation
@@ -145,8 +147,8 @@ MXF includes a comprehensive validation and auto-correction system that prevents
 MXP is a groundbreaking protocol that dramatically improves agent-to-agent communication efficiency while maintaining security and backward compatibility:
 
 #### **Key Benefits**
-- **80%+ Bandwidth Reduction**: Structured messages replace verbose natural language
-- **95% Faster Parsing**: Binary format eliminates ambiguity and parsing overhead
+- **Bandwidth Efficiency**: Structured messages replace verbose natural language
+- **Fast Parsing**: Binary format eliminates ambiguity and parsing overhead
 - **End-to-End Encryption**: AES-256-GCM encryption for sensitive agent communications
 - **Automatic Conversion**: Intelligent detection converts suitable messages to MXP format
 - **Backward Compatible**: Agents can send/receive both MXP and natural language
@@ -177,7 +179,7 @@ const agent = await sdk.createAgent({
 });
 ```
 
-📖 **[Complete MXP Migration Guide](docs/mxp-migration-guide.md)**
+📖 **[Complete MXP Protocol Guide](docs/mxf/mxp-protocol.md)**
 
 ### 🎯 **Task Management & Orchestration**
 
@@ -215,11 +217,11 @@ MXF provides a comprehensive task management system that enables intelligent coo
 
 ### 🔍 **Semantic Memory & Search**
 
-MXF integrates Meilisearch, an open-source semantic search engine, to provide intelligent memory retrieval and reduce prompt bloat:
+MXF integrates Meilisearch, an open-source semantic search engine, to provide intelligent memory retrieval:
 
 #### **Key Benefits**
-- **87% Prompt Reduction**: Reduce prompts from ~15,000 to ~2,000 tokens via semantic retrieval
-- **Infinite Memory**: Search entire conversation history beyond 50-message window limits
+- **Efficient Context Retrieval**: Semantic search reduces context size by retrieving only relevant information
+- **Extended Memory**: Search entire conversation history beyond sliding window limits
 - **Hybrid Search**: Configurable keyword + semantic search (default 70% semantic, 30% keyword)
 - **Cross-Channel Intelligence**: Discover patterns and learnings across all agent conversations
 - **Tool Usage History**: Semantic search through all tool executions and outcomes
@@ -227,7 +229,7 @@ MXF integrates Meilisearch, an open-source semantic search engine, to provide in
 #### **Meilisearch Features**
 - **Four Specialized Indexes**: Conversations, actions, patterns, and observations
 - **OpenAI Embeddings**: Using text-embedding-3-small (1536 dimensions) for semantic understanding
-- **Sub-50ms Search Latency**: Optimized for real-time agent queries
+- **Fast Search**: Optimized for real-time agent queries
 - **Automatic Indexing**: Dual-write pattern indexes all conversations and tool usage
 - **Docker Deployment**: Docker Compose deployment with health monitoring
 
@@ -520,11 +522,28 @@ npm run demo:mxp
 
 ### 🎨 **Example Demos**
 
-Explore our growing collection of multi-agent demos in the `/examples` directory:
+Explore our collection of multi-agent demos in the `/examples` directory:
 
+**Strategy & Collaboration:**
 - **First Contact Demo**: Starship crew encounters alien vessel (6 agents)
 - **Software Dev Team Demo**: PM, architect, and developers build web app (5 agents with varying skill levels)
-- More demos coming soon!
+- **Interview Scheduling Demo**: Multi-agent coordination for scheduling
+
+**AI Game Demos:**
+- **Fog of War Game**: Team strategy game with 8 AI commanders competing for resources
+- **Tic-Tac-Toe**: AI vs AI with personality-driven trash talk (2 agents)
+- **Go Fish**: Card game with memory, strategy, and character personalities (2 agents)
+
+**SDK Patterns:**
+- **Channel MCP Registration**: Example of channel-scoped MCP server registration
+- **External MCP Registration**: Example of global MCP server registration
+
+```bash
+# Run game demos
+npm run demo:fog-of-war    # Strategy game with 8 agents
+npm run demo:tic-tac-toe   # Quick AI vs AI game
+npm run demo:go-fish       # Card game with 2 agents
+```
 
 ### 🧪 **Other Ways to Explore MXF**
 

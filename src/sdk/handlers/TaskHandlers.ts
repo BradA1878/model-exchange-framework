@@ -277,45 +277,59 @@ export class TaskHandlers extends Handler {
      * @private
      */
     private setupTaskAssignedHandler(): void {
+        this.logger.debug(`[TaskHandlers:${this.agentId}] Setting up ASSIGNED handler subscription`);
+        
         const subscription = EventBus.client.on(TaskEvents.ASSIGNED, (payload: any) => {
             try {
-                //;
+                // Debug: Log that we received a task assignment event
+                //this.logger.debug(`[TaskHandlers:${this.agentId}] Received ASSIGNED event`);
                 
                 // Extract task assignment data from payload
                 const taskData = payload.data;
                 if (!taskData) {
-                    this.logger.warn('Task assignment payload missing data');
+                    this.logger.warn(`[TaskHandlers:${this.agentId}] Task assignment payload missing data`);
                     return;
                 }
+                
+                // Debug: Log the toAgentId and check
+                //this.logger.info(`[TaskHandlers:${this.agentId}] Checking assignment: toAgentId=${taskData.toAgentId}, assignedAgentIds=${JSON.stringify(taskData.task?.assignedAgentIds || [])}`);
                 
                 // Only process tasks assigned to this agent
                 const isAssignedToAgent = taskData.toAgentId === this.agentId || 
                                          (taskData.task?.assignedAgentIds && taskData.task.assignedAgentIds.includes(this.agentId));
                 
                 if (!isAssignedToAgent) {
+                    //this.logger.info(`[TaskHandlers:${this.agentId}] Not assigned to this agent, skipping`);
                     return;
                 }
                 
+                //this.logger.info(`[TaskHandlers:${this.agentId}] Task IS assigned to this agent`);
+                
                 const assignedTask = taskData.task;
                 if (!assignedTask) {
-                    this.logger.warn('Task assignment payload missing task details');
+                    this.logger.warn(`[TaskHandlers:${this.agentId}] Task assignment payload missing task details`);
                     return;
                 }
                 
                 // Check if task has already been processed
                 if (this.processedTaskAssignments.has(assignedTask.id)) {
+                    //this.logger.info(`[TaskHandlers:${this.agentId}] Task ${assignedTask.id} already processed, skipping`);
                     return;
                 }
                 
+                //this.logger.info(`[TaskHandlers:${this.agentId}] Processing task ${assignedTask.id} for the first time`);
                 this.processedTaskAssignments.add(assignedTask.id);
                 
                 
                 // Convert to SimpleTaskRequest format for compatibility with existing handler
+                // Include title and description for proper task context in buildTaskDesc
                 const taskRequest: SimpleTaskRequest = {
                     taskId: assignedTask.id,
                     fromAgentId: taskData.fromAgentId,
                     toAgentId: taskData.toAgentId,
                     content: assignedTask.description,
+                    title: assignedTask.title, // Include title for proper display
+                    description: assignedTask.description, // Include description for buildTaskDesc compatibility
                     metadata: assignedTask.metadata // Include metadata with completion agent info
                 };
                 

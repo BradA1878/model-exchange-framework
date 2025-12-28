@@ -309,7 +309,7 @@ Context: ${JSON.stringify(context, null, 2)}
 Please analyze and respond in JSON format with:
 {
   "patternDetected": boolean,
-  "patternType": "orapr_sequence|tool_chain|collaboration_flow|error_recovery",
+  "patternType": "orpar_sequence|tool_chain|collaboration_flow|error_recovery",
   "description": "detailed pattern description",
   "confidence": number (0.0-1.0),
   "recommendations": ["recommendation1", "recommendation2"],
@@ -356,7 +356,7 @@ Please analyze and respond in JSON format with:
         
         return {
             patternDetected,
-            patternType: patternDetected ? 'orapr_sequence' : undefined,
+            patternType: patternDetected ? 'orpar_sequence' : undefined,
             description: patternDetected 
                 ? `Detected repeating pattern in ${actionSequence.length}-step sequence`
                 : 'No significant pattern detected',
@@ -395,7 +395,7 @@ Please analyze and respond in JSON format with:
     /**
      * Track ORPAR action sequence for pattern detection
      */
-    public trackOraprAction(channelId: ChannelId, agentId: AgentId, phase: string, action: string): void {
+    public trackOrparAction(channelId: ChannelId, agentId: AgentId, phase: string, action: string): void {
         // Simple tracking - could be expanded
     }
 }

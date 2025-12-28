@@ -6,7 +6,7 @@ The MXF SDK includes specialized handler classes that process specific types of 
 
 The SDK provides five core handler categories:
 
-1. **ControlLoopHandlers**: ORPAR cycle execution (Observation, Reasoning, Action, Planning, Reflection)
+1. **ControlLoopHandlers**: ORPAR cycle execution (Observation, Reasoning, Planning, Action, Reflection)
 2. **McpHandler & McpToolHandlers**: Model Context Protocol tool execution
 3. **McpResourceHandlers**: MCP resource management
 4. **MemoryHandlers**: Memory operations and persistence
@@ -15,7 +15,7 @@ The SDK provides five core handler categories:
 
 ## ControlLoopHandlers
 
-Implements the ORPAR (Observation, Reasoning, Action, Planning, Reflection) cognitive cycle for intelligent agent behavior.
+Implements the ORPAR (Observation, Reasoning, Planning, Action, Reflection) cognitive cycle for intelligent agent behavior.
 
 ### Purpose
 

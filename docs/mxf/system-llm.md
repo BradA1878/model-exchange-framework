@@ -91,7 +91,7 @@ SystemLLM powers all five phases of the ORPAR cycle:
 
 #### Observation Processing
 ```typescript
-processObservationData(observations: Observation[], context?: OraprContext): Observable<any>
+processObservationData(observations: Observation[], context?: OrparContext): Observable<any>
 ```
 - **Model**: Fast, efficient (e.g., `gemini-2.0-flash-lite-001`)
 - **Purpose**: Analyze agent observations for collaboration opportunities
@@ -107,7 +107,7 @@ processObservationData(observations: Observation[], context?: OraprContext): Obs
 
 #### Plan Creation
 ```typescript
-createPlan(reasoning: Reasoning, context?: OraprContext, previousPlans?: Plan[]): Observable<Plan>
+createPlan(reasoning: Reasoning, context?: OrparContext, previousPlans?: Plan[]): Observable<Plan>
 ```
 - **Model**: Strategic planning (e.g., `gemini-2.5-pro-preview-05-06`)
 - **Purpose**: Generate executable action plans
@@ -116,7 +116,7 @@ createPlan(reasoning: Reasoning, context?: OraprContext, previousPlans?: Plan[])
 
 #### Action Analysis
 ```typescript
-analyzeActionExecution(action: PlanAction, result: any, context?: OraprContext): Observable<any>
+analyzeActionExecution(action: PlanAction, result: any, context?: OrparContext): Observable<any>
 ```
 - **Model**: Reliable execution (e.g., `gpt-4o-mini`)
 - **Purpose**: Analyze action execution and impact
@@ -124,7 +124,7 @@ analyzeActionExecution(action: PlanAction, result: any, context?: OraprContext):
 
 #### Reflection Generation
 ```typescript
-generateReflection(plan: Plan, actions: PlanAction[], results: any[], context?: OraprContext): Observable<Reflection>
+generateReflection(plan: Plan, actions: PlanAction[], results: any[], context?: OrparContext): Observable<Reflection>
 ```
 - **Model**: Meta-cognitive (e.g., `claude-3.5-sonnet`)
 - **Purpose**: Meta-cognitive analysis of cycle performance
@@ -228,7 +228,7 @@ SystemLLM automatically selects optimal models based on multiple factors:
 Each ORPAR operation has default models:
 
 ```typescript
-const ORPAR_MODEL_CONFIGS: Record<LlmProviderType, OraprModelConfig> = {
+const ORPAR_MODEL_CONFIGS: Record<LlmProviderType, OrparModelConfig> = {
     [LlmProviderType.OPENROUTER]: {
         observation: 'google/gemini-2.0-flash-lite-001',     // Fast, cheap
         reasoning: 'anthropic/claude-3.5-sonnet',            // Advanced reasoning
@@ -253,8 +253,8 @@ Models automatically upgrade based on context complexity:
 
 ```typescript
 getModelForOperationWithComplexity(
-    operation: OraprOperationType,
-    context?: OraprContext,
+    operation: OrparOperationType,
+    context?: OrparContext,
     complexityOverride?: 'simple' | 'moderate' | 'complex'
 ): string
 ```
@@ -300,8 +300,8 @@ Select models within budget constraints:
 
 ```typescript
 getCostAwareModel(
-    operation: OraprOperationType,
-    context?: OraprContext,
+    operation: OrparOperationType,
+    context?: OrparContext,
     budgetTier: 'ULTRA_CHEAP' | 'BUDGET' | 'STANDARD' | 'PREMIUM' | 'ULTRA_PREMIUM'
 ): string
 ```
@@ -319,8 +319,8 @@ Distribute load across providers:
 
 ```typescript
 getLoadBalancedModel(
-    operation: OraprOperationType,
-    context?: OraprContext,
+    operation: OrparOperationType,
+    context?: OrparContext,
     preferredProviders: string[]
 ): string
 ```
@@ -333,9 +333,9 @@ Use specialized models for specific tasks:
 
 ```typescript
 getSpecializedModel(
-    operation: OraprOperationType,
+    operation: OrparOperationType,
     specialization: 'reasoning' | 'coding' | 'analysis' | 'creative' | 'multilingual' | 'speed',
-    context?: OraprContext
+    context?: OrparContext
 ): string
 ```
 
@@ -400,7 +400,7 @@ interface SystemLlmServiceConfig {
     defaultModel?: string;
     defaultTemperature?: number;
     defaultMaxTokens?: number;
-    oraprModels?: Partial<OraprModelConfig>;
+    orparModels?: Partial<OrparModelConfig>;
     enableRealTimeCoordination?: boolean;
     enableDynamicModelSelection?: boolean;  // Control complexity-based model switching
 }
@@ -411,7 +411,7 @@ const service = new SystemLlmService({
     defaultModel: 'anthropic/claude-3.5-sonnet',
     defaultTemperature: 0.3,
     defaultMaxTokens: 2000,
-    oraprModels: {
+    orparModels: {
         reasoning: 'anthropic/claude-3-opus',  // Override for complex reasoning
         planning: 'openai/o1-preview'          // Override for strategic planning
     },
@@ -432,7 +432,7 @@ const manager = SystemLlmServiceManager.getInstance();
 const service = manager.getServiceForChannel('channel-123', {
     providerType: LlmProviderType.ANTHROPIC,
     defaultModel: 'claude-3-5-sonnet-20241022',
-    oraprModels: {
+    orparModels: {
         observation: 'claude-3-5-haiku-20241022',
         reasoning: 'claude-3-5-sonnet-20241022',
         planning: 'claude-3-5-sonnet-20241022',
@@ -458,7 +458,7 @@ batchProcessObservations(
     batches: Array<{
         agentId: string;
         observations: Observation[];
-        context?: OraprContext;
+        context?: OrparContext;
     }>
 ): Observable<Array<{ agentId: string; result: any; error?: Error }>>
 
@@ -468,7 +468,7 @@ batchAnalyzeActions(
         actionId: string;
         action: PlanAction;
         executionResult: any;
-        context?: OraprContext;
+        context?: OrparContext;
     }>
 ): Observable<Array<{ actionId: string; result: any; error?: Error }>>
 
@@ -477,7 +477,7 @@ batchCreatePlans(
     requests: Array<{
         planId: string;
         reasoning: Reasoning;
-        context?: OraprContext;
+        context?: OrparContext;
         previousPlans?: Plan[];
     }>
 ): Observable<Array<{ planId: string; result: Plan | null; error?: Error }>>
@@ -492,9 +492,9 @@ parallelLlmRequests(
     requests: Array<{
         id: string;
         prompt: string;
-        operation: OraprOperationType;
+        operation: OrparOperationType;
         schema?: any;
-        context?: OraprContext;
+        context?: OrparContext;
         options?: any;
     }>
 ): Observable<Array<{ id: string; result: string; model: string; error?: Error }>>
@@ -505,7 +505,7 @@ parallelLlmRequests(
 Build prompts with full ORPAR context:
 
 ```typescript
-private buildContextAwarePrompt(basePrompt: string, context?: OraprContext): string {
+private buildContextAwarePrompt(basePrompt: string, context?: OrparContext): string {
     if (!context) return basePrompt;
     
     let prompt = basePrompt;
@@ -545,7 +545,7 @@ interface SystemLlmMetrics {
         action: number;
         reflection: number;
     };
-    responseTimeBreakdown: Map<OraprOperationType, number>;
+    responseTimeBreakdown: Map<OrparOperationType, number>;
     modelUsage: Map<string, number>;
     errorBreakdown: Map<string, number>;
 }
@@ -711,7 +711,7 @@ const manager = SystemLlmServiceManager.getInstance();
 // Dev channel: Uses fast, cheap models via OpenRouter
 const devChannel = manager.getServiceForChannel('dev-channel', {
     providerType: LlmProviderType.OPENROUTER,
-    oraprModels: {
+    orparModels: {
         observation: 'google/gemini-2.0-flash-lite-001',  // Fast & cheap for dev
         reasoning: 'openai/gpt-4o-mini',
         planning: 'openai/gpt-4o-mini',
@@ -723,7 +723,7 @@ const devChannel = manager.getServiceForChannel('dev-channel', {
 // This is a SEPARATE instance from devChannel
 const prodChannel = manager.getServiceForChannel('prod-channel', {
     providerType: LlmProviderType.ANTHROPIC,
-    oraprModels: {
+    orparModels: {
         observation: 'claude-3-5-haiku-20241022',
         reasoning: 'claude-3-5-sonnet-20241022',         // High quality for prod
         planning: 'claude-3-5-sonnet-20241022',
@@ -750,7 +750,7 @@ const prodChannel = manager.getServiceForChannel('prod-channel', {
 ### 2. Prompt Engineering
 
 - **Be specific** about coordination and collaboration needs
-- **Include context** using `OraprContext` for better results
+- **Include context** using `OrparContext` for better results
 - **Use schemas** to enforce structured outputs
 - **Test prompts** across different complexity levels
 

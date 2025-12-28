@@ -29,7 +29,7 @@ import { ChannelId } from './ChannelContext';
 /**
  * ORPAR phase timing metrics
  */
-export interface OraprTimingMetrics {
+export interface OrparTimingMetrics {
     /** Average time spent in observation phase (ms) */
     averageObservationTime: number;
     
@@ -198,7 +198,7 @@ export interface AgentPerformanceMetrics {
     channelId: ChannelId;
     
     /** ORPAR cycle timing metrics */
-    oraprTiming: OraprTimingMetrics;
+    orparTiming: OrparTimingMetrics;
     
     /** Tool usage patterns and effectiveness */
     toolUsage: ToolUsageMetrics;

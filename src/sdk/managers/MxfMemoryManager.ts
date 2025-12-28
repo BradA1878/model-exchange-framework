@@ -48,6 +48,7 @@ export interface MemoryManagerConfig {
     maxObservations: number;
     enablePersistence: boolean;
     enableDeduplication?: boolean;
+    maxMessageSize?: number; // Max size in bytes for a single message (default: 100KB)
 }
 
 export class MxfMemoryManager {
@@ -67,7 +68,8 @@ export class MxfMemoryManager {
     private meilisearchService: MxfMeilisearchService | null = null; // Meilisearch integration for semantic search
     private eventBus: typeof EventBus = EventBus; // Event bus for emitting indexing events
     private lastSavedMessageCount: number = 0; // Track how many messages were already saved to MongoDB
-    
+    private maxMessageSize: number = 100 * 1024; // Default 100KB max per message to prevent MongoDB overflow
+
     constructor(config: MemoryManagerConfig) {
         this.config = config;
         this.logger = new Logger('debug', `MemoryManager:${config.agentId}`, 'client');
@@ -75,6 +77,7 @@ export class MxfMemoryManager {
         this.maxHistorySize = config.maxHistory || this.maxHistorySize;
         this.maxObservations = config.maxObservations || this.maxObservations;
         this.enableDeduplication = config.enableDeduplication || this.enableDeduplication;
+        this.maxMessageSize = config.maxMessageSize || this.maxMessageSize;
 
         // Initialize Meilisearch service if enabled
         if (process.env.ENABLE_MEILISEARCH !== 'false') {
@@ -196,10 +199,46 @@ export class MxfMemoryManager {
                 return; // Nothing new to append
             }
 
-            // Truncate large tool results to prevent MongoDB 16MB document limit
-            // Tool results with binary data or large API responses can exceed limits
+            // Calculate total document size to prevent MongoDB 16MB limit
+            const estimatedDocSize = Buffer.byteLength(JSON.stringify({
+                conversationHistory: this.conversationHistory,
+                notes: {
+                    recentObservations: this.observations,
+                    currentReasoning: this.currentReasoning,
+                    currentPlan: this.currentPlan
+                }
+            }), 'utf8');
+
+            // MongoDB has a 16MB limit, use 12MB as safety threshold (75% of limit)
+            const MONGODB_SAFE_LIMIT = 12 * 1024 * 1024; // 12MB
+
+            if (estimatedDocSize > MONGODB_SAFE_LIMIT) {
+                this.logger.warn(
+                    `⚠️  Agent memory approaching MongoDB limit! ` +
+                    `Current: ${(estimatedDocSize / 1024 / 1024).toFixed(2)}MB, ` +
+                    `Limit: ${(MONGODB_SAFE_LIMIT / 1024 / 1024).toFixed(0)}MB. ` +
+                    `Forcing aggressive cleanup...`
+                );
+
+                // Aggressive cleanup: keep only last 20 messages
+                const messagesToKeep = 20;
+                this.conversationHistory = this.conversationHistory.slice(-messagesToKeep);
+                this.observations = this.observations.slice(-10);
+                this.lastSavedMessageCount = 0; // Reset since we truncated
+
+                this.logger.info(`Trimmed conversation to ${this.conversationHistory.length} messages`);
+            }
+
+            // Determine which messages are NEW after potential cleanup
+            const newMessagesAfterCleanup = this.conversationHistory.slice(this.lastSavedMessageCount);
+
+            if (newMessagesAfterCleanup.length === 0) {
+                return; // Nothing new to append after cleanup
+            }
+
+            // Truncate individual large messages (legacy safety check)
             const MAX_CONTENT_LENGTH = 5 * 1024 * 1024; // 5MB per message
-            const truncatedMessages = newMessages.map(msg => {
+            const truncatedMessages = newMessagesAfterCleanup.map(msg => {
                 if (msg.content && msg.content.length > MAX_CONTENT_LENGTH) {
                     this.logger.warn(`Truncating large message content: ${msg.content.length} bytes → ${MAX_CONTENT_LENGTH} bytes (role: ${msg.role})`);
                     return {
@@ -246,7 +285,7 @@ export class MxfMemoryManager {
             this.lastSavedMessageCount = this.conversationHistory.length;
 
         } catch (error) {
-            this.logger.error(`Error saving agent memory: ${error instanceof Error ? error.message : String(error)}`);
+            //this.logger.error(`Error saving agent memory: ${error instanceof Error ? error.message : String(error)}`);
         }
     }
 
@@ -254,15 +293,43 @@ export class MxfMemoryManager {
      * Add a message to the conversation history with optional deduplication
      */
     public addConversationMessage(message: { role: string; content: string; metadata?: Record<string, any>; tool_calls?: any[] }): void {
+        // Calculate message size to prevent MongoDB 16MB document limit
+        const messageSize = Buffer.byteLength(JSON.stringify(message), 'utf8');
+
+        if (messageSize > this.maxMessageSize) {
+            this.logger.warn(
+                `⚠️  Skipping large message (${(messageSize / 1024).toFixed(1)}KB > ${(this.maxMessageSize / 1024).toFixed(0)}KB limit). ` +
+                `Role: ${message.role}, Tool: ${message.metadata?.toolName || 'N/A'}`
+            );
+
+            // Store a summary instead of the full message to preserve conversation flow
+            const summaryMessage: ConversationMessage = {
+                id: uuidv4(),
+                role: message.role as 'user' | 'assistant' | 'system',
+                content: `[Large response omitted - ${(messageSize / 1024).toFixed(1)}KB]`,
+                timestamp: Date.now(),
+                metadata: {
+                    ...message.metadata,
+                    omittedSize: messageSize,
+                    omittedReason: 'exceeded_max_message_size'
+                },
+                tool_calls: message.tool_calls
+            };
+
+            this.conversationHistory.push(summaryMessage);
+            this.trimConversationHistory();
+            return;
+        }
+
         // Only check for duplicates if deduplication is enabled
         if (this.enableDeduplication) {
             const isDuplicate = this.isDuplicateMessage(message);
-            
+
             if (isDuplicate) {
                 return;
             }
         }
-        
+
         const conversationMessage: ConversationMessage = {
             id: uuidv4(),
             role: message.role as 'user' | 'assistant' | 'system',
@@ -271,7 +338,7 @@ export class MxfMemoryManager {
             metadata: message.metadata,
             tool_calls: message.tool_calls // CRITICAL: Preserve tool_calls for assistant messages
         };
-        
+
         // Add to history
         this.conversationHistory.push(conversationMessage);
 
@@ -279,7 +346,11 @@ export class MxfMemoryManager {
         this.trimConversationHistory();
 
         // Index to Meilisearch asynchronously (non-blocking)
-        if (this.meilisearchService) {
+        // Skip system role messages - they contain dynamically generated prompts that are:
+        // 1. Redundant (already sent with every LLM request)
+        // 2. Large (full tool schemas, guidelines, etc.)
+        // 3. Not useful for semantic search (framework boilerplate, not conversation content)
+        if (this.meilisearchService && message.role !== 'system') {
             this.indexConversationToMeilisearch(conversationMessage).catch(error => {
                 // Error already logged in indexConversationToMeilisearch, just prevent unhandled rejection
             });
@@ -1000,7 +1071,7 @@ export class MxfMemoryManager {
             
             // Save imported memory
             await this.saveAgentMemory();
-            
+
         } catch (error) {
             this.logger.error(`Error importing memory: ${error}`);
             throw error;

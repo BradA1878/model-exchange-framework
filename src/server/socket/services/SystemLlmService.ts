@@ -111,7 +111,7 @@ const validator = createStrictValidator('SystemLlmService');
  * ORPAR Model Selection Strategy
  * Each ORPAR step uses models optimized for specific cognitive requirements
  */
-export interface OraprModelConfig {
+export interface OrparModelConfig {
     observation: string;    // Fast, efficient data processing
     reasoning: string;      // Deep analysis, complex inference  
     action: string;         // Reliable execution, tool calling
@@ -122,7 +122,7 @@ export interface OraprModelConfig {
 /**
  * Default ORPAR model configurations by provider
  */
-const ORPAR_MODEL_CONFIGS: Record<LlmProviderType, OraprModelConfig> = {
+const ORPAR_MODEL_CONFIGS: Record<LlmProviderType, OrparModelConfig> = {
     [LlmProviderType.OPENROUTER]: {
         observation: 'google/gemini-2.0-flash-lite-001',           // Fast, cheap observation processing
         reasoning: 'anthropic/claude-3.5-sonnet',                  // Advanced reasoning capabilities
@@ -205,7 +205,7 @@ const ORPAR_MODEL_CONFIGS: Record<LlmProviderType, OraprModelConfig> = {
 /**
  * ORPAR operation types for model selection
  */
-export type OraprOperationType = 'observation' | 'reasoning' | 'action' | 'planning' | 'reflection';
+export type OrparOperationType = 'observation' | 'reasoning' | 'action' | 'planning' | 'reflection';
 
 /**
  * Priority 2: Response Interpretation Layer Interfaces
@@ -287,12 +287,12 @@ const RESPONSE_INTERPRETATION_SCHEMA = {
 /**
  * Context persistence interface for ORPAR phases
  */
-export interface OraprContext {
+export interface OrparContext {
     id: string;
     agentId: string;
     channelId: string;
     cycleId: string;
-    phase: OraprOperationType;
+    phase: OrparOperationType;
     timestamp: number;
     previousPhaseResults?: {
         observation?: any;
@@ -310,8 +310,8 @@ export interface OraprContext {
     };
     metadata: {
         startTime: number;
-        phaseCompletionTimes: Map<OraprOperationType, number>;
-        modelUsage: Map<OraprOperationType, string>;
+        phaseCompletionTimes: Map<OrparOperationType, number>;
+        modelUsage: Map<OrparOperationType, string>;
         errors: string[];
     };
 }
@@ -324,7 +324,7 @@ export interface SystemLlmServiceConfig {
     defaultModel?: string;
     defaultTemperature?: number;
     defaultMaxTokens?: number;
-    oraprModels?: Partial<OraprModelConfig>; // Allow custom ORPAR model overrides
+    orparModels?: Partial<OrparModelConfig>; // Allow custom ORPAR model overrides
     enableRealTimeCoordination?: boolean; // Allow disabling real-time coordination
     enableDynamicModelSelection?: boolean; // Enable complexity-based model switching (recommended for OpenRouter only)
 }
@@ -417,7 +417,7 @@ export class SystemLlmService {
     
     // Store bound function references for proper cleanup
     private boundHandleChannelMessageForCoordination: any;
-    private boundHandleOraprEventForCoordination: any;
+    private boundHandleOrparEventForCoordination: any;
     private channelActivities = new Map<ChannelId, {
         messageCount: number;
         lastMessage: number;
@@ -476,7 +476,7 @@ export class SystemLlmService {
     };
 
     // Context persistence for ORPAR phases
-    private activeContexts = new Map<string, OraprContext>();
+    private activeContexts = new Map<string, OrparContext>();
     
     // Cleanup configuration
     private cleanupConfig = {
@@ -506,7 +506,7 @@ export class SystemLlmService {
             defaultModel: config.defaultModel || DEFAULT_MODELS[providerType],
             defaultTemperature: config.defaultTemperature || 0.3,
             defaultMaxTokens: config.defaultMaxTokens || 2000,
-            oraprModels: config.oraprModels || ORPAR_MODEL_CONFIGS[providerType],
+            orparModels: config.orparModels || ORPAR_MODEL_CONFIGS[providerType],
             enableRealTimeCoordination: config.enableRealTimeCoordination !== false, // Default to true unless explicitly disabled
             enableDynamicModelSelection
         };
@@ -580,10 +580,10 @@ export class SystemLlmService {
         if (this.boundHandleChannelMessageForCoordination) {
             this.eventBus.off(Events.Message.AGENT_MESSAGE_DELIVERED, this.boundHandleChannelMessageForCoordination);
         }
-        if (this.boundHandleOraprEventForCoordination) {
-            this.eventBus.off(Events.ControlLoop.REASONING, this.boundHandleOraprEventForCoordination);
-            this.eventBus.off(Events.ControlLoop.PLAN, this.boundHandleOraprEventForCoordination);
-            this.eventBus.off(Events.ControlLoop.ACTION, this.boundHandleOraprEventForCoordination);
+        if (this.boundHandleOrparEventForCoordination) {
+            this.eventBus.off(Events.ControlLoop.REASONING, this.boundHandleOrparEventForCoordination);
+            this.eventBus.off(Events.ControlLoop.PLAN, this.boundHandleOrparEventForCoordination);
+            this.eventBus.off(Events.ControlLoop.ACTION, this.boundHandleOrparEventForCoordination);
         }
 
         // Clear timers
@@ -644,9 +644,9 @@ export class SystemLlmService {
     /**
      * Get the appropriate model for a specific ORPAR operation
      */
-    public getModelForOperation(operation: OraprOperationType): string {
+    public getModelForOperation(operation: OrparOperationType): string {
         const defaultModelConfig = ORPAR_MODEL_CONFIGS[this.providerType];
-        const customModelConfig = this.config.oraprModels || {};
+        const customModelConfig = this.config.orparModels || {};
         
         // Use custom model if provided, otherwise use default for operation
         const selectedModel = customModelConfig[operation] || defaultModelConfig[operation];
@@ -659,8 +659,8 @@ export class SystemLlmService {
      * Dynamic model selection based on context complexity
      */
     public getModelForOperationWithComplexity(
-        operation: OraprOperationType, 
-        context?: OraprContext,
+        operation: OrparOperationType, 
+        context?: OrparContext,
         complexityOverride?: 'simple' | 'moderate' | 'complex'
     ): string {
         const baseModel = this.getModelForOperation(operation);
@@ -683,7 +683,7 @@ export class SystemLlmService {
     /**
      * Assess context complexity for dynamic model selection
      */
-    private assessContextComplexity(context: OraprContext): 'simple' | 'moderate' | 'complex' {
+    private assessContextComplexity(context: OrparContext): 'simple' | 'moderate' | 'complex' {
         let complexityScore = 0;
         
         // Factor 1: Number of previous phases completed
@@ -751,8 +751,8 @@ export class SystemLlmService {
      * Enhanced complexity assessment with operation-specific weighting
      */
     private assessComplexityForOperation(
-        context: OraprContext, 
-        operation: OraprOperationType
+        context: OrparContext, 
+        operation: OrparOperationType
     ): 'simple' | 'moderate' | 'complex' {
         const baseComplexity = this.assessContextComplexity(context);
         
@@ -777,7 +777,7 @@ export class SystemLlmService {
     /**
      * Get numeric complexity score for advanced model selection
      */
-    private getComplexityScore(context: OraprContext): number {
+    private getComplexityScore(context: OrparContext): number {
         let score = 0;
         
         // All the factors from assessContextComplexity but returning the score
@@ -814,7 +814,7 @@ export class SystemLlmService {
      * Select model based on complexity level
      */
     private selectModelByComplexity(
-        operation: OraprOperationType, 
+        operation: OrparOperationType, 
         complexity: 'simple' | 'moderate' | 'complex'
     ): string {
         const defaultModelConfig = ORPAR_MODEL_CONFIGS[this.providerType];
@@ -1029,8 +1029,8 @@ export class SystemLlmService {
      * Get cost-aware model recommendation based on budget constraints
      */
     public getCostAwareModel(
-        operation: OraprOperationType,
-        context?: OraprContext,
+        operation: OrparOperationType,
+        context?: OrparContext,
         budgetTier: keyof typeof OPENROUTER_MODEL_TIERS = 'STANDARD'
     ): string {
         if (this.providerType !== LlmProviderType.OPENROUTER) {
@@ -1098,8 +1098,8 @@ export class SystemLlmService {
      * Get model recommendation with load balancing across providers
      */
     public getLoadBalancedModel(
-        operation: OraprOperationType,
-        context?: OraprContext,
+        operation: OrparOperationType,
+        context?: OrparContext,
         preferredProviders: string[] = ['anthropic', 'openai', 'google']
     ): string {
         if (this.providerType !== LlmProviderType.OPENROUTER) {
@@ -1167,9 +1167,9 @@ export class SystemLlmService {
      * Get specialized model for specific use cases
      */
     public getSpecializedModel(
-        operation: OraprOperationType,
+        operation: OrparOperationType,
         specialization: 'reasoning' | 'coding' | 'analysis' | 'creative' | 'multilingual' | 'speed',
-        context?: OraprContext
+        context?: OrparContext
     ): string {
         if (this.providerType !== LlmProviderType.OPENROUTER) {
             return this.getModelForOperationWithComplexity(operation, context);
@@ -1223,7 +1223,7 @@ export class SystemLlmService {
         operations: Array<{
             type: 'observation' | 'action' | 'reflection';
             data: any;
-            context?: OraprContext;
+            context?: OrparContext;
         }>
     ): Observable<Array<{ type: string; result: T | null; error?: Error }>> {
         return new Observable(observer => {
@@ -1276,7 +1276,7 @@ export class SystemLlmService {
         observationBatches: Array<{
             agentId: string;
             observations: Observation[];
-            context?: OraprContext;
+            context?: OrparContext;
         }>
     ): Observable<Array<{ agentId: string; result: any; error?: Error }>> {
         return new Observable(observer => {
@@ -1312,7 +1312,7 @@ export class SystemLlmService {
             actionId: string;
             action: PlanAction;
             executionResult: any;
-            context?: OraprContext;
+            context?: OrparContext;
         }>
     ): Observable<Array<{ actionId: string; result: any; error?: Error }>> {
         return new Observable(observer => {
@@ -1347,7 +1347,7 @@ export class SystemLlmService {
         planRequests: Array<{
             planId: string;
             reasoning: Reasoning;
-            context?: OraprContext;
+            context?: OrparContext;
             previousPlans?: Plan[];
         }>
     ): Observable<Array<{ planId: string; result: Plan | null; error?: Error }>> {
@@ -1383,9 +1383,9 @@ export class SystemLlmService {
         requests: Array<{
             id: string;
             prompt: string;
-            operation: OraprOperationType;
+            operation: OrparOperationType;
             schema?: any;
-            context?: OraprContext;
+            context?: OrparContext;
             options?: any;
         }>
     ): Observable<Array<{ id: string; result: string; model: string; error?: Error }>> {
@@ -1431,8 +1431,10 @@ export class SystemLlmService {
     /**
      * Process observation data with fast, efficient models
      */
-    processObservationData(observations: Observation[], context?: OraprContext): Observable<any> {
+    processObservationData(observations: Observation[], context?: OrparContext): Observable<any> {
+        const startTime = Date.now();
         const instructionId = this.generateInstructionId('observation');
+        this.logger.debug(`[ORPAR:OBSERVATION] Starting observation processing - ${observations.length} observations, context phase: ${context?.phase || 'none'}`);
         this.emitInstructionStarted(instructionId, 'observation-processing');
 
         const basePrompt = `
@@ -1454,15 +1456,20 @@ export class SystemLlmService {
         const prompt = this.buildContextAwarePrompt(basePrompt, context);
 
         const model = this.getModelForOperationWithComplexity('observation', context);
-        
+        this.logger.debug(`[ORPAR:OBSERVATION] Selected model: ${model}, prompt length: ${prompt.length} chars`);
+
         return new Observable(observer => {
             this.sendLlmRequestWithRecovery(prompt, null, { model, operation: 'observation' })
                 .then(response => {
+                    const elapsed = Date.now() - startTime;
+                    this.logger.debug(`[ORPAR:OBSERVATION] Completed in ${elapsed}ms - response length: ${response?.length || 0} chars`);
                     this.emitInstructionCompleted(instructionId, response);
                     observer.next(response);
                     observer.complete();
                 })
                 .catch(error => {
+                    const elapsed = Date.now() - startTime;
+                    this.logger.debug(`[ORPAR:OBSERVATION] Failed after ${elapsed}ms - error: ${error.message}`);
                     this.emitInstructionError(instructionId, error.message);
                     observer.error(error);
                 });
@@ -1472,8 +1479,10 @@ export class SystemLlmService {
     /**
      * Create strategic plans with sophisticated planning models
      */
-    createPlan(reasoning: Reasoning, oraprContext?: OraprContext, previousPlans?: Plan[]): Observable<Plan> {
+    createPlan(reasoning: Reasoning, orparContext?: OrparContext, previousPlans?: Plan[]): Observable<Plan> {
+        const startTime = Date.now();
         const instructionId = this.generateInstructionId('planning');
+        this.logger.debug(`[ORPAR:PLANNING] Starting plan creation - reasoning ID: ${reasoning.id}, previous plans: ${previousPlans?.length || 0}`);
         this.emitInstructionStarted(instructionId, 'plan-creation');
 
         // Extract readable text from reasoning content (handle both string and object formats)
@@ -1518,10 +1527,11 @@ export class SystemLlmService {
         Prioritize coordination strategies that maximize collective agent intelligence and minimize redundant efforts.
         `;
 
-        const prompt = this.buildContextAwarePrompt(basePrompt, oraprContext);
+        const prompt = this.buildContextAwarePrompt(basePrompt, orparContext);
 
-        const model = this.getModelForOperationWithComplexity('planning', oraprContext);
-        
+        const model = this.getModelForOperationWithComplexity('planning', orparContext);
+        this.logger.debug(`[ORPAR:PLANNING] Selected model: ${model}, reasoning text length: ${reasoningText.length} chars`);
+
         return new Observable(observer => {
             this.sendLlmRequestWithRecovery(prompt, PLAN_CREATION_SCHEMA, { model, operation: 'planning' })
                 .then(response => {
@@ -1555,11 +1565,14 @@ export class SystemLlmService {
                             }
                         };
                         
+                        const elapsed = Date.now() - startTime;
+                        this.logger.debug(`[ORPAR:PLANNING] Plan created in ${elapsed}ms - plan ID: ${plan.id}, ${plan.actions.length} actions, goal: ${plan.goal?.substring(0, 50)}...`);
                         this.emitInstructionCompleted(instructionId, response);
                         observer.next(plan);
                         observer.complete();
                     } catch (parseError) {
                         // Fallback to original structure if JSON parsing fails
+                        this.logger.debug(`[ORPAR:PLANNING] JSON parse failed, using fallback structure - error: ${parseError instanceof Error ? parseError.message : String(parseError)}`);
                         const plan: Plan = {
                             id: uuidv4(),
                             agentId: reasoning.agentId,
@@ -1578,12 +1591,16 @@ export class SystemLlmService {
                             }
                         };
                         
+                        const elapsed = Date.now() - startTime;
+                        this.logger.debug(`[ORPAR:PLANNING] Fallback plan created in ${elapsed}ms - plan ID: ${plan.id}`);
                         this.emitInstructionCompleted(instructionId, response);
                         observer.next(plan);
                         observer.complete();
                     }
                 })
                 .catch(error => {
+                    const elapsed = Date.now() - startTime;
+                    this.logger.debug(`[ORPAR:PLANNING] Failed after ${elapsed}ms - error: ${error.message}`);
                     this.emitInstructionError(instructionId, error.message);
                     observer.error(error);
                 });
@@ -1593,8 +1610,10 @@ export class SystemLlmService {
     /**
      * Analyze action execution results with reliable models
      */
-    analyzeActionExecution(action: PlanAction, executionResult: any, context?: OraprContext): Observable<any> {
+    analyzeActionExecution(action: PlanAction, executionResult: any, context?: OrparContext): Observable<any> {
+        const startTime = Date.now();
         const instructionId = this.generateInstructionId('action-analysis');
+        this.logger.debug(`[ORPAR:ACTION] Starting action analysis - action: ${action.action}, status: ${action.status}`);
         this.emitInstructionStarted(instructionId, 'action-execution-analysis');
 
         const basePrompt = `
@@ -1619,15 +1638,20 @@ export class SystemLlmService {
         const prompt = this.buildContextAwarePrompt(basePrompt, context);
 
         const model = this.getModelForOperationWithComplexity('action', context);
-        
+        this.logger.debug(`[ORPAR:ACTION] Selected model: ${model}, result size: ${JSON.stringify(executionResult).length} chars`);
+
         return new Observable(observer => {
             this.sendLlmRequestWithRecovery(prompt, null, { model, operation: 'action' })
                 .then(response => {
+                    const elapsed = Date.now() - startTime;
+                    this.logger.debug(`[ORPAR:ACTION] Analysis completed in ${elapsed}ms - response length: ${response?.length || 0} chars`);
                     this.emitInstructionCompleted(instructionId, response);
                     observer.next(response);
                     observer.complete();
                 })
                 .catch(error => {
+                    const elapsed = Date.now() - startTime;
+                    this.logger.debug(`[ORPAR:ACTION] Analysis failed after ${elapsed}ms - error: ${error.message}`);
                     this.emitInstructionError(instructionId, error.message);
                     observer.error(error);
                 });
@@ -1637,8 +1661,11 @@ export class SystemLlmService {
     /**
      * Generate comprehensive reflections with meta-cognitive models
      */
-    generateReflection(plan: Plan, executedActions: PlanAction[], results: any[], context?: OraprContext): Observable<Reflection> {
+    generateReflection(plan: Plan, executedActions: PlanAction[], results: any[], context?: OrparContext): Observable<Reflection> {
+        const startTime = Date.now();
         const instructionId = this.generateInstructionId('reflection');
+        const completedCount = executedActions.filter(a => a.status === 'completed').length;
+        this.logger.debug(`[ORPAR:REFLECTION] Starting reflection - plan ID: ${plan.id}, actions: ${executedActions.length} (${completedCount} completed), results: ${results.length}`);
         this.emitInstructionStarted(instructionId, 'reflection-generation');
 
         const basePrompt = `
@@ -1666,7 +1693,8 @@ export class SystemLlmService {
         const prompt = this.buildContextAwarePrompt(basePrompt, context);
 
         const model = this.getModelForOperationWithComplexity('reflection', context);
-        
+        this.logger.debug(`[ORPAR:REFLECTION] Selected model: ${model}, plan goal: ${plan.goal?.substring(0, 50)}...`);
+
         return new Observable(observer => {
             this.sendLlmRequestWithRecovery(prompt, REFLECTION_SCHEMA, { model, operation: 'reflection' })
                 .then(response => {
@@ -1683,12 +1711,16 @@ export class SystemLlmService {
                         },
                         timestamp: Date.now()
                     };
-                    
+
+                    const elapsed = Date.now() - startTime;
+                    this.logger.debug(`[ORPAR:REFLECTION] Reflection generated in ${elapsed}ms - reflection ID: ${reflection.id}, success: ${reflection.success}, insights: ${reflection.insights.length}`);
                     this.emitInstructionCompleted(instructionId, response);
                     observer.next(reflection);
                     observer.complete();
                 })
                 .catch(error => {
+                    const elapsed = Date.now() - startTime;
+                    this.logger.debug(`[ORPAR:REFLECTION] Failed after ${elapsed}ms - error: ${error.message}`);
                     this.emitInstructionError(instructionId, error.message);
                     observer.error(error);
                 });
@@ -1737,7 +1769,7 @@ export class SystemLlmService {
     /**
      * Track metrics for an operation
      */
-    private trackMetrics(operation: OraprOperationType, responseTime: number, model: string, error?: Error): void {
+    private trackMetrics(operation: OrparOperationType, responseTime: number, model: string, error?: Error): void {
         this.metrics.requestCount++;
         this.metrics.totalResponseTime += responseTime;
         this.metrics.lastRequestTime = new Date();
@@ -1766,8 +1798,8 @@ export class SystemLlmService {
         avgResponseTime: number;
         errorCount: number;
         lastRequestTime: Date | null;
-        operationBreakdown: Record<OraprOperationType, number>;
-        responseTimeBreakdown: Record<OraprOperationType, number>;
+        operationBreakdown: Record<OrparOperationType, number>;
+        responseTimeBreakdown: Record<OrparOperationType, number>;
         modelUsage: Map<string, number>;
         errorBreakdown: Map<string, number>;
     } {
@@ -1791,10 +1823,10 @@ export class SystemLlmService {
         cycleId: string,
         agentId: string,
         channelId: string,
-        phase: OraprOperationType,
+        phase: OrparOperationType,
         result?: any,
-        sharedContext?: Partial<OraprContext['sharedContext']>
-    ): OraprContext {
+        sharedContext?: Partial<OrparContext['sharedContext']>
+    ): OrparContext {
         const contextId = `${agentId}-${cycleId}`;
         const existingContext = this.activeContexts.get(contextId);
         
@@ -1825,7 +1857,7 @@ export class SystemLlmService {
             return existingContext;
         } else {
             // Create new context
-            const newContext: OraprContext = {
+            const newContext: OrparContext = {
                 id: contextId,
                 agentId,
                 channelId,
@@ -1857,7 +1889,7 @@ export class SystemLlmService {
     /**
      * Get context for a cycle
      */
-    public getContext(agentId: string, cycleId: string): OraprContext | undefined {
+    public getContext(agentId: string, cycleId: string): OrparContext | undefined {
         const contextId = `${agentId}-${cycleId}`;
         return this.activeContexts.get(contextId);
     }
@@ -1883,7 +1915,7 @@ export class SystemLlmService {
     /**
      * Build context-aware prompt that includes previous phase results
      */
-    private buildContextAwarePrompt(basePrompt: string, context?: OraprContext): string {
+    private buildContextAwarePrompt(basePrompt: string, context?: OrparContext): string {
         if (!context || !context.previousPhaseResults) {
             return basePrompt;
         }
@@ -2004,10 +2036,10 @@ export class SystemLlmService {
         if (this.boundHandleChannelMessageForCoordination) {
             this.eventBus.off(Events.Message.AGENT_MESSAGE_DELIVERED, this.boundHandleChannelMessageForCoordination);
         }
-        if (this.boundHandleOraprEventForCoordination) {
-            this.eventBus.off(Events.ControlLoop.REASONING, this.boundHandleOraprEventForCoordination);
-            this.eventBus.off(Events.ControlLoop.PLAN, this.boundHandleOraprEventForCoordination);
-            this.eventBus.off(Events.ControlLoop.ACTION, this.boundHandleOraprEventForCoordination);
+        if (this.boundHandleOrparEventForCoordination) {
+            this.eventBus.off(Events.ControlLoop.REASONING, this.boundHandleOrparEventForCoordination);
+            this.eventBus.off(Events.ControlLoop.PLAN, this.boundHandleOrparEventForCoordination);
+            this.eventBus.off(Events.ControlLoop.ACTION, this.boundHandleOrparEventForCoordination);
         }
         
         this.channelActivities.clear();
@@ -2057,7 +2089,7 @@ export class SystemLlmService {
      * Generate fallback response for critical operations during service disruptions
      */
     private generateFallbackResponse(
-        operation: OraprOperationType,
+        operation: OrparOperationType,
         prompt: string,
         error: Error
     ): string {
@@ -2130,33 +2162,45 @@ export class SystemLlmService {
      * Send LLM request using the configured provider with structured outputs support and graceful degradation
      */
     private async sendLlmRequestWithRecovery(
-        prompt: string, 
-        schema?: any, 
+        prompt: string,
+        schema?: any,
         options: any = {}
     ): Promise<string> {
-        const operation = options.operation as OraprOperationType || 'observation';
+        const operation = options.operation as OrparOperationType || 'observation';
         const enableGracefulDegradation = process.env.ENABLE_GRACEFUL_DEGRADATION !== 'false';
+        const model = options.model || this.defaultModel;
         
+        // Debug: Log call stack for observation operations to trace the source
+        if (operation === 'observation') {
+            const stack = new Error().stack?.split('\n').slice(2, 6).join('\n');
+            this.logger.debug(`[SystemLLM:TRACE] Observation call stack:\n${stack}`);
+        }
+        
+        this.logger.debug(`[SystemLLM] Sending request - operation: ${operation}, model: ${model}, schema: ${schema ? 'yes' : 'no'}, prompt: ${prompt.length} chars`);
+
         try {
             // Try the normal LLM request
-            return await this.sendLlmRequestInternal(prompt, schema, options);
+            const result = await this.sendLlmRequestInternal(prompt, schema, options);
+            this.logger.debug(`[SystemLLM] Request successful - operation: ${operation}, response: ${result.length} chars`, result);
+            return result;
         } catch (error) {
             const err = error as Error;
             const errorType = classifyNetworkError(err);
-            
+
             // Check if we should use graceful degradation
-            if (enableGracefulDegradation && 
+            if (enableGracefulDegradation &&
                 (errorType === NetworkErrorType.API_SERVICE_UNAVAILABLE ||
                  errorType === NetworkErrorType.API_BAD_GATEWAY ||
                  errorType === NetworkErrorType.NETWORK_TIMEOUT ||
                  errorType === NetworkErrorType.NETWORK_CONNECTION_REFUSED)) {
-                
-                this.logger.warn(`LLM service unavailable (${errorType}), using graceful degradation for ${operation}`);
-                
+
+                this.logger.warn(`[SystemLLM] Service unavailable (${errorType}), using graceful degradation for ${operation}`);
+
                 // Return a fallback response that allows the system to continue
                 return this.generateFallbackResponse(operation, prompt, err);
             }
-            
+
+            this.logger.debug(`[SystemLLM] Request failed - operation: ${operation}, error: ${err.message}`);
             // For non-recoverable errors, throw as usual
             throw error;
         }
@@ -2176,7 +2220,7 @@ export class SystemLlmService {
         }
         
         const startTime = Date.now();
-        const operation = options.operation as OraprOperationType || 'observation';
+        const operation = options.operation as OrparOperationType || 'observation';
         
         try {
             const client = await this.initClient();
@@ -2262,7 +2306,8 @@ export class SystemLlmService {
                         // Track successful metrics
                         const responseTime = Date.now() - startTime;
                         this.trackMetrics(operation, responseTime, model);
-                        
+                        this.logger.debug(`[SystemLLM:Internal] LLM call completed - model: ${model}, time: ${responseTime}ms, response: ${responseText.length} chars`);
+
                         resolve(responseText);
                     },
                     error: (error: any) => {
@@ -3295,14 +3340,18 @@ ${JSON.stringify(TOOL_RECOMMENDATION_SCHEMA, null, 2)}`;
                 response,
                 usage
             };
-            
+
             const payload = createLlmInstructionCompletedPayload(
                 Events.LlmService.INSTRUCTION_COMPLETED,
                 'system', // Default agentId for system operations
                 'system', // Default channelId for system operations
                 eventData
             );
-            
+
+            // Log a preview of what the SystemLLM produced
+            const preview = response.length > 500 ? response.substring(0, 500) + '...' : response;
+            this.logger.debug(`[SystemLLM:Output] Instruction ${instructionId} completed:\n${preview}`);
+
             this.eventBus.emit(Events.LlmService.INSTRUCTION_COMPLETED, payload);
         } catch (error) {
             logger.error(`Failed to emit instruction completed event: ${error}`);
@@ -3390,7 +3439,7 @@ ${JSON.stringify(TOOL_RECOMMENDATION_SCHEMA, null, 2)}`;
                     expirationTime: new Date(Date.now() + this.calculateTTL(injectionType)).toISOString(),
                     source: 'system_analysis',
                     suggestedTools: await this.suggestRelevantTools(coordinationAnalysis),
-                    oraprPhase: this.mapTriggerToOraprPhase(trigger)
+                    orparPhase: this.mapTriggerToOrparPhase(trigger)
                 },
                 visibility: 'channel_only',
                 ttl: this.calculateTTL(injectionType),
@@ -3830,7 +3879,7 @@ Create a helpful, contextual hint that provides value without being intrusive. K
     /**
      * Map trigger to ORPAR phase
      */
-    private mapTriggerToOraprPhase(trigger: string): 'observation' | 'reasoning' | 'action' | 'planning' | 'reflection' | undefined {
+    private mapTriggerToOrparPhase(trigger: string): 'observation' | 'reasoning' | 'action' | 'planning' | 'reflection' | undefined {
         switch (trigger) {
             case 'pre_reasoning': return 'reasoning';
             case 'post_action': return 'reflection';
@@ -4070,15 +4119,15 @@ Create a helpful, contextual hint that provides value without being intrusive. K
 
         // Create bound function references for proper cleanup
         this.boundHandleChannelMessageForCoordination = this.handleChannelMessageForCoordination.bind(this);
-        this.boundHandleOraprEventForCoordination = this.handleOraprEventForCoordination.bind(this);
+        this.boundHandleOrparEventForCoordination = this.handleOrparEventForCoordination.bind(this);
 
         // Listen to all channel messages for coordination analysis (only one event type to avoid duplicates)
         this.eventBus.on(Events.Message.AGENT_MESSAGE_DELIVERED, this.boundHandleChannelMessageForCoordination);
         
         // Listen to ORPAR events for context injection
-        this.eventBus.on(Events.ControlLoop.REASONING, this.boundHandleOraprEventForCoordination);
-        this.eventBus.on(Events.ControlLoop.PLAN, this.boundHandleOraprEventForCoordination);
-        this.eventBus.on(Events.ControlLoop.ACTION, this.boundHandleOraprEventForCoordination);
+        this.eventBus.on(Events.ControlLoop.REASONING, this.boundHandleOrparEventForCoordination);
+        this.eventBus.on(Events.ControlLoop.PLAN, this.boundHandleOrparEventForCoordination);
+        this.eventBus.on(Events.ControlLoop.ACTION, this.boundHandleOrparEventForCoordination);
 
         // Clean up old activity data every 10 minutes
         this.coordinationCleanupTimer = setInterval(() => this.cleanupOldCoordinationActivity(), 600000);
@@ -4096,20 +4145,8 @@ Create a helpful, contextual hint that provides value without being intrusive. K
                 return;
             }
 
-            // Extract channelId early for guard check
+            // Handle different message event formats and extract channelId
             let channelId: string | undefined;
-            if (payload.channelId) {
-                channelId = payload.channelId;
-            } else if (payload.data?.channelId) {
-                channelId = payload.data.channelId;
-            }
-
-            // Guard: Check if coordination is enabled for this channel
-            if (channelId && !this.configManager.isChannelSystemLlmEnabled(channelId, 'coordination')) {
-                return;
-            }
-
-            // Handle different message event formats
             let message: any;
             
             if (payload.data) {
@@ -4128,6 +4165,14 @@ Create a helpful, contextual hint that provides value without being intrusive. K
             }
             
             if (!channelId || !message) {
+                return;
+            }
+
+            // Guard: Check if coordination is enabled for this channel (AFTER channelId is resolved)
+            const isEnabled = this.configManager.isChannelSystemLlmEnabled(channelId, 'coordination');
+            this.logger.debug(`[COORDINATION_GUARD] Channel ${channelId} - SystemLLM enabled: ${isEnabled}`);
+            if (!isEnabled) {
+                this.logger.debug(`[COORDINATION_GUARD] Skipping coordination for channel ${channelId} - SystemLLM disabled`);
                 return;
             }
 
@@ -4183,7 +4228,7 @@ Create a helpful, contextual hint that provides value without being intrusive. K
     /**
      * Handle ORPAR events and inject contextual coordination
      */
-    private async handleOraprEventForCoordination(payload: any): Promise<void> {
+    private async handleOrparEventForCoordination(payload: any): Promise<void> {
         try {
             // Check if service is shutting down
             if (this.isShuttingDown) {
@@ -4200,7 +4245,7 @@ Create a helpful, contextual hint that provides value without being intrusive. K
             }
 
             // Inject ORPAR-specific coordination context
-            await this.generateAndInjectCoordinationSuggestion(channelId, 'orapr_context', null, agentId);
+            await this.generateAndInjectCoordinationSuggestion(channelId, 'orpar_context', null, agentId);
 
         } catch (error) {
             this.logger.error(`Failed to handle ORPAR event for coordination: ${error}`);
@@ -4440,11 +4485,16 @@ Start with "💡 System coordination insight:" followed by your suggestion.`;
             }
 
             const trimmedResponse = response?.trim() || null;
+            if (trimmedResponse) {
+                this.logger.debug(`[SystemLLM:Coordination] Generated suggestion for ${triggerType}:\n${trimmedResponse}`);
+            }
             return trimmedResponse;
 
         } catch (error) {
             this.logger.warn(`LLM coordination suggestion failed, using fallback: ${error}`);
-            return this.getFallbackCoordinationSuggestion(triggerType, activity);
+            const fallback = this.getFallbackCoordinationSuggestion(triggerType, activity);
+            this.logger.debug(`[SystemLLM:Coordination] Using fallback for ${triggerType}:\n${fallback}`);
+            return fallback;
         }
     }
 
@@ -4457,7 +4507,7 @@ Start with "💡 System coordination insight:" followed by your suggestion.`;
                 return `💡 System coordination insight: High activity detected with ${activity.activeAgents.size} agents. Consider coordinating on shared objectives or dividing tasks for efficiency.`;
             case 'complementary_skills':
                 return `💡 System coordination insight: Multiple agents with complementary capabilities are active. Consider collaboration opportunities that leverage each agent's strengths.`;
-            case 'orapr_context':
+            case 'orpar_context':
                 return `💡 System coordination insight: ORPAR cycle in progress. Consider coordinating with other agents for enhanced reasoning and planning outcomes.`;
             default:
                 return `💡 System coordination insight: Coordination opportunity detected. Consider collaborating with other active agents in this channel.`;
@@ -4558,6 +4608,7 @@ Start with "💡 System coordination insight:" followed by your suggestion.`;
 
             this.eventBus.emit(Events.Message.CHANNEL_MESSAGE, payload);
 
+            this.logger.debug(`[SystemLLM:ToAgents] Sent to channel ${channelId} (${coordinationType}):\n────────────────────────────────────────\n${content}\n────────────────────────────────────────`);
 
         } catch (error) {
             this.logger.error(`Failed to inject system coordination message: ${error}`);
@@ -4601,7 +4652,7 @@ Start with "💡 System coordination insight:" followed by your suggestion.`;
 
     /**
      * Optimize context for MXP token reduction using intelligent compression
-     * Leverages existing ORAPR model selection for optimal summarization
+     * Leverages existing ORPAR model selection for optimal summarization
      * Respects channel and agent-level MXP configuration
      */
     public async optimizeContextForMxp(
@@ -4991,7 +5042,7 @@ Start with "💡 System coordination insight:" followed by your suggestion.`;
             return embedding;
 
         } catch (error) {
-            this.logger.error(`Embedding generation failed: ${error instanceof Error ? error.message : String(error)}`);
+            //this.logger.error(`Embedding generation failed: ${error instanceof Error ? error.message : String(error)}`);
             throw new Error(`Failed to generate embedding: ${error instanceof Error ? error.message : String(error)}`);
         }
     }

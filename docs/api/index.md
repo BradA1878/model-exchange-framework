@@ -189,6 +189,14 @@ agent.on(Events.Message.CHANNEL_MESSAGE, (payload) => {
 - **[Users API](users.md)** - User account management
 - **[Dashboard API](dashboard.md)** - Dashboard-specific endpoints
 
+### Integration & Advanced
+
+**Additional integration and management endpoints:**
+
+- **Bulk Operations API** (`/api/bulk/*`) - Batch operations for agents and tasks
+- **n8n Webhook API** (`/api/webhooks/n8n/*`) - Integration with n8n workflow automation
+- **Demo API** (`/api/demo/*`) - Demo endpoints for testing and examples
+
 ## API Features
 
 ### Error Handling

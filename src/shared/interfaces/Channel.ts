@@ -29,4 +29,8 @@ export interface IChannel {
     createdAt: Date;
     updatedAt: Date;
     metadata?: Record<string, any>;
+    
+    // Channel-level access control and configuration
+    allowedTools?: string[];
+    systemLlmEnabled?: boolean;
 }

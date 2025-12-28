@@ -32,6 +32,7 @@ import { Events } from '../../../shared/events/EventNames';
 import { SystemLlmService } from './SystemLlmService';
 import { SystemLlmServiceManager } from './SystemLlmServiceManager';
 import { AgentService } from './AgentService';
+import { ConfigManager } from '../../../sdk/config/ConfigManager';
 import { EphemeralEventPatternService } from './EphemeralEventPatternService';
 import { 
     ChannelTask, 
@@ -329,8 +330,8 @@ export class TaskService {
     private async assignToSingleAgent(task: TaskDocument): Promise<TaskAssignmentResult> {
         // Skip assignment if task is already assigned
         if (task.assignedAgentId) {
-            //// this.logger.info(`🔄 Task ${task.id} already assigned to agent ${task.assignedAgentId}, emitting assignment event`);
-            
+            this.logger.info(`📋 Task assigned: "${task.title}" → Agent: ${task.assignedAgentId} (manual)`);
+
             // Emit assignment event for manually assigned tasks
             const eventPayload = createTaskEventPayload(
                 TaskEvents.ASSIGNED,
@@ -394,6 +395,8 @@ export class TaskService {
                             task.assignedAgentId = assignedAgent.id;
                             await task.save();
 
+                            this.logger.info(`📋 Task assigned: "${task.title}" → Agent: ${assignedAgent.id} (intelligent)`);
+
                             // Emit assignment event
                             await this.emitTaskAssignmentEvent(task, assignedAgent.id);
 
@@ -424,7 +427,7 @@ export class TaskService {
             task.assignedAgentId = fallbackAgent.id;
             await task.save();
 
-            //// this.logger.info(`⚙️ Task ${task.id} assigned to ${fallbackAgent.id} via fallback strategy`);
+            this.logger.info(`📋 Task assigned: "${task.title}" → Agent: ${fallbackAgent.id} (fallback)`);
 
             // Emit assignment event
             await this.emitTaskAssignmentEvent(task, fallbackAgent.id);
@@ -482,6 +485,7 @@ export class TaskService {
         task.leadAgentId = task.leadAgentId || validAgentIds[0];
         await task.save();
 
+        this.logger.info(`📋 Task assigned: "${task.title}" → ${validAgentIds.length} agents (multi-agent)`);
 
         // Emit assignment events for each agent
         for (const agentId of validAgentIds) {
@@ -538,6 +542,8 @@ export class TaskService {
         task.leadAgentId = task.leadAgentId || assignedAgentIds[0];
         task.channelWideTask = true;
         await task.save();
+
+        this.logger.info(`📋 Task assigned: "${task.title}" → ${assignedAgentIds.length} agents (channel-wide)`);
 
         // Emit assignment events for each agent
         for (const agentId of assignedAgentIds) {
@@ -829,6 +835,14 @@ Your responsibilities:
         agents: any[], 
         workloadAnalysis: ChannelWorkloadAnalysis
     ): Promise<AgentAssignmentAnalysis> {
+        // Guard: Check if SystemLLM is enabled for this channel
+        const isEnabled = ConfigManager.getInstance().isChannelSystemLlmEnabled(task.channelId, 'coordination');
+        this.logger.debug(`[ASSIGNMENT] Channel ${task.channelId} - SystemLLM enabled: ${isEnabled}`);
+        if (!isEnabled) {
+            this.logger.debug(`SystemLLM disabled for channel ${task.channelId}, using fallback assignment`);
+            return this.getFallbackAssignment(task, agents);
+        }
+
         // Get per-channel SystemLlmService instance
         const systemLlm = SystemLlmServiceManager.getInstance().getServiceForChannel(task.channelId);
         if (!systemLlm) {
@@ -938,12 +952,30 @@ Respond with JSON:
      * Fallback assignment when LLM fails
      */
     private getFallbackAssignment(task: any, agents: any[]): AgentAssignmentAnalysis {
-        // Simple role-based fallback
-        const bestAgent = agents[0]; // Simple fallback to first agent
+        // If task has manual assignedAgentIds, respect them first
+        if (task.assignedAgentIds && task.assignedAgentIds.length > 0) {
+            const assignedAgentId = task.assignedAgentIds[0];
+            const assignedAgent = agents.find(a => a.id === assignedAgentId || a.agentId === assignedAgentId);
+            if (assignedAgent) {
+                return {
+                    recommendedAgentId: assignedAgent.id || assignedAgent.agentId,
+                    confidence: 1.0,
+                    reasoning: 'Manual assignment - task explicitly assigned to this agent',
+                    roleMatch: 1.0,
+                    capabilityMatch: 1.0,
+                    workloadScore: 1.0,
+                    expertiseScore: 1.0,
+                    availabilityScore: 1.0
+                };
+            }
+        }
+
+        // Simple fallback to first agent if no manual assignment
+        const bestAgent = agents[0];
         return {
-            recommendedAgentId: bestAgent.id,
+            recommendedAgentId: bestAgent.id || bestAgent.agentId,
             confidence: 0.5,
-            reasoning: 'Fallback assignment - LLM unavailable',
+            reasoning: 'Fallback assignment - no manual assignment specified',
             roleMatch: 0.5,
             capabilityMatch: 0.5,
             workloadScore: 0.5,
@@ -1196,13 +1228,17 @@ Respond with JSON:
             const channels = Array.from(this.activeChannels.value);
             
             for (const channelId of channels) {
+                // Guard: Skip channels with SystemLLM disabled
+                if (!ConfigManager.getInstance().isChannelSystemLlmEnabled(channelId, 'coordination')) {
+                    continue;
+                }
+
                 const workload = this.channelWorkloads.get(channelId);
                 if (workload && workload.confidence > 0.7) {
                     // Use per-channel SystemLLM instance for optimization suggestions
                     const systemLlm = SystemLlmServiceManager.getInstance().getServiceForChannel(channelId);
                     if (systemLlm) {
                         await systemLlm.analyzeChannelForCoordination(channelId);
-                    } else {
                     }
                 }
             }
@@ -1262,11 +1298,15 @@ Respond with JSON:
     ): Promise<{ status: string; message: string; taskId?: string; nextSteps?: string }> {
         try {
             
-            // Validate inputs
+            // Validate inputs (be forgiving on summary - use default if not provided)
             const validator = createStrictValidator('TaskService.handleTaskCompletion');
             validator.assertIsNonEmptyString(agentId, 'agentId is required');
             validator.assertIsNonEmptyString(channelId, 'channelId is required');
-            validator.assertIsNonEmptyString(completionData.summary, 'summary is required');
+            
+            // Use default summary if not provided (forgiving of LLM variations)
+            if (!completionData.summary || completionData.summary.trim() === '') {
+                completionData.summary = 'Task completed';
+            }
             
             // Find the active task for this agent
             const activeTasks = await this.getTasks({ channelId });

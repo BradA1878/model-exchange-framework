@@ -3,7 +3,28 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MXF Documentation</title>
+    <title>MXF - Model Exchange Framework Documentation</title>
+    <meta name="description" content="Documentation for MXF (Model Exchange Framework) - A multi-agent AI orchestration framework for TypeScript. Build sophisticated AI systems with advanced agent coordination, MCP integration, and the ORPAR control loop.">
+    <meta name="keywords" content="MXF, Model Exchange Framework, AI orchestration, multi-agent, TypeScript, MCP, ORPAR">
+    <meta name="author" content="Brad Anderson">
+    
+    <!-- Open Graph / Social -->
+    <meta property="og:title" content="MXF - Model Exchange Framework">
+    <meta property="og:description" content="Multi-agent AI orchestration framework for TypeScript. Advanced agent coordination, 100+ built-in tools, and MCP integration.">
+    <meta property="og:type" content="website">
+    <meta property="og:image" content="mxf-logo.png">
+    
+    <!-- Favicons -->
+    <link rel="icon" type="image/x-icon" href="favicon.ico">
+    <link rel="icon" type="image/png" sizes="32x32" href="favicon-32x32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="favicon-16x16.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
+    <link rel="manifest" href="site.webmanifest">
+    
+    <!-- Google Fonts - Carlito (Calibri equivalent) + JetBrains Mono for code -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Carlito:ital,wght@0,400;0,700;1,400&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
     
     <!-- Marked.js for Markdown parsing -->
     <script src="https://cdn.jsdelivr.net/npm/marked@11.1.1/marked.min.js"></script>
@@ -18,35 +39,73 @@
     
     <style>
         :root {
-            --bg-primary: #f5f5f5;
+            /* Light theme - matching logo background */
+            --bg-primary: #f6fefe;
             --bg-secondary: #ffffff;
-            --bg-tertiary: #f8f9fa;
-            --text-primary: #333333;
-            --text-secondary: #666666;
-            --text-tertiary: #999999;
-            --border-color: #e0e0e0;
-            --hover-bg: #f0f0f0;
-            --code-bg: #f5f5f5;
-            --code-text: #555555;
-            --scrollbar-track: #f1f1f1;
-            --scrollbar-thumb: #c1c1c1;
-            --scrollbar-thumb-hover: #a1a1a1;
+            --bg-tertiary: #eef6f6;
+            --bg-elevated: #ffffff;
+            --text-primary: #1a1a1a;
+            --text-secondary: #4a4a4a;
+            --text-tertiary: #7a7a7a;
+            --border-color: #dce8e8;
+            --border-subtle: #e8f2f2;
+            --hover-bg: #eef6f6;
+            --code-bg: #eef6f6;
+            --code-text: #3d3d3d;
+            --scrollbar-track: #eef6f6;
+            --scrollbar-thumb: #c8d8d8;
+            --scrollbar-thumb-hover: #a8c0c0;
+            
+            /* Accent colors */
+            --accent: #0066cc;
+            --accent-muted: #4a90d9;
+            --accent-bg: rgba(0, 102, 204, 0.08);
+            --accent-border: rgba(0, 102, 204, 0.2);
+            
+            /* Header */
+            --header-bg: #1a1a1a;
+            --header-text: #ffffff;
+            --header-btn-bg: rgba(255, 255, 255, 0.1);
+            --header-btn-hover: rgba(255, 255, 255, 0.18);
+            
+            /* Cards */
+            --card-shadow: 0 1px 3px rgba(0, 0, 0, 0.04), 0 4px 12px rgba(0, 0, 0, 0.03);
+            --card-shadow-hover: 0 4px 12px rgba(0, 0, 0, 0.06), 0 8px 24px rgba(0, 0, 0, 0.04);
         }
 
         [data-theme="dark"] {
-            --bg-primary: #1a1a1a;
-            --bg-secondary: #2d2d2d;
-            --bg-tertiary: #242424;
-            --text-primary: #e0e0e0;
-            --text-secondary: #b0b0b0;
-            --text-tertiary: #808080;
-            --border-color: #404040;
-            --hover-bg: #3a3a3a;
-            --code-bg: #1e1e1e;
-            --code-text: #aaaaaa;
-            --scrollbar-track: #2d2d2d;
-            --scrollbar-thumb: #505050;
-            --scrollbar-thumb-hover: #606060;
+            /* Dark theme - using logo colors (dark navy, steel blue, grays) */
+            --bg-primary: #0d1117;
+            --bg-secondary: #151b23;
+            --bg-tertiary: #1c2530;
+            --bg-elevated: #212a36;
+            --text-primary: #e6edf3;
+            --text-secondary: #9ca8b8;
+            --text-tertiary: #6b7a8c;
+            --border-color: #2a3544;
+            --border-subtle: #1f2937;
+            --hover-bg: #1f2937;
+            --code-bg: #161b22;
+            --code-text: #b8c5d4;
+            --scrollbar-track: #161b22;
+            --scrollbar-thumb: #3a4a5c;
+            --scrollbar-thumb-hover: #4a5c70;
+            
+            /* Accent colors - steel blue from logo */
+            --accent: #6a9fd4;
+            --accent-muted: #7eb3e6;
+            --accent-bg: rgba(106, 159, 212, 0.12);
+            --accent-border: rgba(106, 159, 212, 0.3);
+            
+            /* Header - dark navy from logo */
+            --header-bg: #1a3a5f;
+            --header-text: #ffffff;
+            --header-btn-bg: rgba(255, 255, 255, 0.1);
+            --header-btn-hover: rgba(255, 255, 255, 0.18);
+            
+            /* Cards */
+            --card-shadow: 0 1px 3px rgba(0, 0, 0, 0.25), 0 4px 12px rgba(0, 0, 0, 0.2);
+            --card-shadow-hover: 0 4px 12px rgba(0, 0, 0, 0.35), 0 8px 24px rgba(0, 0, 0, 0.25);
         }
 
         * {
@@ -56,12 +115,14 @@
         }
 
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            font-family: 'Carlito', Calibri, 'Segoe UI', Tahoma, sans-serif;
             height: 100vh;
             overflow: hidden;
             background: var(--bg-primary);
             color: var(--text-primary);
-            transition: background-color 0.3s ease, color 0.3s ease;
+            transition: background-color 0.25s ease, color 0.25s ease;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
         }
 
         .container {
@@ -75,145 +136,199 @@
             top: 0;
             left: 0;
             right: 0;
-            height: 60px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
+            height: 56px;
+            background: var(--header-bg);
+            color: var(--header-text);
             display: flex;
             align-items: center;
             padding: 0 20px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
             z-index: 100;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+        }
+
+        .header-logo {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-shrink: 0;
+        }
+
+        .header-logo img {
+            height: 32px;
+            width: auto;
         }
 
         .header h1 {
-            font-size: 24px;
-            font-weight: 600;
-            flex: 1;
+            font-size: 16px;
+            font-weight: 700;
+            letter-spacing: -0.01em;
         }
 
         .header .subtitle {
-            margin-left: 15px;
-            font-size: 14px;
-            opacity: 0.9;
+            margin-left: 12px;
+            font-size: 13px;
+            opacity: 0.5;
+            font-weight: 400;
         }
 
-        .theme-toggle {
-            margin-left: auto;
-            background: rgba(255, 255, 255, 0.2);
-            border: none;
-            color: white;
-            padding: 8px 16px;
-            border-radius: 6px;
-            cursor: pointer;
-            font-size: 14px;
+        .header-spacer {
+            flex: 1;
+        }
+
+        .header-actions {
             display: flex;
             align-items: center;
             gap: 6px;
-            transition: background 0.2s;
         }
 
-        .theme-toggle:hover {
-            background: rgba(255, 255, 255, 0.3);
+        .header-btn {
+            background: var(--header-btn-bg);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            color: var(--header-text);
+            padding: 7px 12px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 500;
+            font-family: inherit;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            transition: all 0.15s ease;
+            text-decoration: none;
+        }
+
+        .header-btn:hover:not(:disabled) {
+            background: var(--header-btn-hover);
+            border-color: rgba(255, 255, 255, 0.12);
+        }
+
+        .header-btn:disabled {
+            opacity: 0.35;
+            cursor: not-allowed;
+        }
+
+        .header-btn svg {
+            width: 15px;
+            height: 15px;
+            opacity: 0.9;
+        }
+
+        .github-btn {
+            background: rgba(255, 255, 255, 0.06);
         }
 
         .nav-buttons {
             display: flex;
-            gap: 8px;
-            margin-left: 16px;
+            gap: 4px;
+            margin-right: 8px;
         }
 
         .nav-btn {
-            background: rgba(255, 255, 255, 0.2);
-            border: none;
-            color: white;
-            padding: 8px 12px;
+            background: var(--header-btn-bg);
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            color: var(--header-text);
+            padding: 7px 10px;
             border-radius: 6px;
             cursor: pointer;
-            font-size: 14px;
-            transition: background 0.2s;
+            font-size: 13px;
+            font-weight: 500;
+            font-family: inherit;
+            transition: all 0.15s ease;
         }
 
         .nav-btn:hover:not(:disabled) {
-            background: rgba(255, 255, 255, 0.3);
+            background: var(--header-btn-hover);
         }
 
         .nav-btn:disabled {
-            opacity: 0.4;
+            opacity: 0.3;
             cursor: not-allowed;
         }
 
         /* Sidebar */
         .sidebar {
-            width: 320px;
+            width: 280px;
             background: var(--bg-secondary);
             border-right: 1px solid var(--border-color);
             overflow-y: auto;
-            margin-top: 60px;
-            box-shadow: 2px 0 10px rgba(0,0,0,0.05);
+            margin-top: 56px;
+            flex-shrink: 0;
         }
 
         .sidebar-header {
-            padding: 20px;
-            background: var(--bg-tertiary);
-            border-bottom: 1px solid var(--border-color);
+            padding: 16px;
+            background: var(--bg-secondary);
+            border-bottom: 1px solid var(--border-subtle);
             position: sticky;
             top: 0;
             z-index: 10;
         }
 
         .sidebar-header h2 {
-            font-size: 16px;
-            font-weight: 600;
-            color: var(--text-primary);
-            margin-bottom: 8px;
+            font-size: 11px;
+            font-weight: 700;
+            color: var(--text-tertiary);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 10px;
         }
 
         .search-box {
             width: 100%;
-            padding: 8px 12px;
+            padding: 9px 12px;
             border: 1px solid var(--border-color);
-            border-radius: 6px;
-            font-size: 14px;
+            border-radius: 8px;
+            font-size: 13px;
+            font-family: inherit;
             outline: none;
-            background: var(--bg-secondary);
+            background: var(--bg-primary);
             color: var(--text-primary);
+            transition: all 0.15s ease;
+        }
+
+        .search-box::placeholder {
+            color: var(--text-tertiary);
         }
 
         .search-box:focus {
-            border-color: #667eea;
-            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px var(--accent-bg);
         }
 
         /* TOC */
         .toc {
-            padding: 10px;
+            padding: 8px;
         }
 
         .toc-section {
-            margin-bottom: 15px;
+            margin-bottom: 4px;
         }
 
         .toc-section-title {
-            font-size: 13px;
-            font-weight: 600;
-            color: var(--text-secondary);
+            font-size: 11px;
+            font-weight: 700;
+            color: var(--text-tertiary);
             text-transform: uppercase;
-            letter-spacing: 0.5px;
-            padding: 10px 10px 8px 10px;
+            letter-spacing: 0.04em;
+            padding: 10px 10px 6px 10px;
             cursor: pointer;
             user-select: none;
             display: flex;
             align-items: center;
             justify-content: space-between;
+            border-radius: 6px;
+            transition: color 0.15s ease;
         }
 
         .toc-section-title:hover {
-            color: #667eea;
+            color: var(--accent);
         }
 
         .toc-section-title .icon {
-            font-size: 10px;
-            transition: transform 0.2s;
+            font-size: 9px;
+            transition: transform 0.2s ease;
+            opacity: 0.6;
         }
 
         .toc-section.collapsed .icon {
@@ -225,184 +340,195 @@
         }
 
         .toc-items {
-            padding-left: 10px;
+            padding-left: 4px;
         }
 
         .toc-item {
-            padding: 8px 12px;
-            margin: 2px 0;
+            padding: 8px 10px;
+            margin: 1px 0;
             cursor: pointer;
             border-radius: 6px;
-            font-size: 14px;
-            color: var(--text-primary);
-            transition: all 0.2s;
+            font-size: 13px;
+            color: var(--text-secondary);
+            transition: all 0.15s ease;
             display: flex;
             align-items: center;
         }
 
         .toc-item:hover {
             background: var(--hover-bg);
-            color: #667eea;
+            color: var(--text-primary);
         }
 
         .toc-item.active {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            font-weight: 500;
+            background: var(--accent-bg);
+            color: var(--accent);
+            font-weight: 700;
         }
 
         .toc-item-icon {
             margin-right: 8px;
-            font-size: 12px;
-        }
-
-        .toc-subsection {
-            padding-left: 20px;
+            font-size: 13px;
+            opacity: 0.8;
         }
 
         /* Content */
         .content {
             flex: 1;
             overflow-y: auto;
-            margin-top: 60px;
-            background: var(--bg-secondary);
+            margin-top: 56px;
+            background: var(--bg-primary);
         }
 
         .content-inner {
-            max-width: 900px;
+            max-width: 820px;
             margin: 0 auto;
-            padding: 40px;
+            padding: 48px 40px;
         }
 
         /* Markdown Styles */
         .markdown-body {
-            font-size: 16px;
-            line-height: 1.6;
+            font-size: 15px;
+            line-height: 1.7;
             color: var(--text-primary);
         }
 
         .markdown-body h1 {
             font-size: 32px;
             font-weight: 700;
-            margin-top: 24px;
-            margin-bottom: 16px;
-            padding-bottom: 8px;
-            border-bottom: 2px solid var(--border-color);
+            margin-top: 0;
+            margin-bottom: 20px;
+            padding-bottom: 16px;
+            border-bottom: 1px solid var(--border-color);
             color: var(--text-primary);
+            letter-spacing: -0.01em;
+            line-height: 1.2;
         }
 
         .markdown-body h2 {
             font-size: 24px;
-            font-weight: 600;
-            margin-top: 24px;
+            font-weight: 700;
+            margin-top: 40px;
+            margin-bottom: 16px;
+            color: var(--text-primary);
+            letter-spacing: -0.01em;
+        }
+
+        .markdown-body h3 {
+            font-size: 18px;
+            font-weight: 700;
+            margin-top: 32px;
             margin-bottom: 12px;
             color: var(--text-primary);
         }
 
-        .markdown-body h3 {
-            font-size: 20px;
-            font-weight: 600;
-            margin-top: 20px;
-            margin-bottom: 10px;
-            color: var(--text-primary);
-        }
-
         .markdown-body h4 {
-            font-size: 16px;
-            font-weight: 600;
-            margin-top: 16px;
+            font-size: 15px;
+            font-weight: 700;
+            margin-top: 24px;
             margin-bottom: 8px;
             color: var(--text-primary);
         }
 
         .markdown-body p {
             margin-bottom: 16px;
+            color: var(--text-secondary);
         }
 
         .markdown-body ul, .markdown-body ol {
             margin-bottom: 16px;
-            padding-left: 30px;
+            padding-left: 24px;
+            color: var(--text-secondary);
         }
 
         .markdown-body li {
-            margin-bottom: 8px;
+            margin-bottom: 6px;
         }
 
         .markdown-body code {
+            font-family: 'JetBrains Mono', 'SF Mono', Consolas, monospace;
             background: var(--code-bg);
             padding: 2px 6px;
-            border-radius: 3px;
-            font-size: 14px;
-            font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+            border-radius: 4px;
+            font-size: 13px;
             color: var(--code-text);
         }
 
         .markdown-body pre {
+            font-family: 'JetBrains Mono', 'SF Mono', Consolas, monospace;
             background: var(--code-bg);
-            padding: 16px;
-            border-radius: 8px;
+            padding: 18px 20px;
+            border-radius: 10px;
             overflow-x: auto;
-            margin-bottom: 16px;
-            border: 1px solid var(--border-color);
+            margin-bottom: 20px;
+            border: 1px solid var(--border-subtle);
+            font-size: 13px;
+            line-height: 1.6;
         }
 
         .markdown-body pre code {
             background: transparent;
             padding: 0;
+            font-size: inherit;
         }
 
         .markdown-body blockquote {
-            border-left: 4px solid #667eea;
-            padding-left: 16px;
-            margin: 16px 0;
+            border-left: 3px solid var(--accent);
+            padding-left: 20px;
+            margin: 20px 0;
             color: var(--text-secondary);
             font-style: italic;
         }
 
         .markdown-body a {
-            color: #667eea;
+            color: var(--accent);
             text-decoration: none;
+            border-bottom: 1px solid transparent;
+            transition: border-color 0.15s ease;
         }
 
         .markdown-body a:hover {
-            text-decoration: underline;
+            border-bottom-color: var(--accent);
         }
 
         .markdown-body table {
             width: 100%;
             border-collapse: collapse;
-            margin-bottom: 16px;
+            margin-bottom: 20px;
+            font-size: 14px;
         }
 
         .markdown-body th, .markdown-body td {
             border: 1px solid var(--border-color);
-            padding: 8px 12px;
+            padding: 10px 14px;
             text-align: left;
         }
 
         .markdown-body th {
             background: var(--bg-tertiary);
-            font-weight: 600;
+            font-weight: 700;
+            font-size: 13px;
         }
 
         .markdown-body hr {
             border: none;
-            border-top: 2px solid var(--border-color);
-            margin: 24px 0;
+            border-top: 1px solid var(--border-color);
+            margin: 32px 0;
         }
 
         .markdown-body img {
             max-width: 100%;
             height: auto;
+            border-radius: 8px;
         }
 
         /* Mermaid Diagrams */
         .markdown-body .mermaid {
             background: var(--bg-secondary);
             border: 1px solid var(--border-color);
-            border-radius: 8px;
-            padding: 20px;
-            margin: 20px 0;
+            border-radius: 10px;
+            padding: 24px;
+            margin: 24px 0;
             text-align: center;
             overflow-x: auto;
         }
@@ -414,81 +540,151 @@
 
         /* Welcome Screen */
         .welcome {
-            text-align: center;
-            padding: 60px 20px;
+            padding: 20px 0 60px;
             color: var(--text-secondary);
         }
 
-        .welcome h1 {
-            font-size: 48px;
-            margin-bottom: 16px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            background-clip: text;
+        .welcome-header {
+            text-align: center;
+            margin-bottom: 48px;
         }
 
-        .welcome p {
+        .welcome-logo {
+            width: 280px;
+            height: auto;
+            margin-bottom: 24px;
+        }
+
+        .welcome-tagline {
             font-size: 18px;
+            color: var(--text-secondary);
+            margin-bottom: 28px;
+        }
+
+        .welcome-github {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            padding: 10px 18px;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 700;
+            color: var(--text-primary);
+            text-decoration: none;
+            transition: all 0.2s ease;
+        }
+
+        .welcome-github:hover {
+            border-color: var(--accent-border);
+            box-shadow: var(--card-shadow);
+            transform: translateY(-1px);
+        }
+
+        .welcome-github svg {
+            width: 18px;
+            height: 18px;
+            fill: currentColor;
+        }
+
+        .server-banner {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 10px;
+            padding: 16px 20px;
             margin-bottom: 32px;
+            font-size: 13px;
+            color: var(--text-secondary);
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+        }
+
+        .server-banner-icon {
+            font-size: 16px;
+            line-height: 1.4;
+        }
+
+        .server-banner-content strong {
+            color: var(--text-primary);
+            font-weight: 700;
+        }
+
+        .server-banner code {
+            font-family: 'JetBrains Mono', monospace;
+            background: var(--bg-tertiary);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 12px;
         }
 
         .welcome-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-            gap: 20px;
-            max-width: 800px;
-            margin: 0 auto;
-            text-align: left;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 14px;
         }
 
         .welcome-card {
             background: var(--bg-secondary);
             border: 1px solid var(--border-color);
-            border-radius: 8px;
+            border-radius: 10px;
             padding: 20px;
             cursor: pointer;
-            transition: all 0.2s;
+            transition: all 0.2s ease;
+            text-decoration: none;
         }
 
         .welcome-card:hover {
-            border-color: #667eea;
-            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.15);
+            border-color: var(--accent-border);
+            box-shadow: var(--card-shadow-hover);
             transform: translateY(-2px);
         }
 
+        .welcome-card-icon {
+            font-size: 20px;
+            margin-bottom: 10px;
+        }
+
         .welcome-card h3 {
-            color: #667eea;
-            margin-bottom: 8px;
-            font-size: 18px;
+            color: var(--text-primary);
+            margin-bottom: 6px;
+            font-size: 15px;
+            font-weight: 700;
         }
 
         .welcome-card p {
-            color: var(--text-secondary);
-            font-size: 14px;
+            color: var(--text-tertiary);
+            font-size: 13px;
+            line-height: 1.5;
             margin: 0;
+        }
+
+        .external-link-icon {
+            font-size: 12px;
+            opacity: 0.6;
+            margin-left: 4px;
         }
 
         /* Loading */
         .loading {
             text-align: center;
-            padding: 60px 20px;
+            padding: 80px 20px;
             color: var(--text-tertiary);
         }
 
         .loading-spinner {
-            width: 40px;
-            height: 40px;
-            border: 4px solid #f0f0f0;
-            border-top: 4px solid #667eea;
+            width: 32px;
+            height: 32px;
+            border: 2px solid var(--border-color);
+            border-top-color: var(--accent);
             border-radius: 50%;
-            animation: spin 1s linear infinite;
-            margin: 0 auto 20px;
+            animation: spin 0.8s linear infinite;
+            margin: 0 auto 16px;
         }
 
         @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
+            to { transform: rotate(360deg); }
         }
 
         /* Scrollbar */
@@ -510,58 +706,38 @@
             background: var(--scrollbar-thumb-hover);
         }
 
-        /* Server instruction banner */
-        .server-banner {
-            background: #fff3cd;
-            border: 1px solid #ffc107;
-            border-radius: 8px;
-            padding: 16px;
-            margin-bottom: 24px;
-            font-size: 14px;
-        }
-
-        .server-banner strong {
-            color: #856404;
-        }
-
-        .server-banner code {
-            background: #fff;
-            padding: 2px 6px;
-            border-radius: 3px;
-            font-size: 13px;
-        }
-
         /* Mobile hamburger button */
         .hamburger {
             display: none;
-            background: rgba(255, 255, 255, 0.2);
-            border: none;
+            background: var(--header-btn-bg);
+            border: 1px solid rgba(255, 255, 255, 0.08);
             color: white;
-            width: 40px;
-            height: 40px;
+            width: 36px;
+            height: 36px;
             border-radius: 6px;
             cursor: pointer;
-            font-size: 24px;
+            font-size: 18px;
             align-items: center;
             justify-content: center;
             margin-right: 12px;
-            transition: background 0.2s;
+            transition: all 0.15s ease;
         }
 
         .hamburger:hover {
-            background: rgba(255, 255, 255, 0.3);
+            background: var(--header-btn-hover);
         }
 
         /* Sidebar overlay for mobile */
         .sidebar-overlay {
             display: none;
             position: fixed;
-            top: 60px;
+            top: 56px;
             left: 0;
             right: 0;
             bottom: 0;
             background: rgba(0, 0, 0, 0.5);
             z-index: 98;
+            backdrop-filter: blur(2px);
         }
 
         /* Mobile Responsive Styles */
@@ -571,7 +747,7 @@
             }
 
             .header h1 {
-                font-size: 18px;
+                font-size: 15px;
             }
 
             .header .subtitle {
@@ -582,27 +758,18 @@
                 display: none;
             }
 
-            .theme-toggle {
-                padding: 8px;
-            }
-
-            .theme-toggle span {
+            .header-btn span {
                 display: none;
-            }
-
-            .theme-toggle #themeIcon {
-                display: inline;
-                margin: 0;
             }
 
             .sidebar {
                 position: fixed;
-                left: -320px;
-                top: 60px;
+                left: -280px;
+                top: 56px;
                 bottom: 0;
                 z-index: 99;
-                transition: left 0.3s ease;
-                box-shadow: 2px 0 10px rgba(0,0,0,0.3);
+                transition: left 0.25s ease;
+                box-shadow: 4px 0 20px rgba(0,0,0,0.15);
             }
 
             .sidebar.open {
@@ -618,11 +785,15 @@
             }
 
             .content-inner {
-                padding: 20px;
+                padding: 32px 20px;
             }
 
-            .welcome h1 {
-                font-size: 32px;
+            .welcome-logo {
+                width: 200px;
+            }
+
+            .welcome-tagline {
+                font-size: 15px;
             }
 
             .welcome-grid {
@@ -630,38 +801,49 @@
             }
 
             .markdown-body h1 {
-                font-size: 28px;
+                font-size: 26px;
             }
 
             .markdown-body h2 {
-                font-size: 22px;
+                font-size: 20px;
             }
 
             .markdown-body {
-                font-size: 15px;
+                font-size: 14px;
             }
         }
     </style>
 </head>
 <body>
     <div class="header">
-        <button class="hamburger" onclick="toggleSidebar()" id="hamburgerBtn">
-            ☰
-        </button>
-        <h1>📚 MXF Documentation</h1>
+        <button class="hamburger" onclick="toggleSidebar()" id="hamburgerBtn">☰</button>
+        
+        <div class="header-logo">
+            <img src="mxf-logo-small.png" alt="MXF Logo">
+            <h1>MXF Docs</h1>
+        </div>
         <span class="subtitle">Model Exchange Framework</span>
-        <div class="nav-buttons">
-            <button class="nav-btn" onclick="navigateBack()" id="backBtn" disabled>
-                ← Back
-            </button>
-            <button class="nav-btn" onclick="navigateForward()" id="forwardBtn" disabled>
-                Forward →
+        
+        <div class="header-spacer"></div>
+        
+        <div class="header-actions">
+            <div class="nav-buttons">
+                <button class="nav-btn" onclick="navigateBack()" id="backBtn" disabled>←</button>
+                <button class="nav-btn" onclick="navigateForward()" id="forwardBtn" disabled>→</button>
+            </div>
+            
+            <a href="https://github.com/BradA1878/model-exchange-framework" target="_blank" rel="noopener noreferrer" class="header-btn github-btn">
+                <svg viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/>
+                </svg>
+                <span>GitHub</span>
+            </a>
+            
+            <button class="header-btn" onclick="toggleTheme()" id="themeToggle">
+                <span id="themeIcon">🌙</span>
+                <span id="themeText">Dark</span>
             </button>
         </div>
-        <button class="theme-toggle" onclick="toggleTheme()" id="themeToggle">
-            <span id="themeIcon">🌙</span>
-            <span id="themeText">Dark</span>
-        </button>
     </div>
 
     <div class="sidebar-overlay" id="sidebarOverlay" onclick="toggleSidebar()"></div>
@@ -669,8 +851,8 @@
     <div class="container">
         <div class="sidebar">
             <div class="sidebar-header">
-                <h2>Table of Contents</h2>
-                <input type="text" class="search-box" placeholder="Search documentation..." id="searchBox">
+                <h2>Navigation</h2>
+                <input type="text" class="search-box" placeholder="Search docs..." id="searchBox">
             </div>
             <div class="toc" id="toc"></div>
         </div>
@@ -678,34 +860,49 @@
         <div class="content">
             <div class="content-inner" id="content">
                 <div class="welcome">
-                    <h1>Welcome to MXF Documentation</h1>
-                    <p>Select a document from the sidebar to get started</p>
+                    <div class="welcome-header">
+                        <img src="mxf-logo.png" alt="MXF - Model Exchange Framework" class="welcome-logo">
+                        <p class="welcome-tagline">Multi-agent AI orchestration framework for TypeScript</p>
+                        <a href="https://github.com/BradA1878/model-exchange-framework" target="_blank" rel="noopener noreferrer" class="welcome-github">
+                            <svg viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/>
+                            </svg>
+                            View on GitHub
+                        </a>
+                    </div>
                     
                     <div class="server-banner">
-                        <strong>📌 For Best Experience:</strong> Run a local server from the docs directory:<br>
-                        <code>cd docs && python3 -m http.server 8000</code> or <code>npx serve</code><br>
-                        Then open <code>http://localhost:8000/index.html</code>
+                        <span class="server-banner-icon">💡</span>
+                        <div class="server-banner-content">
+                            <strong>Local Development:</strong> Run a server from the docs directory:<br>
+                            <code>python3 -m http.server 8000</code> or <code>npx serve</code>
+                        </div>
                     </div>
 
                     <div class="welcome-grid">
                         <div class="welcome-card" onclick="loadDoc('index.md')">
-                            <h3>🏠 Overview</h3>
-                            <p>Start here for an introduction to MXF</p>
+                            <div class="welcome-card-icon">🏠</div>
+                            <h3>Overview</h3>
+                            <p>Introduction to MXF architecture and concepts</p>
                         </div>
                         <div class="welcome-card" onclick="loadDoc('getting-started.md')">
-                            <h3>🚀 Getting Started</h3>
-                            <p>Quick start guide and tutorials</p>
+                            <div class="welcome-card-icon">🚀</div>
+                            <h3>Getting Started</h3>
+                            <p>Quick start guide and first steps</p>
                         </div>
-                        <div class="welcome-card" onclick="loadDoc('diagram/mxf-architecture.html')">
-                            <h3>🎨 Interactive Architecture</h3>
-                            <p>Explore the system visually</p>
+                        <div class="welcome-card" onclick="window.open('diagram/mxf-architecture.html', '_blank')">
+                            <div class="welcome-card-icon">🎨</div>
+                            <h3>Architecture <span class="external-link-icon">↗</span></h3>
+                            <p>Interactive system diagram</p>
                         </div>
                         <div class="welcome-card" onclick="loadDoc('sdk/index.md')">
-                            <h3>📦 SDK Reference</h3>
+                            <div class="welcome-card-icon">📦</div>
+                            <h3>SDK Reference</h3>
                             <p>TypeScript SDK documentation</p>
                         </div>
                         <div class="welcome-card" onclick="loadDoc('api/index.md')">
-                            <h3>🔌 API Reference</h3>
+                            <div class="welcome-card-icon">🔌</div>
+                            <h3>API Reference</h3>
                             <p>REST and WebSocket APIs</p>
                         </div>
                     </div>
@@ -748,13 +945,16 @@
         }
 
         function addToHistory(file) {
-            // If we're not at the end of history, remove everything after current position
+            // If we're not at the end of history, truncate forward history
             if (historyIndex < docHistory.length - 1) {
                 docHistory = docHistory.slice(0, historyIndex + 1);
             }
             
-            // Add new file to history
-            docHistory.push(file);
+            // Don't add duplicates consecutively
+            if (docHistory[docHistory.length - 1] !== file) {
+                docHistory.push(file);
+            }
+            
             historyIndex = docHistory.length - 1;
             updateNavButtons();
         }
@@ -762,7 +962,7 @@
         function navigateBack() {
             if (historyIndex > 0) {
                 historyIndex--;
-                loadDoc(docHistory[historyIndex], false); // false = don't add to history
+                loadDoc(docHistory[historyIndex], false);
                 updateNavButtons();
             }
         }
@@ -770,175 +970,178 @@
         function navigateForward() {
             if (historyIndex < docHistory.length - 1) {
                 historyIndex++;
-                loadDoc(docHistory[historyIndex], false); // false = don't add to history
+                loadDoc(docHistory[historyIndex], false);
                 updateNavButtons();
             }
         }
 
         // Theme management
-        function toggleTheme() {
-            const html = document.documentElement;
-            const currentTheme = html.getAttribute('data-theme');
-            const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
-            
-            html.setAttribute('data-theme', newTheme);
-            localStorage.setItem('theme', newTheme);
-            
-            // Update button
-            const icon = document.getElementById('themeIcon');
-            const text = document.getElementById('themeText');
-            if (newTheme === 'dark') {
-                icon.textContent = '☀️';
-                text.textContent = 'Light';
-            } else {
-                icon.textContent = '🌙';
-                text.textContent = 'Dark';
-            }
-            
-            // Toggle highlight.js themes
-            const darkStyle = document.getElementById('highlight-dark');
-            const lightStyle = document.getElementById('highlight-light');
-            if (newTheme === 'dark') {
-                darkStyle.disabled = false;
-                lightStyle.disabled = true;
-            } else {
-                darkStyle.disabled = true;
-                lightStyle.disabled = false;
-            }
-            
-            // Update Mermaid theme and re-render diagrams
-            updateMermaidTheme(newTheme);
-            const content = document.getElementById('content');
-            if (content.querySelector('.mermaid')) {
-                // Re-render current document to update Mermaid diagrams
-                const currentFile = document.querySelector('.toc-item.active')?.dataset.file;
-                if (currentFile) {
-                    loadDoc(currentFile);
-                }
-            }
-        }
-
-        // Initialize theme from localStorage
         function initTheme() {
-            const savedTheme = localStorage.getItem('theme') || 'light';
-            document.documentElement.setAttribute('data-theme', savedTheme);
+            const savedTheme = localStorage.getItem('mxf-docs-theme');
+            const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+            const theme = savedTheme || 'dark';
             
-            const icon = document.getElementById('themeIcon');
-            const text = document.getElementById('themeText');
-            if (savedTheme === 'dark') {
-                icon.textContent = '☀️';
-                text.textContent = 'Light';
-                document.getElementById('highlight-dark').disabled = false;
-                document.getElementById('highlight-light').disabled = true;
-            } else {
-                icon.textContent = '🌙';
-                text.textContent = 'Dark';
-                document.getElementById('highlight-dark').disabled = true;
-                document.getElementById('highlight-light').disabled = false;
-            }
+            document.documentElement.setAttribute('data-theme', theme);
+            updateThemeUI(theme);
             
-            // Update Mermaid theme
-            updateMermaidTheme(savedTheme);
-        }
-
-        // Update Mermaid theme
-        function updateMermaidTheme(theme) {
-            const mermaidTheme = theme === 'dark' ? 'dark' : 'default';
-            mermaid.initialize({ 
+            // Initialize Mermaid with theme
+            mermaid.initialize({
                 startOnLoad: false,
-                theme: mermaidTheme,
-                securityLevel: 'loose',
-                flowchart: {
-                    useMaxWidth: true,
-                    htmlLabels: true
-                }
+                theme: theme === 'dark' ? 'dark' : 'default',
+                securityLevel: 'loose'
             });
         }
 
-        // Documentation structure
+        function updateThemeUI(theme) {
+            const icon = document.getElementById('themeIcon');
+            const text = document.getElementById('themeText');
+            const darkStyle = document.getElementById('highlight-dark');
+            const lightStyle = document.getElementById('highlight-light');
+            
+            if (theme === 'dark') {
+                icon.textContent = '☀️';
+                text.textContent = 'Light';
+                darkStyle.disabled = false;
+                lightStyle.disabled = true;
+            } else {
+                icon.textContent = '🌙';
+                text.textContent = 'Dark';
+                darkStyle.disabled = true;
+                lightStyle.disabled = false;
+            }
+        }
+
+        function toggleTheme() {
+            const current = document.documentElement.getAttribute('data-theme');
+            const newTheme = current === 'dark' ? 'light' : 'dark';
+            
+            document.documentElement.setAttribute('data-theme', newTheme);
+            localStorage.setItem('mxf-docs-theme', newTheme);
+            updateThemeUI(newTheme);
+            
+            // Re-render Mermaid diagrams with new theme
+            mermaid.initialize({
+                startOnLoad: false,
+                theme: newTheme === 'dark' ? 'dark' : 'default',
+                securityLevel: 'loose'
+            });
+        }
+
+        // Document structure - based on actual files in docs/
         const docStructure = {
             'Getting Started': {
                 icon: '🚀',
                 items: [
-                    { title: 'Main Overview', file: 'index.md', icon: '🏠' },
-                    { title: 'Getting Started Guide', file: 'getting-started.md', icon: '📖' },
-                    { title: 'Docker Deployment', file: 'deployment.md', icon: '🐳' },
-                    { title: 'Meilisearch Integration', file: 'meilisearch-integration.md', icon: '🔍' },
-                    { title: 'Code Execution Integration', file: 'code-execution-integration.md', icon: '🚀' }
+                    { title: 'Overview', file: 'index.md', icon: '🏠' },
+                    { title: 'Getting Started', file: 'getting-started.md', icon: '📖' },
+                    { title: 'Deployment', file: 'deployment.md', icon: '🚀' },
+                    { title: 'Use Cases', file: 'use-cases.md', icon: '💡' },
+                    { title: 'Troubleshooting', file: 'troubleshooting.md', icon: '🔍' },
+                    { title: 'Glossary', file: 'glossary.md', icon: '📖' },
+                    { title: 'Architecture Diagram', file: 'diagram/mxf-architecture.html', icon: '🎨', isHtml: true, openInNewTab: true }
                 ]
             },
-            'SDK Documentation': {
+            'MXF Core': {
+                icon: '🧊',
+                items: [
+                    { title: 'MXF Overview', file: 'mxf/index.md', icon: '📚' },
+                    { title: 'Key Concepts', file: 'mxf/key-concepts.md', icon: '🔑' },
+                    { title: 'System Overview', file: 'mxf/system-overview.md', icon: '🗺️' },
+                    { title: 'Architecture Diagram', file: 'mxf/architecture-diagram.md', icon: '🏗️' },
+                    { title: 'Data Flow', file: 'mxf/data-flow.md', icon: '🌊' },
+                    { title: 'System LLM', file: 'mxf/system-llm.md', icon: '🧠' },
+                    { title: 'Agentic Model Guide', file: 'mxf/agentic-model-guide.md', icon: '🎯' },
+                    { title: 'ORPAR Loop', file: 'mxf/orpar.md', icon: '🔄' },
+                    { title: 'Validation System', file: 'mxf/validation-system.md', icon: '✅' },
+                    { title: 'Code Execution', file: 'mxf/code-execution.md', icon: '⚡' },
+                    { title: 'Security', file: 'mxf/security.md', icon: '🔒' },
+                    { title: 'Extensibility', file: 'mxf/extensibility.md', icon: '🧩' },
+                    { title: 'Tool Reference', file: 'mxf/tool-reference.md', icon: '🔧' }
+                ]
+            },
+            'SDK': {
                 icon: '📦',
                 items: [
-                    { title: 'SDK Overview', file: 'sdk/index.md', icon: '📚' },
+                    { title: 'SDK Overview', file: 'sdk/index.md', icon: '📦' },
                     { title: 'Authentication', file: 'sdk/authentication.md', icon: '🔐' },
+                    { title: 'CLI', file: 'sdk/cli.md', icon: '💻' },
+                    { title: 'Config Manager', file: 'sdk/config-manager.md', icon: '⚙️' },
+                    { title: 'Handlers', file: 'sdk/handlers.md', icon: '👆' },
+                    { title: 'Managers', file: 'sdk/managers.md', icon: '📋' },
+                    { title: 'Interfaces', file: 'sdk/interfaces.md', icon: '🔗' },
+                    { title: 'Events', file: 'sdk/events.md', icon: '📨' },
+                    { title: 'MCP Integration', file: 'sdk/mcp.md', icon: '🔧' },
+                    { title: 'External MCP Servers', file: 'sdk/external-mcp-servers.md', icon: '🌐' },
                     { title: 'Code Execution', file: 'sdk/code-execution.md', icon: '⚡' },
-                    { title: 'SDK CLI Tools', file: 'sdk/cli.md', icon: '⌨️' },
-                    { title: 'Event System', file: 'sdk/events.md', icon: '📡' },
-                    { title: 'Core Interfaces', file: 'sdk/interfaces.md', icon: '🔷' },
-                    { title: 'Configuration Manager', file: 'sdk/config-manager.md', icon: '⚙️' },
-                    { title: 'SDK Managers', file: 'sdk/managers.md', icon: '🎛️' },
-                    { title: 'SDK Handlers', file: 'sdk/handlers.md', icon: '🎮' },
-                    { title: 'MCP Integration', file: 'sdk/mcp.md', icon: '🔌' },
-                    { title: 'MXP 2.0 Configuration', file: 'sdk/mxp-config.md', icon: '🔧' }
+                    { title: 'MXP Config', file: 'sdk/mxp-config.md', icon: '📋' }
                 ]
             },
-            'Code Examples': {
-                icon: '💡',
+            'SDK Examples': {
+                icon: '📝',
                 items: [
-                    { title: 'Basic Examples', file: 'sdk/examples-basic.md', icon: '🔰' },
+                    { title: 'Examples Overview', file: 'sdk/examples.md', icon: '📚' },
+                    { title: 'Basic Examples', file: 'sdk/examples-basic.md', icon: '🌱' },
+                    { title: 'Task Examples', file: 'sdk/examples-tasks.md', icon: '✅' },
+                    { title: 'Events Examples', file: 'sdk/examples-events.md', icon: '📨' },
+                    { title: 'Memory Examples', file: 'sdk/examples-memory.md', icon: '🧠' },
+                    { title: 'Multi-Agent Examples', file: 'sdk/examples-multi-agent.md', icon: '👥' },
                     { title: 'Code Execution Examples', file: 'sdk/examples-code-execution.md', icon: '⚡' },
-                    { title: 'Multi-Agent Coordination', file: 'sdk/examples-multi-agent.md', icon: '👥' },
-                    { title: 'Event Handling', file: 'sdk/examples-events.md', icon: '📡' },
-                    { title: 'Memory Operations', file: 'sdk/examples-memory.md', icon: '💾' },
-                    { title: 'Task Management', file: 'sdk/examples-tasks.md', icon: '✅' },
-                    { title: 'Complete Applications', file: 'sdk/examples-complete.md', icon: '🎯' }
+                    { title: 'Complete Examples', file: 'sdk/examples-complete.md', icon: '🎯' }
                 ]
             },
-            'API Reference': {
+            'SDK Prompt Templates': {
+                icon: '📄',
+                items: [
+                    { title: 'System Prompt Example', file: 'sdk/system-prompt-example.md', icon: '📝' },
+                    { title: 'Standard System Prompt', file: 'sdk/system-prompt-example-standard.md', icon: '📋' },
+                    { title: 'MXP System Prompt', file: 'sdk/system-prompt-example-mxp.md', icon: '📡' },
+                    { title: 'Agent Config Prompt', file: 'sdk/agent-config-prompt-example.md', icon: '🤖' },
+                    { title: 'Task Prompt Example', file: 'sdk/task-prompt-example.md', icon: '✅' },
+                    { title: 'Conversation Prompt', file: 'sdk/conversation-prompt-example.md', icon: '💬' }
+                ]
+            },
+            'API': {
                 icon: '🔌',
                 items: [
-                    { title: 'API Overview', file: 'api/index.md', icon: '📋' },
-                    { title: 'Channels API', file: 'api/channels.md', icon: '📢' },
-                    { title: 'Agents API', file: 'api/agents.md', icon: '🤖' },
-                    { title: 'Tasks API', file: 'api/tasks.md', icon: '✅' },
-                    { title: 'Memory API', file: 'api/memory.md', icon: '💾' },
-                    { title: 'WebSocket Events', file: 'api/websocket.md', icon: '🔄' },
-                    { title: 'MCP API', file: 'api/mcp.md', icon: '🔧' },
-                    { title: 'Control Loop API', file: 'api/control-loop.md', icon: '🔁' },
-                    { title: 'Analytics API', file: 'api/analytics.md', icon: '📊' },
-                    { title: 'Proactive Validation', file: 'api/proactive-validation.md', icon: '✔️' },
-                    { title: 'Auto-Correction', file: 'api/auto-correction.md', icon: '🔧' },
-                    { title: 'Authentication API', file: 'api/auth.md', icon: '🔑' }
+                    { title: 'API Overview', file: 'api/index.md', icon: '📚' },
+                    { title: 'Authentication', file: 'api/auth.md', icon: '🔐' },
+                    { title: 'Agents', file: 'api/agents.md', icon: '🤖' },
+                    { title: 'Tasks', file: 'api/tasks.md', icon: '✅' },
+                    { title: 'Channels', file: 'api/channels.md', icon: '📡' },
+                    { title: 'Memory', file: 'api/memory.md', icon: '💾' },
+                    { title: 'Users', file: 'api/users.md', icon: '👤' },
+                    { title: 'Config', file: 'api/config.md', icon: '⚙️' },
+                    { title: 'WebSocket', file: 'api/websocket.md', icon: '🔄' },
+                    { title: 'MCP', file: 'api/mcp.md', icon: '🔧' },
+                    { title: 'Control Loop', file: 'api/control-loop.md', icon: '🔁' },
+                    { title: 'Dashboard', file: 'api/dashboard.md', icon: '📊' },
+                    { title: 'Analytics', file: 'api/analytics.md', icon: '📈' }
                 ]
             },
-            'MXF Architecture': {
-                icon: '🏗️',
+            'MXP Protocol': {
+                icon: '📡',
                 items: [
-                    { title: 'Architecture Overview', file: 'mxf/index.md', icon: '🗺️' },
-                    { title: 'Interactive Architecture', file: 'diagram/mxf-architecture.html', icon: '🎨', isHtml: true },
-                    { title: 'Server CLI Tools', file: 'mxf/server-cli.md', icon: '🖥️' },
-                    { title: 'Server Services', file: 'mxf/server-services.md', icon: '⚙️' },
-                    { title: 'System Overview', file: 'mxf/system-overview.md', icon: '🌐' },
-                    { title: 'Key Concepts', file: 'mxf/key-concepts.md', icon: '💡' },
-                    { title: 'ORPAR Cognitive Cycle', file: 'mxf/orpar.md', icon: '🔄' },
-                    { title: 'SystemLLM Service', file: 'mxf/system-llm.md', icon: '🤖' },
-                    { title: 'Code Execution Service', file: 'mxf/code-execution.md', icon: '⚡' },
-                    { title: 'Architecture Diagram', file: 'mxf/architecture-diagram.md', icon: '📐' },
-                    { title: 'Data Flow', file: 'mxf/data-flow.md', icon: '🌊' },
-                    { title: 'Security', file: 'mxf/security.md', icon: '🔒' },
-                    { title: 'Extensibility', file: 'mxf/extensibility.md', icon: '🔌' },
-                    { title: 'Validation System', file: 'mxf/validation-system.md', icon: '✔️' }
-                ]
-            },
-            'MXP 2.0 Protocol': {
-                icon: '⚡',
-                items: [
+                    { title: 'MXP Protocol', file: 'mxf/mxp-protocol.md', icon: '📚' },
                     { title: 'Technical Specification', file: 'mxf/mxp-technical-specification.md', icon: '📄' },
                     { title: 'Enterprise Guide', file: 'mxf/mxp-enterprise.md', icon: '🏢' },
                     { title: 'Monitoring', file: 'mxf/mxp-monitoring.md', icon: '📡' },
-                    { title: 'MXP Protocol', file: 'mxf/mxp-protocol.md', icon: '🔧' },
                     { title: 'Troubleshooting', file: 'mxf/mxp-troubleshooting.md', icon: '🔍' }
+                ]
+            },
+            'Server': {
+                icon: '🖥️',
+                items: [
+                    { title: 'Server CLI', file: 'mxf/server-cli.md', icon: '💻' },
+                    { title: 'Server Services', file: 'mxf/server-services.md', icon: '⚙️' },
+                    { title: 'Development Lifecycle', file: 'mxf/development-lifecycle.md', icon: '🔄' }
+                ]
+            },
+            'Validation': {
+                icon: '✔️',
+                items: [
+                    { title: 'Proactive Validation', file: 'api/proactive-validation.md', icon: '🛡️' },
+                    { title: 'Auto-Correction', file: 'api/auto-correction.md', icon: '🔧' },
+                    { title: 'Validation Analytics', file: 'api/validation-analytics.md', icon: '📊' }
                 ]
             },
             'Dashboard': {
@@ -949,7 +1152,8 @@
                     { title: 'Agents', file: 'dashboard/agents.md', icon: '🤖' },
                     { title: 'Tasks', file: 'dashboard/tasks.md', icon: '✅' },
                     { title: 'Memory', file: 'dashboard/memory.md', icon: '💾' },
-                    { title: 'Analytics', file: 'dashboard/analytics.md', icon: '📈' }
+                    { title: 'Analytics', file: 'dashboard/analytics.md', icon: '📈' },
+                    { title: 'MXP Monitoring', file: 'dashboard/mxp-monitoring.md', icon: '📡' }
                 ]
             },
             'Analytics': {
@@ -959,7 +1163,27 @@
                     { title: 'Task Effectiveness', file: 'analytics/task-effectiveness.md', icon: '✅' },
                     { title: 'MCP Tools', file: 'analytics/mcp-tools.md', icon: '🔧' },
                     { title: 'Validation Analytics', file: 'analytics/validation-analytics.md', icon: '✔️' },
-                    { title: 'Code Execution Analytics', file: 'analytics/code-execution.md', icon: '⚡' }
+                    { title: 'Code Execution', file: 'analytics/code-execution.md', icon: '⚡' }
+                ]
+            },
+            'Integrations': {
+                icon: '🔗',
+                items: [
+                    { title: 'Code Execution Integration', file: 'code-execution-integration.md', icon: '⚡' },
+                    { title: 'Meilisearch Integration', file: 'meilisearch-integration.md', icon: '🔍' },
+                    { title: 'Task Prompt Best Practices', file: 'task-prompt-best-practices.md', icon: '📝' }
+                ]
+            },
+            'Example Projects': {
+                icon: '🎮',
+                items: [
+                    { title: 'First Contact Demo', file: 'examples/first-contact.md', icon: '🚀' },
+                    { title: 'Interview Scheduling', file: 'examples/interview-scheduling.md', icon: '📅' },
+                    { title: 'Fog of War Game', file: 'examples/fog-of-war.md', icon: '🎯' },
+                    { title: 'Tic-Tac-Toe AI', file: 'examples/tic-tac-toe.md', icon: '⭕' },
+                    { title: 'Go Fish AI', file: 'examples/go-fish.md', icon: '🐟' },
+                    { title: 'External MCP Registration', file: 'examples/external-mcp.md', icon: '🔌' },
+                    { title: 'Channel MCP Registration', file: 'examples/channel-mcp.md', icon: '📡' }
                 ]
             }
         };
@@ -990,9 +1214,9 @@
                     itemDiv.className = 'toc-item';
                     itemDiv.innerHTML = `
                         <span class="toc-item-icon">${item.icon}</span>
-                        <span>${item.title}</span>
+                        <span>${item.title}${item.openInNewTab ? ' <span class="external-link-icon">↗</span>' : ''}</span>
                     `;
-                    itemDiv.onclick = () => loadDoc(item.file);
+                    itemDiv.onclick = () => item.openInNewTab ? window.open(item.file, '_blank') : loadDoc(item.file);
                     itemDiv.dataset.file = item.file;
                     if (item.isHtml) {
                         itemDiv.dataset.isHtml = 'true';
@@ -1022,7 +1246,7 @@
             content.innerHTML = `
                 <div class="loading">
                     <div class="loading-spinner"></div>
-                    <p>Loading ${file}...</p>
+                    <p>Loading...</p>
                 </div>
             `;
             
@@ -1120,12 +1344,17 @@
             } catch (error) {
                 content.innerHTML = `
                     <div class="welcome">
-                        <h1>⚠️ Error Loading Document</h1>
-                        <p>Could not load <code>${file}</code></p>
-                        <p style="color: #999; font-size: 14px;">
-                            Make sure you're running a local server:<br>
-                            <code>python3 -m http.server 8000</code> or <code>npx serve</code>
-                        </p>
+                        <div class="welcome-header">
+                            <h1>⚠️ Error</h1>
+                            <p class="welcome-tagline">Could not load <code>${file}</code></p>
+                        </div>
+                        <div class="server-banner">
+                            <span class="server-banner-icon">💡</span>
+                            <div class="server-banner-content">
+                                <strong>Make sure you're running a local server:</strong><br>
+                                <code>python3 -m http.server 8000</code> or <code>npx serve</code>
+                            </div>
+                        </div>
                     </div>
                 `;
             }

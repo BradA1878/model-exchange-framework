@@ -170,7 +170,7 @@ export class OpenRouterMcpClient extends BaseMcpClient {
 
         // Check if model supports Exacto
         if (!OpenRouterMcpClient.isExactoSupported(baseModel)) {
-            this.logger.warn(`⚠️ Model ${baseModel} does not support :exacto variant. Supported models: ${OpenRouterMcpClient.EXACTO_SUPPORTED_MODELS.join(', ')}`);
+            // this.logger.warn(`⚠️ Model ${baseModel} does not support :exacto variant. Supported models: ${OpenRouterMcpClient.EXACTO_SUPPORTED_MODELS.join(', ')}`);
             return modelName; // Return original model name
         }
 
@@ -269,10 +269,6 @@ export class OpenRouterMcpClient extends BaseMcpClient {
 
     }
 
-    // OLD reorderMessagesForOpenRouter method REMOVED
-    // Reordering now handled by OpenRouterMessageAdapter.transform()
-    // This is a CLEAN BREAK - no backwards compatibility, no deprecated methods
-
     /**
      * Convert ConversationMessage directly to OpenRouter format
      * No MCP intermediate step - preserves all metadata
@@ -307,10 +303,6 @@ export class OpenRouterMcpClient extends BaseMcpClient {
         return openRouterMsg;
     }
 
-    // DELETED: convertToOpenRouterMessages - replaced by adapter
-    // DELETED: mapRoleToOpenRouter - replaced by adapter
-    // CLEAN BREAK: All legacy conversion methods removed
-    
     /**
      * Convert MCP tools to OpenRouter tools (using utility)
      * 
@@ -468,8 +460,10 @@ export class OpenRouterMcpClient extends BaseMcpClient {
         const transformedMessages = converter.transform(openRouterMessages, MessageFormat.OPENROUTER);
 
 
+        // Message count may differ if orphaned tool results were dropped - this is expected
+        // and prevents API errors when conversation history is cleared between turns
         if (transformedMessages.length !== openRouterMessages.length) {
-            this.logger.error(`❌ CRITICAL: Messages lost during transformation! ${openRouterMessages.length} → ${transformedMessages.length}`);
+            this.logger.debug(`Messages adjusted during transformation: ${openRouterMessages.length} → ${transformedMessages.length} (orphaned tool results dropped)`);
         }
 
         // Messages are already in OpenRouter format - send directly
@@ -517,17 +511,15 @@ export class OpenRouterMcpClient extends BaseMcpClient {
             content: systemContent
         });
         
-        // 2. Task message (if present)
-        if (context.currentTask) {
-            messages.push({
-                role: 'user',
-                content: `## Current Task\n${context.currentTask.description}`
-            });
-        }
-        
-        // 3. Conversation history: Filter same as Azure for consistency
+        // 2. Conversation history: Filter same as Azure for consistency
+        // NOTE: Task message is now added AFTER conversation history to maintain chronological order
+        // This fixes the bug where subsequent tasks appeared above existing conversation
         const dialogueMessages = context.conversationHistory.filter(msg => {
             const layer = msg.metadata?.contextLayer;
+            
+            // INCLUDE: SystemLLM messages - they are "held" until the next real prompt
+            // and should be bundled with that prompt to provide coordination insights
+            // (Previously these were skipped, breaking the SystemLLM flow)
             
             // INCLUDE: Messages with conversation or tool-result layer
             if (layer === 'conversation' || layer === 'tool-result') {
@@ -568,6 +560,15 @@ export class OpenRouterMcpClient extends BaseMcpClient {
         const openRouterDialogue = dialogueMessages.map(msg => this.convertConversationToOpenRouter(msg));
         messages.push(...openRouterDialogue);
         
+        // 3. Task message (if present) - Added AFTER conversation history for chronological ordering
+        // This ensures subsequent task assignments appear after existing conversation
+        if (context.currentTask) {
+            messages.push({
+                role: 'user',
+                content: `## Current Task\n${context.currentTask.description}`
+            });
+        }
+        
         // 4. Recent actions (if needed for context)
         if (context.recentActions.length > 0) {
             const actionsContent = [
@@ -584,10 +585,6 @@ export class OpenRouterMcpClient extends BaseMcpClient {
         return messages;
     }
     
-    // DELETED: convertConversationToMcp - no longer needed, convert directly to OpenRouter
-    // DELETED: convertOpenRouterToMcpMessages - lossy conversion removed
-    // CLEAN BREAK: Only sendWithContext path remains (no backwards compatibility)
-
     /**
      * Legacy MCP message path for simple use cases (SystemLlm, etc.)
      * For complex multi-turn conversations with tools, use sendWithContext()
@@ -660,9 +657,6 @@ export class OpenRouterMcpClient extends BaseMcpClient {
         }
     }
 
-    // DELETED: executeOpenRouterRequestInternal - old MCP conversion path removed
-    // CLEAN BREAK: Only executeOpenRouterRequestDirect and executeOpenRouterRequestCore remain
-
     /**
      * Core OpenRouter request execution with messages already in OpenRouter format
      */
@@ -689,8 +683,7 @@ export class OpenRouterMcpClient extends BaseMcpClient {
                 model,
                 messages: openRouterMessages,
                 temperature,
-                max_tokens: maxTokens,
-                verbosity: "low"  // Reduces wordiness for more concise, autonomous agent responses
+                max_tokens: maxTokens
             };
             
             // Enable reasoning tokens for reasoning models (o1, gpt-5, deepseek-reasoner)
@@ -738,16 +731,18 @@ export class OpenRouterMcpClient extends BaseMcpClient {
                 Object.assign(requestBody, options.providerOptions);
             }
             
-            // Add HTTP referer and title for OpenRouter tracking
+            // Add HTTP referer and title for OpenRouter tracking/attribution
+            // HTTP-Referer is the primary identifier for app attribution
+            // X-Title sets the display name in rankings and analytics
+            // Both are needed for proper attribution - see https://openrouter.ai/docs/app-attribution
             const headers: Record<string, string> = {
                 'Content-Type': 'application/json',
                 'Authorization': `Bearer ${this.config.apiKey}`,
-                'HTTP-Referer': options?.referer,
+                'HTTP-Referer': options?.referer || 'http://mxf.dev',
                 'X-Title': options?.title || 'MXF'
             };
             
             // Log basic request info
-
             // console.log ('')
             // console.log(`🚀 OpenRouter request: ${requestBody.tools?.length || 0} tools`);
             // console.log(JSON.stringify(requestBody));

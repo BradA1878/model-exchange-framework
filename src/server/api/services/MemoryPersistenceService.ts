@@ -26,7 +26,7 @@
  */
 
 import { Observable, from, of, throwError } from 'rxjs';
-import { map, catchError, tap } from 'rxjs/operators';
+import { map, catchError, tap, switchMap } from 'rxjs/operators';
 import { v4 as uuidv4 } from 'uuid';
 
 import { 
@@ -183,14 +183,79 @@ export class MemoryPersistenceService implements IMemoryPersistenceService {
             }
         };
 
-        // CRITICAL: Append conversation history instead of replacing
-        // This preserves historical messages across sessions for Meilisearch backfill
+        // CRITICAL: Check document size before appending to prevent MongoDB 16MB limit
+        // Append conversation history with size-based cleanup if needed
         if (conversationHistory && Array.isArray(conversationHistory) && conversationHistory.length > 0) {
-            updateOp.$push = {
-                conversationHistory: { $each: conversationHistory }  // Append new messages
-            };
+            // First, get existing document to check size
+            return from(AgentMemory.findOne({ agentId: memory.agentId }).exec()).pipe(
+                switchMap(existingDoc => {
+                    // Calculate current document size
+                    const currentSize = existingDoc ? Buffer.byteLength(JSON.stringify(existingDoc.toObject()), 'utf8') : 0;
+                    const newMessagesSize = Buffer.byteLength(JSON.stringify(conversationHistory), 'utf8');
+                    const projectedSize = currentSize + newMessagesSize;
+
+                    // MongoDB 16MB limit, use 12MB as safe threshold (75%)
+                    const MONGODB_SAFE_LIMIT = 12 * 1024 * 1024;
+
+                    if (projectedSize > MONGODB_SAFE_LIMIT) {
+                        this.logger.warn(
+                            `⚠️  Agent ${memory.agentId} memory would exceed limit! ` +
+                            `Current: ${(currentSize / 1024 / 1024).toFixed(2)}MB, ` +
+                            `New: ${(newMessagesSize / 1024 / 1024).toFixed(2)}MB, ` +
+                            `Projected: ${(projectedSize / 1024 / 1024).toFixed(2)}MB. ` +
+                            `Using REPLACE instead of APPEND.`
+                        );
+
+                        // Use $set to REPLACE conversation history instead of appending
+                        // Keep only the new messages to prevent overflow
+                        updateOp.$set = {
+                            ...updateOp.$set,
+                            conversationHistory: conversationHistory  // Replace entire history
+                        };
+                    } else {
+                        // Safe to append
+                        updateOp.$push = {
+                            conversationHistory: { $each: conversationHistory }
+                        };
+                    }
+
+                    return from(
+                        AgentMemory.findOneAndUpdate(
+                            { agentId: memory.agentId },
+                            updateOp,
+                            { upsert: true, new: true }
+                        ).exec()
+                    );
+                }),
+                map(doc => doc.toObject() as IAgentMemory),
+                tap(savedMemory => {
+                }),
+                catchError(error => {
+                    // Handle duplicate key errors gracefully (race condition on concurrent saves)
+                    if (error.code === 11000 && error.message?.includes('id_1 dup key')) {
+                        // Silently retry once - the document now exists so update will succeed
+                        return from(
+                            AgentMemory.findOneAndUpdate(
+                                { agentId: memory.agentId },
+                                updateOp,
+                                { upsert: false, new: true } // Don't upsert, just update
+                            ).exec()
+                        ).pipe(
+                            map(doc => {
+                                if (!doc) {
+                                    throw new Error(`Agent memory document disappeared during retry for ${memory.agentId}`);
+                                }
+                                return doc.toObject() as IAgentMemory;
+                            })
+                        );
+                    }
+                    //this.logger.error(`Error saving agent memory for ${memory.agentId}`, error);
+                    return throwError(() => error);
+                })
+            );
         }
 
+        // No conversation history to save, just update other fields
         return from(
             AgentMemory.findOneAndUpdate(
                 { agentId: memory.agentId },
@@ -202,7 +267,25 @@ export class MemoryPersistenceService implements IMemoryPersistenceService {
             tap(savedMemory => {
             }),
             catchError(error => {
-                this.logger.error(`Error saving agent memory for ${memory.agentId}`, error);
+                // Handle duplicate key errors gracefully (race condition on concurrent saves)
+                if (error.code === 11000 && error.message?.includes('id_1 dup key')) {
+                    // Silently retry once - the document now exists so update will succeed
+                    return from(
+                        AgentMemory.findOneAndUpdate(
+                            { agentId: memory.agentId },
+                            updateOp,
+                            { upsert: false, new: true } // Don't upsert, just update
+                        ).exec()
+                    ).pipe(
+                        map(doc => {
+                            if (!doc) {
+                                throw new Error(`Agent memory document disappeared during retry for ${memory.agentId}`);
+                            }
+                            return doc.toObject() as IAgentMemory;
+                        })
+                    );
+                }
+                //this.logger.error(`Error saving agent memory for ${memory.agentId}`, error);
                 return throwError(() => error);
             })
         );

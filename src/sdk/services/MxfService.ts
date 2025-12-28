@@ -162,7 +162,10 @@ export class MxfService implements IInternalChannelService {
             requireApproval: config.requireApproval ?? false,
             maxAgents: config.maxAgents ?? 100,
             allowAnonymous: config.allowAnonymous ?? false,
-            metadata: config.metadata || {}
+            metadata: config.metadata || {},
+            allowedTools: config.allowedTools || [],
+            systemLlmEnabled: config.systemLlmEnabled ?? true,
+            mcpServers: config.mcpServers || []
         };
 
         // Initialize API service if API URL is provided

@@ -43,6 +43,7 @@ export const PUBLIC_AGENT_EVENTS = [
     Events.Agent.LLM_REASONING,
     Events.Agent.LLM_REASONING_PARSED,
     Events.Agent.LLM_REASONING_TOOLS_SYNTHESIZED,
+    Events.Agent.TASK_ASSIGNED,
 ] as const;
 
 /**

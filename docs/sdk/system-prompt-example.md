@@ -41,7 +41,7 @@ Shows the MXP protocol format used throughout all tool examples and communicatio
 | Aspect | Standard Format | MXP Format |
 |--------|----------------|------------|
 | **Tool Examples** | Verbose JSON with `name`/`arguments` | Compact protocol with `op`/`args` |
-| **Token Usage** | Higher token consumption | 60-70% reduction in collaborative workflows |
+| **Token Usage** | Higher token consumption | Significant reduction in collaborative workflows |
 | **Format Consistency** | Mixed formats throughout prompt | Unified MXP format throughout |
 | **Learning Curve** | Traditional JSON (familiar) | Protocol-oriented (efficient) |
 | **Compatibility** | Works with all agents | Requires MXP-enabled agents |
