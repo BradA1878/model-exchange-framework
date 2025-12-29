@@ -93,7 +93,7 @@ const agent = await sdk.createAgent({
   secretKey: key.secretKey,
   llmProvider: LlmProviderType.OPENROUTER,
   apiKey: process.env.OPENROUTER_API_KEY!,
-  defaultModel: 'anthropic/claude-3.5-haiku',
+  defaultModel: 'anthropic/claude-haiku-4',
   temperature: 0.7,
   maxTokens: 100000,
   reasoning: { enabled: false }, // Disable for faster gameplay
@@ -260,7 +260,7 @@ async function connectAllAgents() {
       secretKey: key.secretKey,
       llmProvider: LlmProviderType.OPENROUTER,
       apiKey: process.env.OPENROUTER_API_KEY!,
-      defaultModel: 'anthropic/claude-3.5-haiku',
+      defaultModel: 'anthropic/claude-haiku-4',
       agentConfigPrompt: generatePersonality(commander)
     });
 

@@ -72,7 +72,7 @@ const candidate = await sdk.createAgent({
     secretKey: candidateKey.secretKey,
     llmProvider: LlmProviderType.OPENROUTER,
     apiKey: process.env.OPENROUTER_API_KEY!,
-    defaultModel: 'anthropic/claude-3.5-haiku',
+    defaultModel: 'anthropic/claude-haiku-4',
     personality: `You are Alex Johnson, a software engineer looking for a new position.
     You have flexible availability this week except Tuesday mornings.
     You prefer afternoon interviews.`,
@@ -87,7 +87,7 @@ const recruiter = await sdk.createAgent({
     secretKey: recruiterKey.secretKey,
     llmProvider: LlmProviderType.OPENROUTER,
     apiKey: process.env.OPENROUTER_API_KEY!,
-    defaultModel: 'anthropic/claude-3.5-sonnet',
+    defaultModel: 'anthropic/claude-opus-4.5',
     personality: `You are Sarah Chen, a technical recruiter at TechCorp.
     You're coordinating a first-round interview for a senior developer position.
     The interview should be 45-60 minutes with two engineers.`,

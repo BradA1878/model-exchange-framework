@@ -53,7 +53,7 @@ const agent = await sdk.createAgent({
     name: 'Game Player',
     channelId: channel.id,
     provider: 'openrouter',
-    model: 'anthropic/claude-3.5-sonnet'
+    model: 'anthropic/claude-haiku-4.5'
 });
 ```
 
@@ -113,7 +113,7 @@ const otherAgent = await sdk.createAgent({
     name: 'Other Agent',
     channelId: 'different-channel',
     provider: 'openrouter',
-    model: 'anthropic/claude-3.5-sonnet'
+    model: 'anthropic/claude-haiku-4.5'
 });
 
 // This agent does NOT see the game tools

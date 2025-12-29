@@ -68,7 +68,7 @@ const agent = await sdk.createAgent({
     keyId: 'key-abc123',
     secretKey: 'secret-xyz789',
     llmProvider: 'anthropic',
-    defaultModel: 'claude-3-5-sonnet-20241022',
+    defaultModel: 'claude-opus-4.5',
     apiKey: process.env.ANTHROPIC_API_KEY,
     agentConfigPrompt: 'You are a helpful AI assistant.'
 });
@@ -131,7 +131,7 @@ const agent = await sdk.createAgent({
     keyId: credentials.keyId,
     secretKey: credentials.secretKey,
     llmProvider: 'openai',
-    defaultModel: 'gpt-4o',
+    defaultModel: 'gpt-5.2',
     apiKey: process.env.OPENAI_API_KEY,
     allowedTools: ['messaging_send', 'messaging_coordinate']
 });
@@ -157,7 +157,7 @@ const aiAgent = await sdk.createAgent({
     keyId: credentials.keyId,
     secretKey: credentials.secretKey,
     llmProvider: 'anthropic',
-    defaultModel: 'claude-3-5-sonnet-20241022',
+    defaultModel: 'claude-opus-4.5',
     apiKey: process.env.ANTHROPIC_API_KEY,
     agentConfigPrompt: `You are a helpful AI assistant. 
     You can help users with their questions using the available tools.
@@ -249,21 +249,21 @@ monitor.on(Events.Task.COMPLETED, (payload) => {
 ### OpenRouter
 ```typescript
 llmProvider: 'openrouter',
-defaultModel: 'anthropic/claude-3.5-sonnet',
+defaultModel: 'anthropic/claude-opus-4.5',
 apiKey: process.env.OPENROUTER_API_KEY
 ```
 
 ### Anthropic
 ```typescript
 llmProvider: 'anthropic',
-defaultModel: 'claude-3-5-sonnet-20241022',
+defaultModel: 'claude-opus-4.5',
 apiKey: process.env.ANTHROPIC_API_KEY
 ```
 
 ### OpenAI
 ```typescript
 llmProvider: 'openai',
-defaultModel: 'gpt-4o',
+defaultModel: 'gpt-5.2',
 apiKey: process.env.OPENAI_API_KEY
 ```
 

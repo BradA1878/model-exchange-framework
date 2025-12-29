@@ -60,7 +60,7 @@ const playerX = await sdk.createAgent({
     You love to taunt your opponent and celebrate your moves.
     You play X and always aim for the win.`,
     provider: 'openrouter',
-    model: 'anthropic/claude-3.5-sonnet'
+    model: 'anthropic/claude-haiku-4.5'
 });
 ```
 

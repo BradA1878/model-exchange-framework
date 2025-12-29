@@ -122,7 +122,7 @@ const agent = await sdk.createAgent({
     agentId: 'tool-user',
     name: 'Tool User Agent',
     provider: 'openrouter',
-    model: 'anthropic/claude-3.5-sonnet'
+    model: 'anthropic/claude-haiku-4.5'
 });
 
 // Tools are automatically available

@@ -124,39 +124,39 @@ export interface OrparModelConfig {
  */
 const ORPAR_MODEL_CONFIGS: Record<LlmProviderType, OrparModelConfig> = {
     [LlmProviderType.OPENROUTER]: {
-        observation: 'google/gemini-2.0-flash-lite-001',           // Fast, cheap observation processing
-        reasoning: 'anthropic/claude-3.5-sonnet',                  // Advanced reasoning capabilities
-        action: 'openai/gpt-4o-mini',                              // Reliable, cost-effective execution
-        planning: 'google/gemini-2.5-pro-preview-05-06',          // Strategic planning with large context
-        reflection: 'anthropic/claude-3.5-sonnet'                 // Meta-cognitive analysis
+        observation: 'google/gemini-2.5-flash',                    // Fast, efficient observation processing
+        reasoning: 'anthropic/claude-opus-4.5',                    // Advanced reasoning capabilities (Claude 4 series)
+        action: 'anthropic/claude-haiku-4.5',                               // Reliable tool execution (GPT-5 series)
+        planning: 'google/gemini-2.5-pro-preview-06-05',          // Strategic planning with large context
+        reflection: 'anthropic/claude-opus-4.5'                    // Meta-cognitive analysis (Claude 4 series)
     },
     [LlmProviderType.GEMINI]: {
-        observation: 'gemini-1.5-flash',
-        reasoning: 'gemini-1.5-pro',
-        action: 'gemini-1.5-flash',
-        planning: 'gemini-1.5-pro',
-        reflection: 'gemini-1.5-pro'
+        observation: 'gemini-2.5-flash',
+        reasoning: 'gemini-2.5-pro',
+        action: 'gemini-2.5-flash',
+        planning: 'gemini-2.5-pro',
+        reflection: 'gemini-2.5-pro'
     },
     [LlmProviderType.OPENAI]: {
-        observation: 'gpt-4o-mini',
-        reasoning: 'gpt-4o',
-        action: 'gpt-4o-mini',
-        planning: 'gpt-4o',
-        reflection: 'gpt-4o'
+        observation: 'gpt-5-nano',
+        reasoning: 'gpt-5.2',
+        action: 'gpt-5-mini',
+        planning: 'gpt-5.2',
+        reflection: 'gpt-5.2'
     },
     [LlmProviderType.ANTHROPIC]: {
-        observation: 'claude-3-5-haiku-20241022',
-        reasoning: 'claude-3-5-sonnet-20241022',
-        action: 'claude-3-5-haiku-20241022',
-        planning: 'claude-3-5-sonnet-20241022',
-        reflection: 'claude-3-5-sonnet-20241022'
+        observation: 'claude-haiku-4.5',
+        reasoning: 'claude-sonnet-4.5',
+        action: 'claude-haiku-4.5',
+        planning: 'claude-sonnet-4.5',
+        reflection: 'claude-sonnet-4.5'
     },
     [LlmProviderType.AZURE_OPENAI]: {
-        observation: 'gpt-4o-mini',
-        reasoning: 'gpt-4o',
-        action: 'gpt-4o-mini',
-        planning: 'gpt-4o',
-        reflection: 'gpt-4o'
+        observation: 'gpt-5-nano',
+        reasoning: 'gpt-5.2',
+        action: 'gpt-5-mini',
+        planning: 'gpt-5.2',
+        reflection: 'gpt-5.2'
     },
     [LlmProviderType.XAI]: {
         observation: 'grok-2-1212',
@@ -333,12 +333,12 @@ export interface SystemLlmServiceConfig {
  * Default models for each provider type
  */
 const DEFAULT_MODELS: Record<LlmProviderType, string> = {
-    [LlmProviderType.OPENROUTER]: 'google/gemini-2.5-flash',  // Upgraded from lite for better comprehension
-    [LlmProviderType.GEMINI]: 'gemini-1.5-flash',
-    [LlmProviderType.OPENAI]: 'gpt-4o-mini',
-    [LlmProviderType.ANTHROPIC]: 'claude-3-5-haiku-20241022',
-    [LlmProviderType.AZURE_OPENAI]: 'gpt-4o-mini',
-    [LlmProviderType.XAI]: 'grok-2-1212',
+    [LlmProviderType.OPENROUTER]: 'google/gemini-2.5-flash',  // Fast, efficient default
+    [LlmProviderType.GEMINI]: 'gemini-2.5-flash',
+    [LlmProviderType.OPENAI]: 'gpt-5-mini',
+    [LlmProviderType.ANTHROPIC]: 'claude-haiku-4',
+    [LlmProviderType.AZURE_OPENAI]: 'gpt-5-mini',
+    [LlmProviderType.XAI]: 'grok-3',
     [LlmProviderType.OLLAMA]: 'llama3.2:3b',
     [LlmProviderType.CUSTOM]: 'custom-model',
     [LlmProviderType.PROVIDER_TYPE_1]: 'provider-1-model',
@@ -352,47 +352,47 @@ const DEFAULT_MODELS: Record<LlmProviderType, string> = {
 export const OPENROUTER_MODEL_TIERS = {
     // Ultra-cheap (under $0.10/1M tokens)
     ULTRA_CHEAP: [
-        'google/gemini-2.0-flash-lite-001',
+        'openai/gpt-5-nano',
+        'google/gemini-2.5-flash',
         'meta-llama/llama-3.2-3b-instruct',
-        'microsoft/phi-3.5-mini-128k-instruct',
-        'google/gemini-flash-1.5',
-        'openai/gpt-3.5-turbo'
+        'microsoft/phi-4',
+        'qwen/qwen-3-8b'
     ],
     
     // Budget (under $1.00/1M tokens)  
     BUDGET: [
-        'openai/gpt-4o-mini',
-        'anthropic/claude-3.5-haiku',
-        'meta-llama/llama-3.1-8b-instruct',
-        'google/gemini-2.0-flash-exp',
-        'qwen/qwen-2.5-32b-instruct'
+        'openai/gpt-5-mini',
+        'anthropic/claude-haiku-4',
+        'google/gemini-2.5-flash',
+        'meta-llama/llama-3.3-70b-instruct',
+        'qwen/qwen-3-32b'
     ],
     
     // Standard (under $5.00/1M tokens)
     STANDARD: [
-        'anthropic/claude-3.5-sonnet',
-        'openai/gpt-4o',
-        'google/gemini-2.5-flash-preview-05-20',
-        'meta-llama/llama-3.1-70b-instruct',
-        'qwen/qwen-2.5-72b-instruct'
+        'anthropic/claude-sonnet-4',
+        'openai/gpt-5.2',
+        'google/gemini-2.5-pro-preview-06-05',
+        'meta-llama/llama-3.3-70b-instruct',
+        'deepseek/deepseek-v3'
     ],
     
     // Premium (under $15.00/1M tokens)
     PREMIUM: [
-        'google/gemini-2.5-pro-preview-05-06',
-        'anthropic/claude-3-opus',
-        'meta-llama/llama-3.1-405b-instruct',
-        'mistralai/mistral-large',
-        'cohere/command-r-plus'
+        'anthropic/claude-sonnet-4.5',
+        'anthropic/claude-opus-4.5',
+        'google/gemini-2.5-pro-preview-06-05',
+        'openai/gpt-5.2',
+        'mistralai/mistral-large-2'
     ],
     
-    // Ultra-premium (reasoning models)
+    // Ultra-premium (most capable models)
     ULTRA_PREMIUM: [
-        'openai/o1-preview',
-        'openai/o1-mini',
-        'deepseek/deepseek-r1-preview',
-        'google/gemini-2.5-flash-preview-05-20:thinking',
-        'anthropic/claude-3.5-sonnet:beta'
+        'anthropic/claude-opus-4.5',
+        'anthropic/claude-sonnet-4.5',
+        'openai/gpt-5.2',
+        'deepseek/deepseek-r1',
+        'google/gemini-2.5-pro-preview-06-05'
     ]
 } as const;
 
@@ -829,153 +829,135 @@ export class SystemLlmService {
         const modelUpgrades: Record<LlmProviderType, Record<string, { moderate: string; complex: string }>> = {
             [LlmProviderType.OPENROUTER]: {
                 // === FAST/CHEAP MODELS (Simple Tasks) ===
-                'google/gemini-2.0-flash-lite-001': {
-                    moderate: 'openai/gpt-4o-mini',
-                    complex: 'anthropic/claude-3.5-sonnet'
+                'google/gemini-2.5-flash': {
+                    moderate: 'openai/gpt-5-mini',
+                    complex: 'anthropic/claude-sonnet-4'
                 },
-                'openai/gpt-4o-mini-2': {
-                    moderate: 'openai/gpt-4o',
-                    complex: 'openai/o1-preview'
+                'openai/gpt-5-nano': {
+                    moderate: 'openai/gpt-5-mini',
+                    complex: 'openai/gpt-5.2'
                 },
                 'meta-llama/llama-3.2-3b-instruct': {
-                    moderate: 'meta-llama/llama-3.1-8b-instruct',
-                    complex: 'meta-llama/llama-3.1-70b-instruct'
+                    moderate: 'meta-llama/llama-3.3-70b-instruct',
+                    complex: 'meta-llama/llama-3.3-70b-instruct'
                 },
-                'microsoft/phi-3.5-mini-128k-instruct': {
-                    moderate: 'microsoft/phi-3-medium-128k-instruct',
-                    complex: 'anthropic/claude-3.5-sonnet'
+                'microsoft/phi-4': {
+                    moderate: 'openai/gpt-5-mini',
+                    complex: 'anthropic/claude-sonnet-4'
                 },
                 
                 // === REASONING MODELS (Observation/Analysis) ===
-                'anthropic/claude-3.5-sonnet': {
-                    moderate: 'anthropic/claude-3.5-sonnet:beta',
-                    complex: 'anthropic/claude-3-opus'
+                'anthropic/claude-sonnet-4': {
+                    moderate: 'anthropic/claude-sonnet-4.5',
+                    complex: 'anthropic/claude-opus-4.5'
                 },
-                'openai/gpt-4o': {
-                    moderate: 'openai/o1-mini',
-                    complex: 'openai/o1-preview'
+                'openai/gpt-5.2': {
+                    moderate: 'anthropic/claude-sonnet-4.5',
+                    complex: 'anthropic/claude-opus-4.5'
                 },
-                'google/gemini-2.5-flash-preview-05-20': {
-                    moderate: 'google/gemini-2.5-pro-preview-05-06',
-                    complex: 'google/gemini-2.5-flash-preview-05-20:thinking'
+                'google/gemini-2.5-pro-preview-06-05': {
+                    moderate: 'anthropic/claude-sonnet-4.5',
+                    complex: 'anthropic/claude-opus-4.5'
                 },
                 
                 // === PLANNING MODELS (Strategic Thinking) ===
-                'google/gemini-2.5-pro-preview-05-06': {
-                    moderate: 'openai/o1-mini',
-                    complex: 'openai/o1-preview'
+                'anthropic/claude-sonnet-4.5': {
+                    moderate: 'anthropic/claude-opus-4.5',
+                    complex: 'anthropic/claude-opus-4.5'
                 },
-                'meta-llama/llama-3.1-70b-instruct': {
-                    moderate: 'meta-llama/llama-3.1-405b-instruct',
-                    complex: 'openai/o1-preview'
+                'meta-llama/llama-3.3-70b-instruct': {
+                    moderate: 'anthropic/claude-sonnet-4',
+                    complex: 'anthropic/claude-sonnet-4.5'
                 },
-                'qwen/qwen-2.5-72b-instruct': {
-                    moderate: 'anthropic/claude-3.5-sonnet',
-                    complex: 'anthropic/claude-3-opus'
+                'qwen/qwen-3-32b': {
+                    moderate: 'anthropic/claude-sonnet-4',
+                    complex: 'anthropic/claude-sonnet-4.5'
                 },
                 
                 // === ACTION MODELS (Tool Calling/Execution) ===
-                'openai/gpt-4o-mini': {
-                    moderate: 'openai/gpt-4o',
-                    complex: 'anthropic/claude-3.5-sonnet'
+                'openai/gpt-5-mini': {
+                    moderate: 'openai/gpt-5.2',
+                    complex: 'anthropic/claude-sonnet-4'
                 },
-                'google/gemini-2.0-flash-exp': {
-                    moderate: 'google/gemini-2.5-pro-preview-05-06',
-                    complex: 'openai/gpt-4o'
+                'anthropic/claude-haiku-4': {
+                    moderate: 'anthropic/claude-sonnet-4',
+                    complex: 'anthropic/claude-sonnet-4.5'
                 },
-                'anthropic/claude-3-haiku': {
-                    moderate: 'anthropic/claude-3.5-sonnet',
-                    complex: 'anthropic/claude-3-opus'
+                'anthropic/claude-haiku-4.5': {
+                    moderate: 'anthropic/claude-sonnet-4',
+                    complex: 'anthropic/claude-sonnet-4.5'
                 },
                 
                 // === REFLECTION MODELS (Meta-cognitive Analysis) ===
-                'openai/o1-mini': {
-                    moderate: 'openai/o1-preview',
-                    complex: 'anthropic/claude-3-opus'
+                'anthropic/claude-opus-4.5': {
+                    moderate: 'anthropic/claude-opus-4.5',
+                    complex: 'anthropic/claude-opus-4.5'
                 },
-                'anthropic/claude-3-opus': {
-                    moderate: 'anthropic/claude-3-opus',
-                    complex: 'openai/o1-preview'
-                },
-                'google/gemini-2.5-flash-preview-05-20:thinking': {
-                    moderate: 'openai/o1-mini',
-                    complex: 'openai/o1-preview'
+                'deepseek/deepseek-r1': {
+                    moderate: 'anthropic/claude-sonnet-4.5',
+                    complex: 'anthropic/claude-opus-4.5'
                 },
                 
                 // === SPECIALIZED MODELS ===
-                'deepseek/deepseek-chat': {
-                    moderate: 'deepseek/deepseek-r1-lite-preview',
-                    complex: 'deepseek/deepseek-r1-preview'
+                'deepseek/deepseek-v3': {
+                    moderate: 'deepseek/deepseek-r1',
+                    complex: 'anthropic/claude-opus-4.5'
                 },
-                'x-ai/grok-2-1212': {
-                    moderate: 'x-ai/grok-2-vision-1212',
-                    complex: 'anthropic/claude-3-opus'
+                'x-ai/grok-3': {
+                    moderate: 'anthropic/claude-sonnet-4',
+                    complex: 'anthropic/claude-opus-4.5'
                 },
-                'mistralai/mistral-large': {
-                    moderate: 'anthropic/claude-3.5-sonnet',
-                    complex: 'openai/o1-preview'
-                },
-                'cohere/command-r-plus': {
-                    moderate: 'anthropic/claude-3.5-sonnet',
-                    complex: 'anthropic/claude-3-opus'
+                'mistralai/mistral-large-2': {
+                    moderate: 'anthropic/claude-sonnet-4',
+                    complex: 'anthropic/claude-sonnet-4.5'
                 },
                 
                 // === OPEN SOURCE HIGH-PERFORMANCE ===
-                'meta-llama/llama-3.1-8b-instruct': {
-                    moderate: 'meta-llama/llama-3.1-70b-instruct',
-                    complex: 'meta-llama/llama-3.1-405b-instruct'
-                },
-                'meta-llama/llama-3.1-405b-instruct': {
-                    moderate: 'anthropic/claude-3.5-sonnet',
-                    complex: 'openai/o1-preview'
-                },
-                'qwen/qwen-2.5-32b-instruct': {
-                    moderate: 'qwen/qwen-2.5-72b-instruct',
-                    complex: 'anthropic/claude-3.5-sonnet'
-                },
-                
-                // === COST-OPTIMIZED PATHS ===
-                'google/gemini-flash-1.5': {
-                    moderate: 'google/gemini-2.0-flash-exp',
-                    complex: 'google/gemini-2.5-pro-preview-05-06'
-                },
-                'anthropic/claude-3.5-haiku': {
-                    moderate: 'anthropic/claude-3.5-sonnet',
-                    complex: 'anthropic/claude-3-opus'
-                },
-                'openai/gpt-3.5-turbo': {
-                    moderate: 'openai/gpt-4o-mini',
-                    complex: 'openai/gpt-4o'
+                'qwen/qwen-3-8b': {
+                    moderate: 'qwen/qwen-3-32b',
+                    complex: 'anthropic/claude-sonnet-4'
                 }
             },
             [LlmProviderType.OPENAI]: {
-                'gpt-4o-mini': {
-                    moderate: 'gpt-4o',
-                    complex: 'gpt-4o'
+                'gpt-5-nano': {
+                    moderate: 'gpt-5-mini',
+                    complex: 'gpt-5.2'
                 },
-                'gpt-4o': {
-                    moderate: 'gpt-4o',
-                    complex: 'gpt-4o'
+                'gpt-5-mini': {
+                    moderate: 'gpt-5.2',
+                    complex: 'gpt-5.2'
+                },
+                'gpt-5.2': {
+                    moderate: 'gpt-5.2',
+                    complex: 'gpt-5.2'
                 }
             },
             [LlmProviderType.ANTHROPIC]: {
-                'claude-3-5-haiku-20241022': {
-                    moderate: 'claude-3-5-sonnet-20241022',
-                    complex: 'claude-3-5-sonnet-20241022'
+                'claude-haiku-4': {
+                    moderate: 'claude-sonnet-4',
+                    complex: 'claude-sonnet-4.5'
                 },
-                'claude-3-5-sonnet-20241022': {
-                    moderate: 'claude-3-5-sonnet-20241022',
-                    complex: 'claude-3-5-sonnet-20241022'
+                'claude-sonnet-4': {
+                    moderate: 'claude-sonnet-4.5',
+                    complex: 'claude-opus-4'
+                },
+                'claude-sonnet-4.5': {
+                    moderate: 'claude-opus-4',
+                    complex: 'claude-opus-4'
                 }
             },
             [LlmProviderType.AZURE_OPENAI]: {
-                'gpt-4o-mini': {
-                    moderate: 'gpt-4o',
-                    complex: 'gpt-4o'
+                'gpt-5-nano': {
+                    moderate: 'gpt-5-mini',
+                    complex: 'gpt-5.2'
                 },
-                'gpt-4o': {
-                    moderate: 'gpt-4o',
-                    complex: 'gpt-4o'
+                'gpt-5-mini': {
+                    moderate: 'gpt-5.2',
+                    complex: 'gpt-5.2'
+                },
+                'gpt-5.2': {
+                    moderate: 'gpt-5.2',
+                    complex: 'gpt-5.2'
                 }
             },
             // Default mappings for other providers  
@@ -1043,34 +1025,34 @@ export class SystemLlmService {
         // Select model based on operation type and complexity within budget tier
         const operationModelPreferences = {
             observation: [
-                'google/gemini-2.0-flash-lite-001',
-                'openai/gpt-4o-mini',
-                'anthropic/claude-3.5-haiku',
-                'google/gemini-2.0-flash-exp'
+                'google/gemini-2.5-flash',
+                'openai/gpt-5-nano',
+                'anthropic/claude-haiku-4',
+                'openai/gpt-5-mini'
             ],
             reasoning: [
-                'anthropic/claude-3.5-sonnet',
-                'openai/gpt-4o',
-                'google/gemini-2.5-flash-preview-05-20',
-                'openai/o1-mini'
+                'anthropic/claude-sonnet-4',
+                'openai/gpt-5.2',
+                'google/gemini-2.5-pro-preview-06-05',
+                'anthropic/claude-sonnet-4.5'
             ],
             action: [
-                'openai/gpt-4o-mini',
-                'openai/gpt-4o',
-                'anthropic/claude-3.5-sonnet',
-                'google/gemini-2.5-pro-preview-05-06'
+                'openai/gpt-5-mini',
+                'openai/gpt-5.2',
+                'anthropic/claude-sonnet-4',
+                'google/gemini-2.5-pro-preview-06-05'
             ],
             planning: [
-                'google/gemini-2.5-pro-preview-05-06',
-                'anthropic/claude-3-opus',
-                'openai/o1-preview',
-                'meta-llama/llama-3.1-405b-instruct'
+                'google/gemini-2.5-pro-preview-06-05',
+                'anthropic/claude-opus-4.5',
+                'anthropic/claude-sonnet-4.5',
+                'openai/gpt-5.2'
             ],
             reflection: [
-                'anthropic/claude-3.5-sonnet',
-                'openai/o1-mini',
-                'anthropic/claude-3-opus',
-                'openai/o1-preview'
+                'anthropic/claude-sonnet-4',
+                'anthropic/claude-sonnet-4.5',
+                'anthropic/claude-opus-4.5',
+                'deepseek/deepseek-r1'
             ]
         };
 
@@ -1115,29 +1097,29 @@ export class SystemLlmService {
 
         const providerModels = {
             anthropic: {
-                simple: 'anthropic/claude-3.5-haiku',
-                moderate: 'anthropic/claude-3.5-sonnet',
-                complex: 'anthropic/claude-3-opus'
+                simple: 'anthropic/claude-haiku-4',
+                moderate: 'anthropic/claude-sonnet-4',
+                complex: 'anthropic/claude-opus-4.5'
             },
             openai: {
-                simple: 'openai/gpt-4o-mini',
-                moderate: 'openai/gpt-4o',
-                complex: 'openai/o1-preview'
+                simple: 'openai/gpt-5-nano',
+                moderate: 'openai/gpt-5-mini',
+                complex: 'openai/gpt-5.2'
             },
             google: {
-                simple: 'google/gemini-2.0-flash-lite-001',
-                moderate: 'google/gemini-2.5-flash-preview-05-20',
-                complex: 'google/gemini-2.5-pro-preview-05-06'
+                simple: 'google/gemini-2.5-flash',
+                moderate: 'google/gemini-2.5-flash',
+                complex: 'google/gemini-2.5-pro-preview-06-05'
             },
             meta: {
-                simple: 'meta-llama/llama-3.1-8b-instruct',
-                moderate: 'meta-llama/llama-3.1-70b-instruct', 
-                complex: 'meta-llama/llama-3.1-405b-instruct'
+                simple: 'meta-llama/llama-3.2-3b-instruct',
+                moderate: 'meta-llama/llama-3.3-70b-instruct', 
+                complex: 'meta-llama/llama-3.3-70b-instruct'
             },
             deepseek: {
-                simple: 'deepseek/deepseek-chat',
-                moderate: 'deepseek/deepseek-r1-lite-preview',
-                complex: 'deepseek/deepseek-r1-preview'
+                simple: 'deepseek/deepseek-v3',
+                moderate: 'deepseek/deepseek-r1',
+                complex: 'deepseek/deepseek-r1'
             }
         };
 
@@ -1160,7 +1142,7 @@ export class SystemLlmService {
         // For coordination suggestions, always use the fastest, cheapest models
         // Since coordination suggestions are simple, short tasks (max 80 words)
         // Priority: Speed > Cost > Quality (simple tasks don't need premium models)
-        return 'anthropic/claude-3.5-haiku'; // Fast, cheap, reliable for simple coordination tasks
+        return 'anthropic/claude-haiku-4.5'; // Fast, cheap, reliable for simple coordination tasks
     }
 
     /**
@@ -1179,34 +1161,34 @@ export class SystemLlmService {
         
         const specializationModels = {
             reasoning: {
-                simple: 'openai/o1-mini',
-                moderate: 'openai/o1-preview',
-                complex: 'deepseek/deepseek-r1-preview'
+                simple: 'anthropic/claude-sonnet-4',
+                moderate: 'anthropic/claude-sonnet-4.5',
+                complex: 'deepseek/deepseek-r1'
             },
             coding: {
-                simple: 'meta-llama/llama-3.1-8b-instruct',
-                moderate: 'anthropic/claude-3.5-sonnet',
-                complex: 'deepseek/deepseek-r1-preview'
+                simple: 'anthropic/claude-haiku-4.5',
+                moderate: 'anthropic/claude-sonnet-4.5',
+                complex: 'deepseek/deepseek-r1'
             },
             analysis: {
-                simple: 'anthropic/claude-3.5-haiku',
-                moderate: 'anthropic/claude-3.5-sonnet',
-                complex: 'anthropic/claude-3-opus'
+                simple: 'anthropic/claude-haiku-4',
+                moderate: 'anthropic/claude-sonnet-4',
+                complex: 'anthropic/claude-opus-4.5'
             },
             creative: {
-                simple: 'google/gemini-2.0-flash-exp',
-                moderate: 'google/gemini-2.5-flash-preview-05-20',
-                complex: 'anthropic/claude-3-opus'
+                simple: 'google/gemini-2.5-flash',
+                moderate: 'google/gemini-2.5-pro-preview-06-05',
+                complex: 'anthropic/claude-opus-4.5'
             },
             multilingual: {
-                simple: 'qwen/qwen-2.5-32b-instruct',
-                moderate: 'qwen/qwen-2.5-72b-instruct',
-                complex: 'google/gemini-2.5-pro-preview-05-06'
+                simple: 'qwen/qwen-3-8b',
+                moderate: 'qwen/qwen-3-32b',
+                complex: 'google/gemini-2.5-pro-preview-06-05'
             },
             speed: {
-                simple: 'google/gemini-2.0-flash-lite-001',
-                moderate: 'openai/gpt-4o-mini',
-                complex: 'google/gemini-2.0-flash-exp'
+                simple: 'google/gemini-2.5-flash',
+                moderate: 'openai/gpt-5-nano',
+                complex: 'openai/gpt-5-mini'
             }
         };
 

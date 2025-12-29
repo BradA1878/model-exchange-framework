@@ -782,7 +782,7 @@ const agent = await sdk.createAgent({
     keyId: 'key-abc123',
     secretKey: 'secret-xyz789',
     llmProvider: 'openai',
-    defaultModel: 'gpt-4o',
+    defaultModel: 'gpt-5.2',
     apiKey: process.env.OPENAI_API_KEY,
     capabilities: ['analysis', 'communication'],
     metadata: {

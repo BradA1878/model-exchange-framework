@@ -31,7 +31,7 @@ graph TB
 - Agents submit observations via `ControlLoopHandlers.submitObservation()`
 - Server stores observations in queue via `ControlLoop.addObservation()`
 - Observations are enriched with metadata (source, timestamp, confidence)
-- Fast, efficient models process observations (e.g., `gemini-2.0-flash-lite-001`)
+- Fast, efficient models process observations (e.g., `gemini-2.5-flash`)
 
 **Observation Structure**:
 ```typescript
@@ -58,7 +58,7 @@ interface Observation {
 **Implementation**:
 - `ControlLoop.processObservations()` triggers reasoning phase
 - `SystemLlmService.processObservationData()` performs AI analysis
-- Advanced reasoning models analyze patterns (e.g., `claude-3.5-sonnet`)
+- Advanced reasoning models analyze patterns (e.g., `claude-opus-4.5`)
 - Coordination-focused analysis identifies collaboration opportunities
 
 **Reasoning Structure**:
@@ -131,7 +131,7 @@ interface PlanAction {
 **Implementation**:
 - `ControlLoop.executePlan()` executes actions in order
 - Respects action dependencies and priorities
-- Reliable execution models ensure consistency (e.g., `gpt-4o-mini`)
+- Reliable execution models ensure consistency (e.g., `claude-haiku-4.5`)
 - Action results become new observations
 
 **Execution Modes**:
@@ -151,7 +151,7 @@ type ActionStatus = 'pending' | 'executing' | 'completed' | 'failed' | 'aborted'
 **Implementation**:
 - `ControlLoop.reflect()` analyzes completed plans
 - `SystemLlmService.generateReflection()` performs meta-cognitive evaluation
-- Reflection models assess effectiveness (e.g., `claude-3.5-sonnet`)
+- Reflection models assess effectiveness (e.g., `claude-opus-4.5`)
 - Insights feed into pattern learning system
 
 **Reflection Structure**:
@@ -217,11 +217,11 @@ Each ORPAR phase uses models optimized for specific cognitive requirements:
 ### OpenRouter Default Configuration
 ```typescript
 const ORPAR_MODEL_CONFIGS = {
-    observation: 'google/gemini-2.0-flash-lite-001',     // Fast data processing
-    reasoning: 'anthropic/claude-3.5-sonnet',            // Advanced reasoning
-    action: 'openai/gpt-4o-mini',                        // Reliable execution
-    planning: 'google/gemini-2.5-pro-preview-05-06',    // Strategic planning
-    reflection: 'anthropic/claude-3.5-sonnet'           // Meta-cognitive analysis
+    observation: 'google/gemini-2.5-flash',              // Fast data processing
+    reasoning: 'anthropic/claude-opus-4.5',              // Advanced reasoning
+    action: 'anthropic/claude-haiku-4.5',                // Reliable execution
+    planning: 'google/gemini-2.5-pro-preview-06-05',    // Strategic planning
+    reflection: 'anthropic/claude-opus-4.5'              // Meta-cognitive analysis
 };
 ```
 
@@ -245,17 +245,17 @@ Models automatically upgrade based on context complexity:
 
 **Example Upgrade Path**:
 ```
-observation (simple):  gemini-2.0-flash-lite-001
-observation (moderate): openai/gpt-4o-mini
-observation (complex):  anthropic/claude-3.5-sonnet
+observation (simple):  google/gemini-2.5-flash
+observation (moderate): anthropic/claude-haiku-4.5
+observation (complex):  anthropic/claude-sonnet-4.5
 
-reasoning (simple):  claude-3.5-sonnet
-reasoning (moderate): claude-3.5-sonnet:beta
-reasoning (complex):  claude-3-opus
+reasoning (simple):  anthropic/claude-opus-4.5
+reasoning (moderate): anthropic/claude-opus-4.5
+reasoning (complex):  anthropic/claude-opus-4.5
 
-planning (simple):  gemini-2.5-pro-preview
-planning (moderate): openai/o1-mini
-planning (complex):  openai/o1-preview
+planning (simple):  google/gemini-2.5-pro-preview-06-05
+planning (moderate): anthropic/claude-sonnet-4.5
+planning (complex):  anthropic/claude-opus-4.5
 ```
 
 ## Event Flow
@@ -487,12 +487,12 @@ Use specialized models for specific tasks:
 
 ```typescript
 specializations: {
-    reasoning: 'openai/o1-preview',
-    coding: 'deepseek/deepseek-r1-preview',
-    analysis: 'anthropic/claude-3-opus',
-    creative: 'google/gemini-2.5-pro',
-    multilingual: 'qwen/qwen-2.5-72b',
-    speed: 'google/gemini-2.0-flash-lite'
+    reasoning: 'anthropic/claude-sonnet-4.5',
+    coding: 'deepseek/deepseek-r1',
+    analysis: 'anthropic/claude-opus-4.5',
+    creative: 'google/gemini-2.5-pro-preview-06-05',
+    multilingual: 'qwen/qwen-3-32b',
+    speed: 'google/gemini-2.5-flash'
 }
 ```
 

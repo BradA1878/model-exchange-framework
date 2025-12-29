@@ -362,7 +362,7 @@ async function connectAgents() {
             llmProvider: LlmProviderType.OPENROUTER,
             apiKey: process.env.OPENROUTER_API_KEY!,
             defaultModel: selectedModel,
-            temperature: 0.8, // Higher temperature for more creative taunts
+            temperature: 1, // Higher temperature for more creative taunts
             maxTokens: 50000,
             reasoning: { enabled: false },
             allowedTools: [

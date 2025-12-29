@@ -251,7 +251,7 @@ const openRouterConfig: AgentConfig = {
 const agentConfig: AgentConfig = {
     llmProvider: {
         type: LlmProviderType.ANTHROPIC,
-        model: 'claude-sonnet-4',
+        model: 'claude-opus-4.5',
         options: {
             temperature: 0.3,
             maxTokens: 2048
@@ -285,9 +285,9 @@ const systemLlmConfig = {
     orparModels: {
         observation: 'google/gemini-2.0-flash',     // Fast observation
         reasoning: 'anthropic/claude-opus-4-5',     // Deep reasoning
-        action: 'anthropic/claude-sonnet-4',        // Reliable tool execution
+        action: 'anthropic/claude-haiku-4.5',       // Reliable tool execution
         planning: 'anthropic/claude-opus-4-5',      // Strategic planning
-        reflection: 'anthropic/claude-sonnet-4'     // Meta-cognitive
+        reflection: 'anthropic/claude-opus-4.5'    // Meta-cognitive
     }
 };
 
@@ -318,7 +318,7 @@ const badConfig = {
 // Example fallback chain
 const modelFallback = [
     'anthropic/claude-opus-4-5',      // Primary
-    'anthropic/claude-sonnet-4',      // Fallback 1
+    'anthropic/claude-sonnet-4.5',    // Fallback 1
     'google/gemini-3-pro',            // Fallback 2
     'openai/gpt-5'                    // Fallback 3 (full model, not mini)
 ];

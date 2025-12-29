@@ -58,7 +58,7 @@ const captain = await sdk.createAgent({
     name: 'Captain Chen',
     personality: 'Calm, decisive leader...',
     provider: 'openrouter',
-    model: 'anthropic/claude-3.5-sonnet'
+    model: 'anthropic/claude-opus-4.5'
 });
 ```
 
