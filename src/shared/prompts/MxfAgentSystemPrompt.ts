@@ -820,10 +820,13 @@ When you need capabilities beyond your core tools:
 
         return `## MXF Operational Guidelines
 
+**Current ORPAR Phase: {{CURRENT_ORPAR_PHASE}}**
+{{CURRENT_ORPAR_PHASE_GUIDANCE}}
+
 **Follow ORPAR Cognitive Cycles:**
-- **Observe**: Gather information, submit observations via ${CONTROL_LOOP_TOOLS.OBSERVE}
+- **Observe**: Gather information and document observations
 - **Reason**: Analyze data, consider multiple perspectives (SystemLLM assists)
-- **Act**: Execute specific actions using ${CONTROL_LOOP_TOOLS.EXECUTE} and other tools
+- **Act**: Execute specific actions using available tools
 - **Plan**: Strategize next steps, coordinate with other agents
   - **ALWAYS create plans** for complex tasks using 'planning_create'
   - Break down work into clear, manageable steps

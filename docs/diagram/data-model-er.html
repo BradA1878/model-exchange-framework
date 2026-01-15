@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MXF Data Model</title>
+    <link rel="stylesheet" href="diagram-base.css">
+    <style>
+        .entity {
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        .entity:hover {
+            filter: drop-shadow(0 4px 12px var(--shadow));
+        }
+        .entity.highlighted {
+            filter: drop-shadow(0 0 15px var(--accent));
+        }
+        .entity-header {
+            fill: var(--accent);
+        }
+        .entity-body {
+            fill: var(--node-bg);
+            stroke: var(--border);
+            stroke-width: 1;
+        }
+        .relationship-line {
+            stroke: var(--connection-line);
+            stroke-width: 2;
+            fill: none;
+        }
+        .cardinality {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 10px;
+            fill: var(--text-muted);
+        }
+        .entity-details {
+            position: fixed;
+            bottom: 2rem;
+            left: 50%;
+            transform: translateX(-50%);
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 1.25rem 2rem;
+            min-width: 600px;
+            box-shadow: 0 8px 32px var(--shadow);
+            display: none;
+        }
+        .entity-details.visible {
+            display: block;
+        }
+        .entity-details h3 {
+            color: var(--accent);
+            margin-bottom: 0.75rem;
+        }
+        .entity-fields {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 0.5rem 2rem;
+            font-size: 0.85rem;
+        }
+        .entity-field {
+            display: flex;
+            gap: 0.5rem;
+        }
+        .field-name {
+            font-family: 'JetBrains Mono', monospace;
+            color: var(--text-primary);
+        }
+        .field-type {
+            color: var(--text-muted);
+        }
+        .field-key {
+            color: var(--accent);
+            font-weight: 700;
+        }
+    </style>
+</head>
+<body>
+    <div class="diagram-container">
+        <header class="diagram-header">
+            <div>
+                <h1 class="diagram-title">Data Model (Entity Relationships)</h1>
+                <p class="diagram-subtitle">Core entities and their relationships</p>
+            </div>
+            <button class="theme-toggle" onclick="toggleTheme()">
+                <span class="theme-toggle-icon">🌙</span>
+                <span class="theme-toggle-label">Dark</span>
+            </button>
+        </header>
+        
+        <div id="diagram-container"></div>
+        
+        <div class="entity-details" id="entityDetails">
+            <h3 id="entityName">Entity</h3>
+            <div class="entity-fields" id="entityFields"></div>
+        </div>
+        
+        <div class="legend">
+            <div class="legend-item">
+                <span style="font-family: 'JetBrains Mono'; color: var(--accent);">PK</span>
+                <span>Primary Key</span>
+            </div>
+            <div class="legend-item">
+                <span style="font-family: 'JetBrains Mono'; color: var(--text-muted);">FK</span>
+                <span>Foreign Key</span>
+            </div>
+            <div class="legend-item">
+                <span>||--o{</span>
+                <span>One to Many</span>
+            </div>
+            <div class="legend-item">
+                <span>}o--o{</span>
+                <span>Many to Many</span>
+            </div>
+        </div>
+    </div>
+
+    <script src="diagram-utils.js"></script>
+    <script>
+        const entityData = {
+            User: {
+                fields: [
+                    { name: '_id', type: 'ObjectId', key: 'PK' },
+                    { name: 'username', type: 'string' },
+                    { name: 'email', type: 'string' },
+                    { name: 'role', type: 'string' },
+                    { name: 'isActive', type: 'boolean' },
+                    { name: 'createdAt', type: 'timestamp' }
+                ]
+            },
+            Channel: {
+                fields: [
+                    { name: '_id', type: 'ObjectId', key: 'PK' },
+                    { name: 'channelId', type: 'string', key: 'UK' },
+                    { name: 'name', type: 'string' },
+                    { name: 'isPrivate', type: 'boolean' },
+                    { name: 'createdBy', type: 'ObjectId', key: 'FK' },
+                    { name: 'participants', type: 'array' }
+                ]
+            },
+            Agent: {
+                fields: [
+                    { name: '_id', type: 'ObjectId', key: 'PK' },
+                    { name: 'agentId', type: 'string', key: 'UK' },
+                    { name: 'status', type: 'string' },
+                    { name: 'capabilities', type: 'array' },
+                    { name: 'lastActive', type: 'timestamp' },
+                    { name: 'createdAt', type: 'timestamp' }
+                ]
+            },
+            Task: {
+                fields: [
+                    { name: '_id', type: 'ObjectId', key: 'PK' },
+                    { name: 'channelId', type: 'string', key: 'FK' },
+                    { name: 'title', type: 'string' },
+                    { name: 'status', type: 'string' },
+                    { name: 'assignedAgentId', type: 'string', key: 'FK' },
+                    { name: 'priority', type: 'string' }
+                ]
+            },
+            ChannelKey: {
+                fields: [
+                    { name: '_id', type: 'ObjectId', key: 'PK' },
+                    { name: 'keyId', type: 'string', key: 'UK' },
+                    { name: 'channelId', type: 'string', key: 'FK' },
+                    { name: 'createdBy', type: 'ObjectId', key: 'FK' },
+                    { name: 'isActive', type: 'boolean' },
+                    { name: 'lastUsed', type: 'timestamp' }
+                ]
+            },
+            Memory: {
+                fields: [
+                    { name: '_id', type: 'ObjectId', key: 'PK' },
+                    { name: 'scope', type: 'string' },
+                    { name: 'targetId', type: 'string' },
+                    { name: 'key', type: 'string' },
+                    { name: 'value', type: 'json' },
+                    { name: 'version', type: 'number' }
+                ]
+            },
+            MCPTool: {
+                fields: [
+                    { name: '_id', type: 'ObjectId', key: 'PK' },
+                    { name: 'name', type: 'string' },
+                    { name: 'description', type: 'string' },
+                    { name: 'inputSchema', type: 'json' },
+                    { name: 'channelId', type: 'string', key: 'FK' },
+                    { name: 'enabled', type: 'boolean' }
+                ]
+            },
+            AuditLog: {
+                fields: [
+                    { name: '_id', type: 'ObjectId', key: 'PK' },
+                    { name: 'eventType', type: 'string' },
+                    { name: 'channelId', type: 'string', key: 'FK' },
+                    { name: 'agentId', type: 'string', key: 'FK' },
+                    { name: 'details', type: 'json' },
+                    { name: 'timestamp', type: 'timestamp' }
+                ]
+            }
+        };
+        
+        class ERDiagram extends MXFDiagram {
+            render() {
+                // Entity positions
+                const entities = [
+                    { name: 'User', x: 150, y: 100 },
+                    { name: 'Channel', x: 400, y: 100 },
+                    { name: 'ChannelKey', x: 150, y: 280 },
+                    { name: 'Agent', x: 650, y: 100 },
+                    { name: 'Task', x: 650, y: 280 },
+                    { name: 'Memory', x: 400, y: 280 },
+                    { name: 'MCPTool', x: 400, y: 450 },
+                    { name: 'AuditLog', x: 650, y: 450 }
+                ];
+                
+                // Relationships
+                const relationships = [
+                    { from: 'User', to: 'Channel', label: 'creates', card: '1:N' },
+                    { from: 'User', to: 'ChannelKey', label: 'creates', card: '1:N' },
+                    { from: 'Channel', to: 'Agent', label: 'contains', card: '1:N' },
+                    { from: 'Channel', to: 'Task', label: 'has', card: '1:N' },
+                    { from: 'Channel', to: 'Memory', label: 'has', card: '1:N' },
+                    { from: 'Channel', to: 'ChannelKey', label: 'authorizes', card: '1:N' },
+                    { from: 'Channel', to: 'MCPTool', label: 'provides', card: '1:N' },
+                    { from: 'Agent', to: 'Task', label: 'assigned', card: '1:N' },
+                    { from: 'Agent', to: 'Memory', label: 'has', card: '1:N' },
+                    { from: 'Channel', to: 'AuditLog', label: 'generates', card: '1:N' },
+                    { from: 'Agent', to: 'AuditLog', label: 'generates', card: '1:N' }
+                ];
+                
+                // Draw relationships first (so they're behind entities)
+                const entityMap = {};
+                entities.forEach(e => entityMap[e.name] = e);
+                
+                relationships.forEach(rel => {
+                    const from = entityMap[rel.from];
+                    const to = entityMap[rel.to];
+                    if (from && to) {
+                        this.drawRelationship(from, to, rel.label, rel.card);
+                    }
+                });
+                
+                // Draw entities
+                entities.forEach((entity, i) => {
+                    this.drawEntity(entity.x, entity.y, entity.name, i * 50);
+                });
+            }
+            
+            drawEntity(x, y, name, delay) {
+                const data = entityData[name];
+                const width = 180;
+                const headerHeight = 30;
+                const rowHeight = 18;
+                const height = headerHeight + data.fields.length * rowHeight + 10;
+                
+                const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+                g.setAttribute('class', 'entity');
+                g.setAttribute('data-entity', name);
+                g.style.opacity = '0';
+                
+                setTimeout(() => {
+                    g.style.transition = 'all 0.4s ease';
+                    g.style.opacity = '1';
+                }, delay);
+                
+                // Body
+                const body = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                body.setAttribute('x', x - width/2);
+                body.setAttribute('y', y);
+                body.setAttribute('width', width);
+                body.setAttribute('height', height);
+                body.setAttribute('class', 'entity-body');
+                body.setAttribute('rx', 4);
+                g.appendChild(body);
+                
+                // Header
+                const header = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                header.setAttribute('x', x - width/2);
+                header.setAttribute('y', y);
+                header.setAttribute('width', width);
+                header.setAttribute('height', headerHeight);
+                header.setAttribute('class', 'entity-header');
+                header.setAttribute('rx', 4);
+                g.appendChild(header);
+                
+                // Header bottom corners
+                const headerBottom = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                headerBottom.setAttribute('x', x - width/2);
+                headerBottom.setAttribute('y', y + headerHeight - 4);
+                headerBottom.setAttribute('width', width);
+                headerBottom.setAttribute('height', 4);
+                headerBottom.setAttribute('class', 'entity-header');
+                g.appendChild(headerBottom);
+                
+                // Entity name
+                const nameText = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                nameText.setAttribute('x', x);
+                nameText.setAttribute('y', y + 20);
+                nameText.setAttribute('text-anchor', 'middle');
+                nameText.setAttribute('fill', 'white');
+                nameText.setAttribute('font-weight', '700');
+                nameText.setAttribute('font-size', '13px');
+                nameText.textContent = name;
+                g.appendChild(nameText);
+                
+                // Fields (show first 3)
+                data.fields.slice(0, 3).forEach((field, i) => {
+                    const fieldY = y + headerHeight + 15 + i * rowHeight;
+                    
+                    // Key indicator
+                    if (field.key) {
+                        const keyText = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                        keyText.setAttribute('x', x - width/2 + 8);
+                        keyText.setAttribute('y', fieldY);
+                        keyText.setAttribute('class', 'field-key');
+                        keyText.setAttribute('font-size', '9px');
+                        keyText.textContent = field.key;
+                        g.appendChild(keyText);
+                    }
+                    
+                    // Field name
+                    const fieldText = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                    fieldText.setAttribute('x', x - width/2 + 30);
+                    fieldText.setAttribute('y', fieldY);
+                    fieldText.setAttribute('font-family', "'JetBrains Mono', monospace");
+                    fieldText.setAttribute('font-size', '10px');
+                    fieldText.setAttribute('fill', 'var(--text-primary)');
+                    fieldText.textContent = field.name;
+                    g.appendChild(fieldText);
+                    
+                    // Field type
+                    const typeText = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                    typeText.setAttribute('x', x + width/2 - 8);
+                    typeText.setAttribute('y', fieldY);
+                    typeText.setAttribute('text-anchor', 'end');
+                    typeText.setAttribute('font-size', '9px');
+                    typeText.setAttribute('fill', 'var(--text-muted)');
+                    typeText.textContent = field.type;
+                    g.appendChild(typeText);
+                });
+                
+                // "..." if more fields
+                if (data.fields.length > 3) {
+                    const moreText = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                    moreText.setAttribute('x', x);
+                    moreText.setAttribute('y', y + headerHeight + 15 + 3 * rowHeight);
+                    moreText.setAttribute('text-anchor', 'middle');
+                    moreText.setAttribute('font-size', '10px');
+                    moreText.setAttribute('fill', 'var(--text-muted)');
+                    moreText.textContent = `... +${data.fields.length - 3} more`;
+                    g.appendChild(moreText);
+                }
+                
+                // Click handler
+                g.addEventListener('click', () => showEntityDetails(name));
+                
+                this.mainGroup.appendChild(g);
+            }
+            
+            drawRelationship(from, to, label, card) {
+                const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+                
+                // Calculate connection points
+                const dx = to.x - from.x;
+                const dy = to.y - from.y;
+                
+                let x1, y1, x2, y2;
+                
+                if (Math.abs(dx) > Math.abs(dy)) {
+                    // Horizontal connection
+                    x1 = from.x + (dx > 0 ? 90 : -90);
+                    y1 = from.y + 50;
+                    x2 = to.x + (dx > 0 ? -90 : 90);
+                    y2 = to.y + 50;
+                } else {
+                    // Vertical connection
+                    x1 = from.x;
+                    y1 = from.y + (dy > 0 ? 100 : 0);
+                    x2 = to.x;
+                    y2 = to.y + (dy > 0 ? 0 : 100);
+                }
+                
+                const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                const midX = (x1 + x2) / 2;
+                const midY = (y1 + y2) / 2;
+                
+                let d;
+                if (Math.abs(dx) > Math.abs(dy)) {
+                    d = `M ${x1} ${y1} C ${midX} ${y1}, ${midX} ${y2}, ${x2} ${y2}`;
+                } else {
+                    d = `M ${x1} ${y1} C ${x1} ${midY}, ${x2} ${midY}, ${x2} ${y2}`;
+                }
+                
+                path.setAttribute('d', d);
+                path.setAttribute('class', 'relationship-line');
+                g.appendChild(path);
+                
+                // Cardinality markers
+                const cardText = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                cardText.setAttribute('x', midX);
+                cardText.setAttribute('y', midY - 5);
+                cardText.setAttribute('class', 'cardinality');
+                cardText.setAttribute('text-anchor', 'middle');
+                cardText.textContent = card;
+                g.appendChild(cardText);
+                
+                this.mainGroup.insertBefore(g, this.mainGroup.firstChild);
+            }
+        }
+        
+        function showEntityDetails(name) {
+            const data = entityData[name];
+            if (!data) return;
+            
+            document.getElementById('entityName').textContent = name;
+            
+            const fieldsHtml = data.fields.map(f => `
+                <div class="entity-field">
+                    ${f.key ? `<span class="field-key">${f.key}</span>` : ''}
+                    <span class="field-name">${f.name}</span>
+                    <span class="field-type">${f.type}</span>
+                </div>
+            `).join('');
+            
+            document.getElementById('entityFields').innerHTML = fieldsHtml;
+            document.getElementById('entityDetails').classList.add('visible');
+            
+            // Highlight entity
+            document.querySelectorAll('.entity').forEach(e => {
+                e.classList.toggle('highlighted', e.dataset.entity === name);
+            });
+        }
+        
+        // Close details on click outside
+        document.addEventListener('click', (e) => {
+            if (!e.target.closest('.entity') && !e.target.closest('.entity-details')) {
+                document.getElementById('entityDetails').classList.remove('visible');
+                document.querySelectorAll('.entity').forEach(e => e.classList.remove('highlighted'));
+            }
+        });
+        
+        // Initialize
+        const diagram = new ERDiagram('diagram-container', {
+            width: 850,
+            height: 520
+        });
+        diagram.render();
+    </script>
+</body>
+</html>

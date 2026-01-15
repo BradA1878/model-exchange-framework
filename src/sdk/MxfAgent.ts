@@ -148,7 +148,14 @@ export class MxfAgent extends MxfClient {
         'task_create',       // Creating multiple tasks
         'messaging_send',    // Sending to multiple agents
         'read_file',         // Reading multiple files
-        'filesystem_read'    // Reading multiple files
+        'filesystem_read',   // Reading multiple files
+        // ORPAR control loop tools - legitimately called multiple times per cognitive cycle
+        'orpar_status',      // Called to check phase status
+        'orpar_observe',     // Called during observe phase
+        'orpar_reason',      // Called during reason phase
+        'orpar_plan',        // Called during plan phase
+        'orpar_act',         // Called during act phase
+        'orpar_reflect'      // Called during reflect phase
     ];
     // Combined list of exempt tools (default + injected via config)
     private circuitBreakerExemptTools: string[] = [];
@@ -336,8 +343,46 @@ export class MxfAgent extends MxfClient {
         };
         EventBus.client.on(AgentEvents.TASK_ASSIGNED, this.taskAssignedHandler);
         
-        // Set up task request handler
+        // Set up task request handler with ORPAR integration
         this.setTaskRequestHandler(async (taskRequest: any) => {
+            // Check if channel has systemLlmEnabled for ORPAR orchestration
+            const channelConfig = this.mxfService.getChannelConfig();
+            const systemLlmEnabled = channelConfig?.systemLlmEnabled ?? false;
+
+            if (systemLlmEnabled && this.controlLoopHandlers) {
+                try {
+                    // Initialize ControlLoop if not already active
+                    let loopId = this.controlLoopHandlers.getActiveControlLoopId();
+                    if (!loopId) {
+                        loopId = await this.controlLoopHandlers.initializeControlLoop({
+                            agentId: this.agentId,
+                            channelId: this.config.channelId
+                        });
+                        this.modelLogger.info(`[ORPAR] Initialized ControlLoop: ${loopId}`);
+
+                        // Start the control loop so it processes observations through full ORPAR cycle
+                        await this.controlLoopHandlers.startControlLoop(loopId);
+                        this.modelLogger.info(`[ORPAR] Started ControlLoop: ${loopId}`);
+                    }
+
+                    // Submit task as observation to trigger ORPAR cycle
+                    if (loopId) {
+                        const observation = {
+                            type: 'task_assigned',
+                            content: `Task assigned: ${taskRequest.title || taskRequest.content}`,
+                            taskId: taskRequest.taskId,
+                            description: taskRequest.description || taskRequest.content,
+                            timestamp: Date.now()
+                        };
+                        await this.controlLoopHandlers.submitObservation(loopId, observation);
+                        this.modelLogger.info(`[ORPAR] Submitted task observation to ControlLoop`);
+                    }
+                } catch (error) {
+                    this.modelLogger.warn(`[ORPAR] Failed to initialize/submit observation: ${error}`);
+                    // Continue with task execution even if ORPAR setup fails
+                }
+            }
+
             return this.taskExecutionManager.executeTask(taskRequest);
         });
         
@@ -398,15 +443,6 @@ export class MxfAgent extends MxfClient {
             });
         }
 
-        // Get available tools
-        const availableTools = this.getAvailableToolsForGeneration(tools);
-
-        // Get contextual tools to reduce cognitive load
-        const contextualTools = this.getContextualTools(
-            this.memoryManager.getConversationHistory(), 
-            availableTools
-        );
-
         // Execute synchronous tool loop
         let iteration = 0;
         let taskComplete = false;
@@ -420,17 +456,42 @@ export class MxfAgent extends MxfClient {
                 break;
             }
 
-            // Recalculate contextual tools each iteration
+            // CRITICAL FIX: When phase-gated (allowedTools set), get FRESH tools from server each iteration
+            // The passed `tools` parameter may be pre-filtered for a different phase (e.g., OBSERVE)
+            // When phase transitions to ACT, we need game tools that weren't in the original filtered set
+            // Also: getCachedTools() only has internal MXF tools - external MCP server tools require a refresh
+            let availableTools: any[];
+
+            if (this.modelConfig.allowedTools && this.modelConfig.allowedTools.length > 0) {
+                // Phase-gated mode: Force refresh tools from server to include external MCP server tools
+                // This is critical because external tools (game_setSecret) aren't in the initial cache
+                try {
+                    availableTools = await this.toolService?.loadTools(undefined, true) || [];
+                } catch (error) {
+                    this.modelLogger.warn(`Failed to refresh tools, using cached: ${error}`);
+                    availableTools = this.toolService?.getCachedTools() || [];
+                }
+                const originalCount = availableTools.length;
+                availableTools = availableTools.filter(tool =>
+                    this.modelConfig.allowedTools!.includes(tool.name)
+                );
+                this.modelLogger.debug(`🔒 Phase-gated tools: ${originalCount} → ${availableTools.length} tools (allowed: ${this.modelConfig.allowedTools.join(', ')})`);
+            } else {
+                // Non-phase-gated mode: Use passed tools or get from service (backward compatible)
+                availableTools = this.getAvailableToolsForGeneration(tools);
+            }
+
+            // Recalculate contextual tools each iteration with fresh availableTools
             const updatedConversation = this.memoryManager.getConversationHistory();
-            
+
             // Check if last message was a tool execution feedback - if so, send minimal tools
             const lastMessage = updatedConversation[updatedConversation.length - 1];
-            const isToolFeedback = lastMessage?.content?.includes('TOOL EXECUTION ACKNOWLEDGMENT') || 
+            const isToolFeedback = lastMessage?.content?.includes('TOOL EXECUTION ACKNOWLEDGMENT') ||
                                    lastMessage?.content?.includes('TOOL EXECUTION ERROR');
-            
+
             // Use minimal tool set for tool feedback responses, full contextual tools otherwise
-            const toolsToSend = isToolFeedback ? 
-                this.getMinimalToolsForFeedback(availableTools) : 
+            const toolsToSend = isToolFeedback ?
+                this.getMinimalToolsForFeedback(availableTools) :
                 this.getContextualTools(updatedConversation, availableTools);
             
             // Build AgentContext from current state
@@ -463,7 +524,8 @@ export class MxfAgent extends MxfClient {
             // Filter out system messages - they're passed separately via systemPrompt
             const conversationWithoutSystem = baseConversation.filter(msg => msg.role !== 'system');
 
-            // Build complete context with channel config and active agents
+            // Build complete context with channel config, active agents, and ORPAR phase
+            const currentOrparPhase = this.controlLoopHandlers?.getCurrentPhase() || null;
             const agentContext: AgentContext = await this.contextBuilder.buildContext(
                 systemPrompt,
                 this.modelConfig,
@@ -472,7 +534,8 @@ export class MxfAgent extends MxfClient {
                 toolsToSend,
                 this.config.channelId,
                 this.mxfService.getChannelConfig(),
-                this.mxfService.getActiveAgents()
+                this.mxfService.getActiveAgents(),
+                currentOrparPhase
             );
 
             // Send using context-based approach
@@ -1813,6 +1876,29 @@ This iteration has been skipped. Choose a different action or complete the task.
      */
     public updateConfiguration(config: Partial<AgentConfig>): void {
         this.modelConfig = { ...this.modelConfig, ...config };
+    }
+
+    /**
+     * Override updateAllowedTools to also update modelConfig and regenerate system prompt.
+     * This ensures that when allowedTools changes dynamically (e.g., for phase-gated tools),
+     * both the tools sent to LLM and the system prompt reflect the new allowed tools.
+     */
+    public async updateAllowedTools(tools: string[]): Promise<void> {
+        // Call parent implementation (updates this.config and server)
+        await super.updateAllowedTools(tools);
+
+        // CRITICAL: Also update modelConfig which is used by task execution
+        // Without this, getAllowedTools() callback returns stale allowedTools
+        this.modelConfig.allowedTools = tools;
+
+        // Regenerate system prompt with new allowed tools
+        // The system prompt includes tool documentation, which should only show allowed tools
+        try {
+            await this.systemPromptManager.loadCompleteSystemPrompt();
+            this.modelLogger.debug(`🔄 System prompt regenerated for ${tools.length} allowed tools`);
+        } catch (error) {
+            this.modelLogger.warn(`Failed to regenerate system prompt after tools update: ${error}`);
+        }
     }
 
     /**

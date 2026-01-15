@@ -2,6 +2,8 @@
 
 The following sequence illustrates request and response flow in MXF:
 
+<div class="mermaid-fallback">
+
 ```mermaid
 sequenceDiagram
     participant User
@@ -18,6 +20,10 @@ sequenceDiagram
     API-->>SDK: Response JSON
     Dashboard-->>User: UI update
 ```
+
+</div>
+
+<iframe src="../diagram/data-flow-architecture.html" width="100%" height="520" style="border: none; border-radius: 10px; background: var(--bg-secondary);"></iframe>
 
 Key points:
 - Both Dashboard and SDK use the same API endpoints.

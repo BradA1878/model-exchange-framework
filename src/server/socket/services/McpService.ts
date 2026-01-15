@@ -374,24 +374,33 @@ export class McpService {
         }
 
         // Filter out mxpOptions from tools if MXP is not enabled for the agent
-        // This is determined by checking if the agent has MXP configuration
-        // For now, we'll remove mxpOptions from all tools since MXP is typically disabled
-        // TODO: Check agent's mxpEnabled flag and only remove if false
-        allTools = allTools.map(tool => {
-            // Only modify tools that have mxpOptions in their input schema
-            if (tool.inputSchema?.properties?.mxpOptions) {
-                // Clone the tool to avoid mutating the original
-                const clonedTool = JSON.parse(JSON.stringify(tool));
-                // Remove mxpOptions from the input schema properties
-                delete clonedTool.inputSchema.properties.mxpOptions;
-                // Update description to remove MXP references if present
-                if (clonedTool.description?.includes('MXP')) {
-                    clonedTool.description = clonedTool.description.replace('. Supports MXP protocol for structured communication', '');
+        // Check agent's mxpEnabled flag and only remove mxpOptions if MXP is disabled
+        let mxpEnabled = false;
+        if (filter?.agentId) {
+            const agentService = AgentService.getInstance();
+            const agentData = agentService.getAgent(filter.agentId);
+            // Check agent metadata for mxpEnabled flag (set during agent configuration)
+            mxpEnabled = agentData?.metadata?.mxpEnabled === true;
+        }
+
+        // Only filter out mxpOptions if MXP is not enabled for this agent
+        if (!mxpEnabled) {
+            allTools = allTools.map(tool => {
+                // Only modify tools that have mxpOptions in their input schema
+                if (tool.inputSchema?.properties?.mxpOptions) {
+                    // Clone the tool to avoid mutating the original
+                    const clonedTool = JSON.parse(JSON.stringify(tool));
+                    // Remove mxpOptions from the input schema properties
+                    delete clonedTool.inputSchema.properties.mxpOptions;
+                    // Update description to remove MXP references if present
+                    if (clonedTool.description?.includes('MXP')) {
+                        clonedTool.description = clonedTool.description.replace('. Supports MXP protocol for structured communication', '');
+                    }
+                    return clonedTool;
                 }
-                return clonedTool;
-            }
-            return tool;
-        });
+                return tool;
+            });
+        }
 
         return allTools;
     }

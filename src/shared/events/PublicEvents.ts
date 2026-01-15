@@ -101,7 +101,7 @@ export const PUBLIC_MEMORY_EVENTS = [
 ] as const;
 
 /**
- * Public Control Loop Events - Observable reasoning phases
+ * Public Control Loop Events - Server-orchestrated reasoning phases
  */
 export const PUBLIC_CONTROL_LOOP_EVENTS = [
     Events.ControlLoop.OBSERVATION,
@@ -111,6 +111,23 @@ export const PUBLIC_CONTROL_LOOP_EVENTS = [
     Events.ControlLoop.REFLECTION,
     Events.ControlLoop.EXECUTION,
     Events.ControlLoop.ERROR,
+] as const;
+
+/**
+ * Public ORPAR Events - Agent-driven cognitive cycle documentation
+ *
+ * These events are emitted when agents explicitly call orpar_* tools to document
+ * their cognitive process. They are DISTINCT from ControlLoopEvents which are
+ * emitted by the server-orchestrated control loop system.
+ */
+export const PUBLIC_ORPAR_EVENTS = [
+    Events.Orpar.OBSERVE,
+    Events.Orpar.REASON,
+    Events.Orpar.PLAN,
+    Events.Orpar.ACT,
+    Events.Orpar.REFLECT,
+    Events.Orpar.STATUS,
+    Events.Orpar.ERROR,
 ] as const;
 
 /**
@@ -144,6 +161,7 @@ export const PUBLIC_EVENTS = [
     ...PUBLIC_MCP_EVENTS,
     ...PUBLIC_MEMORY_EVENTS,
     ...PUBLIC_CONTROL_LOOP_EVENTS,
+    ...PUBLIC_ORPAR_EVENTS,
     ...PUBLIC_CHANNEL_EVENTS,
     ...PUBLIC_MEILISEARCH_EVENTS,
 ] as const;
@@ -176,6 +194,7 @@ export const getEventCategory = (eventName: PublicEventName): string => {
     if (PUBLIC_MCP_EVENTS.includes(eventName as any)) return 'mcp';
     if (PUBLIC_MEMORY_EVENTS.includes(eventName as any)) return 'memory';
     if (PUBLIC_CONTROL_LOOP_EVENTS.includes(eventName as any)) return 'controlLoop';
+    if (PUBLIC_ORPAR_EVENTS.includes(eventName as any)) return 'orpar';
     if (PUBLIC_CHANNEL_EVENTS.includes(eventName as any)) return 'channel';
     if (PUBLIC_MEILISEARCH_EVENTS.includes(eventName as any)) return 'meilisearch';
     return 'unknown';

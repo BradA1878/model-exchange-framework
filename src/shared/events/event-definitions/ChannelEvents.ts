@@ -77,7 +77,9 @@ export const ChannelActionTypes = {
     GET_CONTEXT: 'get_context',
     UPDATE_CONTEXT: 'update_context',
     SET_METADATA: 'set_metadata',
-    GET_METADATA: 'get_metadata'
+    GET_METADATA: 'get_metadata',
+    MESSAGE_POSTED: 'message_posted',
+    ERROR: 'error'
 } as const;
 
 /**

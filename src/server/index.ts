@@ -408,3 +408,6 @@ const setupApiRoutes = () => {
 
 // Start the initialization process
 initializeServer();
+
+// Export app and server for testing (supertest integration)
+export { app, server, io };

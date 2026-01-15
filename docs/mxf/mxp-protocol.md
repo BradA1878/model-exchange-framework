@@ -18,51 +18,57 @@ MXP 2.0 addresses optimization challenges through a modular approach:
 
 ### MXP 2.0 Modular Architecture
 
+<div class="mermaid-fallback">
+
 ```mermaid
 graph TB
     subgraph "Agent Layer"
         A[MxfAgent] --> B[MxpConfigManager]
     end
-    
+
     subgraph "Token Optimization Module"
         B --> C[Mxp2TokenOptimizer]
         C --> D[SystemLlmService]
         C --> E[PatternLearningService]
     end
-    
-    subgraph "Bandwidth Optimization Module" 
+
+    subgraph "Bandwidth Optimization Module"
         B --> F[Enhanced MxfMessageAggregator]
         F --> G[Binary Encoding]
         F --> H[Priority Compression]
     end
-    
+
     subgraph "Security Module"
         B --> I[ChannelKeyService]
         I --> J[Progressive Encryption]
         J --> K[Audit Logging]
     end
-    
+
     subgraph "Analytics Module"
         B --> L[Real-time Metrics]
         L --> M[Cost Calculation]
         L --> N[Performance Tracking]
     end
-    
+
     subgraph "Existing MXF Services"
         O[EventBus] --> P[ChannelContextMemory]
         P --> Q[PatternLearningService]
         Q --> R[SystemLlmService]
     end
-    
+
     C -.-> R
     E -.-> Q
     F -.-> O
-    
+
     style C fill:#f9f,stroke:#333,stroke-width:4px
-    style F fill:#bbf,stroke:#333,stroke-width:4px  
+    style F fill:#bbf,stroke:#333,stroke-width:4px
     style I fill:#fbf,stroke:#333,stroke-width:4px
     style L fill:#bfb,stroke:#333,stroke-width:4px
 ```
+
+</div>
+
+<iframe src="../diagram/mxp-protocol.html" width="100%" height="520" style="border: none; border-radius: 10px; background: var(--bg-secondary);"></iframe>
 
 ### Service Integration Flow
 

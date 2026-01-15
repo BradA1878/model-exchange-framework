@@ -443,11 +443,11 @@ export class McpToolRegistry {
     
     /**
      * Notify listeners that the tool registry has changed
+     *
+     * This event uses McpToolRegistry.TOOL_REGISTRY_CHANGED as a custom registry-specific event.
+     * The event follows the standard payload structure with tools array for registry consistency.
      */
     private notifyToolRegistryChanged(): void {
-        // TODO: Review if this custom event should be formalized in McpEvents.ts
-        // For now, ensuring it emits a valid payload structure.
-        // The payload for this custom event is { tools: ExtendedMcpToolDefinition[] }
         EventBus.server.emit(McpToolRegistry.TOOL_REGISTRY_CHANGED, createMcpToolRegistryChangedPayload(
             McpToolRegistry.TOOL_REGISTRY_CHANGED,
             'system', // agentId for system events

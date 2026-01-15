@@ -1,0 +1,297 @@
+/**
+ * Test Fixtures
+ *
+ * Reusable test data and configurations for integration tests.
+ */
+
+import { LlmProviderType } from '../../src/sdk/index';
+import type { TestAgentConfig, TestChannelConfig } from './TestSDK';
+
+// =============================================================================
+// Agent Configurations
+// =============================================================================
+
+/**
+ * Minimal agent configuration for basic tests
+ */
+export const MINIMAL_AGENT_CONFIG: TestAgentConfig = {
+    capabilities: ['testing'],
+    allowedTools: [],
+    agentConfigPrompt: 'You are a test agent. Respond briefly.',
+    temperature: 0.1,
+    maxTokens: 500
+};
+
+/**
+ * Agent with full tool access for tool execution tests
+ */
+export const TOOL_TEST_AGENT_CONFIG: TestAgentConfig = {
+    name: 'Tool Test Agent',
+    capabilities: ['testing', 'tool-execution'],
+    allowedTools: [
+        'tool_help',
+        'tool_validate',
+        'tool_quick_reference',
+        'tools_recommend',
+        'messaging_send',
+        'messaging_broadcast',
+        'memory_search_conversations'
+    ],
+    agentConfigPrompt: `You are a test agent for tool execution testing.
+When asked to use a tool, execute it directly without explanation.
+Report tool results concisely.`,
+    temperature: 0.2,
+    maxTokens: 2000
+};
+
+/**
+ * Agent for communication tests
+ */
+export const COMMUNICATION_AGENT_CONFIG: TestAgentConfig = {
+    name: 'Communication Test Agent',
+    capabilities: ['messaging', 'testing'],
+    allowedTools: [
+        'messaging_send',
+        'messaging_broadcast',
+        'messaging_discover'
+    ],
+    agentConfigPrompt: `You are a test agent for communication testing.
+When you receive messages, acknowledge them.
+When asked to send messages, do so directly.`,
+    temperature: 0.3,
+    maxTokens: 1000
+};
+
+/**
+ * Agent for ORPAR/control loop tests
+ */
+export const ORPAR_TEST_AGENT_CONFIG: TestAgentConfig = {
+    name: 'ORPAR Test Agent',
+    capabilities: ['reasoning', 'planning', 'testing'],
+    allowedTools: [
+        'control_loop_initialize',
+        'control_loop_submit_observation',
+        'control_loop_get_status'
+    ],
+    agentConfigPrompt: `You are a test agent for ORPAR control loop testing.
+Follow the ORPAR cycle: Observe, Reason, Plan, Act, Reflect.
+Report each phase's completion.`,
+    temperature: 0.5,
+    maxTokens: 3000
+};
+
+/**
+ * Agent for task system tests
+ */
+export const TASK_TEST_AGENT_CONFIG: TestAgentConfig = {
+    name: 'Task Test Agent',
+    capabilities: ['task-handling', 'testing'],
+    allowedTools: [
+        'task_create_with_plan',
+        'task_complete',
+        'task_monitoring_status',
+        'task_update'
+    ],
+    agentConfigPrompt: `You are a test agent for task system testing.
+Accept tasks when offered.
+Complete tasks by reporting "Task completed: [task description]".
+Fail tasks only when explicitly asked to simulate failure.`,
+    temperature: 0.3,
+    maxTokens: 2000
+};
+
+/**
+ * Agent for memory tests
+ */
+export const MEMORY_TEST_AGENT_CONFIG: TestAgentConfig = {
+    name: 'Memory Test Agent',
+    capabilities: ['memory', 'testing'],
+    allowedTools: [
+        'memory_get',
+        'memory_set',
+        'memory_search_conversations',
+        'memory_search_actions'
+    ],
+    agentConfigPrompt: `You are a test agent for memory system testing.
+Store and retrieve information as requested.
+Report memory operations results.`,
+    temperature: 0.2,
+    maxTokens: 2000
+};
+
+// =============================================================================
+// Channel Configurations
+// =============================================================================
+
+/**
+ * Standard test channel configuration
+ */
+export const STANDARD_CHANNEL_CONFIG: TestChannelConfig = {
+    description: 'Standard integration test channel',
+    isPrivate: false,
+    requireApproval: false,
+    maxAgents: 10,
+    disableSystemLlm: true
+};
+
+/**
+ * Private channel for isolation tests
+ */
+export const PRIVATE_CHANNEL_CONFIG: TestChannelConfig = {
+    description: 'Private integration test channel',
+    isPrivate: true,
+    requireApproval: true,
+    maxAgents: 5,
+    disableSystemLlm: true
+};
+
+/**
+ * Channel with SystemLLM enabled
+ */
+export const SYSTEMLLM_CHANNEL_CONFIG: TestChannelConfig = {
+    description: 'Channel with SystemLLM enabled',
+    isPrivate: false,
+    requireApproval: false,
+    maxAgents: 10,
+    disableSystemLlm: false
+};
+
+// =============================================================================
+// Test Messages
+// =============================================================================
+
+export const TEST_MESSAGES = {
+    simple: 'Hello, this is a test message.',
+    withMetadata: {
+        content: 'Test message with metadata',
+        metadata: { testId: 'msg-001', priority: 'high' }
+    },
+    longContent: 'Lorem ipsum '.repeat(100).trim(),
+    specialCharacters: 'Test with special chars: !@#$%^&*()_+-=[]{}|;:\'",.<>?/',
+    unicode: 'Test with unicode: ',
+    multiline: `Line 1
+Line 2
+Line 3`,
+    json: JSON.stringify({ key: 'value', nested: { a: 1, b: 2 } })
+};
+
+// =============================================================================
+// Tool Inputs
+// =============================================================================
+
+export const TOOL_INPUTS = {
+    toolHelp: {
+        valid: { toolName: 'messaging_send' },
+        invalid: { toolName: '' }
+    },
+    messagingSend: {
+        valid: (channelId: string) => ({
+            channelId,
+            message: 'Test message from tool'
+        }),
+        missingChannel: { message: 'Test message' },
+        missingMessage: (channelId: string) => ({ channelId })
+    },
+    memorySearch: {
+        valid: (channelId: string) => ({
+            query: 'test search query',
+            channelId,
+            limit: 5
+        })
+    }
+};
+
+// =============================================================================
+// Expected Event Types
+// =============================================================================
+
+export const EXPECTED_EVENTS = {
+    agentLifecycle: [
+        'agent:register',
+        'agent:registered',
+        'agent:connected',
+        'agent:disconnected'
+    ],
+    channelLifecycle: [
+        'channel:created',
+        'channel:joined',
+        'channel:left',
+        'channel:deleted'
+    ],
+    messaging: [
+        'message:channel',
+        'message:agent',
+        'message:broadcast'
+    ],
+    toolExecution: [
+        'mcp:tool_call_request',
+        'mcp:tool_call_result'
+    ],
+    controlLoop: [
+        'controlloop:initialized',
+        'controlloop:observation',
+        'controlloop:reasoning',
+        'controlloop:planning',
+        'controlloop:action',
+        'controlloop:reflection',
+        'controlloop:completed'
+    ],
+    task: [
+        'task:created',
+        'task:assigned',
+        'task:accepted',
+        'task:completed',
+        'task:failed'
+    ],
+    memory: [
+        'memory:get',
+        'memory:set',
+        'memory:updated'
+    ]
+};
+
+// =============================================================================
+// Timeout Constants
+// =============================================================================
+
+export const TIMEOUTS = {
+    /** Short operations like simple queries */
+    short: 5000,
+    /** Standard operations like tool execution */
+    standard: 10000,
+    /** Long operations like LLM calls */
+    long: 30000,
+    /** Very long operations like ORPAR cycles */
+    veryLong: 60000,
+    /** Connection timeout */
+    connection: 15000,
+    /** Event wait timeout */
+    event: 10000
+};
+
+// =============================================================================
+// Helper Functions
+// =============================================================================
+
+/**
+ * Generate a unique test ID
+ */
+export function generateTestId(prefix: string = 'test'): string {
+    return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/**
+ * Create a delayed promise for testing timeouts
+ */
+export function createDelayedPromise<T>(value: T, delay: number): Promise<T> {
+    return new Promise(resolve => setTimeout(() => resolve(value), delay));
+}
+
+/**
+ * Create a failing promise for testing error handling
+ */
+export function createFailingPromise(error: string, delay: number = 0): Promise<never> {
+    return new Promise((_, reject) =>
+        setTimeout(() => reject(new Error(error)), delay)
+    );
+}

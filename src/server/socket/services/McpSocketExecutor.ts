@@ -37,6 +37,9 @@ import { createBaseEventPayload, createMcpToolCallPayload, createMcpToolErrorPay
 import { McpToolRegistry, ExtendedMcpToolDefinition } from '../../api/services/McpToolRegistry';
 import { v4 as uuidv4 } from 'uuid';
 import { AutoCorrectionService } from '../../../shared/services/AutoCorrectionService';
+import { AgentService } from './AgentService';
+import { getCoreToolsArray } from '../../../shared/constants/CoreTools';
+import { normalizeOrparParameters } from '../../../shared/utils/ParameterNormalizer';
 
 // Create validator for socket executor
 const validator = createStrictValidator('McpSocketExecutor');
@@ -395,7 +398,34 @@ export class McpSocketExecutor {
             validator.assertIsNonEmptyString(context.requestId);
             validator.assertIsNonEmptyString(context.agentId);
             validator.assertIsNonEmptyString(context.channelId);
-            
+
+            // Check tool authorization for this agent
+            // agentId is guaranteed to be a string after validation above
+            const agentService = AgentService.getInstance();
+            const agent = agentService.getAgent(context.agentId as string);
+            if (agent) {
+                const allowedTools = agent.allowedTools;
+
+                // Empty array = unrestricted (allow all tools)
+                if (allowedTools !== undefined && allowedTools.length > 0) {
+                    // Specific tools listed - check if tool is in list
+                    if (!allowedTools.includes(toolName)) {
+                        return throwError(() => new Error(
+                            `Tool '${toolName}' is not authorized for agent '${context.agentId}'. Allowed tools: ${allowedTools.join(', ')}`
+                        ));
+                    }
+                } else if (allowedTools === undefined) {
+                    // Undefined = use core tools
+                    const coreTools = getCoreToolsArray();
+                    if (!coreTools.includes(toolName)) {
+                        return throwError(() => new Error(
+                            `Tool '${toolName}' is not authorized for agent '${context.agentId}'. Agent is restricted to core MXF tools.`
+                        ));
+                    }
+                }
+                // allowedTools.length === 0 means unrestricted, so no check needed
+            }
+
             // Get the tool from the registry
             const toolObservable = McpToolRegistry.getInstance().listTools();
             
@@ -411,19 +441,23 @@ export class McpSocketExecutor {
                     if (!tool.enabled) {
                         return throwError(() => new Error(`Tool ${toolName} is disabled`));
                     }
-                    
+
+                    // Normalize parameter names before validation (handles LLM variations)
+                    // This maps common mistakes like 'reasoning' -> 'analysis' for ORPAR tools
+                    const normalizedInput = normalizeOrparParameters(toolName, input);
+
                     // Validate input against schema with detailed error reporting
-                    const validationResult = validateToolInput(tool.inputSchema, input);
+                    const validationResult = validateToolInput(tool.inputSchema, normalizedInput);
                     if (!validationResult.valid) {
-                        const errorMessage = formatValidationError(validationResult, toolName, tool.inputSchema, input);
+                        const errorMessage = formatValidationError(validationResult, toolName, tool.inputSchema, normalizedInput);
                         this.logger.error(`Tool validation failed:\n${errorMessage}`);
-                        
+
                         // Attempt auto-correction before failing
                         return from(this.autoCorrectionService.attemptCorrection(
                             context.agentId as string,  // Already validated above
                             context.channelId as string,  // Already validated above
                             toolName,
-                            input,
+                            normalizedInput,
                             errorMessage,
                             tool.inputSchema
                         )).pipe(
@@ -457,7 +491,7 @@ export class McpSocketExecutor {
                     }
                     
                     // Validation passed, use coerced input (handles LLM type errors like "true" → true)
-                    return of({ tool, correctedInput: validationResult.coercedInput || input });
+                    return of({ tool, correctedInput: validationResult.coercedInput || normalizedInput });
                     
                 }),
                 mergeMap(({ tool, correctedInput }) => {

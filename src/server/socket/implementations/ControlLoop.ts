@@ -115,6 +115,14 @@ export class ControlLoop implements IControlLoop {
 
     private lastReasoning?: Reasoning;
 
+    // Track previous actions for ORPAR reasoning phase (populated from completed plan actions)
+    private previousActionsHistory: string[] = [];
+    private readonly maxPreviousActions = 20; // Keep last 20 actions for context
+
+    // Track previous plans for ORPAR planning phase
+    private previousPlansHistory: Plan[] = [];
+    private readonly maxPreviousPlans = 5; // Keep last 5 plans for context
+
     /**
      * Create a new control loop
      * @param agentId Agent ID that owns this control loop
@@ -805,7 +813,8 @@ export class ControlLoop implements IControlLoop {
                     // Step 2: Generate reasoning with advanced thinking model
                     const context = `Control loop ${this.loopId} in channel ${this.getChannelId()}`;
                     const observations = currentObservations.map(obs => obs.content || JSON.stringify(obs));
-                    const previousActions: string[] = []; // TODO: Implement previous actions tracking
+                    // Use tracked action history from previous cycles for context
+                    const previousActions = [...this.previousActionsHistory];
                     
                     // Use SystemLlmService for structured reasoning with fail-fast validation
                     const reasoningResult = await lastValueFrom(
@@ -1023,11 +1032,18 @@ export class ControlLoop implements IControlLoop {
                         'planning',
                         reasoning
                     );
-                    const previousPlans: Plan[] = []; // TODO: Implement previous plans tracking
+                    // Use tracked plan history from previous cycles for context
+                    const previousPlans = [...this.previousPlansHistory];
 
                     plan = await lastValueFrom(
                         systemLlmService.createPlan(reasoning, orparContext, previousPlans)
                     );
+
+                    // Store plan in history for future cycles (keep max 5)
+                    this.previousPlansHistory.push(plan);
+                    if (this.previousPlansHistory.length > this.maxPreviousPlans) {
+                        this.previousPlansHistory.shift();
+                    }
                     
                     // Enhance plan with metadata
                     plan.metadata = {
@@ -1356,7 +1372,17 @@ export class ControlLoop implements IControlLoop {
                         status: action.status,
                         metadata: action.metadata
                     }));
-                    
+
+                    // Store executed actions in history for future reasoning phases
+                    for (const action of executedActions) {
+                        const actionDesc = `${action.action}: ${action.description || 'No description'} (status: ${action.status})`;
+                        this.previousActionsHistory.push(actionDesc);
+                    }
+                    // Trim to max size
+                    while (this.previousActionsHistory.length > this.maxPreviousActions) {
+                        this.previousActionsHistory.shift();
+                    }
+
                     reflection = await lastValueFrom(
                         systemLlmService.generateReflection(plan, executedActions, results)
                     );

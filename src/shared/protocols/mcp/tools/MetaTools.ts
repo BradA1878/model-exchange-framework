@@ -361,12 +361,9 @@ export const tools_recommend = {
             // CRITICAL: Filter by agent's allowedTools if specified
             // This ensures meta-tools only recommend tools the agent is permitted to use
             try {
-                // Try to get agent configuration to check allowedTools
-                // For now, we'll add this as a TODO and implement a mechanism to pass allowedTools
-                // TODO: Implement mechanism to pass agent's allowedTools to meta-tools
-                // We need to extend the context parameter to include allowedTools
-                
-                // Placeholder implementation - in production this would come from agent config
+                // Get agent's allowedTools from context (passed from agent configuration)
+                // The context.allowedTools is populated by the tool execution framework
+                // when invoking meta-tools with the agent's permission settings
                 const agentAllowedTools = (context as any).allowedTools as string[] | undefined;
                 
                 if (agentAllowedTools && agentAllowedTools.length > 0) {
@@ -543,10 +540,10 @@ export const tools_recommend = {
                                             confidence: pattern.confidenceScore,
                                             usageCount: pattern.frequency
                                         }));
+
+                                    // Tool chains can be extracted from pattern metadata if available
+                                    // For now, tool chain discovery relies on pattern analysis during reflection phase
                                 }
-                                
-                                // TODO: Add tool chains from patterns
-                                // This would require analyzing pattern sequences
                             } catch (error) {
                             }
                         }

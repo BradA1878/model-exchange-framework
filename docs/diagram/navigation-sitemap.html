@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MXF Dashboard Navigation</title>
+    <link rel="stylesheet" href="diagram-base.css">
+    <style>
+        .nav-node {
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        .nav-node:hover {
+            transform: scale(1.05);
+        }
+        .nav-node.active {
+            filter: drop-shadow(0 0 12px var(--accent));
+        }
+        .nav-level-0 rect { fill: #3b82f6; }
+        .nav-level-1 rect { fill: #22c55e; }
+        .nav-level-2 rect { fill: #f59e0b; }
+        .nav-level-3 rect { fill: #a855f7; }
+        .breadcrumb {
+            display: flex;
+            gap: 0.5rem;
+            align-items: center;
+            padding: 0.75rem 1rem;
+            background: var(--bg-secondary);
+            border-radius: 8px;
+            margin-bottom: 1rem;
+            font-size: 0.9rem;
+        }
+        .breadcrumb-item {
+            color: var(--text-muted);
+        }
+        .breadcrumb-item.active {
+            color: var(--accent);
+            font-weight: 600;
+        }
+        .breadcrumb-sep {
+            color: var(--border);
+        }
+    </style>
+</head>
+<body>
+    <div class="diagram-container">
+        <header class="diagram-header">
+            <div>
+                <h1 class="diagram-title">Dashboard Navigation Structure</h1>
+                <p class="diagram-subtitle">Vue 3 + Vuetify dashboard sitemap</p>
+            </div>
+            <button class="theme-toggle" onclick="toggleTheme()">
+                <span class="theme-toggle-icon">🌙</span>
+                <span class="theme-toggle-label">Dark</span>
+            </button>
+        </header>
+        
+        <div class="breadcrumb" id="breadcrumb">
+            <span class="breadcrumb-item active">Dashboard</span>
+        </div>
+        
+        <div id="diagram-container"></div>
+        
+        <div class="legend">
+            <div class="legend-item">
+                <div class="legend-color" style="background: #3b82f6;"></div>
+                <span>Root / Auth</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #22c55e;"></div>
+                <span>Main Sections</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #f59e0b;"></div>
+                <span>Sub-Sections</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #a855f7;"></div>
+                <span>Features</span>
+            </div>
+        </div>
+    </div>
+
+    <script src="diagram-utils.js"></script>
+    <script>
+        const navStructure = {
+            root: {
+                label: 'Root',
+                icon: '🏠',
+                children: ['login', 'magic', 'dashboard']
+            },
+            login: { label: 'Login', icon: '🔐', level: 1 },
+            magic: { label: 'Magic Link', icon: '✨', level: 1 },
+            dashboard: {
+                label: 'Dashboard',
+                icon: '📊',
+                level: 1,
+                children: ['home', 'account', 'analytics', 'channels', 'admin']
+            },
+            home: { label: 'Home', icon: '🏠', level: 2 },
+            account: { label: 'Account', icon: '👤', level: 2 },
+            analytics: {
+                label: 'Analytics',
+                icon: '📈',
+                level: 2,
+                children: ['a-data', 'a-charts']
+            },
+            'a-data': { label: 'Data', icon: '📋', level: 3 },
+            'a-charts': { label: 'Charts', icon: '📊', level: 3 },
+            channels: {
+                label: 'Channels',
+                icon: '📢',
+                level: 2,
+                children: ['c-memory', 'c-context', 'c-docs', 'c-agents', 'c-tools', 'c-tasks']
+            },
+            'c-memory': { label: 'Memory', icon: '🧠', level: 3 },
+            'c-context': { label: 'Context', icon: '📝', level: 3 },
+            'c-docs': { label: 'Docs', icon: '📄', level: 3 },
+            'c-agents': { label: 'Agents', icon: '🤖', level: 3 },
+            'c-tools': { label: 'Tools', icon: '🔧', level: 3 },
+            'c-tasks': { label: 'Tasks', icon: '✅', level: 3 },
+            admin: {
+                label: 'Admin',
+                icon: '⚙️',
+                level: 2,
+                children: ['ad-users', 'ad-channels', 'ad-agents', 'ad-mcp', 'ad-exec', 'ad-tasks', 'ad-audit', 'ad-sec', 'ad-sys']
+            },
+            'ad-users': { label: 'Users', icon: '👥', level: 3 },
+            'ad-channels': { label: 'Channels', icon: '📢', level: 3 },
+            'ad-agents': { label: 'Agents', icon: '🤖', level: 3 },
+            'ad-mcp': { label: 'MCP Tools', icon: '🔧', level: 3 },
+            'ad-exec': { label: 'Executions', icon: '⚡', level: 3 },
+            'ad-tasks': { label: 'Tasks', icon: '✅', level: 3 },
+            'ad-audit': { label: 'Audit Logs', icon: '📝', level: 3 },
+            'ad-sec': { label: 'Security', icon: '🔒', level: 3 },
+            'ad-sys': { label: 'System', icon: '💻', level: 3 }
+        };
+        
+        class NavDiagram extends MXFDiagram {
+            render() {
+                this.nodePositions = {};
+                this.drawTree('root', 600, 50, 0);
+            }
+            
+            drawTree(nodeId, x, y, depth) {
+                const node = navStructure[nodeId];
+                if (!node) return;
+                
+                const level = node.level || depth;
+                this.drawNode(x, y, nodeId, node, level);
+                this.nodePositions[nodeId] = { x, y };
+                
+                if (node.children) {
+                    const childCount = node.children.length;
+                    let spacing, startX;
+                    
+                    if (level === 0) {
+                        spacing = 200;
+                        startX = x - (childCount - 1) * spacing / 2;
+                    } else if (level === 1) {
+                        spacing = 200;
+                        startX = x - (childCount - 1) * spacing / 2;
+                    } else {
+                        spacing = 100;
+                        startX = x - (childCount - 1) * spacing / 2;
+                    }
+                    
+                    const childY = y + 100;
+                    
+                    node.children.forEach((childId, i) => {
+                        const childX = startX + i * spacing;
+                        
+                        // Draw connection
+                        this.drawConnection(x, y + 20, childX, childY - 20);
+                        
+                        this.drawTree(childId, childX, childY, depth + 1);
+                    });
+                }
+            }
+            
+            drawNode(x, y, id, node, level) {
+                const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+                g.setAttribute('class', `nav-node nav-level-${level}`);
+                g.setAttribute('data-id', id);
+                
+                const width = node.children ? 100 : 80;
+                const height = 40;
+                
+                const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                rect.setAttribute('x', x - width/2);
+                rect.setAttribute('y', y - height/2);
+                rect.setAttribute('width', width);
+                rect.setAttribute('height', height);
+                rect.setAttribute('rx', node.children ? 8 : 20);
+                g.appendChild(rect);
+                
+                const icon = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                icon.setAttribute('x', x - width/2 + 15);
+                icon.setAttribute('y', y + 5);
+                icon.setAttribute('font-size', '14px');
+                icon.textContent = node.icon;
+                g.appendChild(icon);
+                
+                const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                label.setAttribute('x', x - width/2 + 32);
+                label.setAttribute('y', y + 5);
+                label.setAttribute('fill', 'white');
+                label.setAttribute('font-size', '11px');
+                label.setAttribute('font-weight', '600');
+                label.textContent = node.label;
+                g.appendChild(label);
+                
+                g.addEventListener('click', () => this.selectNode(id));
+                
+                this.mainGroup.appendChild(g);
+            }
+            
+            drawConnection(x1, y1, x2, y2) {
+                const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                const midY = (y1 + y2) / 2;
+                const d = `M ${x1} ${y1} C ${x1} ${midY}, ${x2} ${midY}, ${x2} ${y2}`;
+                
+                path.setAttribute('d', d);
+                path.setAttribute('class', 'edge');
+                path.setAttribute('stroke-width', '1.5');
+                
+                this.mainGroup.insertBefore(path, this.mainGroup.firstChild);
+            }
+            
+            selectNode(id) {
+                // Highlight node
+                document.querySelectorAll('.nav-node').forEach(n => {
+                    n.classList.toggle('active', n.dataset.id === id);
+                });
+                
+                // Build breadcrumb
+                const breadcrumb = [];
+                let currentId = id;
+                
+                while (currentId) {
+                    breadcrumb.unshift(navStructure[currentId]);
+                    
+                    // Find parent
+                    let parentId = null;
+                    for (const [key, val] of Object.entries(navStructure)) {
+                        if (val.children && val.children.includes(currentId)) {
+                            parentId = key;
+                            break;
+                        }
+                    }
+                    currentId = parentId;
+                }
+                
+                const breadcrumbHtml = breadcrumb.map((node, i) => {
+                    const isLast = i === breadcrumb.length - 1;
+                    return `
+                        <span class="breadcrumb-item ${isLast ? 'active' : ''}">${node.icon} ${node.label}</span>
+                        ${!isLast ? '<span class="breadcrumb-sep">›</span>' : ''}
+                    `;
+                }).join('');
+                
+                document.getElementById('breadcrumb').innerHTML = breadcrumbHtml;
+            }
+        }
+        
+        // Initialize
+        const diagram = new NavDiagram('diagram-container', {
+            width: 1200,
+            height: 500
+        });
+        diagram.render();
+    </script>
+</body>
+</html>

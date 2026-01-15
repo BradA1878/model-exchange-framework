@@ -64,7 +64,8 @@ export const PROMPT_TEMPLATES = {
     
     // Control loop state
     CURRENT_ORPAR_PHASE: '{{CURRENT_ORPAR_PHASE}}',
-    
+    CURRENT_ORPAR_PHASE_GUIDANCE: '{{CURRENT_ORPAR_PHASE_GUIDANCE}}',
+
     // Task status
     CURRENT_TASK_ID: '{{CURRENT_TASK_ID}}',
     CURRENT_TASK_TITLE: '{{CURRENT_TASK_TITLE}}',
@@ -224,10 +225,24 @@ export class PromptTemplateReplacer {
             result = result.replace(/\{\{SYSTEM_LLM_STATUS\}\}/g, statusStr);
         }
         
-        // Replace ORPAR phase if provided
+        // Replace ORPAR phase - always replace to avoid leftover template markers
+        // When phase is null, show "(Not in active cycle)" to indicate ORPAR is available but not running
+        const orparPhaseValue = context.currentOrparPhase || '(Not in active cycle)';
+        result = result.replace(/\{\{CURRENT_ORPAR_PHASE\}\}/g, orparPhaseValue);
+
+        // Add phase-specific behavioral hints when a phase is active
+        let phaseGuidance = '';
         if (context.currentOrparPhase) {
-            result = result.replace(/\{\{CURRENT_ORPAR_PHASE\}\}/g, context.currentOrparPhase);
+            const phaseHints: Record<string, string> = {
+                'Observe': 'Focus on gathering information and context. Use discovery and read tools. Do not take actions yet.',
+                'Reason': 'Analyze the observations. Consider multiple perspectives. Identify patterns and insights.',
+                'Plan': 'Create a strategic plan based on your reasoning. Define clear steps and priorities.',
+                'Act': 'Execute your plan. Use appropriate tools to accomplish each step.',
+                'Reflect': 'Evaluate the outcomes. Extract learnings. Store insights for future reference.'
+            };
+            phaseGuidance = phaseHints[context.currentOrparPhase] || '';
         }
+        result = result.replace(/\{\{CURRENT_ORPAR_PHASE_GUIDANCE\}\}/g, phaseGuidance);
         
         // Replace task status if provided
         if (context.currentTaskId) {

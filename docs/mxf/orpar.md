@@ -6,6 +6,8 @@
 
 ORPAR is a five-phase cognitive cycle that enables agents to operate autonomously with built-in learning and adaptation capabilities. Unlike traditional control loops, ORPAR integrates AI-powered reasoning at each phase and maintains context across the entire cycle.
 
+<div class="mermaid-fallback">
+
 ```mermaid
 graph TB
     O[Observe] --> R[Reason]
@@ -13,13 +15,57 @@ graph TB
     P --> A[Action]
     A --> Re[Reflect]
     Re --> O
-    
+
     style O fill:#e1f5e1
     style R fill:#e1e5f5
     style P fill:#f5e1f5
     style A fill:#f5f5e1
     style Re fill:#f5e1e1
 ```
+
+</div>
+
+<iframe src="../diagram/orpar-control-loop.html" width="100%" height="750" style="border: none; border-radius: 10px; background: var(--bg-secondary);"></iframe>
+
+## When to Use ORPAR
+
+ORPAR is a powerful cognitive framework, but it's not appropriate for every scenario. Understanding when to use it—and when to skip it—will help you build more effective agent systems.
+
+### Ideal Use Cases
+
+**Long-Running Tasks with Structured Thought**
+
+ORPAR is designed for tasks where deliberate, step-by-step cognitive processing matters. The five-phase cycle introduces intentional pacing that benefits complex problem-solving, multi-step reasoning, and tasks requiring adaptation over time. If your task takes multiple turns or requires the agent to build on previous observations, ORPAR provides the structure to do this effectively.
+
+**Multi-Tool Coordination During the ACT Phase**
+
+The ACT phase is designed to work alongside other tool calls. Agents can combine memory tools, domain-specific tools, and communication tools within the ORPAR cycle. For long-running tasks, this integration between cognitive structure and tool execution creates a powerful feedback loop—the agent observes outcomes, reasons about them, plans next steps, acts using available tools, and reflects on results.
+
+**Tasks Requiring Explainability**
+
+Since ORPAR forces agents to document each cognitive phase, it creates an audit trail of the agent's thinking. This is valuable for debugging, training, and demonstrating how the agent reached a conclusion.
+
+### Model Selection Considerations
+
+ORPAR works well with both reasoning and non-reasoning models. In some cases, **non-reasoning models produce more creative and varied results** because they lack the reinforcement learning constraints that can make reasoning models more conservative. Additionally, non-reasoning models are typically less expensive, making ORPAR a cost-effective choice for tasks that benefit from structured cognition without requiring deep reasoning at every step.
+
+The framework already includes dynamic model selection per phase—fast models for observation, deep models for reasoning—so you can balance cost and capability based on the cognitive requirements of each phase.
+
+### When NOT to Use ORPAR
+
+**Simple One-Shot Tasks**
+
+ORPAR is overkill for straightforward tasks where a reasoning model can complete the work in a single turn without structured deliberation. If your agent just needs to answer a question, make a single API call, or perform a quick transformation, skip ORPAR and let the model work directly.
+
+**Time-Sensitive Operations**
+
+Because ORPAR is intentionally deliberate, it adds latency. Each phase involves model calls, state tracking, and potential tool execution. For real-time interactions or latency-sensitive operations, a simpler control flow is more appropriate.
+
+### The ORPAR Tools as Feedback Mechanisms
+
+The ORPAR tools (`orpar_observe`, `orpar_reason`, `orpar_plan`, `orpar_act`, `orpar_reflect`) are **documentation and feedback tools**, not orchestration tools. They record what the agent did at each phase and update the system on progress. It's up to the developer to design how agents use these tools in combination with domain-specific tools to leverage the cognitive cycle effectively.
+
+For a working example that demonstrates this pattern, see the [Twenty Questions demo](/examples/twenty-questions/), which shows two agents using ORPAR phases alongside game-specific tools to play a complete game with observable cognitive cycles.
 
 ## The Five Phases
 
@@ -303,10 +349,145 @@ if (phase === 'reflection' && hasCompleteOrpar) {
 
 ## MCP Tools for ORPAR
 
-MXF provides MCP tools for each ORPAR phase:
+MXF provides two approaches for ORPAR phase management:
+
+### 1. ORPAR Cognitive Tools (Agent-Driven)
+
+These tools enable agents to **explicitly structure their thinking** using the ORPAR pattern. When agents have these tools in their `allowedTools`, they are expected to document each phase of their cognitive process:
 
 ```typescript
-// Available ORPAR Tools
+// ORPAR Cognitive Tools
+ORPAR_TOOLS = {
+    OBSERVE: 'orpar_observe',    // Document observations
+    REASON: 'orpar_reason',      // Record reasoning analysis
+    PLAN: 'orpar_plan',          // Create action plan
+    ACT: 'orpar_act',            // Record action execution
+    REFLECT: 'orpar_reflect',    // Document reflection
+    STATUS: 'orpar_status'       // Check current phase
+};
+```
+
+### ORPAR State Management
+
+Each agent maintains ORPAR state tracking per channel. This state persists across API calls within a task but should be cleared between distinct tasks to ensure agents start fresh cognitive cycles.
+
+**Automatic Stale State Detection**
+
+The `orpar_status` tool automatically detects stale state by comparing available tools with the current phase. If `orpar_observe` is allowed (indicating a new task/cycle should start) but the tracked phase is not OBSERVE, the state is automatically cleared:
+
+```typescript
+// Example: Agent in 'plan' phase but orpar_observe is in allowedTools
+// This indicates a new task - state is automatically reset
+const result = await agent.callTool('orpar_status', {});
+// Returns: { currentPhase: 'none', nextTool: 'orpar_observe', note: 'Previous cycle state cleared' }
+```
+
+**Explicit State Clearing via CLEAR_STATE Event**
+
+For explicit control, use the `OrparEvents.CLEAR_STATE` event:
+
+```typescript
+import { EventBus } from '../events/EventBus';
+import { OrparEvents } from '../events/event-definitions/OrparEvents';
+import { createBaseEventPayload } from '../schemas/EventPayloadSchema';
+
+// Clear ORPAR state when starting a new task
+EventBus.client.emit(OrparEvents.CLEAR_STATE, createBaseEventPayload(
+    OrparEvents.CLEAR_STATE,
+    agentId,
+    channelId,
+    { reason: 'New task starting', previousPhase: 'reflect' },
+    { source: 'MyApplication' }
+));
+```
+
+**Best Practice: Clear State Between Tasks**
+
+When building turn-based or task-based applications, clear both conversation history and ORPAR state between tasks:
+
+```typescript
+// Clear conversation history for fresh context
+const memoryManager = agent.getMemoryManager?.();
+if (memoryManager?.clearConversationHistory) {
+    memoryManager.clearConversationHistory();
+}
+
+// Clear ORPAR state via EventBus
+EventBus.client.emit(OrparEvents.CLEAR_STATE, createBaseEventPayload(
+    OrparEvents.CLEAR_STATE,
+    agentId,
+    channelId,
+    { reason: 'New task starting' },
+    { source: 'MyApplication' }
+));
+```
+
+**Key Features:**
+
+- **Flow Validation**: Enforces the cognitive cycle sequence
+  ```
+  observe → reason → plan → act → reflect → observe (new cycle)
+  ```
+
+- **Error Guidance**: Returns helpful errors if phases are skipped
+  ```json
+  {
+    "success": false,
+    "error": "Invalid ORPAR transition: Cannot go from 'observe' to 'act'. Expected: reason",
+    "hint": "You must REASON about your observations before planning."
+  }
+  ```
+
+- **ControlLoop Integration**: Emits corresponding `ControlLoopEvents.*` to the server
+
+- **Per-Agent State Tracking**: Tracks cycle count, phase history, current phase
+
+**Example Usage:**
+
+```typescript
+// Agent documents their observation
+await agent.callTool('orpar_observe', {
+    observations: 'The game shows 3 questions asked. Q1: "Is it alive?" → YES.',
+    keyFacts: ['The secret is alive', 'It is a mammal']
+});
+
+// Agent documents their reasoning
+await agent.callTool('orpar_reason', {
+    analysis: 'Based on "alive" and "mammal", likely a pet or wild animal.',
+    conclusions: ['Probably a common pet', 'Could be cat, dog, or hamster'],
+    confidence: 0.7
+});
+
+// Agent documents their plan
+await agent.callTool('orpar_plan', {
+    plan: 'Ask about size to narrow down possibilities.',
+    actions: [{ action: 'Ask size question', tool: 'game_askQuestion' }],
+    rationale: 'Size will eliminate roughly half the remaining options.'
+});
+
+// Agent executes and documents action
+await agent.callTool('game_askQuestion', { question: 'Is it smaller than a cat?' });
+await agent.callTool('orpar_act', {
+    action: 'Asked size question',
+    toolUsed: 'game_askQuestion',
+    outcome: 'Answer was YES',
+    success: true
+});
+
+// Agent documents reflection
+await agent.callTool('orpar_reflect', {
+    reflection: 'The YES answer confirms it is small. Combined with pet category, likely hamster or mouse.',
+    learnings: ['Size question was highly effective'],
+    expectationsMet: true
+});
+```
+
+### 2. Control Loop Tools (Server-Orchestrated)
+
+These tools allow direct interaction with the server-side control loop:
+
+```typescript
+// Control Loop Tools
 CONTROL_LOOP_TOOLS = {
     OBSERVE: 'controlLoop_observe',      // Submit observations
     REASON: 'controlLoop_reason',        // Trigger reasoning
@@ -316,11 +497,22 @@ CONTROL_LOOP_TOOLS = {
 };
 ```
 
-Each tool:
-- Has strict JSON schema validation
-- Supports priority/timeout/retry policies
-- Emits appropriate control loop events
-- Returns structured results
+### Comparison
+
+| Feature | ORPAR Tools (`orpar_*`) | Control Loop Tools (`controlLoop_*`) |
+|---------|-------------------------|-------------------------------------|
+| **Primary User** | Agent's LLM | System/SDK |
+| **Purpose** | Document agent thinking | Interact with server control loop |
+| **Flow Validation** | Enforced | Not enforced |
+| **Visibility** | Agent structures own cognition | Server orchestrates |
+| **Event Emission** | Automatic | Automatic |
+| **Best For** | Demo/training, explainability | Automated orchestration |
+
+**All tools:**
+- Have strict JSON schema validation
+- Support priority/timeout/retry policies
+- Emit appropriate control loop events
+- Return structured results
 
 ## Performance Characteristics
 

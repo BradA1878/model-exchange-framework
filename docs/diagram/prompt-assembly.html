@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MXF Prompt Assembly Pipeline</title>
+    <link rel="stylesheet" href="diagram-base.css">
+    <style>
+        .layer-box {
+            transition: all 0.3s ease;
+        }
+        .layer-box:hover {
+            filter: brightness(1.05);
+        }
+        .component-node {
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        .component-node:hover {
+            filter: brightness(1.1) drop-shadow(0 4px 12px var(--shadow));
+        }
+        .flow-arrow {
+            stroke-dasharray: 6 3;
+            animation: flowPulse 1s linear infinite;
+        }
+        @keyframes flowPulse {
+            to { stroke-dashoffset: -9; }
+        }
+        .phase-indicator {
+            animation: phaseGlow 2s ease-in-out infinite;
+        }
+        @keyframes phaseGlow {
+            0%, 100% { opacity: 0.9; }
+            50% { opacity: 1; }
+        }
+    </style>
+</head>
+<body>
+    <div class="diagram-container">
+        <header class="diagram-header">
+            <div>
+                <h1 class="diagram-title">Prompt Assembly Pipeline</h1>
+                <p class="diagram-subtitle">ORPAR phase-aware prompt construction from Server to LLM</p>
+            </div>
+            <button class="theme-toggle" onclick="toggleTheme()">
+                <span class="theme-toggle-icon">🌙</span>
+                <span class="theme-toggle-label">Dark</span>
+            </button>
+        </header>
+
+        <div id="diagram-container"></div>
+
+        <div class="legend">
+            <div class="legend-item">
+                <div class="legend-color" style="background: #3b82f6;"></div>
+                <span>Server Layer</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #a855f7;"></div>
+                <span>SDK Layer</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #f59e0b;"></div>
+                <span>Template Layer</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #22c55e;"></div>
+                <span>LLM Providers</span>
+            </div>
+        </div>
+    </div>
+
+    <script src="diagram-utils.js"></script>
+    <script>
+        class PromptAssemblyDiagram extends MXFDiagram {
+            render() {
+                let y = 30;
+
+                // SERVER LAYER
+                this.drawLayerLabel(400, y, 'SERVER LAYER', '#3b82f6');
+                y += 25;
+                this.drawLayerBox(30, y, 740, 130, '#3b82f6');
+
+                // ControlLoop component
+                this.drawComponent(150, y + 40, 'ControlLoop.ts', '#3b82f6', [
+                    'ORPAR State Machine',
+                    'Phase Event Emission'
+                ]);
+
+                // ORPAR phases
+                const phases = ['Observe', 'Reason', 'Plan', 'Act', 'Reflect'];
+                const phaseColors = ['#60a5fa', '#818cf8', '#c084fc', '#f472b6', '#fb923c'];
+                phases.forEach((phase, i) => {
+                    this.drawPhaseBox(320 + i * 80, y + 30, phase, phaseColors[i]);
+                });
+
+                // SystemLlmService component
+                this.drawComponent(650, y + 85, 'SystemLlmService', '#3b82f6', ['orparPhase metadata']);
+
+                // Arrow from ControlLoop to phases
+                this.drawHorizontalFlow(220, y + 40, 310, y + 40);
+
+                y += 145;
+
+                // Flow arrow between layers
+                this.drawVerticalFlow(400, y - 10, 400, y + 15, 'Socket.IO Events');
+                y += 30;
+
+                // SDK LAYER
+                this.drawLayerLabel(400, y, 'SDK LAYER', '#a855f7');
+                y += 25;
+                this.drawLayerBox(30, y, 740, 120, '#a855f7');
+
+                // SDK components
+                this.drawComponent(120, y + 60, 'ControlLoopHandlers', '#a855f7', [
+                    'currentPhase tracking',
+                    'Event subscriptions'
+                ]);
+
+                this.drawComponent(320, y + 60, 'MxfAgent', '#a855f7', [
+                    'getCurrentPhase()',
+                    'Pass to context'
+                ]);
+
+                this.drawComponent(520, y + 60, 'MxfContextBuilder', '#a855f7', [
+                    'buildContext()',
+                    'Phase injection'
+                ]);
+
+                // Arrows between SDK components
+                this.drawHorizontalFlow(190, y + 60, 250, y + 60);
+                this.drawHorizontalFlow(390, y + 60, 450, y + 60);
+
+                y += 135;
+
+                // Flow arrow between layers
+                this.drawVerticalFlow(400, y - 10, 400, y + 15, 'Template Context');
+                y += 30;
+
+                // TEMPLATE LAYER
+                this.drawLayerLabel(400, y, 'TEMPLATE LAYER', '#f59e0b');
+                y += 25;
+                this.drawLayerBox(30, y, 740, 140, '#f59e0b');
+
+                // Template components
+                this.drawComponent(200, y + 45, 'PromptTemplateReplacer', '#f59e0b', [
+                    '{{CURRENT_ORPAR_PHASE}}',
+                    '{{PHASE_GUIDANCE}}'
+                ]);
+
+                // Phase guidance mapping
+                this.drawGuidanceBox(520, y + 25, [
+                    { phase: 'Observe', text: 'Gather info...' },
+                    { phase: 'Reason', text: 'Analyze...' },
+                    { phase: 'Plan', text: 'Strategize...' },
+                    { phase: 'Act', text: 'Execute...' },
+                    { phase: 'Reflect', text: 'Evaluate...' }
+                ]);
+
+                this.drawComponent(200, y + 100, 'MxfAgentSystemPrompt', '#f59e0b', ['buildOrparGuidelines()']);
+
+                // Arrows
+                this.drawHorizontalFlow(280, y + 45, 400, y + 60);
+                this.drawVerticalFlow(200, y + 70, 200, y + 85);
+
+                y += 155;
+
+                // Flow arrow between layers
+                this.drawVerticalFlow(400, y - 10, 400, y + 15, 'Enhanced Prompt');
+                y += 30;
+
+                // LLM PROVIDERS
+                this.drawLayerLabel(400, y, 'LLM PROVIDERS', '#22c55e');
+                y += 25;
+                this.drawLayerBox(30, y, 740, 80, '#22c55e');
+
+                // Provider nodes
+                const providers = [
+                    { name: 'Anthropic', detail: 'system param' },
+                    { name: 'OpenAI', detail: 'first message' },
+                    { name: 'OpenRouter', detail: 'first message' },
+                    { name: 'Gemini', detail: 'system instruction' }
+                ];
+                providers.forEach((p, i) => {
+                    this.drawProviderNode(120 + i * 170, y + 45, p.name, p.detail);
+                });
+            }
+
+            drawLayerLabel(x, y, label, color) {
+                const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                text.setAttribute('x', x);
+                text.setAttribute('y', y);
+                text.setAttribute('text-anchor', 'middle');
+                text.setAttribute('fill', color);
+                text.setAttribute('font-weight', '700');
+                text.setAttribute('font-size', '12px');
+                text.textContent = label;
+                this.mainGroup.appendChild(text);
+            }
+
+            drawLayerBox(x, y, w, h, color) {
+                const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                rect.setAttribute('x', x);
+                rect.setAttribute('y', y);
+                rect.setAttribute('width', w);
+                rect.setAttribute('height', h);
+                rect.setAttribute('rx', 10);
+                rect.setAttribute('fill', color);
+                rect.setAttribute('opacity', '0.1');
+                rect.setAttribute('stroke', color);
+                rect.setAttribute('stroke-width', '2');
+                rect.setAttribute('class', 'layer-box');
+                this.mainGroup.appendChild(rect);
+            }
+
+            drawComponent(x, y, name, color, details = []) {
+                const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+                g.setAttribute('class', 'component-node');
+
+                const width = 140;
+                const height = 55 + details.length * 12;
+
+                const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                rect.setAttribute('x', x - width/2);
+                rect.setAttribute('y', y - height/2);
+                rect.setAttribute('width', width);
+                rect.setAttribute('height', height);
+                rect.setAttribute('rx', 8);
+                rect.setAttribute('fill', color);
+                rect.setAttribute('opacity', '0.9');
+                g.appendChild(rect);
+
+                // Name
+                const nameEl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                nameEl.setAttribute('x', x);
+                nameEl.setAttribute('y', y - height/2 + 18);
+                nameEl.setAttribute('text-anchor', 'middle');
+                nameEl.setAttribute('fill', 'white');
+                nameEl.setAttribute('font-weight', '700');
+                nameEl.setAttribute('font-size', '10px');
+                nameEl.textContent = name;
+                g.appendChild(nameEl);
+
+                // Details
+                details.forEach((detail, i) => {
+                    const detailEl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                    detailEl.setAttribute('x', x);
+                    detailEl.setAttribute('y', y - height/2 + 32 + i * 12);
+                    detailEl.setAttribute('text-anchor', 'middle');
+                    detailEl.setAttribute('fill', 'rgba(255,255,255,0.8)');
+                    detailEl.setAttribute('font-size', '8px');
+                    detailEl.textContent = detail;
+                    g.appendChild(detailEl);
+                });
+
+                this.mainGroup.appendChild(g);
+            }
+
+            drawPhaseBox(x, y, phase, color) {
+                const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+                g.setAttribute('class', 'phase-indicator');
+
+                const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                rect.setAttribute('x', x - 32);
+                rect.setAttribute('y', y - 12);
+                rect.setAttribute('width', 64);
+                rect.setAttribute('height', 24);
+                rect.setAttribute('rx', 4);
+                rect.setAttribute('fill', color);
+                g.appendChild(rect);
+
+                const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                text.setAttribute('x', x);
+                text.setAttribute('y', y + 4);
+                text.setAttribute('text-anchor', 'middle');
+                text.setAttribute('fill', 'white');
+                text.setAttribute('font-weight', '600');
+                text.setAttribute('font-size', '9px');
+                text.textContent = phase;
+                g.appendChild(text);
+
+                this.mainGroup.appendChild(g);
+            }
+
+            drawGuidanceBox(x, y, mappings) {
+                const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+
+                const width = 200;
+                const height = 100;
+
+                const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                rect.setAttribute('x', x - width/2);
+                rect.setAttribute('y', y);
+                rect.setAttribute('width', width);
+                rect.setAttribute('height', height);
+                rect.setAttribute('rx', 6);
+                rect.setAttribute('fill', 'var(--bg-tertiary)');
+                rect.setAttribute('stroke', '#f59e0b');
+                rect.setAttribute('stroke-width', '1');
+                g.appendChild(rect);
+
+                const title = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                title.setAttribute('x', x);
+                title.setAttribute('y', y + 15);
+                title.setAttribute('text-anchor', 'middle');
+                title.setAttribute('fill', '#f59e0b');
+                title.setAttribute('font-weight', '600');
+                title.setAttribute('font-size', '9px');
+                title.textContent = 'Phase Guidance';
+                g.appendChild(title);
+
+                mappings.forEach((m, i) => {
+                    const line = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                    line.setAttribute('x', x - width/2 + 10);
+                    line.setAttribute('y', y + 32 + i * 13);
+                    line.setAttribute('fill', 'var(--text-secondary)');
+                    line.setAttribute('font-size', '8px');
+                    line.textContent = `${m.phase}: ${m.text}`;
+                    g.appendChild(line);
+                });
+
+                this.mainGroup.appendChild(g);
+            }
+
+            drawProviderNode(x, y, name, detail) {
+                const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+                g.setAttribute('class', 'component-node');
+
+                const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                rect.setAttribute('x', x - 65);
+                rect.setAttribute('y', y - 25);
+                rect.setAttribute('width', 130);
+                rect.setAttribute('height', 50);
+                rect.setAttribute('rx', 8);
+                rect.setAttribute('fill', '#22c55e');
+                rect.setAttribute('opacity', '0.9');
+                g.appendChild(rect);
+
+                const nameEl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                nameEl.setAttribute('x', x);
+                nameEl.setAttribute('y', y - 5);
+                nameEl.setAttribute('text-anchor', 'middle');
+                nameEl.setAttribute('fill', 'white');
+                nameEl.setAttribute('font-weight', '700');
+                nameEl.setAttribute('font-size', '11px');
+                nameEl.textContent = name;
+                g.appendChild(nameEl);
+
+                const detailEl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                detailEl.setAttribute('x', x);
+                detailEl.setAttribute('y', y + 10);
+                detailEl.setAttribute('text-anchor', 'middle');
+                detailEl.setAttribute('fill', 'rgba(255,255,255,0.7)');
+                detailEl.setAttribute('font-size', '9px');
+                detailEl.textContent = detail;
+                g.appendChild(detailEl);
+
+                this.mainGroup.appendChild(g);
+            }
+
+            drawHorizontalFlow(x1, y1, x2, y2) {
+                const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                path.setAttribute('d', `M ${x1} ${y1} L ${x2} ${y2}`);
+                path.setAttribute('class', 'edge flow-arrow');
+                path.setAttribute('marker-end', 'url(#arrowhead)');
+                this.mainGroup.insertBefore(path, this.mainGroup.firstChild);
+            }
+
+            drawVerticalFlow(x1, y1, x2, y2, label) {
+                const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+
+                const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                path.setAttribute('d', `M ${x1} ${y1} L ${x2} ${y2}`);
+                path.setAttribute('class', 'edge flow-arrow');
+                path.setAttribute('marker-end', 'url(#arrowhead)');
+                g.appendChild(path);
+
+                if (label) {
+                    const midY = (y1 + y2) / 2;
+                    const bg = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                    bg.setAttribute('x', x1 + 10);
+                    bg.setAttribute('y', midY - 8);
+                    bg.setAttribute('width', label.length * 6);
+                    bg.setAttribute('height', 14);
+                    bg.setAttribute('fill', 'var(--bg-primary)');
+                    bg.setAttribute('rx', 3);
+                    g.appendChild(bg);
+
+                    const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                    text.setAttribute('x', x1 + 15);
+                    text.setAttribute('y', midY + 3);
+                    text.setAttribute('fill', 'var(--text-muted)');
+                    text.setAttribute('font-size', '9px');
+                    text.textContent = label;
+                    g.appendChild(text);
+                }
+
+                this.mainGroup.insertBefore(g, this.mainGroup.firstChild);
+            }
+        }
+
+        // Initialize
+        const diagram = new PromptAssemblyDiagram('diagram-container', {
+            width: 800,
+            height: 720
+        });
+        diagram.render();
+    </script>
+</body>
+</html>

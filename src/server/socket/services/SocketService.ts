@@ -393,4 +393,17 @@ export class SocketService implements ISocketService {
     public getAllHeartbeats(): Map<string, number> {
         return new Map(this.heartbeats);
     }
+
+    /**
+     * Get the count of currently connected sockets
+     * @returns Number of connected sockets
+     */
+    public getConnectedSocketsCount(): number {
+        if (!this.io) {
+            return 0;
+        }
+        // Get the default namespace and count connected sockets
+        const sockets = this.io.sockets?.sockets;
+        return sockets ? sockets.size : 0;
+    }
 }

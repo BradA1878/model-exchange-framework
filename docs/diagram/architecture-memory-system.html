@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MXF Memory System Architecture</title>
+    <link rel="stylesheet" href="diagram-base.css">
+    <style>
+        .memory-scope {
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        .memory-scope:hover {
+            filter: brightness(1.1) drop-shadow(0 4px 12px var(--shadow));
+        }
+        .memory-scope.highlighted {
+            filter: drop-shadow(0 0 15px var(--accent));
+        }
+        .mem-node {
+            transition: all 0.3s ease;
+        }
+        .mem-node:hover {
+            filter: brightness(1.1);
+        }
+        .data-flow-line {
+            stroke-dasharray: 8 4;
+            animation: flowDash 1s linear infinite;
+        }
+        @keyframes flowDash {
+            to { stroke-dashoffset: -12; }
+        }
+        .info-card {
+            position: absolute;
+            bottom: 0.5rem;
+            left: 50%;
+            transform: translateX(-50%);
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 0.75rem 1.5rem;
+            display: flex;
+            gap: 2rem;
+            box-shadow: 0 4px 20px var(--shadow);
+        }
+        .info-stat {
+            text-align: center;
+        }
+        .info-stat-value {
+            font-size: 1.2rem;
+            font-weight: 700;
+            color: var(--accent);
+        }
+        .info-stat-label {
+            font-size: 0.7rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+        }
+    </style>
+</head>
+<body>
+    <div class="diagram-container">
+        <header class="diagram-header">
+            <div>
+                <h1 class="diagram-title">Memory System Architecture</h1>
+                <p class="diagram-subtitle">Multi-scope persistent memory with versioning and search</p>
+            </div>
+            <button class="theme-toggle" onclick="toggleTheme()">
+                <span class="theme-toggle-icon">🌙</span>
+                <span class="theme-toggle-label">Dark</span>
+            </button>
+        </header>
+
+        <div class="controls">
+            <button class="control-btn active" onclick="showAllScopes()">All Scopes</button>
+            <button class="control-btn" onclick="highlightScope('agent')">Agent Memory</button>
+            <button class="control-btn" onclick="highlightScope('channel')">Channel Memory</button>
+            <button class="control-btn" onclick="highlightScope('relationship')">Relationship Memory</button>
+        </div>
+
+        <div id="diagram-container" style="position: relative;"></div>
+
+        <div class="info-card">
+            <div class="info-stat">
+                <div class="info-stat-value">3</div>
+                <div class="info-stat-label">Scopes</div>
+            </div>
+            <div class="info-stat">
+                <div class="info-stat-value">∞</div>
+                <div class="info-stat-label">Versions</div>
+            </div>
+            <div class="info-stat">
+                <div class="info-stat-value">Real-time</div>
+                <div class="info-stat-label">Sync</div>
+            </div>
+            <div class="info-stat">
+                <div class="info-stat-value">Semantic</div>
+                <div class="info-stat-label">Search</div>
+            </div>
+        </div>
+
+        <div class="legend" style="margin-top: 3.5rem;">
+            <div class="legend-item">
+                <div class="legend-color" style="background: #6366f1;"></div>
+                <span>Agent - Private</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #14b8a6;"></div>
+                <span>Channel - Shared</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #ec4899;"></div>
+                <span>Relationship - Bilateral</span>
+            </div>
+        </div>
+    </div>
+
+    <script src="diagram-utils.js"></script>
+    <script>
+        class MemoryDiagram extends MXFDiagram {
+            render() {
+                // Section groups
+                this.drawSection(30, 30, 200, 220, 'Memory Scopes');
+                this.drawSection(250, 30, 150, 220, 'Operations');
+                this.drawSection(420, 30, 150, 220, 'Features');
+                this.drawSection(590, 30, 150, 220, 'Storage');
+
+                // Memory Scopes
+                this.drawMemoryScope(130, 75, 'agent', '🤖', 'Agent Memory', 'Private Context', '#6366f1');
+                this.drawMemoryScope(130, 140, 'channel', '📢', 'Channel Memory', 'Shared Context', '#14b8a6');
+                this.drawMemoryScope(130, 205, 'relationship', '🤝', 'Relationship', 'Inter-Agent', '#ec4899');
+
+                // Operations
+                const ops = [
+                    { y: 70, icon: '➕', label: 'Create' },
+                    { y: 105, icon: '📖', label: 'Read' },
+                    { y: 140, icon: '✏️', label: 'Update' },
+                    { y: 175, icon: '🗑️', label: 'Delete' },
+                    { y: 210, icon: '🔍', label: 'Search' }
+                ];
+                ops.forEach(op => this.drawOpNode(325, op.y, op.icon, op.label));
+
+                // Features
+                const feats = [
+                    { y: 85, icon: '📚', label: 'Versioning' },
+                    { y: 140, icon: '🏷️', label: 'Metadata' },
+                    { y: 195, icon: '🔄', label: 'Sync' }
+                ];
+                feats.forEach(f => this.drawFeatureNode(495, f.y, f.icon, f.label));
+
+                // Storage
+                this.drawStorageNode(665, 100, '🗄️', 'MongoDB');
+                this.drawStorageNode(665, 170, '📑', 'Indexes');
+
+                // Flow arrows
+                this.drawFlowArrow(210, 140, 260, 140);
+                this.drawFlowArrow(380, 140, 430, 140);
+                this.drawFlowArrow(550, 140, 600, 140);
+            }
+
+            drawSection(x, y, w, h, label) {
+                const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+
+                const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                rect.setAttribute('x', x);
+                rect.setAttribute('y', y);
+                rect.setAttribute('width', w);
+                rect.setAttribute('height', h);
+                rect.setAttribute('rx', 10);
+                rect.setAttribute('fill', 'var(--bg-tertiary)');
+                rect.setAttribute('stroke', 'var(--border)');
+                g.appendChild(rect);
+
+                const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                text.setAttribute('x', x + w/2);
+                text.setAttribute('y', y + 18);
+                text.setAttribute('text-anchor', 'middle');
+                text.setAttribute('fill', 'var(--text-muted)');
+                text.setAttribute('font-size', '10px');
+                text.setAttribute('font-weight', '600');
+                text.textContent = label.toUpperCase();
+                g.appendChild(text);
+
+                this.mainGroup.appendChild(g);
+            }
+
+            drawMemoryScope(x, y, type, icon, label, sublabel, color) {
+                const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+                g.setAttribute('class', 'memory-scope');
+                g.setAttribute('data-scope', type);
+
+                const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                rect.setAttribute('x', x - 80);
+                rect.setAttribute('y', y - 22);
+                rect.setAttribute('width', 160);
+                rect.setAttribute('height', 44);
+                rect.setAttribute('rx', 8);
+                rect.setAttribute('fill', color);
+                rect.setAttribute('opacity', '0.9');
+                g.appendChild(rect);
+
+                const iconEl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                iconEl.setAttribute('x', x);
+                iconEl.setAttribute('y', y - 3);
+                iconEl.setAttribute('text-anchor', 'middle');
+                iconEl.setAttribute('font-size', '14px');
+                iconEl.textContent = icon;
+                g.appendChild(iconEl);
+
+                const labelEl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                labelEl.setAttribute('x', x);
+                labelEl.setAttribute('y', y + 13);
+                labelEl.setAttribute('text-anchor', 'middle');
+                labelEl.setAttribute('fill', 'white');
+                labelEl.setAttribute('font-size', '11px');
+                labelEl.setAttribute('font-weight', '600');
+                labelEl.textContent = label;
+                g.appendChild(labelEl);
+
+                g.addEventListener('click', () => highlightScope(type));
+                this.mainGroup.appendChild(g);
+            }
+
+            drawOpNode(x, y, icon, label) {
+                const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+                g.setAttribute('class', 'mem-node');
+
+                const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                rect.setAttribute('x', x - 55);
+                rect.setAttribute('y', y - 14);
+                rect.setAttribute('width', 110);
+                rect.setAttribute('height', 28);
+                rect.setAttribute('rx', 6);
+                rect.setAttribute('fill', '#3b82f6');
+                g.appendChild(rect);
+
+                const iconEl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                iconEl.setAttribute('x', x - 30);
+                iconEl.setAttribute('y', y + 5);
+                iconEl.setAttribute('font-size', '12px');
+                iconEl.textContent = icon;
+                g.appendChild(iconEl);
+
+                const labelEl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                labelEl.setAttribute('x', x - 12);
+                labelEl.setAttribute('y', y + 4);
+                labelEl.setAttribute('fill', 'white');
+                labelEl.setAttribute('font-size', '11px');
+                labelEl.setAttribute('font-weight', '600');
+                labelEl.textContent = label;
+                g.appendChild(labelEl);
+
+                this.mainGroup.appendChild(g);
+            }
+
+            drawFeatureNode(x, y, icon, label) {
+                const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+                g.setAttribute('class', 'mem-node');
+
+                const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                rect.setAttribute('x', x - 55);
+                rect.setAttribute('y', y - 22);
+                rect.setAttribute('width', 110);
+                rect.setAttribute('height', 44);
+                rect.setAttribute('rx', 6);
+                rect.setAttribute('fill', '#22c55e');
+                g.appendChild(rect);
+
+                const iconEl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                iconEl.setAttribute('x', x);
+                iconEl.setAttribute('y', y - 3);
+                iconEl.setAttribute('text-anchor', 'middle');
+                iconEl.setAttribute('font-size', '16px');
+                iconEl.textContent = icon;
+                g.appendChild(iconEl);
+
+                const labelEl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                labelEl.setAttribute('x', x);
+                labelEl.setAttribute('y', y + 14);
+                labelEl.setAttribute('text-anchor', 'middle');
+                labelEl.setAttribute('fill', 'white');
+                labelEl.setAttribute('font-size', '11px');
+                labelEl.setAttribute('font-weight', '600');
+                labelEl.textContent = label;
+                g.appendChild(labelEl);
+
+                this.mainGroup.appendChild(g);
+            }
+
+            drawStorageNode(x, y, icon, label) {
+                const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+                g.setAttribute('class', 'mem-node');
+
+                // Database cylinder shape
+                const w = 100, h = 50;
+                const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                const rx = w / 2, ry = 8;
+                const px = x - w/2, py = y - h/2;
+                const d = `
+                    M ${px} ${py + ry}
+                    A ${rx} ${ry} 0 0 1 ${px + w} ${py + ry}
+                    L ${px + w} ${py + h - ry}
+                    A ${rx} ${ry} 0 0 1 ${px} ${py + h - ry}
+                    Z
+                    M ${px} ${py + ry}
+                    A ${rx} ${ry} 0 0 0 ${px + w} ${py + ry}
+                `;
+                path.setAttribute('d', d);
+                path.setAttribute('fill', '#f59e0b');
+                path.setAttribute('stroke', '#d97706');
+                path.setAttribute('stroke-width', '1');
+                g.appendChild(path);
+
+                const labelEl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                labelEl.setAttribute('x', x);
+                labelEl.setAttribute('y', y + 5);
+                labelEl.setAttribute('text-anchor', 'middle');
+                labelEl.setAttribute('fill', 'white');
+                labelEl.setAttribute('font-size', '11px');
+                labelEl.setAttribute('font-weight', '600');
+                labelEl.textContent = label;
+                g.appendChild(labelEl);
+
+                this.mainGroup.appendChild(g);
+            }
+
+            drawFlowArrow(x1, y1, x2, y2) {
+                const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                path.setAttribute('d', `M ${x1} ${y1} L ${x2} ${y2}`);
+                path.setAttribute('class', 'edge data-flow-line');
+                path.setAttribute('marker-end', 'url(#arrowhead)');
+                this.mainGroup.insertBefore(path, this.mainGroup.firstChild);
+            }
+        }
+
+        function highlightScope(scope) {
+            document.querySelectorAll('.memory-scope').forEach(el => {
+                el.classList.toggle('highlighted', el.dataset.scope === scope);
+            });
+            document.querySelectorAll('.control-btn').forEach(btn => {
+                btn.classList.remove('active');
+                if (btn.textContent.toLowerCase().includes(scope)) {
+                    btn.classList.add('active');
+                }
+            });
+        }
+
+        function showAllScopes() {
+            document.querySelectorAll('.memory-scope').forEach(el => {
+                el.classList.remove('highlighted');
+            });
+            document.querySelectorAll('.control-btn').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            document.querySelector('.control-btn').classList.add('active');
+        }
+
+        // Initialize
+        const diagram = new MemoryDiagram('diagram-container', {
+            width: 770,
+            height: 280
+        });
+        diagram.render();
+    </script>
+</body>
+</html>

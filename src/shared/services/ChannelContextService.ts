@@ -661,9 +661,9 @@ export class ChannelContextService implements IChannelContextService {
         return this.getContext(channelId).pipe(
             mergeMap(context => {
                 if (!context) {
-                    // TEMPORARY FIX: Auto-create a basic channel context if none exists
-                    // TODO: Remove this once proper channel context initialization is implemented
-        this.logger.warn(`No context found for channel ${channelId}, creating default context for summary generation`);
+                    // Fallback: Auto-create a basic channel context if none exists
+                    // This ensures summary generation works even for dynamically created channels
+                    this.logger.warn(`No context found for channel ${channelId}, creating default context for summary generation`);
                     
                     const defaultContext: ChannelContextType = {
                         id: channelId,

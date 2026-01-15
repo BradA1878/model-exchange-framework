@@ -13,6 +13,8 @@ The Control Loop system provides:
 
 ## Architecture
 
+<div class="mermaid-fallback">
+
 ```mermaid
 graph TB
     subgraph "ORPAR Cycle"
@@ -22,7 +24,7 @@ graph TB
         P --> Re[Reflect]
         Re --> O
     end
-    
+
     subgraph "Models"
         OM[Observation Model]
         RM[Reasoning Model]
@@ -30,16 +32,20 @@ graph TB
         PM[Progress Model]
         ReM[Reflection Model]
     end
-    
+
     O -.-> OM
     R -.-> RM
     A -.-> AM
     P -.-> PM
     Re -.-> ReM
-    
+
     style O fill:#f9f,stroke:#333,stroke-width:2px
     style Re fill:#bbf,stroke:#333,stroke-width:2px
 ```
+
+</div>
+
+<iframe src="../diagram/orpar-control-loop.html" width="100%" height="750" style="border: none; border-radius: 10px; background: var(--bg-secondary);"></iframe>
 
 ## REST Endpoints
 

@@ -135,6 +135,8 @@ MXF supports multiple LLM providers through dedicated MCP client implementations
 
 ## Architecture
 
+<div class="mermaid-fallback">
+
 ```mermaid
 graph TB
     subgraph "Agent (SDK)"
@@ -145,18 +147,22 @@ graph TB
         C --> F[XAI MCP]
         C --> G[Custom MCP]
     end
-    
+
     subgraph "Server"
         H[MCP Service] --> I[Tool Registry]
         I --> J[Tool Execution]
         J --> K[Tool Results]
     end
-    
+
     B <--> H
-    
+
     style A fill:#f9f,stroke:#333,stroke-width:4px
     style H fill:#bbf,stroke:#333,stroke-width:2px
 ```
+
+</div>
+
+<iframe src="../diagram/mcp-tool-integration.html" width="100%" height="700" style="border: none; border-radius: 10px; background: var(--bg-secondary);"></iframe>
 
 ## Tool Execution
 

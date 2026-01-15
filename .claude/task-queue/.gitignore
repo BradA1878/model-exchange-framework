@@ -1,0 +1,7 @@
+# Ignore notification JSON files (they're transient)
+*.json
+
+# But track the processed directory structure
+!processed/
+processed/*
+!processed/.gitkeep

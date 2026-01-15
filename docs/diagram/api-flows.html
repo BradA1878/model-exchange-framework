@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MXF Dashboard Flow</title>
+    <link rel="stylesheet" href="diagram-base.css">
+    <style>
+        .sequence-msg {
+            opacity: 0;
+            animation: msgAppear 0.5s ease forwards;
+        }
+        @keyframes msgAppear {
+            to { opacity: 1; }
+        }
+        .tab-bar {
+            display: flex;
+            gap: 0.5rem;
+            margin-bottom: 1rem;
+            border-bottom: 2px solid var(--border);
+            padding-bottom: 0.5rem;
+        }
+        .tab-btn {
+            padding: 0.5rem 1rem;
+            background: transparent;
+            border: none;
+            color: var(--text-secondary);
+            font-family: 'Carlito', sans-serif;
+            font-size: 0.9rem;
+            cursor: pointer;
+            border-radius: 6px 6px 0 0;
+            transition: all 0.2s ease;
+        }
+        .tab-btn:hover {
+            background: var(--bg-tertiary);
+        }
+        .tab-btn.active {
+            background: var(--accent);
+            color: white;
+        }
+    </style>
+</head>
+<body>
+    <div class="diagram-container">
+        <header class="diagram-header">
+            <div>
+                <h1 class="diagram-title">Dashboard API Flows</h1>
+                <p class="diagram-subtitle">User interaction sequences with the API</p>
+            </div>
+            <button class="theme-toggle" onclick="toggleTheme()">
+                <span class="theme-toggle-icon">🌙</span>
+                <span class="theme-toggle-label">Dark</span>
+            </button>
+        </header>
+        
+        <div class="tab-bar">
+            <button class="tab-btn active" onclick="showFlow('auth')">🔐 Authentication</button>
+            <button class="tab-btn" onclick="showFlow('channels')">📢 Channels</button>
+            <button class="tab-btn" onclick="showFlow('agents')">🤖 Agents</button>
+            <button class="tab-btn" onclick="showFlow('tasks')">📋 Tasks</button>
+            <button class="tab-btn" onclick="showFlow('memory')">🧠 Memory</button>
+            <button class="tab-btn" onclick="showFlow('analytics')">📊 Analytics</button>
+        </div>
+        
+        <div id="diagram-container"></div>
+    </div>
+
+    <script src="diagram-utils.js"></script>
+    <script>
+        const flows = {
+            auth: {
+                title: 'Authentication Flow',
+                participants: ['User', 'Dashboard', 'API'],
+                messages: [
+                    { from: 0, to: 1, label: 'Login (email)', type: 'request' },
+                    { from: 1, to: 2, label: 'POST /api/auth/magic-link', type: 'request' },
+                    { from: 2, to: 0, label: 'Magic link email', type: 'response' },
+                    { from: 0, to: 1, label: 'Click magic link', type: 'request' },
+                    { from: 1, to: 2, label: 'POST /api/auth/verify', type: 'request' },
+                    { from: 2, to: 1, label: 'JWT Token', type: 'response' },
+                    { from: 1, to: 0, label: 'Redirect to dashboard', type: 'response' }
+                ]
+            },
+            channels: {
+                title: 'Channels Flow',
+                participants: ['User', 'Dashboard', 'API'],
+                messages: [
+                    { from: 0, to: 1, label: 'Click "Create Channel"', type: 'request' },
+                    { from: 1, to: 2, label: 'POST /api/channels', type: 'request' },
+                    { from: 2, to: 1, label: 'Returns new channel details', type: 'response' },
+                    { from: 1, to: 0, label: 'Displays channel in list', type: 'response' }
+                ]
+            },
+            agents: {
+                title: 'Agents Flow',
+                participants: ['User', 'Dashboard', 'API'],
+                messages: [
+                    { from: 0, to: 1, label: 'Click "Agents" tab', type: 'request' },
+                    { from: 1, to: 2, label: 'GET /api/agents?channelId={id}', type: 'request' },
+                    { from: 2, to: 1, label: 'Returns agent list', type: 'response' },
+                    { from: 0, to: 1, label: 'Click "Create Agent"', type: 'request' },
+                    { from: 1, to: 2, label: 'GET /api/config/agent-options', type: 'request' },
+                    { from: 2, to: 1, label: 'Returns provider/model options', type: 'response' },
+                    { from: 0, to: 1, label: 'Submit creation form', type: 'request' },
+                    { from: 1, to: 2, label: 'POST /api/agents', type: 'request' },
+                    { from: 2, to: 1, label: 'Agent created', type: 'response' }
+                ]
+            },
+            tasks: {
+                title: 'Tasks Flow',
+                participants: ['User', 'Dashboard', 'API'],
+                messages: [
+                    { from: 0, to: 1, label: 'Click "Tasks" tab', type: 'request' },
+                    { from: 1, to: 2, label: 'GET /api/tasks?channelId={id}', type: 'request' },
+                    { from: 2, to: 1, label: 'Returns task list', type: 'response' },
+                    { from: 0, to: 1, label: 'Click "Create Task"', type: 'request' },
+                    { from: 1, to: 2, label: 'POST /api/tasks', type: 'request' },
+                    { from: 2, to: 1, label: 'Task created', type: 'response' }
+                ]
+            },
+            memory: {
+                title: 'Memory Flow',
+                participants: ['User', 'Dashboard', 'API'],
+                messages: [
+                    { from: 0, to: 1, label: 'Click "Memory" tab', type: 'request' },
+                    { from: 1, to: 2, label: 'GET /api/channels/memory/{id}', type: 'request' },
+                    { from: 2, to: 1, label: 'Returns memory entries', type: 'response' },
+                    { from: 0, to: 1, label: 'Click "Add Entry"', type: 'request' },
+                    { from: 1, to: 2, label: 'POST /api/channels/memory/{id}', type: 'request' },
+                    { from: 2, to: 1, label: 'Entry created', type: 'response' }
+                ]
+            },
+            analytics: {
+                title: 'Analytics Flow',
+                participants: ['User', 'Dashboard', 'API'],
+                messages: [
+                    { from: 0, to: 1, label: 'Click "Analytics" tab', type: 'request' },
+                    { from: 1, to: 2, label: 'GET /api/analytics/stats', type: 'request' },
+                    { from: 2, to: 1, label: 'Displays system stats', type: 'response' },
+                    { from: 0, to: 1, label: 'Filter events', type: 'request' },
+                    { from: 1, to: 2, label: 'GET /api/analytics/events?...', type: 'request' },
+                    { from: 2, to: 1, label: 'Shows event logs', type: 'response' },
+                    { from: 0, to: 1, label: 'Generate report', type: 'request' },
+                    { from: 1, to: 2, label: 'POST /api/analytics/reports', type: 'request' },
+                    { from: 2, to: 1, label: 'Returns report data', type: 'response' }
+                ]
+            }
+        };
+        
+        let currentDiagram = null;
+        
+        function showFlow(flowId) {
+            // Update tabs
+            document.querySelectorAll('.tab-btn').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            event.target.classList.add('active');
+            
+            // Clear and redraw
+            const container = document.getElementById('diagram-container');
+            container.innerHTML = '';
+            
+            const flow = flows[flowId];
+            currentDiagram = new SequenceDiagram('diagram-container', {
+                width: 800,
+                height: 100 + flow.messages.length * 50
+            });
+            currentDiagram.render(flow);
+        }
+        
+        class SequenceDiagram extends MXFDiagram {
+            render(flow) {
+                const spacing = 250;
+                const startY = 60;
+                const messageSpacing = 50;
+                
+                // Draw participants
+                flow.participants.forEach((p, i) => {
+                    const x = 150 + i * spacing;
+                    
+                    // Top box
+                    const topBox = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                    topBox.setAttribute('class', 'participant-box');
+                    topBox.setAttribute('x', x - 50);
+                    topBox.setAttribute('y', 20);
+                    topBox.setAttribute('width', 100);
+                    topBox.setAttribute('height', 32);
+                    this.mainGroup.appendChild(topBox);
+                    
+                    const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                    label.setAttribute('class', 'participant-text');
+                    label.setAttribute('x', x);
+                    label.setAttribute('y', 42);
+                    label.textContent = p;
+                    this.mainGroup.appendChild(label);
+                    
+                    // Lifeline
+                    const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                    line.setAttribute('class', 'participant-line');
+                    line.setAttribute('x1', x);
+                    line.setAttribute('y1', 52);
+                    line.setAttribute('x2', x);
+                    line.setAttribute('y2', startY + flow.messages.length * messageSpacing + 30);
+                    this.mainGroup.appendChild(line);
+                });
+                
+                // Draw messages
+                flow.messages.forEach((msg, i) => {
+                    const y = startY + (i + 1) * messageSpacing;
+                    const fromX = 150 + msg.from * spacing;
+                    const toX = 150 + msg.to * spacing;
+                    
+                    const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+                    g.setAttribute('class', 'sequence-msg');
+                    g.style.animationDelay = `${i * 100}ms`;
+                    
+                    // Arrow
+                    const arrow = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                    arrow.setAttribute('x1', fromX);
+                    arrow.setAttribute('y1', y);
+                    arrow.setAttribute('x2', toX);
+                    arrow.setAttribute('y2', y);
+                    arrow.setAttribute('class', `message-line ${msg.type === 'response' ? 'message-line-return' : ''}`);
+                    arrow.setAttribute('marker-end', 'url(#arrowhead)');
+                    g.appendChild(arrow);
+                    
+                    // Label background
+                    const midX = (fromX + toX) / 2;
+                    const textWidth = msg.label.length * 6 + 16;
+                    const bg = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                    bg.setAttribute('x', midX - textWidth/2);
+                    bg.setAttribute('y', y - 16);
+                    bg.setAttribute('width', textWidth);
+                    bg.setAttribute('height', 14);
+                    bg.setAttribute('fill', 'var(--bg-secondary)');
+                    bg.setAttribute('rx', 2);
+                    g.appendChild(bg);
+                    
+                    // Label
+                    const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                    text.setAttribute('class', 'message-text');
+                    text.setAttribute('x', midX);
+                    text.setAttribute('y', y - 6);
+                    text.setAttribute('text-anchor', 'middle');
+                    text.textContent = msg.label;
+                    g.appendChild(text);
+                    
+                    this.mainGroup.appendChild(g);
+                });
+            }
+        }
+        
+        // Initialize with auth flow
+        document.addEventListener('DOMContentLoaded', () => {
+            const diagram = new SequenceDiagram('diagram-container', {
+                width: 800,
+                height: 450
+            });
+            diagram.render(flows.auth);
+        });
+    </script>
+</body>
+</html>

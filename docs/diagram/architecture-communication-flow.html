@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MXF Component Communication Flow</title>
+    <link rel="stylesheet" href="diagram-base.css">
+    <style>
+        .sequence-step {
+            opacity: 0;
+            transition: opacity 0.5s ease;
+        }
+        .sequence-step.visible {
+            opacity: 1;
+        }
+        .step-number {
+            fill: var(--accent);
+            font-weight: 700;
+            font-size: 11px;
+        }
+        .activation-bar {
+            fill: var(--accent);
+            opacity: 0.3;
+        }
+        .playback-controls {
+            display: flex;
+            gap: 1rem;
+            align-items: center;
+            margin-bottom: 1rem;
+        }
+        .play-btn {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.75rem 1.5rem;
+            background: var(--accent);
+            border: none;
+            border-radius: 8px;
+            color: white;
+            font-family: 'Carlito', sans-serif;
+            font-size: 0.9rem;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        .play-btn:hover {
+            background: var(--accent-light);
+            transform: translateY(-1px);
+        }
+        .step-indicator {
+            font-size: 0.9rem;
+            color: var(--text-secondary);
+        }
+        .speed-control {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .speed-control label {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+        }
+        .speed-control select {
+            padding: 0.4rem 0.75rem;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+            font-family: 'Carlito', sans-serif;
+        }
+    </style>
+</head>
+<body>
+    <div class="diagram-container">
+        <header class="diagram-header">
+            <div>
+                <h1 class="diagram-title">Component Communication Flow</h1>
+                <p class="diagram-subtitle">Message flow through MXF architecture</p>
+            </div>
+            <button class="theme-toggle" onclick="toggleTheme()">
+                <span class="theme-toggle-icon">🌙</span>
+                <span class="theme-toggle-label">Dark</span>
+            </button>
+        </header>
+        
+        <div class="playback-controls">
+            <button class="play-btn" id="playBtn" onclick="playSequence()">
+                <span id="playIcon">▶</span>
+                <span id="playText">Play Animation</span>
+            </button>
+            <button class="control-btn" onclick="resetSequence()">↻ Reset</button>
+            <span class="step-indicator">Step <span id="currentStep">0</span> of <span id="totalSteps">12</span></span>
+            <div class="speed-control">
+                <label>Speed:</label>
+                <select id="speedSelect">
+                    <option value="2000">Slow</option>
+                    <option value="1000" selected>Normal</option>
+                    <option value="500">Fast</option>
+                </select>
+            </div>
+        </div>
+        
+        <div id="diagram-container" style="position: relative;"></div>
+        
+        <div class="legend">
+            <div class="legend-item">
+                <div class="legend-color" style="background: #14b8a6;"></div>
+                <span>Request Flow</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #6b8a8a; opacity: 0.5;"></div>
+                <span>Response Flow</span>
+            </div>
+        </div>
+    </div>
+
+    <script src="diagram-utils.js"></script>
+    <script>
+        let currentStep = 0;
+        let isPlaying = false;
+        let playInterval = null;
+        const totalSteps = 12;
+        
+        class SequenceDiagram extends MXFDiagram {
+            render() {
+                const w = this.options.width;
+                const h = this.options.height;
+                
+                // Participants
+                const participants = [
+                    { id: 'ui', label: 'Dashboard', x: 100 },
+                    { id: 'api', label: 'REST API', x: 250 },
+                    { id: 'ws', label: 'WebSocket', x: 400 },
+                    { id: 'eb', label: 'EventBus', x: 550 },
+                    { id: 'svc', label: 'Services', x: 700 },
+                    { id: 'db', label: 'MongoDB', x: 850 },
+                    { id: 'agent', label: 'MxfAgent', x: 1000 }
+                ];
+                
+                // Draw participant boxes and lifelines
+                participants.forEach(p => {
+                    // Top box
+                    const topBox = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                    topBox.setAttribute('class', 'participant-box');
+                    topBox.setAttribute('x', p.x - 50);
+                    topBox.setAttribute('y', 30);
+                    topBox.setAttribute('width', 100);
+                    topBox.setAttribute('height', 36);
+                    this.mainGroup.appendChild(topBox);
+                    
+                    // Label
+                    const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                    label.setAttribute('class', 'participant-text');
+                    label.setAttribute('x', p.x);
+                    label.setAttribute('y', 52);
+                    label.textContent = p.label;
+                    this.mainGroup.appendChild(label);
+                    
+                    // Lifeline
+                    const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                    line.setAttribute('class', 'participant-line');
+                    line.setAttribute('x1', p.x);
+                    line.setAttribute('y1', 66);
+                    line.setAttribute('x2', p.x);
+                    line.setAttribute('y2', h - 30);
+                    this.mainGroup.appendChild(line);
+                    
+                    // Bottom box
+                    const bottomBox = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                    bottomBox.setAttribute('class', 'participant-box');
+                    bottomBox.setAttribute('x', p.x - 50);
+                    bottomBox.setAttribute('y', h - 30);
+                    bottomBox.setAttribute('width', 100);
+                    bottomBox.setAttribute('height', 26);
+                    this.mainGroup.appendChild(bottomBox);
+                });
+                
+                // Messages (sequence steps)
+                const messages = [
+                    { step: 1, from: 'ui', to: 'api', y: 100, label: 'Login Request', type: 'request' },
+                    { step: 2, from: 'api', to: 'db', y: 130, label: 'Validate User', type: 'request' },
+                    { step: 3, from: 'db', to: 'api', y: 160, label: 'User Data', type: 'response' },
+                    { step: 4, from: 'api', to: 'ui', y: 190, label: 'JWT Token', type: 'response' },
+                    { step: 5, from: 'agent', to: 'ws', y: 240, label: 'Connect with Keys', type: 'request' },
+                    { step: 6, from: 'ws', to: 'eb', y: 270, label: 'agent:register', type: 'request' },
+                    { step: 7, from: 'eb', to: 'svc', y: 300, label: 'Process Registration', type: 'request' },
+                    { step: 8, from: 'svc', to: 'db', y: 330, label: 'Store Agent', type: 'request' },
+                    { step: 9, from: 'db', to: 'svc', y: 360, label: 'Confirmation', type: 'response' },
+                    { step: 10, from: 'svc', to: 'eb', y: 390, label: 'agent:registered', type: 'response' },
+                    { step: 11, from: 'eb', to: 'ws', y: 420, label: 'Forward Event', type: 'response' },
+                    { step: 12, from: 'ws', to: 'agent', y: 450, label: 'Connected', type: 'response' }
+                ];
+                
+                const participantMap = {};
+                participants.forEach(p => participantMap[p.id] = p.x);
+                
+                messages.forEach(msg => {
+                    const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+                    g.setAttribute('class', 'sequence-step');
+                    g.setAttribute('data-step', msg.step);
+                    
+                    const fromX = participantMap[msg.from];
+                    const toX = participantMap[msg.to];
+                    const isResponse = msg.type === 'response';
+                    
+                    // Arrow line
+                    const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                    line.setAttribute('class', `message-line ${isResponse ? 'message-line-return' : ''}`);
+                    line.setAttribute('x1', fromX);
+                    line.setAttribute('y1', msg.y);
+                    line.setAttribute('x2', toX);
+                    line.setAttribute('y2', msg.y);
+                    line.setAttribute('marker-end', 'url(#arrowhead)');
+                    g.appendChild(line);
+                    
+                    // Message label background
+                    const midX = (fromX + toX) / 2;
+                    const textBg = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                    textBg.setAttribute('x', midX - 60);
+                    textBg.setAttribute('y', msg.y - 18);
+                    textBg.setAttribute('width', 120);
+                    textBg.setAttribute('height', 16);
+                    textBg.setAttribute('fill', 'var(--bg-secondary)');
+                    textBg.setAttribute('rx', 2);
+                    g.appendChild(textBg);
+                    
+                    // Message label
+                    const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                    text.setAttribute('class', 'message-text');
+                    text.setAttribute('x', midX);
+                    text.setAttribute('y', msg.y - 6);
+                    text.setAttribute('text-anchor', 'middle');
+                    text.textContent = msg.label;
+                    g.appendChild(text);
+                    
+                    // Step number
+                    const stepCircle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+                    stepCircle.setAttribute('cx', Math.min(fromX, toX) - 20);
+                    stepCircle.setAttribute('cy', msg.y);
+                    stepCircle.setAttribute('r', 10);
+                    stepCircle.setAttribute('fill', 'var(--accent)');
+                    g.appendChild(stepCircle);
+                    
+                    const stepNum = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                    stepNum.setAttribute('class', 'step-number');
+                    stepNum.setAttribute('x', Math.min(fromX, toX) - 20);
+                    stepNum.setAttribute('y', msg.y + 4);
+                    stepNum.setAttribute('text-anchor', 'middle');
+                    stepNum.setAttribute('fill', 'white');
+                    stepNum.textContent = msg.step;
+                    g.appendChild(stepNum);
+                    
+                    this.mainGroup.appendChild(g);
+                });
+                
+                document.getElementById('totalSteps').textContent = totalSteps;
+            }
+        }
+        
+        function showStep(step) {
+            const steps = document.querySelectorAll('.sequence-step');
+            steps.forEach(s => {
+                const stepNum = parseInt(s.dataset.step);
+                s.classList.toggle('visible', stepNum <= step);
+            });
+            document.getElementById('currentStep').textContent = step;
+        }
+        
+        function playSequence() {
+            if (isPlaying) {
+                pauseSequence();
+                return;
+            }
+            
+            isPlaying = true;
+            document.getElementById('playIcon').textContent = '⏸';
+            document.getElementById('playText').textContent = 'Pause';
+            
+            const speed = parseInt(document.getElementById('speedSelect').value);
+            
+            playInterval = setInterval(() => {
+                currentStep++;
+                if (currentStep > totalSteps) {
+                    pauseSequence();
+                    currentStep = totalSteps;
+                }
+                showStep(currentStep);
+            }, speed);
+        }
+        
+        function pauseSequence() {
+            isPlaying = false;
+            clearInterval(playInterval);
+            document.getElementById('playIcon').textContent = '▶';
+            document.getElementById('playText').textContent = 'Play Animation';
+        }
+        
+        function resetSequence() {
+            pauseSequence();
+            currentStep = 0;
+            showStep(0);
+        }
+        
+        // Initialize
+        const diagram = new SequenceDiagram('diagram-container', {
+            width: 1100,
+            height: 520
+        });
+        diagram.render();
+    </script>
+</body>
+</html>

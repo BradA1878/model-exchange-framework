@@ -38,6 +38,8 @@ interface Agent {
 
 #### Agent Lifecycle
 
+<div class="mermaid-fallback">
+
 ```mermaid
 stateDiagram-v2
     [*] --> Created
@@ -55,6 +57,10 @@ stateDiagram-v2
     Authenticated --> Disconnected: disconnect()
     Disconnected --> [*]
 ```
+
+</div>
+
+<iframe src="../diagram/agent-lifecycle.html" width="100%" height="650" style="border: none; border-radius: 10px; background: var(--bg-secondary);"></iframe>
 
 ### 2. Channels
 
@@ -134,6 +140,8 @@ interface Task {
 
 #### Task Lifecycle
 
+<div class="mermaid-fallback">
+
 ```mermaid
 graph LR
     A[Created] --> B[Pending]
@@ -144,6 +152,10 @@ graph LR
     F --> B
     E --> G[Archived]
 ```
+
+</div>
+
+<iframe src="../diagram/task-lifecycle.html" width="100%" height="420" style="border: none; border-radius: 10px; background: var(--bg-secondary);"></iframe>
 
 ### 4. Memory System
 
@@ -225,19 +237,25 @@ MXF uses events as the primary communication mechanism, enabling loose coupling 
 
 #### Event Flow
 
+<div class="mermaid-fallback">
+
 ```mermaid
 sequenceDiagram
     participant Source
     participant EventBus
     participant Handler1
     participant Handler2
-    
+
     Source->>EventBus: emit(event)
     EventBus->>Handler1: notify
     EventBus->>Handler2: notify
     Handler1->>EventBus: acknowledge
     Handler2->>EventBus: acknowledge
 ```
+
+</div>
+
+<iframe src="../diagram/architecture-communication-flow.html" width="100%" height="500" style="border: none; border-radius: 10px; background: var(--bg-secondary);"></iframe>
 
 ### 6. Authentication & Security
 
@@ -259,6 +277,8 @@ MXF implements a dual authentication system to support different use cases while
 
 #### Security Layers
 
+<div class="mermaid-fallback">
+
 ```mermaid
 graph TB
     A[Request] --> B[TLS Encryption]
@@ -267,11 +287,15 @@ graph TB
     D --> E[Input Validation]
     E --> F[Business Logic]
     F --> G[Audit Logging]
-    
+
     style B fill:#e8f5e9
     style C fill:#e3f2fd
     style D fill:#fff3e0
 ```
+
+</div>
+
+<iframe src="../diagram/security-layers.html" width="100%" height="530" style="border: none; border-radius: 10px; background: var(--bg-secondary);"></iframe>
 
 ### 7. Model Context Protocol (MCP)
 
@@ -481,6 +505,8 @@ interface ValidationMetrics {
 
 #### Integration Workflow
 
+<div class="mermaid-fallback">
+
 ```mermaid
 sequenceDiagram
     participant Agent
@@ -488,16 +514,16 @@ sequenceDiagram
     participant AutoCorrection
     participant PatternLearning
     participant ValidationPerf
-    
+
     Agent->>Interceptor: Execute Tool
     Interceptor->>AutoCorrection: Validate Parameters
-    
+
     alt Validation Fails
         AutoCorrection->>PatternLearning: Request Patterns
         PatternLearning-->>AutoCorrection: Return Patterns
         AutoCorrection->>AutoCorrection: Apply Correction
         AutoCorrection->>ValidationPerf: Record Attempt
-        
+
         alt Correction Success
             AutoCorrection-->>Interceptor: Corrected Parameters
             Interceptor-->>Agent: Success Result
@@ -511,6 +537,10 @@ sequenceDiagram
         ValidationPerf->>PatternLearning: Record Success
     end
 ```
+
+</div>
+
+<iframe src="../diagram/validation-system.html" width="100%" height="680" style="border: none; border-radius: 10px; background: var(--bg-secondary);"></iframe>
 
 ## Additional Concepts
 
@@ -537,6 +567,8 @@ sequenceDiagram
 
 ## Concept Relationships
 
+<div class="mermaid-fallback">
+
 ```mermaid
 graph TB
     subgraph "Core Entities"
@@ -545,30 +577,34 @@ graph TB
         T[Tasks]
         M[Memory]
     end
-    
+
     subgraph "Supporting Systems"
         E[Events]
         AU[Authentication]
         MC[MCP Tools]
         CL[Control Loops]
     end
-    
+
     A -->|participate in| C
     A -->|execute| T
     A -->|maintain| M
     C -->|contain| T
     C -->|share| M
-    
+
     E -->|connect| A
     E -->|notify| C
     AU -->|secure| A
     MC -->|extend| A
     CL -->|enhance| A
-    
+
     style A fill:#e3f2fd
     style C fill:#e8f5e9
     style E fill:#fff3e0
 ```
+
+</div>
+
+<iframe src="../diagram/concept-relationships.html" width="100%" height="520" style="border: none; border-radius: 10px; background: var(--bg-secondary);"></iframe>
 
 ## Best Practices
 

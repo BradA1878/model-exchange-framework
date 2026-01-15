@@ -41,6 +41,8 @@ import { createStrictValidator } from '../../shared/utils/validation';
 export interface IToolService {
     loadTools(filter?: { name?: string; channelId?: string }): Promise<ClientTool[]>;
     getCachedTools(): ClientTool[];
+    filterToolsByAllowed(tools: ClientTool[], allowedTools?: string[]): ClientTool[];
+    getCachedToolsFiltered(allowedTools?: string[]): ClientTool[];
     isLoaded(): boolean;
     getToolCount(): number;
     getTool(name: string): ClientTool | null;
@@ -193,6 +195,27 @@ export class MxfToolService implements IToolService {
      */
     public getCachedTools(): ClientTool[] {
         return this.tools;
+    }
+
+    /**
+     * Filter tools by the agent's current allowedTools list.
+     * If allowedTools is empty/undefined, returns all tools (no restriction).
+     * This is used to filter tools at the point of LLM request assembly.
+     */
+    public filterToolsByAllowed(tools: ClientTool[], allowedTools?: string[]): ClientTool[] {
+        if (!allowedTools || allowedTools.length === 0) {
+            return tools; // No restriction
+        }
+        return tools.filter(tool => allowedTools.includes(tool.name));
+    }
+
+    /**
+     * Get cached tools filtered by allowedTools.
+     * This ensures only allowed tools are sent to the LLM.
+     */
+    public getCachedToolsFiltered(allowedTools?: string[]): ClientTool[] {
+        const cached = this.getCachedTools();
+        return this.filterToolsByAllowed(cached, allowedTools);
     }
 
     /**

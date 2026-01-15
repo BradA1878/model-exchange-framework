@@ -32,6 +32,8 @@ import { Events } from '../../../events/EventNames';
 import { TaskEvents } from '../../../events/event-definitions/TaskEvents';
 import { createTaskEventPayload } from '../../../schemas/EventPayloadSchema';
 import { TaskCompletionConfig } from '../../../types/TaskCompletionTypes';
+import { MemoryService } from '../../../services/MemoryService';
+import { firstValueFrom } from 'rxjs';
 import { v4 as uuidv4 } from 'uuid';
 
 const logger = new Logger('debug', 'TaskPlanningTools', 'server');
@@ -137,21 +139,22 @@ export const task_create_with_plan: McpToolDefinition = {
                 }))
             };
             
-            // Store plan in channel memory
-            const memoryPayload = {
-                agentId: context.agentId,
-                channelId: context.channelId,
-                scope: 'channel',
-                key: `plan:${planId}`,
-                value: plan,
-                metadata: {
-                    type: 'task_completion_plan',
-                    taskTitle: input.title
+            // Store plan in channel memory using MemoryService
+            const memoryService = MemoryService.getInstance();
+            const channelMemory = await firstValueFrom(memoryService.getChannelMemory(context.channelId!));
+            const currentSharedState = channelMemory.sharedState || {};
+            await firstValueFrom(memoryService.updateChannelMemory(context.channelId!, {
+                sharedState: {
+                    ...currentSharedState,
+                    [`plan:${planId}`]: {
+                        ...plan,
+                        metadata: {
+                            type: 'task_completion_plan',
+                            taskTitle: input.title
+                        }
+                    }
                 }
-            };
-            
-            // Store plan in both channel memory and local storage for planning tools
-            EventBus.server.emit('memory:set', memoryPayload);
+            }));
             
             // Also store in planning tool's active plans for compatibility
             const activePlans = (global as any).activePlans || new Map();

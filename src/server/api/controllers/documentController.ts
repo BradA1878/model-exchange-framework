@@ -248,9 +248,28 @@ export const createDocument = async (req: AuthenticatedRequest, res: Response): 
             fileSize = file.size;
             mimeType = file.mimetype;
             originalFileName = file.originalname;
-            
-            // TODO: Implement file storage logic (local file system, S3, etc.)
-            // For now, we'll store content inline for text files
+
+            // Store file to local filesystem
+            const uploadDir = path.join(process.cwd(), 'uploads', 'documents');
+            try {
+                await fs.mkdir(uploadDir, { recursive: true });
+                const fileExtension = path.extname(originalFileName) || '';
+                const uniqueFileName = `${crypto.randomUUID()}${fileExtension}`;
+                filePath = path.join(uploadDir, uniqueFileName);
+
+                // If file has buffer (memory storage), write it; otherwise use the path
+                if (file.buffer) {
+                    await fs.writeFile(filePath, file.buffer);
+                } else if (file.path) {
+                    // File already saved by multer disk storage, just copy to our location
+                    await fs.copyFile(file.path, filePath);
+                }
+                logger.info(`File stored at: ${filePath}`);
+            } catch (storageError) {
+                logger.error(`Failed to store file: ${storageError}`);
+                // Continue without file storage - content will be stored inline if provided
+                filePath = undefined;
+            }
         } else if (content) {
             fileSize = Buffer.byteLength(content, 'utf8');
         }

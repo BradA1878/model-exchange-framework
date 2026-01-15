@@ -8,6 +8,8 @@ The MXF Validation & Error Prevention System is a comprehensive, multi-layered a
 
 ### Core Components
 
+<div class="mermaid-fallback">
+
 ```mermaid
 graph TD
     A[Tool Call Request] --> B[ValidationMiddleware]
@@ -15,23 +17,27 @@ graph TD
     C --> D[ValidationCacheService]
     C --> E[ParameterHintService]
     C --> F[RiskAssessmentEngine]
-    
+
     G[ValidationResult] --> H{Valid?}
     H -->|Yes| I[Execute Tool]
     H -->|No| J[AutoCorrectionService]
-    
+
     J --> K[CorrectionStrategyEngine]
     K --> L[PatternLearningService]
     K --> M[SafetyValidator]
-    
+
     N[PredictiveAnalyticsService] --> O[ErrorPredictionModel]
     N --> P[AnomalyDetectionEngine]
     N --> Q[RiskScoringModel]
-    
+
     R[ValidationAnalyticsService] --> S[MetricsAggregation]
     R --> T[TrendAnalysis]
     R --> U[PerformanceOptimization]
 ```
+
+</div>
+
+<iframe src="../diagram/validation-system.html" width="100%" height="680" style="border: none; border-radius: 10px; background: var(--bg-secondary);"></iframe>
 
 ### Service Layer Architecture
 

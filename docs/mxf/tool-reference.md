@@ -26,7 +26,7 @@ const agent = await sdk.createAgent({
 | Category | Tools | Description |
 |----------|-------|-------------|
 | [Communication & Collaboration](#communication--collaboration) | 11 | Agent messaging, discovery, and coordination |
-| [Control Loop & ORPAR](#control-loop--orpar) | 11 | ORPAR cognitive cycle management |
+| [Control Loop & ORPAR](#control-loop--orpar) | 17 | ORPAR cognitive cycle management (6 agent-driven + 11 server-orchestrated) |
 | [Task Management](#task-management) | 13 | Task creation, tracking, and effectiveness |
 | [Memory & Context](#memory--context) | 10 | Memory operations and semantic search |
 | [Development & Code](#development--code) | 20 | TypeScript, Git, testing, and code analysis |
@@ -65,7 +65,58 @@ Tools for agent-to-agent messaging and coordination.
 
 Tools for managing the ORPAR (Observe, Reason, Plan, Act, Reflect) cognitive cycle.
 
-### Lifecycle Management
+### ORPAR Cognitive Tools (Agent-Driven)
+
+These tools enable agents to **explicitly structure their thinking** using the ORPAR pattern. Flow validation enforces the cognitive cycle sequence and provides helpful guidance if phases are skipped.
+
+| Tool | Description |
+|------|-------------|
+| `orpar_observe` | Document observations about the current situation |
+| `orpar_reason` | Record reasoning and analysis based on observations |
+| `orpar_plan` | Create and document an action plan |
+| `orpar_act` | Record action execution and outcomes |
+| `orpar_reflect` | Document reflection and learnings from the cycle |
+| `orpar_status` | Check current ORPAR phase and cycle status |
+
+**Flow Validation:** `observe → reason → plan → act → reflect → observe (new cycle)`
+
+**Example:**
+```typescript
+// Document observation
+await agent.callTool('orpar_observe', {
+    observations: 'Q1: "Is it alive?" → YES',
+    keyFacts: ['The secret is alive']
+});
+
+// Document reasoning (required after observe)
+await agent.callTool('orpar_reason', {
+    analysis: 'Based on answers, likely a pet animal.',
+    confidence: 0.7
+});
+
+// Document plan (required after reason)
+await agent.callTool('orpar_plan', {
+    plan: 'Ask about size to narrow possibilities.'
+});
+
+// Execute action and document
+await agent.callTool('game_askQuestion', { question: 'Is it small?' });
+await agent.callTool('orpar_act', {
+    action: 'Asked size question',
+    outcome: 'YES'
+});
+
+// Document reflection (completes cycle)
+await agent.callTool('orpar_reflect', {
+    reflection: 'It is a small, living pet. Likely hamster or mouse.'
+});
+```
+
+### Control Loop Tools (Server-Orchestrated)
+
+These tools interact directly with the server-side control loop for automated orchestration.
+
+#### Lifecycle Management
 
 | Tool | Description |
 |------|-------------|
@@ -73,7 +124,7 @@ Tools for managing the ORPAR (Observe, Reason, Plan, Act, Reflect) cognitive cyc
 | `controlLoop_status` | Get current control loop status |
 | `controlLoop_stop` | Stop the running control loop |
 
-### ORPAR Phases
+#### ORPAR Phases
 
 | Tool | Description |
 |------|-------------|
@@ -83,7 +134,7 @@ Tools for managing the ORPAR (Observe, Reason, Plan, Act, Reflect) cognitive cyc
 | `controlLoop_execute` | Execute action phase - perform planned actions |
 | `controlLoop_reflect` | Execute reflection phase - evaluate outcomes |
 
-**Source Files:** `ControlLoopLifecycle.ts`, `ControlLoopPhases.ts`, `ControlLoopTools.ts`
+**Source Files:** `OrparTools.ts`, `ControlLoopLifecycle.ts`, `ControlLoopPhases.ts`, `ControlLoopTools.ts`
 
 ---
 

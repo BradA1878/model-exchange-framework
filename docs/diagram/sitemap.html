@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MXF Dashboard Sitemap</title>
+    <link rel="stylesheet" href="diagram-base.css">
+    <style>
+        .sitemap-node {
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        .sitemap-node:hover {
+            transform: scale(1.05);
+        }
+        .node-root { fill: #6366f1; }
+        .node-auth { fill: #22c55e; }
+        .node-main { fill: #14b8a6; }
+        .node-section { fill: #f59e0b; }
+        .node-page { fill: #3b82f6; }
+        .node-admin { fill: #ef4444; }
+        .tree-line {
+            stroke: var(--connection-line);
+            stroke-width: 2;
+            fill: none;
+        }
+        .breadcrumb {
+            display: flex;
+            gap: 0.5rem;
+            align-items: center;
+            padding: 0.75rem 1rem;
+            background: var(--bg-secondary);
+            border-radius: 8px;
+            margin-bottom: 1rem;
+            font-size: 0.9rem;
+        }
+        .breadcrumb-sep {
+            color: var(--text-muted);
+        }
+        .breadcrumb-item {
+            color: var(--accent);
+            cursor: pointer;
+        }
+        .breadcrumb-item:hover {
+            text-decoration: underline;
+        }
+        .breadcrumb-current {
+            color: var(--text-primary);
+            font-weight: 600;
+        }
+    </style>
+</head>
+<body>
+    <div class="diagram-container">
+        <header class="diagram-header">
+            <div>
+                <h1 class="diagram-title">Dashboard Sitemap</h1>
+                <p class="diagram-subtitle">Vue 3 + Vuetify application structure</p>
+            </div>
+            <button class="theme-toggle" onclick="toggleTheme()">
+                <span class="theme-toggle-icon">🌙</span>
+                <span class="theme-toggle-label">Dark</span>
+            </button>
+        </header>
+        
+        <div class="breadcrumb" id="breadcrumb">
+            <span class="breadcrumb-item" onclick="highlightPath('root')">Root</span>
+            <span class="breadcrumb-sep">→</span>
+            <span class="breadcrumb-current">Select a page</span>
+        </div>
+        
+        <div id="diagram-container"></div>
+        
+        <div class="legend">
+            <div class="legend-item">
+                <div class="legend-color" style="background: #6366f1;"></div>
+                <span>Root</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #22c55e;"></div>
+                <span>Auth Pages</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #14b8a6;"></div>
+                <span>Main Dashboard</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #f59e0b;"></div>
+                <span>Sections</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #ef4444;"></div>
+                <span>Admin Area</span>
+            </div>
+        </div>
+    </div>
+
+    <script src="diagram-utils.js"></script>
+    <script>
+        const siteStructure = {
+            root: { label: 'Root', type: 'root', x: 550, y: 40 },
+            children: [
+                { id: 'login', label: 'Login', type: 'auth', path: '/login' },
+                { id: 'magic', label: 'Magic Link', type: 'auth', path: '/magic-link' },
+                { 
+                    id: 'dashboard', 
+                    label: 'Dashboard', 
+                    type: 'main',
+                    path: '/dashboard',
+                    children: [
+                        { id: 'home', label: 'Home', type: 'page', path: '/dashboard/home' },
+                        { id: 'account', label: 'Account', type: 'page', path: '/dashboard/account' },
+                        { 
+                            id: 'analytics', 
+                            label: 'Analytics', 
+                            type: 'section',
+                            children: [
+                                { id: 'a-data', label: 'Data', type: 'page' },
+                                { id: 'a-charts', label: 'Charts', type: 'page' }
+                            ]
+                        },
+                        { 
+                            id: 'channels', 
+                            label: 'Channels', 
+                            type: 'section',
+                            children: [
+                                { id: 'c-memory', label: 'Memory', type: 'page' },
+                                { id: 'c-context', label: 'Context', type: 'page' },
+                                { id: 'c-docs', label: 'Docs', type: 'page' },
+                                { id: 'c-agents', label: 'Agents', type: 'page' },
+                                { id: 'c-tools', label: 'Tools', type: 'page' },
+                                { id: 'c-tasks', label: 'Tasks', type: 'page' }
+                            ]
+                        },
+                        { 
+                            id: 'admin', 
+                            label: 'Admin', 
+                            type: 'admin',
+                            children: [
+                                { id: 'ad-users', label: 'Users', type: 'page' },
+                                { id: 'ad-channels', label: 'Channels', type: 'page' },
+                                { id: 'ad-agents', label: 'Agents', type: 'page' },
+                                { id: 'ad-mcp', label: 'MCP Tools', type: 'page' },
+                                { id: 'ad-exec', label: 'Executions', type: 'page' },
+                                { id: 'ad-tasks', label: 'Tasks', type: 'page' },
+                                { id: 'ad-audit', label: 'Audit Logs', type: 'page' },
+                                { id: 'ad-sec', label: 'Security', type: 'page' },
+                                { id: 'ad-sys', label: 'System', type: 'page' }
+                            ]
+                        }
+                    ]
+                }
+            ]
+        };
+        
+        class SitemapDiagram extends MXFDiagram {
+            render() {
+                // Draw root
+                this.drawNode(550, 40, 'Root', 'root', 'root');
+                
+                // Level 1: Auth and Dashboard
+                const level1 = [
+                    { x: 150, label: 'Login', type: 'auth', id: 'login' },
+                    { x: 350, label: 'Magic Link', type: 'auth', id: 'magic' },
+                    { x: 700, label: 'Dashboard', type: 'main', id: 'dashboard' }
+                ];
+                
+                level1.forEach(node => {
+                    this.drawConnection(550, 60, node.x, 100);
+                    this.drawNode(node.x, 120, node.label, node.type, node.id);
+                });
+                
+                // Level 2: Dashboard children
+                const level2 = [
+                    { x: 100, label: 'Home', type: 'page', id: 'home' },
+                    { x: 250, label: 'Account', type: 'page', id: 'account' },
+                    { x: 450, label: 'Analytics', type: 'section', id: 'analytics', hasChildren: true },
+                    { x: 700, label: 'Channels', type: 'section', id: 'channels', hasChildren: true },
+                    { x: 950, label: 'Admin', type: 'admin', id: 'admin', hasChildren: true }
+                ];
+                
+                level2.forEach(node => {
+                    this.drawConnection(700, 140, node.x, 180);
+                    this.drawNode(node.x, 200, node.label, node.type, node.id);
+                });
+                
+                // Level 3: Analytics children
+                const analyticsChildren = [
+                    { x: 400, label: 'Data', type: 'page', id: 'a-data' },
+                    { x: 500, label: 'Charts', type: 'page', id: 'a-charts' }
+                ];
+                analyticsChildren.forEach(node => {
+                    this.drawConnection(450, 220, node.x, 260);
+                    this.drawNode(node.x, 280, node.label, node.type, node.id);
+                });
+                
+                // Level 3: Channels children
+                const channelsChildren = [
+                    { x: 550, label: 'Memory', type: 'page', id: 'c-memory' },
+                    { x: 630, label: 'Context', type: 'page', id: 'c-context' },
+                    { x: 710, label: 'Docs', type: 'page', id: 'c-docs' },
+                    { x: 790, label: 'Agents', type: 'page', id: 'c-agents' },
+                    { x: 870, label: 'Tools', type: 'page', id: 'c-tools' },
+                    { x: 950, label: 'Tasks', type: 'page', id: 'c-tasks' }
+                ];
+                channelsChildren.forEach(node => {
+                    this.drawConnection(700, 220, node.x, 260);
+                    this.drawNode(node.x, 280, node.label, node.type, node.id);
+                });
+                
+                // Level 3: Admin children (wrap to next row)
+                const adminChildren = [
+                    { x: 100, label: 'Users', type: 'page', id: 'ad-users' },
+                    { x: 200, label: 'Channels', type: 'page', id: 'ad-channels' },
+                    { x: 300, label: 'Agents', type: 'page', id: 'ad-agents' },
+                    { x: 400, label: 'MCP Tools', type: 'page', id: 'ad-mcp' },
+                    { x: 500, label: 'Executions', type: 'page', id: 'ad-exec' },
+                    { x: 600, label: 'Tasks', type: 'page', id: 'ad-tasks' },
+                    { x: 700, label: 'Audit Logs', type: 'page', id: 'ad-audit' },
+                    { x: 800, label: 'Security', type: 'page', id: 'ad-sec' },
+                    { x: 900, label: 'System', type: 'page', id: 'ad-sys' }
+                ];
+                
+                // Draw vertical line from Admin down
+                this.drawConnection(950, 220, 950, 340);
+                this.drawConnection(950, 340, 500, 340);
+                
+                adminChildren.forEach(node => {
+                    this.drawConnection(500, 340, node.x, 360);
+                    this.drawNode(node.x, 380, node.label, 'admin', node.id);
+                });
+            }
+            
+            drawNode(x, y, label, type, id) {
+                const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+                g.setAttribute('class', 'sitemap-node');
+                g.setAttribute('data-id', id);
+                
+                const colors = {
+                    root: '#6366f1',
+                    auth: '#22c55e',
+                    main: '#14b8a6',
+                    section: '#f59e0b',
+                    page: '#3b82f6',
+                    admin: '#ef4444'
+                };
+                
+                const width = Math.max(70, label.length * 8 + 20);
+                
+                const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                rect.setAttribute('x', x - width/2);
+                rect.setAttribute('y', y - 15);
+                rect.setAttribute('width', width);
+                rect.setAttribute('height', 30);
+                rect.setAttribute('rx', 6);
+                rect.setAttribute('fill', colors[type]);
+                g.appendChild(rect);
+                
+                const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                text.setAttribute('x', x);
+                text.setAttribute('y', y + 5);
+                text.setAttribute('text-anchor', 'middle');
+                text.setAttribute('fill', 'white');
+                text.setAttribute('font-size', '12px');
+                text.setAttribute('font-weight', '600');
+                text.textContent = label;
+                g.appendChild(text);
+                
+                g.addEventListener('click', () => this.selectNode(id, label));
+                
+                this.mainGroup.appendChild(g);
+            }
+            
+            drawConnection(x1, y1, x2, y2) {
+                const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                
+                let d;
+                if (x1 === x2) {
+                    d = `M ${x1} ${y1} L ${x2} ${y2}`;
+                } else {
+                    const midY = (y1 + y2) / 2;
+                    d = `M ${x1} ${y1} L ${x1} ${midY} L ${x2} ${midY} L ${x2} ${y2}`;
+                }
+                
+                path.setAttribute('d', d);
+                path.setAttribute('class', 'tree-line');
+                this.mainGroup.insertBefore(path, this.mainGroup.firstChild);
+            }
+            
+            selectNode(id, label) {
+                // Update breadcrumb
+                const breadcrumb = document.getElementById('breadcrumb');
+                breadcrumb.innerHTML = `
+                    <span class="breadcrumb-item" onclick="highlightPath('root')">Root</span>
+                    <span class="breadcrumb-sep">→</span>
+                    <span class="breadcrumb-current">${label}</span>
+                `;
+                
+                // Highlight selected node
+                document.querySelectorAll('.sitemap-node').forEach(n => {
+                    n.style.opacity = n.dataset.id === id ? '1' : '0.4';
+                });
+            }
+        }
+        
+        function highlightPath(path) {
+            document.querySelectorAll('.sitemap-node').forEach(n => {
+                n.style.opacity = '1';
+            });
+        }
+        
+        // Initialize
+        const diagram = new SitemapDiagram('diagram-container', {
+            width: 1050,
+            height: 440
+        });
+        diagram.render();
+    </script>
+</body>
+</html>

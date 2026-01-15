@@ -266,23 +266,23 @@ export class ToolHelpers {
      */
     static parseJsonToolCalls(text: string, availableTools: any[], logger: Logger): any[] {
         try {
-            
+
             // Remove markdown code block formatting if present
             const cleanedText = text.replace(/```json\s*/g, '').replace(/```\s*/g, '');
-            
+
             // Try to find JSON patterns in the text - improved regex for nested objects
             const jsonMatches = ToolHelpers.extractCompleteJsonObjects(cleanedText);
-            
+
             if (!jsonMatches || jsonMatches.length === 0) {
                 return [];
             }
-            
+
             const toolCalls: any[] = [];
-            
+
             // Look for tool name mentions in the text before the JSON
             const toolNameMatch = text.match(/(?:use|call|invoke)\s+`?([a-zA-Z_][a-zA-Z0-9_]*)`?/i);
             const mentionedToolName = toolNameMatch ? toolNameMatch[1] : null;
-            
+
             for (const jsonMatch of jsonMatches) {
                 try {
                     const parsed = JSON.parse(jsonMatch);

@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MXF Security Architecture</title>
+    <link rel="stylesheet" href="diagram-base.css">
+    <style>
+        .security-layer {
+            transition: all 0.3s ease;
+        }
+        .security-layer:hover {
+            filter: brightness(1.05);
+        }
+        .shield-icon {
+            animation: shieldPulse 2s ease infinite;
+        }
+        @keyframes shieldPulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.8; }
+        }
+        .flow-arrow {
+            stroke-dasharray: 8 4;
+            animation: arrowFlow 1s linear infinite;
+        }
+        @keyframes arrowFlow {
+            to { stroke-dashoffset: -12; }
+        }
+    </style>
+</head>
+<body>
+    <div class="diagram-container">
+        <header class="diagram-header">
+            <div>
+                <h1 class="diagram-title">Security Architecture</h1>
+                <p class="diagram-subtitle">Defense in depth with multi-layer protection</p>
+            </div>
+            <button class="theme-toggle" onclick="toggleTheme()">
+                <span class="theme-toggle-icon">🌙</span>
+                <span class="theme-toggle-label">Dark</span>
+            </button>
+        </header>
+        
+        <div id="diagram-container"></div>
+        
+        <div class="legend">
+            <div class="legend-item">
+                <div class="legend-color" style="background: #3b82f6;"></div>
+                <span>External Access</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #22c55e;"></div>
+                <span>Security Layers</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #f59e0b;"></div>
+                <span>Authentication</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #a855f7;"></div>
+                <span>Authorization</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #ef4444;"></div>
+                <span>Data Protection</span>
+            </div>
+        </div>
+    </div>
+
+    <script src="diagram-utils.js"></script>
+    <script>
+        class SecurityDiagram extends MXFDiagram {
+            render() {
+                // External Access section - compact layout
+                const externalGroup = this.createGroup(20, 35, 'External Access', 145, 190);
+                this.mainGroup.appendChild(externalGroup);
+
+                this.createSecurityNode(92, 105, '💻', 'Client Apps', '#3b82f6');
+                this.createSecurityNode(92, 175, '🤖', 'Agent SDKs', '#3b82f6');
+
+                // Security Layers section
+                const securityGroup = this.createGroup(180, 35, 'Security Layers', 145, 190);
+                this.mainGroup.appendChild(securityGroup);
+
+                this.createSecurityNode(252, 85, '🔐', 'TLS/SSL', '#22c55e', 'Encryption');
+                this.createSecurityNode(252, 135, '🛡️', 'WAF', '#22c55e', 'Firewall');
+                this.createSecurityNode(252, 185, '⏱️', 'Rate Limit', '#22c55e');
+
+                // Authentication section
+                const authGroup = this.createGroup(340, 35, 'Authentication', 160, 190);
+                this.mainGroup.appendChild(authGroup);
+
+                this.createSecurityNode(420, 85, '🎫', 'JWT Auth', '#f59e0b', 'Users');
+                this.createSecurityNode(420, 135, '🔑', 'API Keys', '#f59e0b', 'Agents');
+                this.createSecurityNode(420, 185, '📱', 'MFA', '#f59e0b', 'Multi-Factor');
+
+                // Authorization section
+                const authzGroup = this.createGroup(515, 35, 'Authorization', 160, 190);
+                this.mainGroup.appendChild(authzGroup);
+
+                this.createSecurityNode(595, 85, '👥', 'RBAC', '#a855f7', 'Role-Based');
+                this.createSecurityNode(595, 135, '📋', 'Perms', '#a855f7', 'Matrix');
+                this.createSecurityNode(595, 185, '🎯', 'Scope', '#a855f7', 'Resource');
+
+                // Data Protection section
+                const dataGroup = this.createGroup(690, 35, 'Data Protection', 160, 190);
+                this.mainGroup.appendChild(dataGroup);
+
+                this.createSecurityNode(770, 85, '🔒', 'Encrypt', '#ef4444', 'at Rest');
+                this.createSecurityNode(770, 135, '#️⃣', 'Hashing', '#ef4444', 'Passwords');
+                this.createSecurityNode(770, 185, '📝', 'Audit', '#ef4444', 'Logging');
+                
+                // Draw flow arrows
+                this.drawFlowArrows();
+            }
+            
+            createSecurityNode(x, y, icon, label, color, sublabel = '') {
+                const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+                g.setAttribute('class', 'security-layer');
+                
+                const height = sublabel ? 50 : 36;
+                const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                rect.setAttribute('x', x - 70);
+                rect.setAttribute('y', y - height/2);
+                rect.setAttribute('width', 140);
+                rect.setAttribute('height', height);
+                rect.setAttribute('rx', 6);
+                rect.setAttribute('fill', color);
+                rect.setAttribute('opacity', '0.9');
+                g.appendChild(rect);
+                
+                const iconEl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                iconEl.setAttribute('x', x - 50);
+                iconEl.setAttribute('y', sublabel ? y - 3 : y + 4);
+                iconEl.setAttribute('font-size', '16px');
+                iconEl.setAttribute('class', 'shield-icon');
+                iconEl.textContent = icon;
+                g.appendChild(iconEl);
+                
+                const labelEl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                labelEl.setAttribute('x', x - 28);
+                labelEl.setAttribute('y', sublabel ? y - 3 : y + 4);
+                labelEl.setAttribute('fill', 'white');
+                labelEl.setAttribute('font-weight', '600');
+                labelEl.setAttribute('font-size', '12px');
+                labelEl.textContent = label;
+                g.appendChild(labelEl);
+                
+                if (sublabel) {
+                    const subEl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                    subEl.setAttribute('x', x - 28);
+                    subEl.setAttribute('y', y + 14);
+                    subEl.setAttribute('fill', 'rgba(255,255,255,0.8)');
+                    subEl.setAttribute('font-size', '10px');
+                    subEl.textContent = sublabel;
+                    g.appendChild(subEl);
+                }
+                
+                this.mainGroup.appendChild(g);
+                return g;
+            }
+            
+            drawFlowArrows() {
+                const flows = [
+                    // External to Security
+                    { x1: 152, y1: 105, x2: 192, y2: 85 },
+                    { x1: 152, y1: 175, x2: 192, y2: 185 },
+                    // Security to Auth
+                    { x1: 312, y1: 85, x2: 360, y2: 85 },
+                    { x1: 312, y1: 185, x2: 360, y2: 185 },
+                    // Auth to Authz
+                    { x1: 480, y1: 85, x2: 535, y2: 85 },
+                    { x1: 480, y1: 135, x2: 535, y2: 135 },
+                    // Authz to Data
+                    { x1: 655, y1: 85, x2: 710, y2: 85 },
+                    { x1: 655, y1: 185, x2: 710, y2: 185 }
+                ];
+                
+                flows.forEach(flow => {
+                    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                    path.setAttribute('d', `M ${flow.x1} ${flow.y1} L ${flow.x2} ${flow.y2}`);
+                    path.setAttribute('class', 'edge flow-arrow');
+                    path.setAttribute('marker-end', 'url(#arrowhead)');
+                    this.mainGroup.insertBefore(path, this.mainGroup.firstChild);
+                });
+            }
+        }
+        
+        // Initialize with more compact dimensions
+        const diagram = new SecurityDiagram('diagram-container', {
+            width: 900,
+            height: 280
+        });
+        diagram.render();
+    </script>
+</body>
+</html>

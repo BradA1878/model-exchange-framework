@@ -20,6 +20,8 @@ SystemLLM is a server-side service that handles all AI-powered decision-making a
 
 SystemLLM uses a **one-instance-per-channel** architecture:
 
+<div class="mermaid-fallback">
+
 ```mermaid
 graph TB
     subgraph "Client Layer"
@@ -27,54 +29,58 @@ graph TB
         A2[Agent 2]
         A3[Agent 3]
     end
-    
+
     subgraph "Server Layer"
         SLSM[SystemLlmServiceManager<br/>Singleton]
-        
+
         subgraph "Channel A"
             SLS1[SystemLlmService<br/>Instance A]
             CL1[ControlLoop A]
         end
-        
+
         subgraph "Channel B"
             SLS2[SystemLlmService<br/>Instance B]
             CL2[ControlLoop B]
         end
-        
+
         subgraph "Channel C"
             SLS3[SystemLlmService<br/>Instance C]
             CL3[ControlLoop C]
         end
     end
-    
+
     subgraph "LLM Providers"
         OR[OpenRouter]
         GEM[Gemini]
         OAI[OpenAI]
         ANT[Anthropic]
     end
-    
+
     A1 -->|ORPAR Events| CL1
     A2 -->|ORPAR Events| CL2
     A3 -->|ORPAR Events| CL3
-    
+
     CL1 -->|Request AI| SLS1
     CL2 -->|Request AI| SLS2
     CL3 -->|Request AI| SLS3
-    
+
     SLSM -->|Creates & Manages| SLS1
     SLSM -->|Creates & Manages| SLS2
     SLSM -->|Creates & Manages| SLS3
-    
+
     SLS1 -->|API Calls| OR
     SLS2 -->|API Calls| GEM
     SLS3 -->|API Calls| OAI
-    
+
     style SLSM fill:#f5e1e1
     style SLS1 fill:#e1f5e1
     style SLS2 fill:#e1f5e1
     style SLS3 fill:#e1f5e1
 ```
+
+</div>
+
+<iframe src="../diagram/per-channel-instance.html" width="100%" height="540" style="border: none; border-radius: 10px; background: var(--bg-secondary);"></iframe>
 
 **Key Benefits**:
 - **Isolation**: Channel A's operations don't affect Channel B

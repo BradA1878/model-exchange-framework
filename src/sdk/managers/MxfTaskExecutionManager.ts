@@ -95,23 +95,34 @@ export class MxfTaskExecutionManager {
      * Execute task in a continuous loop until agent signals completion
      */
     private async executeTaskLoop(taskRequest: any): Promise<void> {
-        
+
         // Get available tools from task request or use cached tools
         let availableTools: any[] = [];
-        
+
         if (taskRequest.tools && taskRequest.tools.length > 0) {
             // Use provided tools from task request
             availableTools = taskRequest.tools;
         } else {
             // Get cached tools - FAIL FAST if not available
             availableTools = this.callbacks.getCachedTools();
-            
+
             if (!availableTools || availableTools.length === 0) {
                 throw new Error('No cached tools available - cannot execute task');
             }
-            
+
         }
-        
+
+        // CRITICAL: Filter tools by allowedTools to ensure only permitted tools are sent to LLM
+        // This is essential for phase-gated tool systems where allowedTools changes dynamically
+        const allowedTools = this.callbacks.getAllowedTools();
+        if (allowedTools && allowedTools.length > 0) {
+            const originalCount = availableTools.length;
+            availableTools = availableTools.filter((tool: any) =>
+                allowedTools.includes(tool.name)
+            );
+            this.logger.debug(`🔒 Tool filtering: ${originalCount} → ${availableTools.length} tools (allowedTools: ${allowedTools.join(', ')})`);
+        }
+
         // Create comprehensive task prompt with context
         const taskPrompt = this.createTaskPrompt(taskRequest);
         

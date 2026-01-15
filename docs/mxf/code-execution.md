@@ -10,42 +10,52 @@ The **CodeExecutionSandboxService** enables agents to execute JavaScript and Typ
 
 Code execution uses **VM2** for sandboxing with complete isolation:
 
+<div class="mermaid-fallback">
+
+```mermaid
+flowchart TB
+    subgraph Request["📥 Agent Code Request"]
+        A[Code to Execute]
+    end
+
+    subgraph Validation["🔒 ProactiveValidationService"]
+        B[BLOCKING - validation required]
+    end
+
+    subgraph Security["🛡️ CodeExecutionSandboxService"]
+        C1[Pattern Detection]
+        C2[Security Validation]
+        C3[Resource Monitoring]
+    end
+
+    subgraph Sandbox["🔐 VM2 Isolated Sandbox"]
+        D1["❌ No file system access"]
+        D2["❌ No network access"]
+        D3["❌ No process manipulation"]
+        D4["✅ Safe built-ins only"]
+    end
+
+    subgraph Persistence["💾 Result + Persistence"]
+        E1[MongoDB audit trail]
+        E2[Event emission]
+        E3[Pattern learning]
+    end
+
+    Request --> Validation
+    Validation --> Security
+    Security --> Sandbox
+    Sandbox --> Persistence
+
+    style Request fill:#3b82f6
+    style Validation fill:#f59e0b
+    style Security fill:#a855f7
+    style Sandbox fill:#ef4444
+    style Persistence fill:#22c55e
 ```
-┌─────────────────────────────────────────┐
-│          Agent Code Request              │
-└──────────────┬──────────────────────────┘
-               │
-               ▼
-┌─────────────────────────────────────────┐
-│   ProactiveValidationService             │
-│   (BLOCKING - validation required)       │
-└──────────────┬──────────────────────────┘
-               │
-               ▼
-┌─────────────────────────────────────────┐
-│   CodeExecutionSandboxService            │
-│   • Pattern Detection                    │
-│   • Security Validation                  │
-│   • Resource Monitoring                  │
-└──────────────┬──────────────────────────┘
-               │
-               ▼
-┌─────────────────────────────────────────┐
-│        VM2 Isolated Sandbox              │
-│   ❌ No file system access               │
-│   ❌ No network access                   │
-│   ❌ No process manipulation             │
-│   ✅ Safe built-ins only                 │
-└──────────────┬──────────────────────────┘
-               │
-               ▼
-┌─────────────────────────────────────────┐
-│    Execution Result + Persistence        │
-│    • MongoDB audit trail                 │
-│    • Event emission                      │
-│    • Pattern learning                    │
-└─────────────────────────────────────────┘
-```
+
+</div>
+
+<iframe src="../diagram/sandbox-isolation.html" width="100%" height="620" style="border: none; border-radius: 10px; background: var(--bg-secondary);"></iframe>
 
 ### Security Layers
 

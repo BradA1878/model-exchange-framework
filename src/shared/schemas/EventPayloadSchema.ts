@@ -198,6 +198,19 @@ export interface AgentLeaveEventData {
 export type AgentLeaveEventPayload = BaseEventPayload<AgentLeaveEventData>;
 
 /**
+ * Data for allowed tools update events.
+ * Used when dynamically changing an agent's allowed tools during runtime.
+ */
+export interface AllowedToolsUpdateEventData {
+    allowedTools: string[];
+}
+
+/**
+ * Payload type for allowed tools update events
+ */
+export type AllowedToolsUpdateEventPayload = BaseEventPayload<AllowedToolsUpdateEventData>;
+
+/**
  * Data for channel-related events (e.g., created, joined, left, deleted).
  */
 export interface ChannelEventData {
@@ -607,6 +620,31 @@ export function createAgentEventPayload(
     options: { source?: string; eventId?: string; timestamp?: number; } = {}
 ): AgentEventPayload {
     return createBaseEventPayload<AgentEventData>(eventType, agentId, channelId, agentData, options);
+}
+
+/**
+ * Creates an AllowedToolsUpdateEventPayload.
+ * Used when dynamically changing an agent's allowed tools during runtime.
+ *
+ * @param eventType - The event type (e.g., Events.Agent.ALLOWED_TOOLS_UPDATE).
+ * @param agentId - The Agent ID whose tools are being updated.
+ * @param channelId - The Channel ID context for the update.
+ * @param allowedTools - The new list of allowed tool names.
+ * @param options - Optional base event payload options.
+ * @returns An AllowedToolsUpdateEventPayload.
+ */
+export function createAllowedToolsUpdateEventPayload(
+    eventType: EventName | string,
+    agentId: AgentId,
+    channelId: ChannelId,
+    allowedTools: string[],
+    options: { source?: string; eventId?: string; timestamp?: number; } = {}
+): AllowedToolsUpdateEventPayload {
+    return createBaseEventPayload<AllowedToolsUpdateEventData>(
+        eventType, agentId, channelId,
+        { allowedTools },
+        options
+    );
 }
 
 /**

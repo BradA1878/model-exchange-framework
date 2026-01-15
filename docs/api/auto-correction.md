@@ -13,46 +13,52 @@ The Auto-Correction System is designed to:
 
 ## Architecture
 
+<div class="mermaid-fallback">
+
 ```mermaid
 graph TB
     subgraph "Auto-Correction System"
         IC[Interceptor] --> AS[AutoCorrectionService]
         AS --> CSE[CorrectionStrategyEngine]
         AS --> RWS[RecoveryWorkflowService]
-        
+
         subgraph "Strategies"
             TP[Type Conversion]
             MP[Missing Parameters]
             UP[Unknown Properties]
             CV[Constraint Violations]
         end
-        
+
         CSE --> TP
         CSE --> MP
         CSE --> UP
         CSE --> CV
     end
-    
+
     subgraph "Learning & Analytics"
         PLS[PatternLearningService]
         VPS[ValidationPerformanceService]
         AIS[AutoCorrectionIntegrationService]
     end
-    
+
     AS --> PLS
     AS --> VPS
     AS --> AIS
-    
+
     subgraph "Storage"
         MongoDB[(MongoDB)]
     end
-    
+
     PLS --> MongoDB
     VPS --> MongoDB
-    
+
     style AS fill:#f9f,stroke:#333,stroke-width:2px
     style CSE fill:#bbf,stroke:#333,stroke-width:2px
 ```
+
+</div>
+
+<iframe src="../diagram/validation-system.html" width="100%" height="680" style="border: none; border-radius: 10px; background: var(--bg-secondary);"></iframe>
 
 ## REST API Endpoints
 

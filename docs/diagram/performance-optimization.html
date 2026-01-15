@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MXF Performance Optimization</title>
+    <link rel="stylesheet" href="diagram-base.css">
+    <style>
+        .optimization-stage {
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        .optimization-stage:hover {
+            filter: brightness(1.1) drop-shadow(0 4px 12px var(--shadow));
+        }
+        .flow-indicator {
+            stroke-dasharray: 8 4;
+            animation: flowPulse 1.5s linear infinite;
+        }
+        @keyframes flowPulse {
+            to { stroke-dashoffset: -12; }
+        }
+        .perf-metric {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 9px;
+            fill: var(--text-muted);
+        }
+    </style>
+</head>
+<body>
+    <div class="diagram-container">
+        <header class="diagram-header">
+            <div>
+                <h1 class="diagram-title">Performance Optimization</h1>
+                <p class="diagram-subtitle">Multi-layer optimization strategy for high-performance MXF</p>
+            </div>
+            <button class="theme-toggle" onclick="toggleTheme()">
+                <span class="theme-toggle-icon">🌙</span>
+                <span class="theme-toggle-label">Dark</span>
+            </button>
+        </header>
+
+        <div id="diagram-container"></div>
+
+        <div class="legend">
+            <div class="legend-item">
+                <div class="legend-color" style="background: #3b82f6;"></div>
+                <span>Frontend</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #22c55e;"></div>
+                <span>API Layer</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #f59e0b;"></div>
+                <span>Caching</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #a855f7;"></div>
+                <span>Database</span>
+            </div>
+        </div>
+    </div>
+
+    <script src="diagram-utils.js"></script>
+    <script>
+        const optimizations = {
+            // Frontend
+            cdn: { icon: '🌐', label: 'CDN', sublabel: 'Static Assets', color: '#3b82f6', desc: 'Content Delivery Network for fast static asset delivery' },
+            lazy: { icon: '⏳', label: 'Lazy Load', sublabel: 'Components', color: '#3b82f6', desc: 'Load components on-demand to reduce initial bundle' },
+            browserCache: { icon: '💾', label: 'Browser', sublabel: 'Caching', color: '#3b82f6', desc: 'Client-side caching for repeat visits' },
+            // API
+            pool: { icon: '🔗', label: 'Connection', sublabel: 'Pooling', color: '#22c55e', desc: 'Reuse database connections for efficiency' },
+            batch: { icon: '📦', label: 'Request', sublabel: 'Batching', color: '#22c55e', desc: 'Combine multiple requests into single calls' },
+            compress: { icon: '🗜️', label: 'Response', sublabel: 'Compression', color: '#22c55e', desc: 'Gzip/Brotli compression for smaller payloads' },
+            // Caching
+            memCache: { icon: '⚡', label: 'In-Memory', sublabel: 'Cache', color: '#f59e0b', desc: 'Ultra-fast L1 cache for hot data' },
+            redisCache: { icon: '🔴', label: 'Redis', sublabel: 'Cache', color: '#f59e0b', desc: 'Distributed L2 cache for shared state' },
+            queryCache: { icon: '📋', label: 'Query Result', sublabel: 'Cache', color: '#f59e0b', desc: 'Cache expensive query results' },
+            // Database
+            index: { icon: '📑', label: 'Query', sublabel: 'Indexing', color: '#a855f7', desc: 'Optimized indexes for fast lookups' },
+            shard: { icon: '🔀', label: 'Data', sublabel: 'Sharding', color: '#a855f7', desc: 'Horizontal partitioning for scale' },
+            replica: { icon: '📚', label: 'Read', sublabel: 'Replicas', color: '#a855f7', desc: 'Read replicas for query distribution' }
+        };
+
+        class PerformanceDiagram extends MXFDiagram {
+            render() {
+                // Create section groups
+                this.createSectionGroup(30, 40, 'Frontend Optimizations', 210, 145, '#3b82f6');
+                this.createSectionGroup(260, 40, 'API Optimizations', 210, 145, '#22c55e');
+                this.createSectionGroup(490, 40, 'Caching Strategy', 210, 145, '#f59e0b');
+                this.createSectionGroup(720, 40, 'Database Optimizations', 210, 145, '#a855f7');
+
+                // Frontend nodes
+                this.createOptNode(90, 95, 'cdn');
+                this.createOptNode(90, 150, 'lazy');
+                this.createOptNode(180, 122, 'browserCache');
+
+                // API nodes
+                this.createOptNode(320, 95, 'pool');
+                this.createOptNode(320, 150, 'batch');
+                this.createOptNode(410, 122, 'compress');
+
+                // Caching nodes
+                this.createOptNode(550, 95, 'memCache');
+                this.createOptNode(550, 150, 'redisCache');
+                this.createOptNode(640, 122, 'queryCache');
+
+                // Database nodes
+                this.createOptNode(780, 95, 'index');
+                this.createOptNode(780, 150, 'shard');
+                this.createOptNode(870, 122, 'replica');
+
+                // Draw flow arrows
+                this.drawFlowArrows();
+
+                // Add performance metrics
+                this.addMetrics();
+            }
+
+            createSectionGroup(x, y, label, width, height, color) {
+                const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+
+                const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                rect.setAttribute('x', x);
+                rect.setAttribute('y', y);
+                rect.setAttribute('width', width);
+                rect.setAttribute('height', height);
+                rect.setAttribute('rx', 10);
+                rect.setAttribute('fill', color);
+                rect.setAttribute('opacity', '0.12');
+                rect.setAttribute('stroke', color);
+                rect.setAttribute('stroke-width', '2');
+                g.appendChild(rect);
+
+                const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                text.setAttribute('x', x + width/2);
+                text.setAttribute('y', y + 22);
+                text.setAttribute('text-anchor', 'middle');
+                text.setAttribute('fill', color);
+                text.setAttribute('font-weight', '700');
+                text.setAttribute('font-size', '12px');
+                text.textContent = label;
+                g.appendChild(text);
+
+                this.mainGroup.appendChild(g);
+            }
+
+            createOptNode(x, y, key) {
+                const data = optimizations[key];
+                const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+                g.setAttribute('class', 'optimization-stage');
+
+                const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                rect.setAttribute('x', x - 45);
+                rect.setAttribute('y', y - 25);
+                rect.setAttribute('width', 90);
+                rect.setAttribute('height', 50);
+                rect.setAttribute('rx', 8);
+                rect.setAttribute('fill', data.color);
+                rect.setAttribute('opacity', '0.9');
+                g.appendChild(rect);
+
+                const icon = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                icon.setAttribute('x', x - 30);
+                icon.setAttribute('y', y + 5);
+                icon.setAttribute('font-size', '16px');
+                icon.textContent = data.icon;
+                g.appendChild(icon);
+
+                const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                label.setAttribute('x', x - 10);
+                label.setAttribute('y', y - 3);
+                label.setAttribute('fill', 'white');
+                label.setAttribute('font-weight', '600');
+                label.setAttribute('font-size', '10px');
+                label.textContent = data.label;
+                g.appendChild(label);
+
+                const sublabel = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                sublabel.setAttribute('x', x - 10);
+                sublabel.setAttribute('y', y + 11);
+                sublabel.setAttribute('fill', 'rgba(255,255,255,0.8)');
+                sublabel.setAttribute('font-size', '9px');
+                sublabel.textContent = data.sublabel;
+                g.appendChild(sublabel);
+
+                // Tooltip
+                g.addEventListener('mouseenter', (e) => this.showTooltip(e, data.label, data.desc));
+                g.addEventListener('mouseleave', () => this.hideTooltip());
+
+                this.mainGroup.appendChild(g);
+            }
+
+            drawFlowArrows() {
+                // Internal flow arrows within sections
+                this.drawFlowArrow(135, 95, 135, 150);
+                this.drawFlowArrow(135, 122, 180, 122);
+
+                this.drawFlowArrow(365, 95, 365, 150);
+                this.drawFlowArrow(365, 122, 410, 122);
+
+                this.drawFlowArrow(595, 95, 595, 150);
+                this.drawFlowArrow(595, 122, 640, 122);
+
+                this.drawFlowArrow(825, 95, 825, 150);
+                this.drawFlowArrow(825, 122, 870, 122);
+
+                // Section-to-section arrows
+                this.drawSectionArrow(240, 122, 260, 122);
+                this.drawSectionArrow(470, 122, 490, 122);
+                this.drawSectionArrow(700, 122, 720, 122);
+            }
+
+            drawFlowArrow(x1, y1, x2, y2) {
+                const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                line.setAttribute('x1', x1);
+                line.setAttribute('y1', y1);
+                line.setAttribute('x2', x2);
+                line.setAttribute('y2', y2);
+                line.setAttribute('class', 'edge');
+                line.setAttribute('stroke-width', '1.5');
+                line.setAttribute('opacity', '0.5');
+                this.mainGroup.insertBefore(line, this.mainGroup.firstChild);
+            }
+
+            drawSectionArrow(x1, y1, x2, y2) {
+                const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                path.setAttribute('d', `M ${x1} ${y1} L ${x2} ${y2}`);
+                path.setAttribute('class', 'edge flow-indicator');
+                path.setAttribute('stroke-width', '3');
+                path.setAttribute('marker-end', 'url(#arrowhead)');
+                this.mainGroup.insertBefore(path, this.mainGroup.firstChild);
+            }
+
+            addMetrics() {
+                const metrics = [
+                    { x: 135, y: 195, text: '~80% faster load' },
+                    { x: 365, y: 195, text: '~60% less latency' },
+                    { x: 595, y: 195, text: '~95% cache hit' },
+                    { x: 825, y: 195, text: '~10x query speed' }
+                ];
+
+                metrics.forEach(m => {
+                    const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                    text.setAttribute('x', m.x);
+                    text.setAttribute('y', m.y);
+                    text.setAttribute('text-anchor', 'middle');
+                    text.setAttribute('class', 'perf-metric');
+                    text.textContent = m.text;
+                    this.mainGroup.appendChild(text);
+                });
+            }
+        }
+
+        // Initialize
+        const diagram = new PerformanceDiagram('diagram-container', {
+            width: 960,
+            height: 220
+        });
+        diagram.render();
+    </script>
+</body>
+</html>

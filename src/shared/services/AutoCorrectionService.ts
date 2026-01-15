@@ -433,9 +433,11 @@ export class AutoCorrectionService {
                 }
 
                 // Try to get successful patterns for this tool
+                // Uses 'default' channel since strategy context doesn't include channel info
+                // Patterns are aggregated across channels for global learning
                 try {
                     const patterns = await this.patternService.getEnhancedPatterns(
-                        'default' as ChannelId, // TODO: Get actual channel from context
+                        'default' as ChannelId,
                         toolName,
                         true
                     );
@@ -940,9 +942,22 @@ export class AutoCorrectionService {
 
     /**
      * Audit correction attempt
+     * Logs correction attempts for analytics and debugging
      */
     private async auditCorrectionAttempt(attempt: CorrectionAttempt): Promise<void> {
-        // TODO: Implement audit logging to database or external system
+        // Log correction attempt for analytics
+        this.logger.info(`Correction attempt: tool=${attempt.toolName}, ` +
+            `strategy=${attempt.strategy}, success=${attempt.successful}, ` +
+            `confidence=${attempt.confidence.toFixed(2)}`);
+
+        // Emit event for external systems to capture (can be persisted by listeners)
+        EventBus.server.emit('correction:attempt', {
+            toolName: attempt.toolName,
+            strategy: attempt.strategy,
+            successful: attempt.successful,
+            confidence: attempt.confidence,
+            timestamp: Date.now()
+        });
     }
 
     /**

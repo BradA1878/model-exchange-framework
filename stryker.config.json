@@ -1,0 +1,38 @@
+{
+  "$schema": "./node_modules/@stryker-mutator/core/schema/stryker-schema.json",
+  "packageManager": "npm",
+  "reporters": ["html", "clear-text", "progress"],
+  "testRunner": "jest",
+  "jest": {
+    "configFile": "tests/jest.unit.config.ts"
+  },
+  "checkers": [],
+  "mutate": [
+    "src/shared/schemas/**/*.ts",
+    "src/shared/protocols/mcp/McpToolCallParser.ts",
+    "src/shared/protocols/mcp/McpToolSchema.ts",
+    "src/shared/utils/validation.ts",
+    "src/shared/types/TaskTypes.ts",
+    "!src/**/*.test.ts",
+    "!src/**/*.spec.ts",
+    "!src/**/index.ts"
+  ],
+  "ignorePatterns": [
+    "**/.claude/**",
+    "node_modules/**",
+    "dist/**",
+    ".stryker-tmp/**",
+    "**/*.sock"
+  ],
+  "timeoutMS": 10000,
+  "concurrency": 4,
+  "coverageAnalysis": "perTest",
+  "thresholds": {
+    "high": 80,
+    "low": 60,
+    "break": 50
+  },
+  "disableTypeChecks": "**/*.ts",
+  "incremental": true,
+  "incrementalFile": ".stryker-tmp/incremental.json"
+}

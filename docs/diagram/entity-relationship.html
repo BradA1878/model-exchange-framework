@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MXF Entity Relationship Diagram</title>
+    <link rel="stylesheet" href="diagram-base.css">
+    <style>
+        .entity {
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        .entity:hover {
+            filter: drop-shadow(0 4px 16px var(--shadow));
+        }
+        .entity.selected {
+            filter: drop-shadow(0 0 20px var(--accent));
+        }
+        .entity-header {
+            fill: var(--accent);
+        }
+        .entity-body {
+            fill: var(--node-bg);
+            stroke: var(--border);
+        }
+        .attribute {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 10px;
+            fill: var(--text-secondary);
+        }
+        .attribute-pk {
+            fill: var(--accent);
+            font-weight: 600;
+        }
+        .attribute-fk {
+            fill: #f59e0b;
+        }
+        .relationship-line {
+            stroke: var(--connection-line);
+            stroke-width: 1.5;
+            fill: none;
+        }
+        .cardinality {
+            font-size: 11px;
+            font-weight: 700;
+            fill: var(--text-muted);
+        }
+        .entity-detail {
+            position: fixed;
+            right: 2rem;
+            top: 8rem;
+            width: 300px;
+            max-height: 70vh;
+            overflow-y: auto;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 1.25rem;
+            opacity: 0;
+            transform: translateX(20px);
+            transition: all 0.3s ease;
+            z-index: 100;
+        }
+        .entity-detail.visible {
+            opacity: 1;
+            transform: translateX(0);
+        }
+        .entity-detail h3 {
+            color: var(--accent);
+            margin-bottom: 0.75rem;
+        }
+        .field-list {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.8rem;
+        }
+        .field-list dt {
+            color: var(--text-primary);
+            margin-top: 0.5rem;
+        }
+        .field-list dd {
+            color: var(--text-muted);
+            margin-left: 1rem;
+        }
+        .field-pk::before { content: '🔑 '; }
+        .field-fk::before { content: '🔗 '; }
+    </style>
+</head>
+<body>
+    <div class="diagram-container">
+        <header class="diagram-header">
+            <div>
+                <h1 class="diagram-title">Entity Relationship Diagram</h1>
+                <p class="diagram-subtitle">MXF core data model and relationships</p>
+            </div>
+            <button class="theme-toggle" onclick="toggleTheme()">
+                <span class="theme-toggle-icon">🌙</span>
+                <span class="theme-toggle-label">Dark</span>
+            </button>
+        </header>
+        
+        <div id="diagram-container"></div>
+        
+        <div class="entity-detail" id="entityDetail">
+            <h3 id="entityName">Select an Entity</h3>
+            <p id="entityDesc" style="color: var(--text-secondary); font-size: 0.9rem; margin-bottom: 1rem;">
+                Click on any entity to see its full schema.
+            </p>
+            <dl class="field-list" id="fieldList"></dl>
+        </div>
+        
+        <div class="legend">
+            <div class="legend-item">
+                <span style="color: var(--accent);">🔑</span>
+                <span>Primary Key</span>
+            </div>
+            <div class="legend-item">
+                <span style="color: #f59e0b;">🔗</span>
+                <span>Foreign Key</span>
+            </div>
+            <div class="legend-item">
+                <span>||--o{</span>
+                <span>One to Many</span>
+            </div>
+            <div class="legend-item">
+                <span>}o--o{</span>
+                <span>Many to Many</span>
+            </div>
+        </div>
+    </div>
+
+    <script src="diagram-utils.js"></script>
+    <script>
+        const entities = {
+            User: {
+                x: 100, y: 100, width: 160, height: 140,
+                desc: 'User accounts for dashboard access',
+                fields: [
+                    { name: '_id', type: 'ObjectId', pk: true },
+                    { name: 'username', type: 'string' },
+                    { name: 'email', type: 'string' },
+                    { name: 'password', type: 'string' },
+                    { name: 'role', type: 'string' },
+                    { name: 'isActive', type: 'boolean' }
+                ]
+            },
+            Channel: {
+                x: 350, y: 100, width: 160, height: 160,
+                desc: 'Communication channels for agent collaboration',
+                fields: [
+                    { name: '_id', type: 'ObjectId', pk: true },
+                    { name: 'channelId', type: 'string', uk: true },
+                    { name: 'name', type: 'string' },
+                    { name: 'description', type: 'string' },
+                    { name: 'isPrivate', type: 'boolean' },
+                    { name: 'createdBy', type: 'ObjectId', fk: 'User' },
+                    { name: 'participants', type: 'array' }
+                ]
+            },
+            Agent: {
+                x: 600, y: 100, width: 160, height: 140,
+                desc: 'AI agent registrations and status',
+                fields: [
+                    { name: '_id', type: 'ObjectId', pk: true },
+                    { name: 'agentId', type: 'string', uk: true },
+                    { name: 'status', type: 'string' },
+                    { name: 'capabilities', type: 'array' },
+                    { name: 'lastActive', type: 'timestamp' }
+                ]
+            },
+            Task: {
+                x: 850, y: 100, width: 160, height: 180,
+                desc: 'Task management and assignment',
+                fields: [
+                    { name: '_id', type: 'ObjectId', pk: true },
+                    { name: 'channelId', type: 'string', fk: 'Channel' },
+                    { name: 'title', type: 'string' },
+                    { name: 'priority', type: 'string' },
+                    { name: 'status', type: 'string' },
+                    { name: 'assignedAgentId', type: 'string', fk: 'Agent' },
+                    { name: 'createdBy', type: 'string' }
+                ]
+            },
+            ChannelKey: {
+                x: 100, y: 320, width: 160, height: 140,
+                desc: 'API authentication keys for channels',
+                fields: [
+                    { name: '_id', type: 'ObjectId', pk: true },
+                    { name: 'keyId', type: 'string', uk: true },
+                    { name: 'secretKey', type: 'string' },
+                    { name: 'channelId', type: 'string', fk: 'Channel' },
+                    { name: 'createdBy', type: 'ObjectId', fk: 'User' },
+                    { name: 'isActive', type: 'boolean' }
+                ]
+            },
+            ChannelMemory: {
+                x: 350, y: 320, width: 160, height: 140,
+                desc: 'Shared memory within channels',
+                fields: [
+                    { name: '_id', type: 'ObjectId', pk: true },
+                    { name: 'channelId', type: 'string', fk: 'Channel' },
+                    { name: 'conversationHistory', type: 'array' },
+                    { name: 'sharedState', type: 'json' },
+                    { name: 'notes', type: 'json' }
+                ]
+            },
+            AgentMemory: {
+                x: 600, y: 320, width: 160, height: 120,
+                desc: 'Private memory per agent',
+                fields: [
+                    { name: '_id', type: 'ObjectId', pk: true },
+                    { name: 'agentId', type: 'string', fk: 'Agent' },
+                    { name: 'conversationHistory', type: 'array' },
+                    { name: 'notes', type: 'json' }
+                ]
+            },
+            MCPTool: {
+                x: 850, y: 320, width: 160, height: 140,
+                desc: 'MCP tool definitions',
+                fields: [
+                    { name: '_id', type: 'ObjectId', pk: true },
+                    { name: 'name', type: 'string' },
+                    { name: 'description', type: 'string' },
+                    { name: 'inputSchema', type: 'json' },
+                    { name: 'channelId', type: 'string', fk: 'Channel' },
+                    { name: 'enabled', type: 'boolean' }
+                ]
+            },
+            AuditLog: {
+                x: 475, y: 500, width: 160, height: 120,
+                desc: 'System audit trail',
+                fields: [
+                    { name: '_id', type: 'ObjectId', pk: true },
+                    { name: 'eventType', type: 'string' },
+                    { name: 'channelId', type: 'string', fk: 'Channel' },
+                    { name: 'agentId', type: 'string', fk: 'Agent' },
+                    { name: 'timestamp', type: 'timestamp' }
+                ]
+            }
+        };
+        
+        const relationships = [
+            { from: 'User', to: 'Channel', label: 'creates', fromCard: '||', toCard: 'o{' },
+            { from: 'User', to: 'ChannelKey', label: 'creates', fromCard: '||', toCard: 'o{' },
+            { from: 'Channel', to: 'Agent', label: 'contains', fromCard: '||', toCard: 'o{' },
+            { from: 'Channel', to: 'Task', label: 'has', fromCard: '||', toCard: 'o{' },
+            { from: 'Channel', to: 'ChannelMemory', label: 'has', fromCard: '||', toCard: 'o{' },
+            { from: 'Channel', to: 'ChannelKey', label: 'authorizes', fromCard: '||', toCard: 'o{' },
+            { from: 'Channel', to: 'MCPTool', label: 'provides', fromCard: '||', toCard: 'o{' },
+            { from: 'Agent', to: 'Task', label: 'assigned', fromCard: '||', toCard: 'o{' },
+            { from: 'Agent', to: 'AgentMemory', label: 'has', fromCard: '||', toCard: 'o{' },
+            { from: 'Channel', to: 'AuditLog', label: 'generates', fromCard: '||', toCard: 'o{' },
+            { from: 'Agent', to: 'AuditLog', label: 'generates', fromCard: '||', toCard: 'o{' }
+        ];
+        
+        class ERDiagram extends MXFDiagram {
+            render() {
+                // Draw relationships first (behind entities)
+                relationships.forEach(rel => {
+                    this.drawRelationship(rel);
+                });
+                
+                // Draw entities
+                Object.entries(entities).forEach(([name, entity]) => {
+                    this.drawEntity(name, entity);
+                });
+            }
+            
+            drawEntity(name, entity) {
+                const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+                g.setAttribute('class', 'entity');
+                g.setAttribute('data-entity', name);
+                
+                // Header
+                const header = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                header.setAttribute('x', entity.x);
+                header.setAttribute('y', entity.y);
+                header.setAttribute('width', entity.width);
+                header.setAttribute('height', 28);
+                header.setAttribute('rx', 4);
+                header.setAttribute('class', 'entity-header');
+                g.appendChild(header);
+                
+                // Body
+                const body = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                body.setAttribute('x', entity.x);
+                body.setAttribute('y', entity.y + 28);
+                body.setAttribute('width', entity.width);
+                body.setAttribute('height', entity.height - 28);
+                body.setAttribute('class', 'entity-body');
+                g.appendChild(body);
+                
+                // Entity name
+                const title = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                title.setAttribute('x', entity.x + entity.width / 2);
+                title.setAttribute('y', entity.y + 18);
+                title.setAttribute('text-anchor', 'middle');
+                title.setAttribute('fill', 'white');
+                title.setAttribute('font-weight', '700');
+                title.setAttribute('font-size', '13px');
+                title.textContent = name;
+                g.appendChild(title);
+                
+                // Fields (show first 5)
+                const visibleFields = entity.fields.slice(0, 5);
+                visibleFields.forEach((field, i) => {
+                    const fieldText = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                    fieldText.setAttribute('x', entity.x + 8);
+                    fieldText.setAttribute('y', entity.y + 48 + i * 18);
+                    fieldText.setAttribute('class', `attribute ${field.pk ? 'attribute-pk' : ''} ${field.fk ? 'attribute-fk' : ''}`);
+                    fieldText.textContent = `${field.pk ? '🔑 ' : field.fk ? '🔗 ' : ''}${field.name}`;
+                    g.appendChild(fieldText);
+                });
+                
+                if (entity.fields.length > 5) {
+                    const moreText = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                    moreText.setAttribute('x', entity.x + 8);
+                    moreText.setAttribute('y', entity.y + 48 + 5 * 18);
+                    moreText.setAttribute('class', 'attribute');
+                    moreText.setAttribute('font-style', 'italic');
+                    moreText.textContent = `+${entity.fields.length - 5} more...`;
+                    g.appendChild(moreText);
+                }
+                
+                g.addEventListener('click', () => showEntityDetail(name, entity));
+                
+                this.mainGroup.appendChild(g);
+            }
+            
+            drawRelationship(rel) {
+                const from = entities[rel.from];
+                const to = entities[rel.to];
+                
+                // Calculate connection points
+                let x1 = from.x + from.width;
+                let y1 = from.y + from.height / 2;
+                let x2 = to.x;
+                let y2 = to.y + to.height / 2;
+                
+                // Adjust for vertical relationships
+                if (Math.abs(from.y - to.y) > 100) {
+                    x1 = from.x + from.width / 2;
+                    y1 = from.y + from.height;
+                    x2 = to.x + to.width / 2;
+                    y2 = to.y;
+                }
+                
+                const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                const midX = (x1 + x2) / 2;
+                const midY = (y1 + y2) / 2;
+                
+                let d;
+                if (Math.abs(y1 - y2) < 50) {
+                    d = `M ${x1} ${y1} L ${x2} ${y2}`;
+                } else {
+                    d = `M ${x1} ${y1} C ${midX} ${y1}, ${midX} ${y2}, ${x2} ${y2}`;
+                }
+                
+                path.setAttribute('d', d);
+                path.setAttribute('class', 'relationship-line');
+                this.mainGroup.insertBefore(path, this.mainGroup.firstChild);
+                
+                // Cardinality labels
+                const card1 = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                card1.setAttribute('x', x1 + 10);
+                card1.setAttribute('y', y1 - 5);
+                card1.setAttribute('class', 'cardinality');
+                card1.textContent = rel.fromCard;
+                this.mainGroup.appendChild(card1);
+                
+                const card2 = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                card2.setAttribute('x', x2 - 25);
+                card2.setAttribute('y', y2 - 5);
+                card2.setAttribute('class', 'cardinality');
+                card2.textContent = rel.toCard;
+                this.mainGroup.appendChild(card2);
+            }
+        }
+        
+        function showEntityDetail(name, entity) {
+            document.getElementById('entityName').textContent = name;
+            document.getElementById('entityDesc').textContent = entity.desc;
+            
+            const fieldList = document.getElementById('fieldList');
+            fieldList.innerHTML = entity.fields.map(f => `
+                <dt class="${f.pk ? 'field-pk' : ''} ${f.fk ? 'field-fk' : ''}">${f.name}</dt>
+                <dd>${f.type}${f.fk ? ` → ${f.fk}` : ''}</dd>
+            `).join('');
+            
+            document.getElementById('entityDetail').classList.add('visible');
+            
+            document.querySelectorAll('.entity').forEach(e => {
+                e.classList.toggle('selected', e.dataset.entity === name);
+            });
+        }
+        
+        // Initialize
+        const diagram = new ERDiagram('diagram-container', {
+            width: 1050,
+            height: 650
+        });
+        diagram.render();
+    </script>
+</body>
+</html>

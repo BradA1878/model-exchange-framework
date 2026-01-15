@@ -13,37 +13,43 @@ The MCP system provides:
 
 ## Architecture
 
+<div class="mermaid-fallback">
+
 ```mermaid
 graph TB
     subgraph "MCP System"
         TR[Tool Registry] --> TE[Tool Executor]
         TE --> TV[Tool Validator]
         TE --> TS[Tool Sandbox]
-        
+
         subgraph "Providers"
             AP[Anthropic MCP]
             OP[OpenAI Functions]
             XP[XAI Tools]
             CP[Custom Tools]
         end
-        
+
         TE --> AP
         TE --> OP
         TE --> XP
         TE --> CP
     end
-    
+
     subgraph "Storage"
         DB[(Tool Database)]
         Cache[(Result Cache)]
     end
-    
+
     TR --> DB
     TE --> Cache
-    
+
     style TR fill:#f9f,stroke:#333,stroke-width:2px
     style TE fill:#bbf,stroke:#333,stroke-width:2px
 ```
+
+</div>
+
+<iframe src="../diagram/mcp-tool-integration.html" width="100%" height="500" style="border: none; border-radius: 10px; background: var(--bg-secondary);"></iframe>
 
 ## REST Endpoints
 

@@ -63,6 +63,7 @@ export class MxfContextBuilder {
      * @param channelId Channel the agent is operating in
      * @param channelConfig Channel configuration (optional)
      * @param activeAgents List of active agent IDs in channel (optional)
+     * @param currentOrparPhase Current ORPAR cognitive cycle phase (optional)
      * @returns Complete AgentContext ready for MCP clients
      */
     public async buildContext(
@@ -73,7 +74,8 @@ export class MxfContextBuilder {
         availableTools: any[],
         channelId: string,
         channelConfig?: any,
-        activeAgents?: string[]
+        activeAgents?: string[],
+        currentOrparPhase?: 'Observe' | 'Reason' | 'Plan' | 'Act' | 'Reflect' | null
     ): Promise<AgentContext> {
         
         // Replace dynamic templates in system prompt (date/time, agent/channel context)
@@ -99,9 +101,9 @@ export class MxfContextBuilder {
             // System status (from channel config)
             systemLlmEnabled: channelConfig?.systemLlmEnabled || false,
 
-            // Control loop state (if available)
-            currentOrparPhase: null, // ORPAR phase tracking not yet implemented
-            
+            // Control loop state - ORPAR phase tracking via event-based updates
+            currentOrparPhase: currentOrparPhase || null,
+
             // Task status (if task is active)
             currentTaskId: currentTask?.taskId || 'None',
             currentTaskTitle: currentTask?.title || 'No active task',
@@ -199,9 +201,30 @@ export class MxfContextBuilder {
         // Use the most recent task message
         const taskMsg = taskMessages[taskMessages.length - 1];
         
+        // Parse structured task content if it contains requirements and completion criteria
+        let requirements: string[] | undefined;
+        let completionCriteria: string[] | undefined;
+
+        if (typeof taskMsg.content === 'object' && taskMsg.content !== null) {
+            const structured = taskMsg.content as Record<string, any>;
+            requirements = structured.requirements;
+            completionCriteria = structured.completionCriteria;
+        } else if (typeof taskMsg.content === 'string') {
+            // Try to extract requirements from formatted text (e.g., "Requirements: - item1 - item2")
+            const reqMatch = taskMsg.content.match(/requirements?:\s*([-•]\s*[^\n]+(?:\n[-•]\s*[^\n]+)*)/i);
+            if (reqMatch) {
+                requirements = reqMatch[1].split(/\n/).map(r => r.replace(/^[-•]\s*/, '').trim()).filter(Boolean);
+            }
+            const critMatch = taskMsg.content.match(/completion\s*criteria?:\s*([-•]\s*[^\n]+(?:\n[-•]\s*[^\n]+)*)/i);
+            if (critMatch) {
+                completionCriteria = critMatch[1].split(/\n/).map(c => c.replace(/^[-•]\s*/, '').trim()).filter(Boolean);
+            }
+        }
+
         return {
-            description: taskMsg.content,
-            // TODO: Extract requirements and completion criteria if structured
+            description: typeof taskMsg.content === 'string' ? taskMsg.content : JSON.stringify(taskMsg.content),
+            requirements,
+            completionCriteria
         };
     }
     

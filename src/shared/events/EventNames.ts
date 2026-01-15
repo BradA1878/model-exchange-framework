@@ -102,6 +102,9 @@ export { McpEvents, McpPayloads };
 import { ControlLoopEvents, ControlLoopPayloads } from './event-definitions/ControlLoopEvents';
 export { ControlLoopEvents };
 
+import { OrparEvents, OrparPayloads } from './event-definitions/OrparEvents';
+export { OrparEvents, OrparPayloads };
+
 import { SystemEvents } from './event-definitions/SystemEvents';
 export { SystemEvents };
 
@@ -147,6 +150,7 @@ export namespace Events {
     export const Task = TaskEvents;
     export const LlmService = LlmServiceEvents;
     export const ControlLoop = ControlLoopEvents;
+    export const Orpar = OrparEvents;
     export const Heartbeat = HeartbeatEvents;
     export const Mcp = McpEvents;
     export const Memory = MemoryEventsInternal;
@@ -172,6 +176,7 @@ export type EventMap =
     TaskPayloads &
     LlmServicePayloads &
     ControlLoopPayloads &
+    OrparPayloads &
     HeartbeatPayloads &
     McpPayloads &
     MemoryPayloads &

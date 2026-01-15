@@ -30,6 +30,8 @@ The MXF Dashboard is a modern web application built with Vue 3, Vuetify, TypeScr
 
 ## Architecture Diagram
 
+<div class="mermaid-fallback">
+
 ```mermaid
 graph TD;
     A[Login/Auth] --> B[DashboardLayout.vue]
@@ -46,6 +48,10 @@ graph TD;
     G --> M[System Analytics]
     H --> N[Protocol Analytics]
 ```
+
+</div>
+
+<iframe src="../diagram/navigation-sitemap.html" width="100%" height="600" style="border: none; border-radius: 10px; background: var(--bg-secondary);"></iframe>
 
 ## Main Components
 
@@ -86,6 +92,8 @@ graph TD;
 
 ## Authentication Flow
 
+<div class="mermaid-fallback">
+
 ```mermaid
 sequenceDiagram
     participant User
@@ -99,6 +107,10 @@ sequenceDiagram
     API-->>Dashboard: Authenticated (JWT)
     Dashboard->>User: Redirect to dashboard
 ```
+
+</div>
+
+<iframe src="../diagram/architecture-communication-flow.html" width="100%" height="550" style="border: none; border-radius: 10px; background: var(--bg-secondary);"></iframe>
 
 ## Useful Links
 

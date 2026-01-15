@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MXF Per-Channel Instance Model</title>
+    <link rel="stylesheet" href="diagram-base.css">
+    <style>
+        .channel-group {
+            transition: all 0.3s ease;
+        }
+        .channel-group:hover {
+            filter: brightness(1.05);
+        }
+        .singleton-badge {
+            font-size: 9px;
+            fill: #ef4444;
+        }
+        .instance-node {
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        .instance-node:hover {
+            filter: drop-shadow(0 4px 12px var(--shadow));
+        }
+        .isolation-indicator {
+            stroke-dasharray: 5 3;
+            stroke-opacity: 0.4;
+        }
+    </style>
+</head>
+<body>
+    <div class="diagram-container">
+        <header class="diagram-header">
+            <div>
+                <h1 class="diagram-title">Per-Channel Instance Model</h1>
+                <p class="diagram-subtitle">SystemLLM uses one-instance-per-channel architecture for isolation</p>
+            </div>
+            <button class="theme-toggle" onclick="toggleTheme()">
+                <span class="theme-toggle-icon">🌙</span>
+                <span class="theme-toggle-label">Dark</span>
+            </button>
+        </header>
+
+        <div id="diagram-container"></div>
+
+        <div class="legend">
+            <div class="legend-item">
+                <div class="legend-color" style="background: #3b82f6;"></div>
+                <span>Client Layer (Agents)</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #ef4444;"></div>
+                <span>Manager (Singleton)</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #22c55e;"></div>
+                <span>Channel Instances</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #a855f7;"></div>
+                <span>LLM Providers</span>
+            </div>
+        </div>
+    </div>
+
+    <script src="diagram-utils.js"></script>
+    <script>
+        class PerChannelDiagram extends MXFDiagram {
+            render() {
+                // Client Layer
+                this.createLayerGroup(30, 30, 'Client Layer', 200, 110, '#3b82f6');
+                this.createAgentNode(80, 80, 'Agent 1', '🤖');
+                this.createAgentNode(130, 80, 'Agent 2', '🤖');
+                this.createAgentNode(180, 80, 'Agent 3', '🤖');
+
+                // Server Layer
+                this.createLayerGroup(30, 160, 'Server Layer', 650, 210, '#6b7280');
+
+                // SystemLlmServiceManager (Singleton)
+                this.createManagerNode(130, 205, 'SystemLlmServiceManager', '🎛️', true);
+
+                // Channel instances
+                const channels = [
+                    { id: 'A', x: 350, color: '#22c55e' },
+                    { id: 'B', x: 500, color: '#22c55e' },
+                    { id: 'C', x: 650, color: '#22c55e' }
+                ];
+
+                channels.forEach(ch => {
+                    this.createChannelGroup(ch.x - 65, 185, `Channel ${ch.id}`, 130, 95, ch.color);
+                    this.createInstanceNode(ch.x, 225, `SystemLlm`, '⚙️', `Instance ${ch.id}`);
+                    this.createInstanceNode(ch.x, 265, `ControlLoop`, '🔄', ch.id);
+                });
+
+                // LLM Providers
+                this.createLayerGroup(700, 30, 'LLM Providers', 180, 110, '#a855f7');
+                const providers = [
+                    { name: 'OpenRouter', icon: '🌐', y: 55 },
+                    { name: 'Gemini', icon: '💎', y: 80 },
+                    { name: 'OpenAI', icon: '🧠', y: 105 },
+                    { name: 'Anthropic', icon: '🔮', y: 130 }
+                ];
+                providers.forEach(p => {
+                    this.createProviderNode(790, p.y, p.name, p.icon);
+                });
+
+                // Draw connections
+                this.drawConnections(channels);
+
+                // Add benefits callout
+                this.addBenefits();
+            }
+
+            createLayerGroup(x, y, label, width, height, color) {
+                const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+
+                const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                rect.setAttribute('x', x);
+                rect.setAttribute('y', y);
+                rect.setAttribute('width', width);
+                rect.setAttribute('height', height);
+                rect.setAttribute('rx', 10);
+                rect.setAttribute('fill', color);
+                rect.setAttribute('opacity', '0.1');
+                rect.setAttribute('stroke', color);
+                rect.setAttribute('stroke-width', '2');
+                g.appendChild(rect);
+
+                const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                text.setAttribute('x', x + 10);
+                text.setAttribute('y', y + 18);
+                text.setAttribute('fill', color);
+                text.setAttribute('font-weight', '700');
+                text.setAttribute('font-size', '11px');
+                text.textContent = label;
+                g.appendChild(text);
+
+                this.mainGroup.appendChild(g);
+            }
+
+            createChannelGroup(x, y, label, width, height, color) {
+                const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+                g.setAttribute('class', 'channel-group');
+
+                const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                rect.setAttribute('x', x);
+                rect.setAttribute('y', y);
+                rect.setAttribute('width', width);
+                rect.setAttribute('height', height);
+                rect.setAttribute('rx', 8);
+                rect.setAttribute('fill', color);
+                rect.setAttribute('opacity', '0.15');
+                rect.setAttribute('stroke', color);
+                rect.setAttribute('stroke-width', '2');
+                rect.setAttribute('class', 'isolation-indicator');
+                g.appendChild(rect);
+
+                const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                text.setAttribute('x', x + width/2);
+                text.setAttribute('y', y + 14);
+                text.setAttribute('text-anchor', 'middle');
+                text.setAttribute('fill', color);
+                text.setAttribute('font-weight', '700');
+                text.setAttribute('font-size', '10px');
+                text.textContent = label;
+                g.appendChild(text);
+
+                this.mainGroup.appendChild(g);
+            }
+
+            createAgentNode(x, y, label, icon) {
+                const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+                g.setAttribute('class', 'instance-node');
+
+                const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+                circle.setAttribute('cx', x);
+                circle.setAttribute('cy', y);
+                circle.setAttribute('r', 20);
+                circle.setAttribute('fill', '#3b82f6');
+                g.appendChild(circle);
+
+                const iconEl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                iconEl.setAttribute('x', x);
+                iconEl.setAttribute('y', y + 5);
+                iconEl.setAttribute('text-anchor', 'middle');
+                iconEl.setAttribute('font-size', '16px');
+                iconEl.textContent = icon;
+                g.appendChild(iconEl);
+
+                const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                text.setAttribute('x', x);
+                text.setAttribute('y', y + 35);
+                text.setAttribute('text-anchor', 'middle');
+                text.setAttribute('fill', 'var(--text-primary)');
+                text.setAttribute('font-size', '9px');
+                text.textContent = label;
+                g.appendChild(text);
+
+                this.mainGroup.appendChild(g);
+            }
+
+            createManagerNode(x, y, label, icon, isSingleton) {
+                const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+                g.setAttribute('class', 'instance-node');
+
+                const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                rect.setAttribute('x', x - 80);
+                rect.setAttribute('y', y - 25);
+                rect.setAttribute('width', 160);
+                rect.setAttribute('height', 50);
+                rect.setAttribute('rx', 8);
+                rect.setAttribute('fill', '#ef4444');
+                rect.setAttribute('opacity', '0.9');
+                g.appendChild(rect);
+
+                const iconEl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                iconEl.setAttribute('x', x - 60);
+                iconEl.setAttribute('y', y + 5);
+                iconEl.setAttribute('font-size', '16px');
+                iconEl.textContent = icon;
+                g.appendChild(iconEl);
+
+                const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                text.setAttribute('x', x - 40);
+                text.setAttribute('y', y - 2);
+                text.setAttribute('fill', 'white');
+                text.setAttribute('font-weight', '600');
+                text.setAttribute('font-size', '10px');
+                text.textContent = label;
+                g.appendChild(text);
+
+                if (isSingleton) {
+                    const badge = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                    badge.setAttribute('x', x - 40);
+                    badge.setAttribute('y', y + 12);
+                    badge.setAttribute('fill', 'rgba(255,255,255,0.8)');
+                    badge.setAttribute('font-size', '9px');
+                    badge.textContent = 'Singleton';
+                    g.appendChild(badge);
+                }
+
+                // Tooltip
+                g.addEventListener('mouseenter', (e) => this.showTooltip(e, 'SystemLlmServiceManager', 'Singleton manager that creates and manages per-channel SystemLlmService instances'));
+                g.addEventListener('mouseleave', () => this.hideTooltip());
+
+                this.mainGroup.appendChild(g);
+            }
+
+            createInstanceNode(x, y, label, icon, sublabel) {
+                const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+                g.setAttribute('class', 'instance-node');
+
+                const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                rect.setAttribute('x', x - 50);
+                rect.setAttribute('y', y - 14);
+                rect.setAttribute('width', 100);
+                rect.setAttribute('height', 28);
+                rect.setAttribute('rx', 5);
+                rect.setAttribute('fill', '#22c55e');
+                rect.setAttribute('opacity', '0.85');
+                g.appendChild(rect);
+
+                const iconEl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                iconEl.setAttribute('x', x - 38);
+                iconEl.setAttribute('y', y + 5);
+                iconEl.setAttribute('font-size', '12px');
+                iconEl.textContent = icon;
+                g.appendChild(iconEl);
+
+                const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                text.setAttribute('x', x - 22);
+                text.setAttribute('y', y + 4);
+                text.setAttribute('fill', 'white');
+                text.setAttribute('font-weight', '600');
+                text.setAttribute('font-size', '9px');
+                text.textContent = `${label} ${sublabel}`;
+                g.appendChild(text);
+
+                this.mainGroup.appendChild(g);
+            }
+
+            createProviderNode(x, y, label, icon) {
+                const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+                g.setAttribute('class', 'instance-node');
+
+                const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                rect.setAttribute('x', x - 55);
+                rect.setAttribute('y', y - 10);
+                rect.setAttribute('width', 110);
+                rect.setAttribute('height', 22);
+                rect.setAttribute('rx', 4);
+                rect.setAttribute('fill', '#a855f7');
+                rect.setAttribute('opacity', '0.85');
+                g.appendChild(rect);
+
+                const iconEl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                iconEl.setAttribute('x', x - 42);
+                iconEl.setAttribute('y', y + 5);
+                iconEl.setAttribute('font-size', '11px');
+                iconEl.textContent = icon;
+                g.appendChild(iconEl);
+
+                const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                text.setAttribute('x', x - 26);
+                text.setAttribute('y', y + 4);
+                text.setAttribute('fill', 'white');
+                text.setAttribute('font-weight', '600');
+                text.setAttribute('font-size', '9px');
+                text.textContent = label;
+                g.appendChild(text);
+
+                this.mainGroup.appendChild(g);
+            }
+
+            drawConnections(channels) {
+                // Agents to Manager
+                [80, 130, 180].forEach(x => {
+                    this.drawConnection(x, 100, 130, 180, '#3b82f6');
+                });
+
+                // Manager to Channel instances
+                channels.forEach(ch => {
+                    this.drawConnection(210, 205, ch.x - 50, 225, '#ef4444');
+                });
+
+                // Channel instances to LLM Providers
+                channels.forEach(ch => {
+                    this.drawConnection(ch.x + 50, 245, 735, 90, '#a855f7', true);
+                });
+            }
+
+            drawConnection(x1, y1, x2, y2, color, dashed = false) {
+                const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                const midX = (x1 + x2) / 2;
+                const midY = (y1 + y2) / 2;
+                const d = `M ${x1} ${y1} Q ${midX} ${y1}, ${midX} ${midY} T ${x2} ${y2}`;
+                path.setAttribute('d', d);
+                path.setAttribute('fill', 'none');
+                path.setAttribute('stroke', color);
+                path.setAttribute('stroke-width', '1.5');
+                path.setAttribute('marker-end', `url(#arrowhead)`);
+                if (dashed) {
+                    path.setAttribute('stroke-dasharray', '4 2');
+                }
+                this.mainGroup.insertBefore(path, this.mainGroup.firstChild);
+            }
+
+            addBenefits() {
+                const benefits = [
+                    { icon: '🔒', text: 'Isolation', desc: "Channel A won't affect B" },
+                    { icon: '⚡', text: 'Concurrency', desc: 'All channels run simultaneously' },
+                    { icon: '⚙️', text: 'Config', desc: 'Different providers per channel' }
+                ];
+
+                const startY = 390;
+                benefits.forEach((b, i) => {
+                    const x = 200 + i * 250;
+
+                    const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+
+                    const icon = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                    icon.setAttribute('x', x);
+                    icon.setAttribute('y', startY);
+                    icon.setAttribute('text-anchor', 'middle');
+                    icon.setAttribute('font-size', '16px');
+                    icon.textContent = b.icon;
+                    g.appendChild(icon);
+
+                    const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                    text.setAttribute('x', x);
+                    text.setAttribute('y', startY + 18);
+                    text.setAttribute('text-anchor', 'middle');
+                    text.setAttribute('fill', 'var(--text-primary)');
+                    text.setAttribute('font-weight', '600');
+                    text.setAttribute('font-size', '11px');
+                    text.textContent = b.text;
+                    g.appendChild(text);
+
+                    const desc = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                    desc.setAttribute('x', x);
+                    desc.setAttribute('y', startY + 32);
+                    desc.setAttribute('text-anchor', 'middle');
+                    desc.setAttribute('fill', 'var(--text-muted)');
+                    desc.setAttribute('font-size', '9px');
+                    desc.textContent = b.desc;
+                    g.appendChild(desc);
+
+                    this.mainGroup.appendChild(g);
+                });
+            }
+        }
+
+        // Initialize
+        const diagram = new PerChannelDiagram('diagram-container', {
+            width: 920,
+            height: 440
+        });
+        diagram.render();
+    </script>
+</body>
+</html>

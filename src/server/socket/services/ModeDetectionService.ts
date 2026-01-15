@@ -113,7 +113,6 @@ export class ModeDetectionService {
             this.triggerModeReassessment(data.channelId);
         });
 
-        // TODO: Add TOOL_CALL and CONTEXT_UPDATE to AgentEvents constants if they don't exist
         this.eventBus.on(AgentEvents.TOOL_CALL, (data: any) => {
             this.triggerModeReassessment(data.channelId);
         });

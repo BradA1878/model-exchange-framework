@@ -30,6 +30,8 @@ import { Subject, Subscription } from 'rxjs';
 import { filter, map } from 'rxjs/operators';
 import { Server as SocketIOServer, Socket } from 'socket.io';
 import { EventMap, Events, ChannelActionTypes, MessageEvents } from './EventNames';
+import { ControlLoopEvents } from './event-definitions/ControlLoopEvents';
+import { OrparEvents } from './event-definitions/OrparEvents';
 import { 
     AnyEventName, 
     BaseEventBusImplementation, 
@@ -219,7 +221,15 @@ export class ServerEventBus extends BaseEventBusImplementation implements IServe
             });
             
             // Also emit to the Socket.IO server if available
-            if (this.ioInstance && !isReservedEvent(event)) {
+            // IMPORTANT: Do NOT broadcast agent-specific events (ORPAR, ControlLoop) via io.emit()
+            // These events are forwarded to specific agents via eventForwardingHandlers.forwardEventToAgent()
+            // Broadcasting them would cause duplicates (agent receives via forward + via broadcast)
+            const agentSpecificEvents = new Set([
+                ...Object.values(ControlLoopEvents),
+                ...Object.values(OrparEvents)
+            ]);
+
+            if (this.ioInstance && !isReservedEvent(event) && !agentSpecificEvents.has(event)) {
                 //;
                 this.ioInstance.emit(event, payload);
             }

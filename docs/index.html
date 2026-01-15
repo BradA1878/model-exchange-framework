@@ -151,6 +151,12 @@
             align-items: center;
             gap: 10px;
             flex-shrink: 0;
+            cursor: pointer;
+            transition: opacity 0.2s ease;
+        }
+
+        .header-logo:hover {
+            opacity: 0.8;
         }
 
         .header-logo img {
@@ -538,6 +544,49 @@
             height: auto;
         }
 
+        /* Hide mermaid fallback when viewing on docs site (iframes used instead) */
+        .markdown-body .mermaid-fallback {
+            display: none;
+        }
+
+        /* Diagram iframe wrapper with pop-out button */
+        .diagram-iframe-wrapper {
+            position: relative;
+            margin: 1rem 0;
+        }
+
+        .diagram-popout-btn {
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            z-index: 10;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 12px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            color: var(--text-secondary);
+            font-size: 12px;
+            cursor: pointer;
+            opacity: 0.7;
+            transition: all 0.2s ease;
+            text-decoration: none;
+        }
+
+        .diagram-popout-btn:hover {
+            opacity: 1;
+            background: var(--accent-bg);
+            border-color: var(--accent);
+            color: var(--accent);
+        }
+
+        .diagram-popout-btn svg {
+            width: 14px;
+            height: 14px;
+        }
+
         /* Welcome Screen */
         .welcome {
             padding: 20px 0 60px;
@@ -818,7 +867,7 @@
     <div class="header">
         <button class="hamburger" onclick="toggleSidebar()" id="hamburgerBtn">☰</button>
         
-        <div class="header-logo">
+        <div class="header-logo" onclick="goHome()" title="Go to home page">
             <img src="mxf-logo-small.png" alt="MXF Logo">
             <h1>MXF Docs</h1>
         </div>
@@ -828,8 +877,9 @@
         
         <div class="header-actions">
             <div class="nav-buttons">
-                <button class="nav-btn" onclick="navigateBack()" id="backBtn" disabled>←</button>
-                <button class="nav-btn" onclick="navigateForward()" id="forwardBtn" disabled>→</button>
+                <button class="nav-btn" onclick="goHome()" title="Home">🏠</button>
+                <button class="nav-btn" onclick="navigateBack()" id="backBtn" disabled title="Back">←</button>
+                <button class="nav-btn" onclick="navigateForward()" id="forwardBtn" disabled title="Forward">→</button>
             </div>
             
             <a href="https://github.com/BradA1878/model-exchange-framework" target="_blank" rel="noopener noreferrer" class="header-btn github-btn">
@@ -912,6 +962,43 @@
     </div>
 
     <script>
+        // Store welcome screen HTML for restoration
+        const welcomeHTML = document.getElementById('content').innerHTML;
+
+        // Go to home/welcome screen
+        function goHome() {
+            const content = document.getElementById('content');
+            const searchBox = document.getElementById('searchBox');
+
+            // Restore welcome screen
+            content.innerHTML = welcomeHTML;
+
+            // Clear search box
+            if (searchBox) {
+                searchBox.value = '';
+                // Reset filtered items
+                document.querySelectorAll('.toc-item').forEach(item => {
+                    item.style.display = 'flex';
+                });
+            }
+
+            // Clear URL hash
+            history.pushState('', document.title, window.location.pathname);
+
+            // Clear active state from TOC items
+            document.querySelectorAll('.toc-item').forEach(item => {
+                item.classList.remove('active');
+            });
+
+            // Reset navigation history
+            docHistory = [];
+            historyIndex = -1;
+            updateNavButtons();
+
+            // Close sidebar on mobile
+            closeSidebarOnMobile();
+        }
+
         // Mobile sidebar toggle
         function toggleSidebar() {
             const sidebar = document.querySelector('.sidebar');
@@ -1114,6 +1201,7 @@
                     { title: 'WebSocket', file: 'api/websocket.md', icon: '🔄' },
                     { title: 'MCP', file: 'api/mcp.md', icon: '🔧' },
                     { title: 'Control Loop', file: 'api/control-loop.md', icon: '🔁' },
+                    { title: 'Prompt Assembly', file: 'api/prompt-assembly.md', icon: '📝' },
                     { title: 'Dashboard', file: 'api/dashboard.md', icon: '📊' },
                     { title: 'Analytics', file: 'api/analytics.md', icon: '📈' }
                 ]
@@ -1164,6 +1252,12 @@
                     { title: 'MCP Tools', file: 'analytics/mcp-tools.md', icon: '🔧' },
                     { title: 'Validation Analytics', file: 'analytics/validation-analytics.md', icon: '✔️' },
                     { title: 'Code Execution', file: 'analytics/code-execution.md', icon: '⚡' }
+                ]
+            },
+            'Testing': {
+                icon: '🧪',
+                items: [
+                    { title: 'Testing Architecture', file: 'testing.md', icon: '🏗️' }
                 ]
             },
             'Integrations': {
@@ -1338,6 +1432,34 @@
                     };
                 });
                 
+                // Wrap diagram iframes with pop-out buttons
+                content.querySelectorAll('iframe[src*="diagram/"]').forEach(iframe => {
+                    const src = iframe.getAttribute('src');
+                    // Create wrapper
+                    const wrapper = document.createElement('div');
+                    wrapper.className = 'diagram-iframe-wrapper';
+
+                    // Create pop-out button
+                    const popoutBtn = document.createElement('a');
+                    popoutBtn.className = 'diagram-popout-btn';
+                    popoutBtn.href = src;
+                    popoutBtn.target = '_blank';
+                    popoutBtn.title = 'Open diagram in new tab';
+                    popoutBtn.innerHTML = `
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+                            <polyline points="15 3 21 3 21 9"></polyline>
+                            <line x1="10" y1="14" x2="21" y2="3"></line>
+                        </svg>
+                        Open full size
+                    `;
+
+                    // Wrap the iframe
+                    iframe.parentNode.insertBefore(wrapper, iframe);
+                    wrapper.appendChild(popoutBtn);
+                    wrapper.appendChild(iframe);
+                });
+
                 // Scroll to top
                 content.scrollTop = 0;
                 

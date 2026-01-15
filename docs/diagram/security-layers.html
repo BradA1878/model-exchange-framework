@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MXF Security Layers</title>
+    <link rel="stylesheet" href="diagram-base.css">
+    <style>
+        .security-layer {
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        .security-layer:hover {
+            filter: brightness(1.1) drop-shadow(0 4px 12px var(--shadow));
+        }
+        .layer-number {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 10px;
+            fill: rgba(255,255,255,0.7);
+        }
+    </style>
+</head>
+<body>
+    <div class="diagram-container">
+        <header class="diagram-header">
+            <div>
+                <h1 class="diagram-title">Security Layers</h1>
+                <p class="diagram-subtitle">Defense in depth request processing</p>
+            </div>
+            <button class="theme-toggle" onclick="toggleTheme()">
+                <span class="theme-toggle-icon">🌙</span>
+                <span class="theme-toggle-label">Dark</span>
+            </button>
+        </header>
+
+        <div id="diagram-container"></div>
+
+        <div class="legend">
+            <div class="legend-item">
+                <div class="legend-color" style="background: #6b7280;"></div>
+                <span>Entry/Exit</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #22c55e;"></div>
+                <span>Encryption</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #3b82f6;"></div>
+                <span>Authentication</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #f59e0b;"></div>
+                <span>Authorization</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #a855f7;"></div>
+                <span>Validation</span>
+            </div>
+        </div>
+    </div>
+
+    <script src="diagram-utils.js"></script>
+    <script>
+        const layers = [
+            { id: 'request', icon: '📨', label: 'Request', color: '#6b7280', desc: 'Incoming request from client or agent' },
+            { id: 'tls', icon: '🔐', label: 'TLS Encryption', color: '#22c55e', desc: 'Transport Layer Security encrypts all traffic' },
+            { id: 'authn', icon: '🎫', label: 'Authentication', color: '#3b82f6', desc: 'Verify identity via JWT or API key' },
+            { id: 'authz', icon: '✅', label: 'Authorization', color: '#f59e0b', desc: 'Check permissions and access rights' },
+            { id: 'validation', icon: '🛡️', label: 'Input Validation', color: '#a855f7', desc: 'Sanitize and validate all inputs' },
+            { id: 'logic', icon: '⚙️', label: 'Business Logic', color: '#6b7280', desc: 'Core application processing' },
+            { id: 'audit', icon: '📝', label: 'Audit Logging', color: '#6b7280', desc: 'Record all actions for compliance' }
+        ];
+
+        class SecurityLayersDiagram extends MXFDiagram {
+            render() {
+                const centerX = 200;
+                const startY = 50;
+                const spacing = 55;
+
+                // Draw layers
+                layers.forEach((layer, i) => {
+                    const y = startY + i * spacing;
+                    this.drawLayer(centerX, y, layer, i + 1);
+
+                    // Draw connection to next layer
+                    if (i < layers.length - 1) {
+                        this.drawConnection(centerX, y + 22, centerX, y + spacing - 22);
+                    }
+                });
+
+                // Add side labels showing flow direction
+                this.addFlowLabels(centerX);
+            }
+
+            drawLayer(x, y, layer, num) {
+                const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+                g.setAttribute('class', 'security-layer');
+
+                const width = 160;
+                const height = 44;
+
+                // Main rect
+                const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                rect.setAttribute('x', x - width/2);
+                rect.setAttribute('y', y - height/2);
+                rect.setAttribute('width', width);
+                rect.setAttribute('height', height);
+                rect.setAttribute('rx', 8);
+                rect.setAttribute('fill', layer.color);
+                rect.setAttribute('opacity', '0.9');
+                g.appendChild(rect);
+
+                // Layer number
+                const numEl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                numEl.setAttribute('x', x - width/2 + 12);
+                numEl.setAttribute('y', y + 4);
+                numEl.setAttribute('class', 'layer-number');
+                numEl.textContent = num;
+                g.appendChild(numEl);
+
+                // Icon
+                const icon = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                icon.setAttribute('x', x - width/2 + 35);
+                icon.setAttribute('y', y + 5);
+                icon.setAttribute('font-size', '16px');
+                icon.textContent = layer.icon;
+                g.appendChild(icon);
+
+                // Label
+                const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                label.setAttribute('x', x - width/2 + 58);
+                label.setAttribute('y', y + 5);
+                label.setAttribute('fill', 'white');
+                label.setAttribute('font-weight', '600');
+                label.setAttribute('font-size', '12px');
+                label.textContent = layer.label;
+                g.appendChild(label);
+
+                // Tooltip
+                g.addEventListener('mouseenter', (e) => this.showTooltip(e, layer.label, layer.desc));
+                g.addEventListener('mouseleave', () => this.hideTooltip());
+
+                this.mainGroup.appendChild(g);
+            }
+
+            drawConnection(x1, y1, x2, y2) {
+                const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                path.setAttribute('d', `M ${x1} ${y1} L ${x2} ${y2}`);
+                path.setAttribute('class', 'edge');
+                path.setAttribute('marker-end', 'url(#arrowhead)');
+                this.mainGroup.insertBefore(path, this.mainGroup.firstChild);
+            }
+
+            addFlowLabels(centerX) {
+                // "Request Flow" label on left
+                const flowLabel = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                flowLabel.setAttribute('x', centerX - 110);
+                flowLabel.setAttribute('y', 215);
+                flowLabel.setAttribute('fill', 'var(--text-muted)');
+                flowLabel.setAttribute('font-size', '10px');
+                flowLabel.setAttribute('writing-mode', 'vertical-rl');
+                flowLabel.setAttribute('text-orientation', 'mixed');
+                flowLabel.textContent = 'Request Flow →';
+                this.mainGroup.appendChild(flowLabel);
+            }
+        }
+
+        // Initialize
+        const diagram = new SecurityLayersDiagram('diagram-container', {
+            width: 400,
+            height: 430
+        });
+        diagram.render();
+    </script>
+</body>
+</html>

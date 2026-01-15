@@ -26,6 +26,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { createControlLoopEventPayload, ControlLoopSpecificData, BaseEventPayload } from '../../shared/schemas/EventPayloadSchema';
 import { EventBus } from '../../shared/events/EventBus';
 import { Events } from '../../shared/events/EventNames';
+import { SystemEvents } from '../../shared/events/event-definitions/SystemEvents';
 import { createStrictValidator } from '../../shared/utils/validation';
 import { Handler } from './Handler';
 import {
@@ -34,6 +35,11 @@ import {
     TopicsExtractEventData,
     SummaryGenerateEventData
 } from '../../shared/schemas/EventPayloadSchema';
+
+/**
+ * ORPAR phase type for tracking current cognitive cycle phase
+ */
+export type OrparPhase = 'Observe' | 'Reason' | 'Plan' | 'Act' | 'Reflect' | null;
 
 /**
  * Handles MCP resource events for provider and consumer agents
@@ -49,7 +55,10 @@ export class ControlLoopHandlers extends Handler {
     protected currentReasoning: any = null;
     protected currentPlan: any = null;
     protected maxObservations: number = 10;
-    
+
+    // ORPAR phase tracking - tracks the current cognitive cycle phase
+    protected currentPhase: OrparPhase = null;
+
     // Store subscriptions for proper cleanup
     private subscriptions: { unsubscribe: () => void }[] = [];
     
@@ -67,10 +76,18 @@ export class ControlLoopHandlers extends Handler {
      * @internal - This method is called internally by MxfClient
      */
     public initialize(): void {
+        // Subscribe to control loop phase events
         this.subscriptions.push(EventBus.client.on(Events.ControlLoop.OBSERVATION, this.handleObservationEvent.bind(this)));
         this.subscriptions.push(EventBus.client.on(Events.ControlLoop.REASONING, this.handleReasoningEvent.bind(this)));
         this.subscriptions.push(EventBus.client.on(Events.ControlLoop.PLAN, this.handlePlanEvent.bind(this)));
         this.subscriptions.push(EventBus.client.on(Events.ControlLoop.ACTION, this.handleActionEvent.bind(this)));
+        this.subscriptions.push(EventBus.client.on(Events.ControlLoop.REFLECTION, this.handleReflectionEvent.bind(this)));
+
+        // Subscribe to ORPAR phase hint events from SystemLLM for phase awareness
+        this.subscriptions.push(EventBus.client.on(SystemEvents.PRE_REASONING_HINT, this.handleOrparPhaseEvent.bind(this)));
+        this.subscriptions.push(EventBus.client.on(SystemEvents.POST_ACTION_ANALYSIS, this.handleOrparPhaseEvent.bind(this)));
+        this.subscriptions.push(EventBus.client.on(SystemEvents.COORDINATION_OPPORTUNITY, this.handleOrparPhaseEvent.bind(this)));
+        this.subscriptions.push(EventBus.client.on(SystemEvents.PATTERN_RECOGNITION, this.handleOrparPhaseEvent.bind(this)));
     }
     
     /**
@@ -273,6 +290,23 @@ export class ControlLoopHandlers extends Handler {
     }
 
     /**
+     * Get the current ORPAR phase
+     * @returns The current phase or null if no phase is active
+     */
+    public getCurrentPhase(): OrparPhase {
+        return this.currentPhase;
+    }
+
+    /**
+     * Manually set the current ORPAR phase (for external control)
+     * @param phase The phase to set
+     */
+    public setCurrentPhase(phase: OrparPhase): void {
+        this.currentPhase = phase;
+        this.logger.debug(`ORPAR phase set to: ${phase}`);
+    }
+
+    /**
      * Handle observation events from the control loop
      * 
      * @param payload Event payload
@@ -281,12 +315,15 @@ export class ControlLoopHandlers extends Handler {
     protected handleObservationEvent(payload: BaseEventPayload<ControlLoopSpecificData>): void {
         const observation = payload.data.observation;
         const loopId = payload.data.loopId
-        
+
         // Only process events for our active control loop
         if (this.activeControlLoopId !== loopId) {
             return;
         }
-        
+
+        // Update ORPAR phase to Observe
+        this.currentPhase = 'Observe';
+
         if (observation) {
             // Add to observations array with max length enforcement
             this.observations.push(observation);
@@ -311,12 +348,15 @@ export class ControlLoopHandlers extends Handler {
     protected handleReasoningEvent(payload: BaseEventPayload<ControlLoopSpecificData>): void {
         const reasoning = payload.data.reasoning;
         const loopId = payload.data.loopId
-        
+
         // Only process events for our active control loop
         if (this.activeControlLoopId !== loopId) {
             return;
         }
-        
+
+        // Update ORPAR phase to Reason
+        this.currentPhase = 'Reason';
+
         if (reasoning) {
             this.currentReasoning = reasoning;
             // Server-side already logs reasoning events, avoid duplicate client logging
@@ -332,12 +372,15 @@ export class ControlLoopHandlers extends Handler {
     protected handlePlanEvent(payload: BaseEventPayload<ControlLoopSpecificData>): void {
         const plan = payload.data.plan;
         const loopId = payload.data.loopId
-        
+
         // Only process events for our active control loop
         if (this.activeControlLoopId !== loopId) {
             return;
         }
-        
+
+        // Update ORPAR phase to Plan
+        this.currentPhase = 'Plan';
+
         if (plan) {
             this.currentPlan = plan;
             // Server-side already logs plan events, avoid duplicate client logging
@@ -354,11 +397,14 @@ export class ControlLoopHandlers extends Handler {
         const action = payload.data.action;
         const status = payload.data.status;
         const loopId = payload.data.loopId;
-        
+
         // Only process events for our active control loop
         if (this.activeControlLoopId !== loopId || !this.currentPlan) {
             return;
         }
+
+        // Update ORPAR phase to Act
+        this.currentPhase = 'Act';
         
         if (action && status && this.currentPlan.actions) {
             // Update action status in the current plan
@@ -664,5 +710,54 @@ export class ControlLoopHandlers extends Handler {
             this.logger.error(`Error generating reflection: ${error instanceof Error ? error.message : String(error)}`);
         }
     }
-    
+
+    /**
+     * Handle reflection events from the control loop
+     * Updates ORPAR phase to Reflect
+     *
+     * @param payload Event payload
+     * @protected
+     */
+    protected handleReflectionEvent(payload: BaseEventPayload<ControlLoopSpecificData>): void {
+        const loopId = payload.data.loopId;
+
+        // Only process events for our active control loop
+        if (this.activeControlLoopId !== loopId) {
+            return;
+        }
+
+        // Update ORPAR phase to Reflect
+        this.currentPhase = 'Reflect';
+    }
+
+    /**
+     * Handle ORPAR phase events from SystemLLM
+     * These events provide phase hints with metadata including orparPhase
+     *
+     * @param payload Event payload from SystemEvents
+     * @protected
+     */
+    protected handleOrparPhaseEvent(payload: any): void {
+        // Extract orparPhase from event metadata if present
+        const orparPhase = payload?.eventData?.metadata?.orparPhase ||
+                          payload?.data?.metadata?.orparPhase;
+
+        if (orparPhase) {
+            // Map server phase names to SDK phase names
+            const phaseMap: Record<string, OrparPhase> = {
+                'observation': 'Observe',
+                'reasoning': 'Reason',
+                'planning': 'Plan',
+                'action': 'Act',
+                'reflection': 'Reflect'
+            };
+
+            const mappedPhase = phaseMap[orparPhase];
+            if (mappedPhase) {
+                this.currentPhase = mappedPhase;
+                this.logger.debug(`ORPAR phase updated from SystemEvent: ${mappedPhase}`);
+            }
+        }
+    }
+
 }

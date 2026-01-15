@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MXF Task Lifecycle</title>
+    <link rel="stylesheet" href="diagram-base.css">
+    <style>
+        .state-box {
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        .state-box:hover {
+            filter: brightness(1.1) drop-shadow(0 4px 12px var(--shadow));
+        }
+        .state-box.active {
+            filter: drop-shadow(0 0 15px var(--accent));
+        }
+        .transition-label {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 11px;
+            fill: var(--text-muted);
+        }
+        .retry-path {
+            stroke: #f59e0b;
+            stroke-dasharray: 6 3;
+        }
+    </style>
+</head>
+<body>
+    <div class="diagram-container">
+        <header class="diagram-header">
+            <div>
+                <h1 class="diagram-title">Task Lifecycle States</h1>
+                <p class="diagram-subtitle">State transitions for task management in MXF</p>
+            </div>
+            <button class="theme-toggle" onclick="toggleTheme()">
+                <span class="theme-toggle-icon">🌙</span>
+                <span class="theme-toggle-label">Dark</span>
+            </button>
+        </header>
+
+        <div id="diagram-container"></div>
+
+        <div class="legend">
+            <div class="legend-item">
+                <div class="legend-color" style="background: #6b7280;"></div>
+                <span>Initial State</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #f59e0b;"></div>
+                <span>Pending/Waiting</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #3b82f6;"></div>
+                <span>Active Processing</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #22c55e;"></div>
+                <span>Success</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #ef4444;"></div>
+                <span>Failure</span>
+            </div>
+        </div>
+    </div>
+
+    <script src="diagram-utils.js"></script>
+    <script>
+        const stateData = {
+            created: {
+                icon: '📝',
+                title: 'Created',
+                color: '#6b7280',
+                desc: 'Task has been created but not yet queued for processing.'
+            },
+            pending: {
+                icon: '⏳',
+                title: 'Pending',
+                color: '#f59e0b',
+                desc: 'Task is queued and waiting for an available agent.'
+            },
+            assigned: {
+                icon: '🎯',
+                title: 'Assigned',
+                color: '#3b82f6',
+                desc: 'Task has been assigned to a specific agent.'
+            },
+            inprogress: {
+                icon: '⚡',
+                title: 'In Progress',
+                color: '#3b82f6',
+                desc: 'Agent is actively working on the task.'
+            },
+            completed: {
+                icon: '✅',
+                title: 'Completed',
+                color: '#22c55e',
+                desc: 'Task has been successfully completed.'
+            },
+            failed: {
+                icon: '❌',
+                title: 'Failed',
+                color: '#ef4444',
+                desc: 'Task execution failed. Can be retried.'
+            },
+            archived: {
+                icon: '📦',
+                title: 'Archived',
+                color: '#6b7280',
+                desc: 'Task has been archived for historical reference.'
+            }
+        };
+
+        class TaskLifecycleDiagram extends MXFDiagram {
+            render() {
+                // State positions - horizontal flow with branches
+                const states = [
+                    { id: 'created', x: 80, y: 150 },
+                    { id: 'pending', x: 210, y: 150 },
+                    { id: 'assigned', x: 340, y: 150 },
+                    { id: 'inprogress', x: 480, y: 150 },
+                    { id: 'completed', x: 620, y: 100 },
+                    { id: 'failed', x: 620, y: 200 },
+                    { id: 'archived', x: 760, y: 100 }
+                ];
+
+                // Transitions
+                const transitions = [
+                    { from: 'created', to: 'pending', label: 'queue' },
+                    { from: 'pending', to: 'assigned', label: 'assign' },
+                    { from: 'assigned', to: 'inprogress', label: 'start' },
+                    { from: 'inprogress', to: 'completed', label: 'success' },
+                    { from: 'inprogress', to: 'failed', label: 'error' },
+                    { from: 'failed', to: 'pending', label: 'retry', curved: true, isRetry: true },
+                    { from: 'completed', to: 'archived', label: 'archive' }
+                ];
+
+                // Draw transitions first (so they appear behind states)
+                transitions.forEach(t => {
+                    const fromState = states.find(s => s.id === t.from);
+                    const toState = states.find(s => s.id === t.to);
+                    if (fromState && toState) {
+                        this.drawTransition(fromState, toState, t.label, t.curved, t.isRetry);
+                    }
+                });
+
+                // Draw states
+                states.forEach(state => {
+                    const data = stateData[state.id];
+                    this.drawState(state.x, state.y, data, state.id);
+                });
+            }
+
+            drawState(x, y, data, id) {
+                const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+                g.setAttribute('class', 'state-box');
+                g.setAttribute('data-state', id);
+
+                // Rounded rect
+                const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                rect.setAttribute('x', x - 55);
+                rect.setAttribute('y', y - 30);
+                rect.setAttribute('width', 110);
+                rect.setAttribute('height', 60);
+                rect.setAttribute('rx', 10);
+                rect.setAttribute('fill', data.color);
+                rect.setAttribute('opacity', '0.9');
+                g.appendChild(rect);
+
+                // Icon
+                const icon = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                icon.setAttribute('x', x);
+                icon.setAttribute('y', y - 5);
+                icon.setAttribute('text-anchor', 'middle');
+                icon.setAttribute('font-size', '18px');
+                icon.textContent = data.icon;
+                g.appendChild(icon);
+
+                // Label
+                const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                label.setAttribute('x', x);
+                label.setAttribute('y', y + 18);
+                label.setAttribute('text-anchor', 'middle');
+                label.setAttribute('fill', 'white');
+                label.setAttribute('font-weight', '700');
+                label.setAttribute('font-size', '12px');
+                label.textContent = data.title;
+                g.appendChild(label);
+
+                // Tooltip on hover
+                g.addEventListener('mouseenter', (e) => this.showTooltip(e, data.title, data.desc));
+                g.addEventListener('mouseleave', () => this.hideTooltip());
+
+                this.mainGroup.appendChild(g);
+            }
+
+            drawTransition(from, to, label, curved = false, isRetry = false) {
+                const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+
+                // Calculate offset for state borders
+                const dx = to.x - from.x;
+                const dy = to.y - from.y;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+                const offsetStart = 55;
+                const offsetEnd = 55;
+
+                let x1 = from.x + (dx / dist) * offsetStart;
+                let y1 = from.y + (dy / dist) * offsetStart;
+                let x2 = to.x - (dx / dist) * offsetEnd;
+                let y2 = to.y - (dy / dist) * offsetEnd;
+
+                const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+
+                let d;
+                if (curved || isRetry) {
+                    // Retry goes back - curve below
+                    if (isRetry) {
+                        const midX = (from.x + to.x) / 2;
+                        const midY = Math.max(from.y, to.y) + 60;
+                        d = `M ${from.x} ${from.y + 30} Q ${midX} ${midY}, ${to.x} ${to.y + 30}`;
+                    } else {
+                        const midX = (x1 + x2) / 2;
+                        const midY = (y1 + y2) / 2;
+                        const perpX = -(y2 - y1) / dist * 30;
+                        const perpY = (x2 - x1) / dist * 30;
+                        d = `M ${x1} ${y1} Q ${midX + perpX} ${midY + perpY}, ${x2} ${y2}`;
+                    }
+                } else {
+                    d = `M ${x1} ${y1} L ${x2} ${y2}`;
+                }
+
+                path.setAttribute('d', d);
+                path.setAttribute('class', `edge ${isRetry ? 'retry-path' : ''}`);
+                path.setAttribute('marker-end', isRetry ? 'url(#arrowhead-orange)' : 'url(#arrowhead)');
+                g.appendChild(path);
+
+                // Label
+                if (label) {
+                    let midX, midY;
+                    if (isRetry) {
+                        midX = (from.x + to.x) / 2;
+                        midY = Math.max(from.y, to.y) + 55;
+                    } else {
+                        midX = (x1 + x2) / 2;
+                        midY = (y1 + y2) / 2 - 8;
+                    }
+
+                    const bg = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                    bg.setAttribute('x', midX - 25);
+                    bg.setAttribute('y', midY - 8);
+                    bg.setAttribute('width', 50);
+                    bg.setAttribute('height', 14);
+                    bg.setAttribute('fill', 'var(--bg-primary)');
+                    bg.setAttribute('rx', 3);
+                    g.appendChild(bg);
+
+                    const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                    text.setAttribute('x', midX);
+                    text.setAttribute('y', midY + 3);
+                    text.setAttribute('class', 'transition-label');
+                    text.setAttribute('text-anchor', 'middle');
+                    text.textContent = label;
+                    g.appendChild(text);
+                }
+
+                this.mainGroup.insertBefore(g, this.mainGroup.firstChild);
+            }
+        }
+
+        // Initialize
+        const diagram = new TaskLifecycleDiagram('diagram-container', {
+            width: 850,
+            height: 320
+        });
+        diagram.render();
+    </script>
+</body>
+</html>

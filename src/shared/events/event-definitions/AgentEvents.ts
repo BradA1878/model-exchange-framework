@@ -119,6 +119,10 @@ export const AgentEvents = {
     RESUME_RESPONSE: 'agent:resume:response', // Response from agent resume
     METRICS_REQUEST: 'agent:metrics:request', // Request for agent metrics
     METRICS_RESPONSE: 'agent:metrics:response', // Response with agent metrics
+
+    // Tool configuration events
+    ALLOWED_TOOLS_UPDATE: 'agent:allowed_tools:update', // Request to update agent's allowed tools
+    ALLOWED_TOOLS_UPDATED: 'agent:allowed_tools:updated', // Confirmation of allowed tools update
 };
 
 /**
@@ -164,4 +168,8 @@ export interface AgentPayloads {
     'agent:resume:response': { agentId: string, success: boolean, error?: string };
     'agent:metrics:request': { agentId: string, timestamp: Date };
     'agent:metrics:response': { agentId: string, metrics: any, timestamp: Date };
+
+    // Tool configuration events
+    'agent:allowed_tools:update': { agentId: string; allowedTools: string[] };
+    'agent:allowed_tools:updated': { agentId: string; allowedTools: string[]; success: boolean };
 }

@@ -226,9 +226,9 @@ export class ChannelService extends EventEmitter {
         });
 
         // Example listener for a generic channel event that might lead to persistence or other actions
-        // TODO: Define 'message_posted' as a valid ChannelActionType in ChannelEventData schema
-        this.eventBus.on(Events.Channel.UPDATED as EventName, (payload: BaseEventPayload<ChannelEventData>) => { 
-            if ((payload.data.action as string) === 'message_posted') { 
+        // Note: 'message_posted' is defined in ChannelActionTypes in ChannelEvents.ts
+        this.eventBus.on(Events.Channel.UPDATED as EventName, (payload: BaseEventPayload<ChannelEventData>) => {
+            if (payload.data.action === 'message_posted') { 
                 // Potentially trigger persistence or other logic if messages are posted via general channel updates
                 // This would require the payload.data to contain full message details.
             }
@@ -435,12 +435,11 @@ export class ChannelService extends EventEmitter {
                     this.channelParticipants.set(channelId, new Set(existingChannel.participants));
                 }
                 
-                // Sync systemLlmEnabled from database to ConfigManager
+                // Sync systemLlmEnabled from database to ConfigManager (explicitly set for both true and false)
                 // Type assertion needed because Mongoose model type doesn't include schema extensions
                 const channelDoc = existingChannel as any;
-                if (channelDoc.systemLlmEnabled === false) {
-                    ConfigManager.getInstance().setChannelSystemLlmEnabled(false, channelId, 'Loaded from database');
-                }
+                const systemLlmEnabled = channelDoc.systemLlmEnabled !== false; // Default to true
+                ConfigManager.getInstance().setChannelSystemLlmEnabled(systemLlmEnabled, channelId, 'Loaded from database');
                 
                 // Cache channel allowedTools in McpService for synchronous tool filtering
                 // Note: setChannelAllowedTools is async but we don't await since DB already has the value
@@ -537,12 +536,10 @@ export class ChannelService extends EventEmitter {
             );
         }
         
-        // Sync systemLlmEnabled to ConfigManager
-        this.logger.info(`[CREATE_CHANNEL] Channel ${channelId} systemLlmEnabled=${metadata?.systemLlmEnabled}`);
-        if (metadata?.systemLlmEnabled === false) {
-            this.logger.info(`[CREATE_CHANNEL] Disabling SystemLLM for channel ${channelId}`);
-            ConfigManager.getInstance().setChannelSystemLlmEnabled(false, channelId, 'Set at channel creation');
-        }
+        // Sync systemLlmEnabled to ConfigManager (explicitly set for both true and false)
+        const systemLlmEnabled = metadata?.systemLlmEnabled !== false; // Default to true
+        this.logger.info(`[CREATE_CHANNEL] Channel ${channelId} systemLlmEnabled=${systemLlmEnabled}`);
+        ConfigManager.getInstance().setChannelSystemLlmEnabled(systemLlmEnabled, channelId, 'Set at channel creation');
 
         this.notifyChannelEvent(Events.Channel.CREATED as EventName, {
             action: 'created', 
@@ -1076,10 +1073,28 @@ export class ChannelService extends EventEmitter {
         } as ChannelMessage; // Casting, ensure all required fields are present
 
         try {
-            // ;
-            
-            // TODO: Implement message persistence if needed
-            
+            // Persist message to MongoDB using atomic operation
+            await Channel.findOneAndUpdate(
+                { channelId },
+                {
+                    $push: {
+                        'sharedMemory.conversationHistory': {
+                            messageId,
+                            content,
+                            senderId: fromAgentId,
+                            timestamp: serverTimestamp,
+                            type: messageType,
+                            metadata
+                        }
+                    },
+                    $set: {
+                        'sharedMemory.updatedAt': new Date(),
+                        lastActive: new Date()
+                    }
+                },
+                { new: true }
+            );
+
             return channelMessageToPersist; // Return the persisted message
 
         } catch (error: any) {
@@ -1151,9 +1166,21 @@ export class ChannelService extends EventEmitter {
 
         const serverTimestamp = Date.now();
 
+        // Determine content format dynamically based on content type and messageType
+        // ContentFormat supports: JSON, BINARY, BASE64, TEXT
+        let detectedFormat = ContentFormat.TEXT;
+        if (messageType === 'json' || (typeof content === 'object' && content !== null)) {
+            detectedFormat = ContentFormat.JSON;
+        } else if (messageType === 'binary' || Buffer.isBuffer(content)) {
+            detectedFormat = ContentFormat.BINARY;
+        } else if (messageType === 'base64') {
+            detectedFormat = ContentFormat.BASE64;
+        }
+        // Markdown and HTML content is stored as TEXT format
+
         // Prepare the message content for persistence and event emission
         const channelMessageContent: ContentWrapper = {
-            format: ContentFormat.TEXT, // TODO: Determine format dynamically or based on messageType
+            format: detectedFormat,
             data: content,
         };
 
@@ -1278,9 +1305,31 @@ export class ChannelService extends EventEmitter {
                 metadata: msg.metadata || {}
             }));
 
-            const channelModel = new Channel();
-            // TODO: Implement bulk message persistence if needed
-            
+            // Persist messages to MongoDB using bulkWrite for efficiency
+            const bulkOps = convertedMessages.map(msg => ({
+                updateOne: {
+                    filter: { channelId },
+                    update: {
+                        $push: {
+                            'sharedMemory.conversationHistory': {
+                                messageId: msg.messageId,
+                                content: msg.content,
+                                senderId: msg.senderId,
+                                timestamp: msg.timestamp,
+                                type: msg.type,
+                                metadata: msg.metadata
+                            }
+                        },
+                        $set: {
+                            'sharedMemory.updatedAt': new Date(),
+                            lastActive: new Date()
+                        }
+                    }
+                }
+            }));
+
+            await Channel.bulkWrite(bulkOps);
+
             // Emit bulk persistence success event
             this.eventBus.emit(Events.Channel.BULK_MESSAGES_PERSISTED, {
                 channelId: channelId,
@@ -1333,9 +1382,9 @@ export class ChannelService extends EventEmitter {
 
         if (channelId && agentId) { 
             // Create channel event data for error
+            // Note: 'error' is defined in ChannelActionTypes in ChannelEvents.ts
             const errorData: ChannelEventData = {
-                // TODO: Define 'error' as a valid ChannelActionType in ChannelEventData schema
-                action: 'error' as ChannelActionType, // Cast action for now
+                action: 'error' as ChannelActionType,
                 error: message, 
                 errorMessage: errorMessage, 
                 details: details,

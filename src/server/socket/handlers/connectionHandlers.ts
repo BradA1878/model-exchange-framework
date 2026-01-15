@@ -27,14 +27,16 @@
 
 import { Server as SocketServer, Socket } from 'socket.io';
 import { EventBus } from '../../../shared/events/EventBus';
-import { 
-    AgentEvents, 
+import {
+    AgentEvents,
     CoreSocketEvents,
     Events,
     ChannelEvents,
     ChannelActionTypes,
     AuthEvents
 } from '../../../shared/events/EventNames';
+import { ControlLoopEvents } from '../../../shared/events/event-definitions/ControlLoopEvents';
+import { OrparEvents } from '../../../shared/events/event-definitions/OrparEvents';
 import { AgentConnectionStatus } from '../../../shared/types/AgentTypes';
 import { createStrictValidator } from '../../../shared/utils/validation';
 import logger from '../../../shared/utils/Logger';
@@ -283,10 +285,10 @@ export const completeSocketConnection = async (
                 }
             }
             
-            // Update allowedTools if provided (need to add this method to AgentService)
+            // Update allowedTools if provided
             if (allowedTools.length > 0) {
                 try {
-                    // TODO: Add updateAgentAllowedTools method to AgentService
+                    getAgentService().updateAgentAllowedTools(agentId, allowedTools);
                 } catch (error) {
                     moduleLogger.error(`Failed to update agent allowed tools for ${agentId}: ${error}`);
                 }
@@ -377,6 +379,36 @@ export const completeSocketConnection = async (
             }
         });
 
+        // 7. Set up allowed tools update handler for dynamic tool changes
+        socket.on(Events.Agent.ALLOWED_TOOLS_UPDATE, (payload: { agentId: string; allowedTools: string[] }) => {
+            try {
+                const updated = getAgentService().updateAgentAllowedTools(payload.agentId, payload.allowedTools);
+
+                if (updated) {
+                    moduleLogger.info(`Updated allowedTools for ${payload.agentId}: ${payload.allowedTools.length} tools`);
+                    socket.emit(Events.Agent.ALLOWED_TOOLS_UPDATED, {
+                        agentId: payload.agentId,
+                        allowedTools: payload.allowedTools,
+                        success: true
+                    });
+                } else {
+                    moduleLogger.warn(`Failed to update allowedTools for ${payload.agentId}: agent not found`);
+                    socket.emit(Events.Agent.ALLOWED_TOOLS_UPDATED, {
+                        agentId: payload.agentId,
+                        allowedTools: payload.allowedTools,
+                        success: false
+                    });
+                }
+            } catch (error) {
+                moduleLogger.error(`Error updating allowedTools for ${payload.agentId}: ${error}`);
+                socket.emit(Events.Agent.ALLOWED_TOOLS_UPDATED, {
+                    agentId: payload.agentId,
+                    allowedTools: payload.allowedTools || [],
+                    success: false
+                });
+            }
+        });
+
         // Get current agent to include actual capabilities in registration payload
         const currentAgent = getAgentService().getAgent(agentId);
         const agentCapabilities = currentAgent?.capabilities || [];
@@ -443,17 +475,34 @@ export const setupSocketEventHandling = (
         // Setup MCP event handlers if present
         setupMcpEventHandlers(socket, agentId, channelId);
         
+        // Build a set of server-originated events that should NOT be routed back to EventBus.server
+        // These events are emitted by the server (OrparTools, ControlLoop) and forwarded to clients.
+        // If clients re-emit them back, we must NOT re-forward to EventBus.server to prevent loops.
+        const serverOriginatedEvents = new Set([
+            // ControlLoop events (server-orchestrated)
+            ...Object.values(ControlLoopEvents),
+            // ORPAR events (agent-driven cognitive documentation via server-side OrparTools)
+            ...Object.values(OrparEvents)
+        ]);
+
         // Use event bus to route client events to server
         socket.onAny((eventName, payload) => {
             // Skip internal events
-            if (eventName.startsWith('connection:') || 
+            if (eventName.startsWith('connection:') ||
                 eventName === AuthEvents.SUCCESS ||
                 eventName === AuthEvents.ERROR ||
-                eventName === 'disconnect' || 
+                eventName === 'disconnect' ||
                 eventName === 'error') {
                 return;
             }
-            
+
+            // Skip server-originated events to prevent client → server → client loops
+            // These events originate from OrparTools/ControlLoop, are forwarded to clients,
+            // and should NOT be re-emitted to EventBus.server when clients echo them back
+            if (serverOriginatedEvents.has(eventName)) {
+                return;
+            }
+
             // Route event to server
             routeClientEventToServer(socket, eventName, payload, socketService);
         });

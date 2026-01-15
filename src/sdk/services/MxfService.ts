@@ -29,6 +29,8 @@ import { default as socketIO } from 'socket.io-client';
 import { EventBus } from '../../shared/events/EventBus';
 import { Events, CoreSocketEvents, AgentEvents, ChannelEvents, ChannelActionTypes, AuthEvents } from '../../shared/events/EventNames';
 import { TaskEvents } from '../../shared/events/event-definitions/TaskEvents';
+import { ControlLoopEvents } from '../../shared/events/event-definitions/ControlLoopEvents';
+import { OrparEvents } from '../../shared/events/event-definitions/OrparEvents';
 import { PublicEventName, isPublicEvent } from '../../shared/events/PublicEvents';
 import { v4 as uuidv4 } from 'uuid';
 import { createChannelMessage, ChannelMessage } from '../../shared/schemas/MessageSchemas';
@@ -267,7 +269,10 @@ export class MxfService implements IInternalChannelService {
                         
                         // Set the socket for event forwarding
                         EventBus.client.setClientSocket(this.socket);
-                        
+
+                        // Set up control loop socket listeners now that socket is available
+                        this.setupControlLoopSocketListeners();
+
                         // Listen for authentication events for logging
                         this.socket.on(AuthEvents.SUCCESS, (authData: any) => {
 
@@ -588,13 +593,16 @@ export class MxfService implements IInternalChannelService {
                     // Depending on policy, you might choose to ignore, or trust one over the other.
                     // For now, we'll proceed using the senderId from the ChannelMessage data.
                 }
-                // TODO: Further processing of payload.data (the ChannelMessage) if needed by MxfService itself.
-                // Typically, other parts of the application would subscribe to this event for their own handling.
+                // The ChannelMessage (payload.data) is available for any MxfService-specific processing.
+                // By design, message handling is delegated to subscribers of this event, keeping MxfService focused on coordination.
             }
         });
 
         // Listen for task events relevant to this agent/channel
         this.setupTaskEventListeners();
+
+        // Set up socket listeners for server-sent control loop events (REASONING, PLAN, etc.)
+        this.setupControlLoopSocketListeners();
     }
 
     /**
@@ -628,6 +636,85 @@ export class MxfService implements IInternalChannelService {
             //
             this.handleTaskEvent('progressUpdated', payload);
         });
+    }
+
+    // Flag to prevent duplicate control loop listener setup
+    private controlLoopListenersSetup = false;
+
+    /**
+     * Set up socket listeners for control loop events from the server
+     * These events (REASONING, PLAN, ACTION, REFLECTION, etc.) are emitted by the server's
+     * ControlLoop and need to be forwarded to EventBus.client for SDK components to receive them.
+     * @private
+     */
+    private setupControlLoopSocketListeners(): void {
+        if (!this.socket) {
+            this.logger.warn(`[Channel:${this.channelId}] Cannot setup control loop listeners - socket not available`);
+            return;
+        }
+
+        // Prevent duplicate setup
+        if (this.controlLoopListenersSetup) {
+            return;
+        }
+        this.controlLoopListenersSetup = true;
+
+        // Control loop events that are emitted by the server and need to be forwarded to EventBus.client
+        // These are server-orchestrated control loop events
+        const controlLoopEventsToForward = [
+            ControlLoopEvents.INITIALIZED,
+            ControlLoopEvents.STARTED,
+            ControlLoopEvents.STOPPED,
+            ControlLoopEvents.OBSERVATION,
+            ControlLoopEvents.REASONING,
+            ControlLoopEvents.PLAN,
+            ControlLoopEvents.ACTION,
+            ControlLoopEvents.EXECUTION,
+            ControlLoopEvents.REFLECTION,
+            ControlLoopEvents.ERROR,
+            ControlLoopEvents.SYSTEM_LLM_REASONING_COMPLETED,
+            ControlLoopEvents.SYSTEM_LLM_REASONING_FAILED
+        ];
+
+        // ORPAR events - agent-driven cognitive cycle documentation
+        // These are DISTINCT from ControlLoopEvents to prevent duplicates
+        const orparEventsToForward = [
+            OrparEvents.OBSERVE,
+            OrparEvents.REASON,
+            OrparEvents.PLAN,
+            OrparEvents.ACT,
+            OrparEvents.REFLECT,
+            OrparEvents.STATUS,
+            OrparEvents.ERROR
+        ];
+
+        // Forward all control loop events
+        controlLoopEventsToForward.forEach(eventName => {
+            this.socket!.on(eventName, (payload: any) => {
+                // Only forward events for this channel
+                if (payload.channelId && payload.channelId !== this.channelId) {
+                    return;
+                }
+
+                // Forward the event to EventBus.client so SDK components can receive it
+                EventBus.client.emit(eventName, payload);
+            });
+        });
+
+        // Forward all ORPAR events (agent-driven cognitive documentation)
+        orparEventsToForward.forEach(eventName => {
+            this.socket!.on(eventName, (payload: any) => {
+                // Only forward events for this channel
+                if (payload.channelId && payload.channelId !== this.channelId) {
+                    return;
+                }
+
+                // Forward the event to EventBus.client so SDK components can receive it
+                EventBus.client.emit(eventName, payload);
+            });
+        });
+
+        this.logger.info(`[Channel:${this.channelId}] Control loop and ORPAR socket listeners initialized`);
     }
 
     /**

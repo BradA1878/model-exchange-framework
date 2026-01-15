@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MXF High-Level System Architecture</title>
+    <link rel="stylesheet" href="diagram-base.css">
+    <style>
+        .arch-node {
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        .arch-node:hover {
+            filter: brightness(1.1) drop-shadow(0 4px 12px var(--shadow));
+        }
+        .arch-node rect {
+            rx: 8;
+        }
+        .node-client rect { fill: #3b82f6; }
+        .node-server rect { fill: #22c55e; }
+        .node-service rect { fill: #6366f1; }
+        .node-security rect { fill: #f59e0b; }
+        .node-cache rect { fill: #f59e0b; }
+        .node-database rect { fill: #f59e0b; }
+        .node-external rect { fill: #ec4899; }
+    </style>
+</head>
+<body>
+    <div class="diagram-container">
+        <header class="diagram-header">
+            <div>
+                <h1 class="diagram-title">High-Level System Architecture</h1>
+                <p class="diagram-subtitle">MXF multi-agent platform component overview</p>
+            </div>
+            <button class="theme-toggle" onclick="toggleTheme()">
+                <span class="theme-toggle-icon">🌙</span>
+                <span class="theme-toggle-label">Dark</span>
+            </button>
+        </header>
+
+        <div class="controls">
+            <button class="control-btn active" data-layer="all">All Layers</button>
+            <button class="control-btn" data-layer="ui">UI Layer</button>
+            <button class="control-btn" data-layer="client">Client Layer</button>
+            <button class="control-btn" data-layer="api">API Gateway</button>
+            <button class="control-btn" data-layer="service">Service Layer</button>
+            <button class="control-btn" data-layer="infra">Infrastructure</button>
+            <button class="control-btn" data-layer="data">Data Layer</button>
+            <button class="control-btn" data-layer="external">External</button>
+        </div>
+
+        <div id="diagram-container"></div>
+
+        <div class="legend">
+            <div class="legend-item">
+                <div class="legend-color" style="background: #3b82f6;"></div>
+                <span>UI/Client</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #22c55e;"></div>
+                <span>API Layer</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #6366f1;"></div>
+                <span>Services</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #f59e0b;"></div>
+                <span>Data/Cache</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #ec4899;"></div>
+                <span>External</span>
+            </div>
+        </div>
+    </div>
+
+    <script src="diagram-utils.js"></script>
+    <script>
+        class ArchitectureDiagram extends MXFDiagram {
+            render() {
+                // Layer definitions
+                const layers = [
+                    { id: 'ui', y: 40, h: 70, label: 'User Interface Layer', w: 580 },
+                    { id: 'client', y: 120, h: 60, label: 'Client Layer', w: 580 },
+                    { id: 'api', y: 190, h: 60, label: 'API Gateway', w: 580 },
+                    { id: 'service', y: 260, h: 70, label: 'Service Layer', w: 580 },
+                    { id: 'infra', y: 340, h: 60, label: 'Core Infrastructure', w: 580 },
+                    { id: 'data', y: 410, h: 60, label: 'Data Persistence', w: 580 },
+                    { id: 'external', y: 260, h: 210, label: 'External', w: 150, x: 620 }
+                ];
+
+                // Draw layer backgrounds
+                layers.forEach(layer => {
+                    this.drawLayer(layer.x || 40, layer.y, layer.w, layer.h, layer.label, layer.id);
+                });
+
+                // Node definitions with positions
+                const nodes = {
+                    // UI Layer
+                    dash: { x: 120, y: 75, label: 'Dashboard', sub: 'Vue 3', type: 'client', layer: 'ui' },
+                    cli: { x: 280, y: 75, label: 'CLI Tools', type: 'client', layer: 'ui' },
+                    custom: { x: 440, y: 75, label: 'Custom UIs', type: 'client', layer: 'ui' },
+                    // Client Layer
+                    sdk: { x: 200, y: 150, label: 'MXF SDK', sub: 'TypeScript', type: 'client', layer: 'client' },
+                    agent: { x: 400, y: 150, label: 'MxfAgent', sub: 'LLM-Powered', type: 'client', layer: 'client' },
+                    // API Layer
+                    rest: { x: 200, y: 220, label: 'REST API', sub: 'Express.js', type: 'server', layer: 'api' },
+                    ws: { x: 400, y: 220, label: 'WebSocket', sub: 'Socket.IO', type: 'server', layer: 'api' },
+                    // Service Layer
+                    as: { x: 90, y: 295, label: 'Agent', type: 'service', layer: 'service', w: 70 },
+                    cs: { x: 170, y: 295, label: 'Channel', type: 'service', layer: 'service', w: 70 },
+                    ts: { x: 250, y: 295, label: 'Task', type: 'service', layer: 'service', w: 70 },
+                    ms: { x: 330, y: 295, label: 'Memory', type: 'service', layer: 'service', w: 70 },
+                    mcp: { x: 410, y: 295, label: 'MCP', type: 'service', layer: 'service', w: 70 },
+                    cls: { x: 510, y: 295, label: 'ControlLoop', type: 'service', layer: 'service', w: 85 },
+                    // Infrastructure
+                    eb: { x: 160, y: 370, label: 'EventBus', sub: 'RxJS', type: 'service', layer: 'infra' },
+                    auth: { x: 330, y: 370, label: 'Auth', sub: 'JWT+Keys', type: 'security', layer: 'infra' },
+                    cache: { x: 500, y: 370, label: 'Cache', type: 'cache', layer: 'infra' },
+                    // Data Layer
+                    mongo: { x: 230, y: 440, label: 'MongoDB', type: 'database', layer: 'data' },
+                    redis: { x: 420, y: 440, label: 'Redis', type: 'cache', layer: 'data' },
+                    // External
+                    llm: { x: 695, y: 300, label: 'LLM Providers', type: 'external', layer: 'external' },
+                    tools: { x: 695, y: 370, label: 'External Tools', type: 'external', layer: 'external' },
+                    webhooks: { x: 695, y: 440, label: 'Webhooks', type: 'external', layer: 'external' }
+                };
+
+                // Draw all nodes
+                Object.entries(nodes).forEach(([id, node]) => {
+                    this.drawNode(id, node);
+                });
+
+                // Define edges
+                const edges = [
+                    ['dash', 'rest'], ['cli', 'sdk'], ['custom', 'sdk'],
+                    ['sdk', 'ws'], ['agent', 'ws'],
+                    ['rest', 'auth'], ['ws', 'auth'],
+                    ['auth', 'as'],
+                    ['as', 'eb'], ['cs', 'eb'], ['ts', 'eb'], ['ms', 'eb'], ['mcp', 'eb'], ['cls', 'eb'],
+                    ['eb', 'mongo'], ['cache', 'redis'],
+                    ['as', 'llm', 'pink'], ['mcp', 'tools', 'pink'], ['cs', 'webhooks', 'pink']
+                ];
+
+                // Draw edges
+                edges.forEach(([from, to, color]) => {
+                    const f = nodes[from];
+                    const t = nodes[to];
+                    if (f && t) {
+                        this.drawEdge(f.x, f.y + 20, t.x, t.y - 20, color);
+                    }
+                });
+
+                // Setup layer filtering
+                this.setupFilters(nodes);
+            }
+
+            drawLayer(x, y, w, h, label, id) {
+                const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+                g.setAttribute('class', 'architecture-layer');
+                g.setAttribute('data-layer', id);
+
+                const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                rect.setAttribute('x', x);
+                rect.setAttribute('y', y);
+                rect.setAttribute('width', w);
+                rect.setAttribute('height', h);
+                rect.setAttribute('rx', 10);
+                rect.setAttribute('fill', 'var(--bg-tertiary)');
+                rect.setAttribute('stroke', 'var(--border)');
+                rect.setAttribute('stroke-width', '1');
+                g.appendChild(rect);
+
+                const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                text.setAttribute('x', x + 10);
+                text.setAttribute('y', y + 18);
+                text.setAttribute('fill', 'var(--text-muted)');
+                text.setAttribute('font-size', '11px');
+                text.setAttribute('font-weight', '600');
+                text.textContent = label.toUpperCase();
+                g.appendChild(text);
+
+                this.mainGroup.appendChild(g);
+            }
+
+            drawNode(id, node) {
+                const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+                g.setAttribute('class', `arch-node node-${node.type}`);
+                g.setAttribute('data-node-id', id);
+                g.setAttribute('data-layer', node.layer);
+
+                const w = node.w || 100;
+                const h = node.sub ? 38 : 32;
+
+                const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                rect.setAttribute('x', node.x - w/2);
+                rect.setAttribute('y', node.y - h/2);
+                rect.setAttribute('width', w);
+                rect.setAttribute('height', h);
+                g.appendChild(rect);
+
+                const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                label.setAttribute('x', node.x);
+                label.setAttribute('y', node.sub ? node.y - 3 : node.y + 4);
+                label.setAttribute('text-anchor', 'middle');
+                label.setAttribute('fill', 'white');
+                label.setAttribute('font-size', '11px');
+                label.setAttribute('font-weight', '600');
+                label.textContent = node.label;
+                g.appendChild(label);
+
+                if (node.sub) {
+                    const sub = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                    sub.setAttribute('x', node.x);
+                    sub.setAttribute('y', node.y + 11);
+                    sub.setAttribute('text-anchor', 'middle');
+                    sub.setAttribute('fill', 'rgba(255,255,255,0.7)');
+                    sub.setAttribute('font-size', '9px');
+                    sub.textContent = node.sub;
+                    g.appendChild(sub);
+                }
+
+                this.mainGroup.appendChild(g);
+            }
+
+            drawEdge(x1, y1, x2, y2, color) {
+                const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                const midY = (y1 + y2) / 2;
+                const d = `M ${x1} ${y1} C ${x1} ${midY}, ${x2} ${midY}, ${x2} ${y2}`;
+                path.setAttribute('d', d);
+                path.setAttribute('fill', 'none');
+                path.setAttribute('stroke', color === 'pink' ? '#ec4899' : 'var(--edge)');
+                path.setAttribute('stroke-width', '1.5');
+                path.setAttribute('marker-end', color === 'pink' ? 'url(#arrowhead-pink)' : 'url(#arrowhead)');
+                this.mainGroup.insertBefore(path, this.mainGroup.firstChild);
+            }
+
+            setupFilters(nodes) {
+                const buttons = document.querySelectorAll('.control-btn');
+                const layerMapping = {
+                    ui: ['dash', 'cli', 'custom'],
+                    client: ['sdk', 'agent'],
+                    api: ['rest', 'ws'],
+                    service: ['as', 'cs', 'ts', 'ms', 'mcp', 'cls'],
+                    infra: ['eb', 'auth', 'cache'],
+                    data: ['mongo', 'redis'],
+                    external: ['llm', 'tools', 'webhooks']
+                };
+
+                buttons.forEach(btn => {
+                    btn.addEventListener('click', () => {
+                        buttons.forEach(b => b.classList.remove('active'));
+                        btn.classList.add('active');
+
+                        const layer = btn.dataset.layer;
+                        const allLayers = document.querySelectorAll('.architecture-layer');
+                        const allNodeEls = document.querySelectorAll('.arch-node');
+
+                        if (layer === 'all') {
+                            allLayers.forEach(l => l.style.opacity = '1');
+                            allNodeEls.forEach(n => n.style.opacity = '1');
+                        } else {
+                            allLayers.forEach(l => {
+                                l.style.opacity = l.dataset.layer === layer ? '1' : '0.2';
+                            });
+                            const activeNodes = layerMapping[layer] || [];
+                            allNodeEls.forEach(n => {
+                                n.style.opacity = activeNodes.includes(n.dataset.nodeId) ? '1' : '0.15';
+                            });
+                        }
+                    });
+                });
+            }
+        }
+
+        // Initialize
+        const diagram = new ArchitectureDiagram('diagram-container', {
+            width: 800,
+            height: 500
+        });
+        diagram.render();
+    </script>
+</body>
+</html>

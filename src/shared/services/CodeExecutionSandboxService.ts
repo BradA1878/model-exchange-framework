@@ -383,8 +383,12 @@ export class CodeExecutionSandboxService {
     }
 
     /**
-     * Simple TypeScript type stripping (basic implementation)
-     * TODO: Use proper TypeScript compiler in Phase 2/3
+     * TypeScript type stripping implementation
+     *
+     * Uses regex-based type stripping for lightweight sandboxed execution.
+     * This approach handles common TypeScript patterns (interfaces, types, annotations, assertions)
+     * without requiring the full TypeScript compiler, keeping sandbox execution fast and lightweight.
+     * For production use with complex TypeScript, consider using ts.transpileModule from typescript package.
      */
     private stripTypeScriptTypes(code: string): string {
         let jsCode = code;

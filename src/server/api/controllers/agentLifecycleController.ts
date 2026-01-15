@@ -30,6 +30,9 @@ import { createStrictValidator } from '../../../shared/utils/validation';
 import { Logger } from '../../../shared/utils/Logger';
 import { EventBus } from '../../../shared/events/EventBus';
 import { Events } from '../../../shared/events/EventNames';
+import { MemoryPersistenceService } from '../services/MemoryPersistenceService';
+import { MemoryScope } from '../../../shared/types/MemoryTypes';
+import { firstValueFrom } from 'rxjs';
 
 // Create validator for this controller
 const validate = createStrictValidator('AgentLifecycleController');
@@ -300,6 +303,49 @@ export const resumeAgent = async (req: Request, res: Response): Promise<void> =>
         });
     } catch (error) {
         logger.error(`Error resuming agent ${req.params.agentId}: ${error}`);
+        res.status(500).json({
+            success: false,
+            message: 'Server error',
+            error: (error as Error).message
+        });
+    }
+};
+
+/**
+ * Delete agent memory
+ *
+ * Deletes all persistent memory for an agent from MongoDB.
+ * This includes conversation history, notes, and custom data.
+ *
+ * @param req - Express request object
+ * @param res - Express response object
+ */
+export const deleteAgentMemory = async (req: Request, res: Response): Promise<void> => {
+    try {
+        const { agentId } = req.params;
+        validate.assertIsNonEmptyString(agentId);
+
+        // Delete agent memory using the persistence service
+        const memoryPersistenceService = MemoryPersistenceService.getInstance();
+        const deleted = await firstValueFrom(
+            memoryPersistenceService.deleteMemory(MemoryScope.AGENT, agentId)
+        );
+
+        if (deleted) {
+            logger.info(`Agent memory deleted for ${agentId}`);
+            res.status(200).json({
+                success: true,
+                message: `Memory deleted for agent ${agentId}`
+            });
+        } else {
+            // Memory may not have existed, but that's okay - return success
+            res.status(200).json({
+                success: true,
+                message: `No memory found for agent ${agentId} (may have been already deleted)`
+            });
+        }
+    } catch (error) {
+        logger.error(`Error deleting agent memory ${req.params.agentId}: ${error}`);
         res.status(500).json({
             success: false,
             message: 'Server error',

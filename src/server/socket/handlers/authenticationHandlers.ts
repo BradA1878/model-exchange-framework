@@ -34,6 +34,7 @@ import { getNormalizedChannelName } from './utilityHandlers';
 import KeyAuthHelper from '../../utils/keyAuthHelper';
 import { Channel } from '../../../shared/models/channel';
 import { AgentService } from '../services/AgentService';
+import { ConfigManager } from '../../../sdk/config/ConfigManager';
 
 // Create module logger
 const moduleLogger = logger.child('AuthenticationHandlers');
@@ -359,13 +360,17 @@ export const sendAuthResponse = async (socket: Socket, authenticatedId: string |
                     const channel = await Channel.findOne({ channelId }).exec();
 
                     if (channel) {
+                        // Get systemLlmEnabled status from ConfigManager
+                        const configManager = ConfigManager.getInstance();
+                        const systemLlmEnabled = configManager.isChannelSystemLlmEnabled(channelId);
+
                         // Extract relevant config for SDK
                         channelConfig = {
                             channelId: channel.channelId,
                             name: channel.name,
                             description: channel.description,
                             showActiveAgents: channel.showActiveAgents !== false, // Default to true
-                            systemLlmEnabled: false // TODO: Get from SystemLlmServiceManager
+                            systemLlmEnabled
                         };
 
                         // Get active agents if showActiveAgents is enabled

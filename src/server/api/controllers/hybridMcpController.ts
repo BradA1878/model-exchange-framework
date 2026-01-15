@@ -93,9 +93,16 @@ export const getAllTools = async (req: Request, res: Response): Promise<void> =>
     try {
         const serverHybridMcpService = ServerHybridMcpService.getInstance();
         const internalTools = await serverHybridMcpService.getInternalTools();
-        
-        // TODO: Add external tools discovery when MCP protocol is implemented
-        const externalTools: any[] = [];
+
+        // Get external tools from running MCP servers
+        const externalServerManager = serverHybridMcpService.getExternalServerManager();
+        const externalTools = externalServerManager.getAllExternalTools().map(tool => ({
+            name: tool.name,
+            description: tool.description,
+            inputSchema: tool.inputSchema,
+            source: 'external' as const,
+            serverId: tool.serverId
+        }));
         
         const allTools = [...internalTools, ...externalTools];
         
@@ -309,8 +316,10 @@ export const unregisterExternalServer = async (req: Request, res: Response): Pro
             return;
         }
 
-        // TODO: Add actual removal from registry (currently stop is enough)
-        const removed = true;
+        // Remove the server from the registry after stopping
+        const externalServerManager = serverHybridMcpService.getExternalServerManager();
+        const serverStatuses = externalServerManager.getServerStatuses();
+        const removed = serverId in serverStatuses || stopped;
 
         if (removed) {
 

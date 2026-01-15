@@ -751,8 +751,36 @@ export class AgentService {
         
         // Store updated agent data
         this.agents.set(agentId, agent);
-        
-        
+
+
+        return agent;
+    }
+
+    /**
+     * Update agent allowed tools
+     * @param agentId - Agent ID
+     * @param allowedTools - List of allowed tool names
+     * @returns Updated agent data
+     */
+    public updateAgentAllowedTools(agentId: string, allowedTools: string[]): IAgent | null {
+        const validator = createStrictValidator();
+        validator.assertIsNonEmptyString(agentId);
+
+        // Get agent data
+        const agent = this.agents.get(agentId);
+        if (!agent) {
+            this.logger.warn(`Attempted to update allowed tools for non-existent agent ${agentId}`);
+            return null;
+        }
+
+        // Update allowed tools
+        agent.allowedTools = allowedTools;
+
+        // Store updated agent data
+        this.agents.set(agentId, agent);
+
+        this.logger.info(`Updated allowed tools for agent ${agentId}: ${allowedTools.length} tools configured`);
+
         return agent;
     }
 
@@ -833,14 +861,22 @@ export class AgentService {
      */
     public getConnectedAgents(): IAgent[] {
         const connectedAgents: IAgent[] = [];
-        
+
         for (const agent of this.agents.values()) {
             if (agent.status === AgentConnectionStatus.CONNECTED && agent.socketIds.length > 0) {
                 connectedAgents.push(agent);
             }
         }
-        
+
         return connectedAgents;
+    }
+
+    /**
+     * Get count of currently connected agents
+     * @returns Number of connected agents
+     */
+    public getConnectedAgentCount(): number {
+        return this.getConnectedAgents().length;
     }
 
     /**

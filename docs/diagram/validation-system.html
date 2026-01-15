@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MXF Validation System</title>
+    <link rel="stylesheet" href="diagram-base.css">
+    <style>
+        .validation-path {
+            stroke-dasharray: 1000;
+            stroke-dashoffset: 1000;
+            animation: drawPath 2s ease forwards;
+        }
+        @keyframes drawPath {
+            to { stroke-dashoffset: 0; }
+        }
+        .decision-diamond {
+            transform-origin: center;
+        }
+        .success-path { stroke: #22c55e; }
+        .error-path { stroke: #ef4444; }
+        .pipeline-stage {
+            opacity: 0;
+            animation: fadeSlideIn 0.5s ease forwards;
+        }
+        @keyframes fadeSlideIn {
+            to { opacity: 1; transform: translateY(0); }
+        }
+    </style>
+</head>
+<body>
+    <div class="diagram-container">
+        <header class="diagram-header">
+            <div>
+                <h1 class="diagram-title">Validation System Architecture</h1>
+                <p class="diagram-subtitle">Proactive validation, auto-correction, and predictive analytics</p>
+            </div>
+            <button class="theme-toggle" onclick="toggleTheme()">
+                <span class="theme-toggle-icon">🌙</span>
+                <span class="theme-toggle-label">Dark</span>
+            </button>
+        </header>
+        
+        <div id="diagram-container"></div>
+        
+        <div class="legend">
+            <div class="legend-item">
+                <div class="legend-color" style="background: #3b82f6;"></div>
+                <span>Validation Pipeline</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #22c55e;"></div>
+                <span>Success Path</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #ef4444;"></div>
+                <span>Error/Correction Path</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #a855f7;"></div>
+                <span>Learning Pipeline</span>
+            </div>
+        </div>
+    </div>
+
+    <script src="diagram-utils.js"></script>
+    <script>
+        class ValidationDiagram extends MXFDiagram {
+            render() {
+                // Tool Call Request entry
+                this.createPipelineNode(90, 55, '📥', 'Tool Request', 'client', 0, 115);
+
+                // Validation Middleware
+                this.createPipelineNode(90, 125, '🔒', 'ValidationMiddleware', 'service', 100, 130);
+                this.createEdge(90, 80, 90, 102);
+
+                // Proactive Validation Service
+                this.createPipelineNode(90, 195, '✅', 'ProactiveValidation', 'service', 200, 130);
+                this.createEdge(90, 150, 90, 172);
+
+                // Branch to sub-services - more compact
+                const subServices = [
+                    { x: 245, label: 'CacheService', icon: '💾' },
+                    { x: 375, label: 'HintService', icon: '💡' },
+                    { x: 505, label: 'RiskEngine', icon: '⚠️' }
+                ];
+
+                subServices.forEach((svc, i) => {
+                    this.createPipelineNode(svc.x, 195, svc.icon, svc.label, 'cache', 300 + i * 50, 110);
+                    this.createEdge(155, 195, svc.x - 55, 195);
+                });
+
+                // Decision diamond
+                this.createDecisionNode(90, 285, 'Valid?', 400);
+                this.createEdge(90, 220, 90, 255);
+
+                // Success path
+                this.createPipelineNode(245, 285, '⚡', 'Execute Tool', 'server', 500, 110);
+                const successPath = this.createEdge(125, 285, 190, 285);
+                successPath.setAttribute('class', 'edge success-path');
+
+                // Label for Yes
+                const yesLabel = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                yesLabel.setAttribute('x', 152);
+                yesLabel.setAttribute('y', 275);
+                yesLabel.setAttribute('class', 'node-text-small');
+                yesLabel.setAttribute('fill', '#22c55e');
+                yesLabel.textContent = 'Yes';
+                this.mainGroup.appendChild(yesLabel);
+
+                // Error path to AutoCorrection
+                this.createPipelineNode(90, 375, '🔧', 'AutoCorrection', 'security', 600, 115);
+                const errorPath = this.createEdge(90, 315, 90, 350);
+                errorPath.setAttribute('class', 'edge error-path');
+
+                // Label for No
+                const noLabel = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                noLabel.setAttribute('x', 105);
+                noLabel.setAttribute('y', 335);
+                noLabel.setAttribute('class', 'node-text-small');
+                noLabel.setAttribute('fill', '#ef4444');
+                noLabel.textContent = 'No';
+                this.mainGroup.appendChild(noLabel);
+
+                // Correction Strategy Engine
+                this.createPipelineNode(245, 375, '🎯', 'CorrectionEngine', 'service', 700, 115);
+                this.createEdge(148, 375, 188, 375);
+
+                // Strategies - more compact
+                const strategies = [
+                    { x: 180, y: 460, label: 'TypeConvert', icon: '🔄' },
+                    { x: 305, y: 460, label: 'MissingParams', icon: '➕' },
+                    { x: 430, y: 460, label: 'UnknownProps', icon: '❓' },
+                    { x: 555, y: 460, label: 'Constraints', icon: '📏' }
+                ];
+
+                strategies.forEach((s, i) => {
+                    this.createPipelineNode(s.x, s.y, s.icon, s.label, 'cache', 800 + i * 50, 105);
+                    this.createEdge(245, 400, s.x, s.y - 25);
+                });
+
+                // Learning Pipeline section - moved and resized
+                const learningGroup = this.createGroup(620, 35, 'Learning & Analytics', 290, 195);
+                this.mainGroup.appendChild(learningGroup);
+
+                // Learning services
+                this.createPipelineNode(765, 80, '📊', 'PatternLearning', 'external', 900, 125);
+                this.createPipelineNode(765, 140, '📈', 'ValidationPerf', 'external', 950, 125);
+                this.createPipelineNode(765, 200, '🔗', 'AutoCorrectInt', 'external', 1000, 125);
+
+                // Connections from correction to learning
+                this.createEdge(303, 375, 703, 80);
+                this.createEdge(303, 375, 703, 140);
+
+                // Predictive Analytics section
+                const predictiveGroup = this.createGroup(620, 245, 'Predictive Analytics', 290, 195);
+                this.mainGroup.appendChild(predictiveGroup);
+
+                this.createPipelineNode(765, 290, '🤖', 'ErrorPrediction', 'service', 1050, 125);
+                this.createPipelineNode(765, 350, '🔍', 'AnomalyDetect', 'service', 1100, 125);
+                this.createPipelineNode(765, 410, '📉', 'RiskScoring', 'service', 1150, 125);
+
+                // Connect analytics
+                this.createEdge(765, 225, 765, 265);
+            }
+            
+            createPipelineNode(x, y, icon, label, type, delay, width = 140) {
+                const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+                g.setAttribute('class', `node node-${type} pipeline-stage`);
+                g.style.animationDelay = `${delay}ms`;
+                g.style.transform = 'translateY(10px)';
+
+                const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                rect.setAttribute('class', 'node-rect');
+                rect.setAttribute('x', x - width/2);
+                rect.setAttribute('y', y - 25);
+                rect.setAttribute('width', width);
+                rect.setAttribute('height', 50);
+                g.appendChild(rect);
+
+                // Icon centered above text
+                const iconEl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                iconEl.setAttribute('x', x);
+                iconEl.setAttribute('y', y - 5);
+                iconEl.setAttribute('text-anchor', 'middle');
+                iconEl.setAttribute('font-size', '16px');
+                iconEl.textContent = icon;
+                g.appendChild(iconEl);
+
+                // Label centered below icon
+                const labelEl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                labelEl.setAttribute('x', x);
+                labelEl.setAttribute('y', y + 14);
+                labelEl.setAttribute('class', 'node-text');
+                labelEl.setAttribute('text-anchor', 'middle');
+                labelEl.setAttribute('font-size', '11px');
+                labelEl.setAttribute('fill', 'var(--text-primary)');
+                labelEl.textContent = label;
+                g.appendChild(labelEl);
+
+                this.mainGroup.appendChild(g);
+                return g;
+            }
+            
+            createDecisionNode(x, y, label, delay) {
+                const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+                g.setAttribute('class', 'node pipeline-stage');
+                g.style.animationDelay = `${delay}ms`;
+                g.style.transform = 'translateY(10px)';
+                
+                const diamond = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+                diamond.setAttribute('points', `${x},${y-30} ${x+35},${y} ${x},${y+30} ${x-35},${y}`);
+                diamond.setAttribute('class', 'node-rect');
+                diamond.setAttribute('fill', 'var(--highlight)');
+                g.appendChild(diamond);
+                
+                const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                text.setAttribute('x', x);
+                text.setAttribute('y', y + 5);
+                text.setAttribute('class', 'node-text');
+                text.setAttribute('font-weight', '700');
+                text.textContent = label;
+                g.appendChild(text);
+                
+                this.mainGroup.appendChild(g);
+                return g;
+            }
+            
+            createEdge(x1, y1, x2, y2) {
+                const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                
+                const dx = x2 - x1;
+                const dy = y2 - y1;
+                
+                let d;
+                if (Math.abs(dx) > Math.abs(dy)) {
+                    const midX = (x1 + x2) / 2;
+                    d = `M ${x1} ${y1} C ${midX} ${y1}, ${midX} ${y2}, ${x2} ${y2}`;
+                } else {
+                    const midY = (y1 + y2) / 2;
+                    d = `M ${x1} ${y1} C ${x1} ${midY}, ${x2} ${midY}, ${x2} ${y2}`;
+                }
+                
+                path.setAttribute('d', d);
+                path.setAttribute('class', 'edge validation-path');
+                path.setAttribute('marker-end', 'url(#arrowhead)');
+                
+                this.mainGroup.insertBefore(path, this.mainGroup.firstChild);
+                return path;
+            }
+        }
+        
+        // Initialize with more compact dimensions
+        const diagram = new ValidationDiagram('diagram-container', {
+            width: 950,
+            height: 560
+        });
+        diagram.render();
+    </script>
+</body>
+</html>

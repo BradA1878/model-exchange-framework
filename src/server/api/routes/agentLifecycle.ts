@@ -30,14 +30,13 @@ import {
     shutdownAgent,
     getAgentMetrics,
     pauseAgent,
-    resumeAgent
+    resumeAgent,
+    deleteAgentMemory
 } from '../controllers/agentLifecycleController';
 import { authenticateUser } from '../middleware/auth';
+import { authenticateDual } from '../middleware/dualAuth';
 
 const router = Router();
-
-// Apply authentication to all agent lifecycle routes
-router.use(authenticateUser);
 
 /**
  * @route POST /api/agents/:agentId/restart
@@ -45,7 +44,7 @@ router.use(authenticateUser);
  * @body reason - Optional reason for restart
  * @access Private (JWT required)
  */
-router.post('/:agentId/restart', restartAgent);
+router.post('/:agentId/restart', authenticateUser, restartAgent);
 
 /**
  * @route POST /api/agents/:agentId/shutdown
@@ -53,7 +52,7 @@ router.post('/:agentId/restart', restartAgent);
  * @body reason - Optional reason for shutdown
  * @access Private (JWT required)
  */
-router.post('/:agentId/shutdown', shutdownAgent);
+router.post('/:agentId/shutdown', authenticateUser, shutdownAgent);
 
 /**
  * @route POST /api/agents/:agentId/pause
@@ -61,7 +60,7 @@ router.post('/:agentId/shutdown', shutdownAgent);
  * @body reason - Optional reason for pause
  * @access Private (JWT required)
  */
-router.post('/:agentId/pause', pauseAgent);
+router.post('/:agentId/pause', authenticateUser, pauseAgent);
 
 /**
  * @route POST /api/agents/:agentId/resume
@@ -69,13 +68,20 @@ router.post('/:agentId/pause', pauseAgent);
  * @body reason - Optional reason for resume
  * @access Private (JWT required)
  */
-router.post('/:agentId/resume', resumeAgent);
+router.post('/:agentId/resume', authenticateUser, resumeAgent);
 
 /**
  * @route GET /api/agents/:agentId/metrics
  * @desc Get agent performance metrics
  * @access Private (JWT required)
  */
-router.get('/:agentId/metrics', getAgentMetrics);
+router.get('/:agentId/metrics', authenticateUser, getAgentMetrics);
+
+/**
+ * @route DELETE /api/agents/:agentId/memory
+ * @desc Delete all persistent memory for an agent
+ * @access Private (JWT or API key required)
+ */
+router.delete('/:agentId/memory', authenticateDual, deleteAgentMemory);
 
 export default router;

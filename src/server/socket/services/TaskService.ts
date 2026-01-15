@@ -328,27 +328,37 @@ export class TaskService {
      * Assign task to a single agent (original logic)
      */
     private async assignToSingleAgent(task: TaskDocument): Promise<TaskAssignmentResult> {
-        // Skip assignment if task is already assigned
-        if (task.assignedAgentId) {
-            this.logger.info(`📋 Task assigned: "${task.title}" → Agent: ${task.assignedAgentId} (manual)`);
+        // Skip assignment if task is already assigned (check both singular and plural forms)
+        // Also respect manual assignment strategy with assignedAgentIds
+        const manualAgentId = task.assignedAgentId ||
+            (task.assignedAgentIds && task.assignedAgentIds.length > 0 ? task.assignedAgentIds[0] : null);
+
+        if (manualAgentId) {
+            // Update the singular field if it was derived from the array
+            if (!task.assignedAgentId && manualAgentId) {
+                task.assignedAgentId = manualAgentId;
+                await task.save();
+            }
+
+            this.logger.info(`📋 Task assigned: "${task.title}" → Agent: ${manualAgentId} (manual)`);
 
             // Emit assignment event for manually assigned tasks
             const eventPayload = createTaskEventPayload(
                 TaskEvents.ASSIGNED,
-                task.assignedAgentId,
+                manualAgentId,
                 task.channelId,
                 {
                     taskId: task.id,
                     fromAgentId: task.createdBy,
-                    toAgentId: task.assignedAgentId,
+                    toAgentId: manualAgentId,
                     task: this.taskDocumentToChannelTask(task)
                 }
             );
             EventBus.server.emit(TaskEvents.ASSIGNED, eventPayload);
-            
+
             return {
                 taskId: task.id,
-                assignedAgentId: task.assignedAgentId,
+                assignedAgentId: manualAgentId,
                 strategy: 'manual' as AssignmentStrategy,
                 confidence: 1.0,
                 reasoning: 'Task manually assigned during creation',

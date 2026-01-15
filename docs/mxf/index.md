@@ -131,13 +131,15 @@ Vue 3-based web interface for:
 
 ## Quick Start Architecture
 
+<div class="mermaid-fallback">
+
 ```mermaid
 graph TB
     subgraph "Client Layer"
         A[MxfAgent/SDK] --> B[WebSocket Client]
         A --> C[REST Client]
     end
-    
+
     subgraph "Server Layer"
         B --> D[Socket.IO Server]
         C --> E[Express API]
@@ -146,16 +148,20 @@ graph TB
         F --> G[Services]
         G --> H[(MongoDB)]
     end
-    
+
     subgraph "External"
         G --> I[LLM APIs]
         G --> J[MCP Tools]
     end
-    
+
     style A fill:#f9f,stroke:#333,stroke-width:4px
     style F fill:#bbf,stroke:#333,stroke-width:2px
     style H fill:#bfb,stroke:#333,stroke-width:2px
 ```
+
+</div>
+
+<iframe src="../diagram/architecture-high-level.html" width="100%" height="800" style="border: none; border-radius: 10px; background: var(--bg-secondary);"></iframe>
 
 ## Design Principles
 
@@ -211,6 +217,8 @@ MXF includes an intelligent validation and pattern learning system that enhances
 
 ### Architecture Integration
 
+<div class="mermaid-fallback">
+
 ```mermaid
 graph TB
     subgraph "Enhanced Meta-Tools Layer"
@@ -219,14 +227,14 @@ graph TB
         D[tools_recommend_on_error] --> B
         D --> C
     end
-    
+
     subgraph "Data Layer"
         B --> E[(Validation Metrics)]
         C --> F[(Pattern Database)]
         E --> G[(MongoDB)]
         F --> G
     end
-    
+
     subgraph "Learning Loop"
         H[Tool Execution] --> I[Success/Failure Event]
         I --> B
@@ -234,12 +242,16 @@ graph TB
         C --> J[Pattern Storage]
         B --> K[Performance Tracking]
     end
-    
+
     style A fill:#f9f,stroke:#333,stroke-width:2px
     style D fill:#f9f,stroke:#333,stroke-width:2px
     style B fill:#bbf,stroke:#333,stroke-width:2px
     style C fill:#bbf,stroke:#333,stroke-width:2px
 ```
+
+</div>
+
+<iframe src="../diagram/validation-system.html" width="100%" height="680" style="border: none; border-radius: 10px; background: var(--bg-secondary);"></iframe>
 
 ### Benefits
 

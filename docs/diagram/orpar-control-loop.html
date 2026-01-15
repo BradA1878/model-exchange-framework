@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MXF ORPAR Control Loop</title>
+    <link rel="stylesheet" href="diagram-base.css">
+    <style>
+        .state-node {
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        .state-node:hover {
+            filter: brightness(1.1);
+        }
+        .state-node.active {
+            filter: drop-shadow(0 0 20px var(--accent));
+        }
+        .state-circle {
+            transition: all 0.3s ease;
+        }
+        .phase-details {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 1.5rem;
+            opacity: 0;
+            transform: translateY(10px);
+            transition: all 0.3s ease;
+            min-width: 280px;
+            flex-shrink: 0;
+        }
+        .phase-details.visible {
+            opacity: 1;
+            transform: translateY(0);
+        }
+        @media (max-width: 900px) {
+            .phase-details {
+                min-width: 100%;
+            }
+        }
+        .phase-title {
+            font-size: 1.25rem;
+            font-weight: 700;
+            color: var(--accent);
+            margin-bottom: 0.75rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .phase-desc {
+            color: var(--text-secondary);
+            line-height: 1.6;
+            margin-bottom: 1rem;
+        }
+        .phase-features {
+            list-style: none;
+        }
+        .phase-features li {
+            padding: 0.4rem 0;
+            color: var(--text-primary);
+            font-size: 0.9rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .phase-features li::before {
+            content: '→';
+            color: var(--accent);
+        }
+        .cycle-animation {
+            animation: rotateCycle 10s linear infinite;
+            transform-origin: center;
+        }
+        .cycle-animation.paused {
+            animation-play-state: paused;
+        }
+        @keyframes rotateCycle {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+        .pulse-ring {
+            animation: pulseRing 2s ease-out infinite;
+        }
+        @keyframes pulseRing {
+            0% { r: 52; opacity: 0.8; }
+            100% { r: 80; opacity: 0; }
+        }
+        /* Compact mode for iframe embedding */
+        .diagram-container {
+            padding: 1rem !important;
+        }
+        .diagram-header {
+            margin-bottom: 1rem;
+            padding-bottom: 0.75rem;
+        }
+        .controls {
+            flex-wrap: wrap;
+        }
+        .legend {
+            margin-top: 1rem;
+            padding: 0.75rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="diagram-container">
+        <header class="diagram-header">
+            <div>
+                <h1 class="diagram-title">ORPAR Control Loop</h1>
+                <p class="diagram-subtitle">Observe → Reason → Plan → Action → Reflect</p>
+            </div>
+            <button class="theme-toggle" onclick="toggleTheme()">
+                <span class="theme-toggle-icon">🌙</span>
+                <span class="theme-toggle-label">Dark</span>
+            </button>
+        </header>
+        
+        <div class="controls">
+            <button class="control-btn active" id="animateBtn" onclick="toggleAnimation()">
+                <span id="animateIcon">⏸</span> Animation
+            </button>
+            <button class="control-btn" onclick="highlightPhase('observe')">Observe</button>
+            <button class="control-btn" onclick="highlightPhase('reason')">Reason</button>
+            <button class="control-btn" onclick="highlightPhase('plan')">Plan</button>
+            <button class="control-btn" onclick="highlightPhase('action')">Action</button>
+            <button class="control-btn" onclick="highlightPhase('reflect')">Reflect</button>
+        </div>
+        
+        <div style="display: flex; flex-wrap: wrap; gap: 1.5rem; align-items: flex-start;">
+            <div id="diagram-container" style="flex: 1 1 500px; min-width: 0; overflow-x: auto;"></div>
+
+            <div class="phase-details" id="phaseDetails">
+                <div class="phase-title">
+                    <span id="phaseIcon">👁️</span>
+                    <span id="phaseTitle">Select a Phase</span>
+                </div>
+                <p class="phase-desc" id="phaseDesc">Click on a phase in the diagram or use the buttons above to learn more about each stage of the ORPAR control loop.</p>
+                <ul class="phase-features" id="phaseFeatures"></ul>
+            </div>
+        </div>
+        
+        <div class="legend">
+            <div class="legend-item">
+                <div class="legend-color" style="background: #22c55e;"></div>
+                <span>Observe - Data gathering</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #3b82f6;"></div>
+                <span>Reason - Analysis</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #a855f7;"></div>
+                <span>Plan - Decision making</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #f59e0b;"></div>
+                <span>Action - Execution</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #ef4444;"></div>
+                <span>Reflect - Learning</span>
+            </div>
+        </div>
+    </div>
+
+    <script src="diagram-utils.js"></script>
+    <script>
+        const phaseData = {
+            observe: {
+                icon: '👁️',
+                title: 'Observe',
+                color: '#22c55e',
+                desc: 'Gather information from environment, agent inputs, and system state.',
+                features: [
+                    'Cross-agent observation sharing',
+                    'Batch observation processing',
+                    'Priority-based queuing',
+                    'Automatic metadata enrichment',
+                    'Fast model processing (Gemini Flash)'
+                ]
+            },
+            reason: {
+                icon: '🧠',
+                title: 'Reason',
+                color: '#3b82f6',
+                desc: 'Analyze observations and generate insights using AI-powered reasoning.',
+                features: [
+                    'Context analysis',
+                    'Pattern identification',
+                    'Insight generation',
+                    'Multi-model reasoning',
+                    'Confidence scoring'
+                ]
+            },
+            plan: {
+                icon: '📋',
+                title: 'Plan',
+                color: '#a855f7',
+                desc: 'Create actionable plans based on reasoning outputs.',
+                features: [
+                    'Goal decomposition',
+                    'Action prioritization',
+                    'Dependency management',
+                    'Resource allocation',
+                    'Risk assessment'
+                ]
+            },
+            action: {
+                icon: '⚡',
+                title: 'Action',
+                color: '#f59e0b',
+                desc: 'Execute planned actions through tool calls and agent interactions.',
+                features: [
+                    'Tool execution',
+                    'Progress monitoring',
+                    'Error handling',
+                    'Parallel execution',
+                    'Rollback support'
+                ]
+            },
+            reflect: {
+                icon: '🔄',
+                title: 'Reflect',
+                color: '#ef4444',
+                desc: 'Evaluate outcomes and extract learnings for continuous improvement.',
+                features: [
+                    'Outcome evaluation',
+                    'Learning extraction',
+                    'Pattern updates',
+                    'Performance metrics',
+                    'Knowledge persistence'
+                ]
+            }
+        };
+        
+        let isAnimating = true;
+        
+        class ORPARDiagram extends MXFDiagram {
+            render() {
+                const centerX = 350;
+                const centerY = 290;
+                const radius = 180;
+                
+                // Create rotating group
+                this.cycleGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+                this.cycleGroup.setAttribute('class', 'cycle-animation');
+                this.mainGroup.appendChild(this.cycleGroup);
+                
+                // Central hub
+                const hub = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+                hub.setAttribute('cx', centerX);
+                hub.setAttribute('cy', centerY);
+                hub.setAttribute('r', 44);
+                hub.setAttribute('fill', 'var(--bg-tertiary)');
+                hub.setAttribute('stroke', 'var(--accent)');
+                hub.setAttribute('stroke-width', '3');
+                this.mainGroup.appendChild(hub);
+                
+                const hubText = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                hubText.setAttribute('x', centerX);
+                hubText.setAttribute('y', centerY + 5);
+                hubText.setAttribute('text-anchor', 'middle');
+                hubText.setAttribute('class', 'node-text');
+                hubText.setAttribute('font-weight', '700');
+                hubText.textContent = 'ORPAR';
+                this.mainGroup.appendChild(hubText);
+                
+                // Pulse ring
+                const pulseRing = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+                pulseRing.setAttribute('cx', centerX);
+                pulseRing.setAttribute('cy', centerY);
+                pulseRing.setAttribute('r', 52);
+                pulseRing.setAttribute('fill', 'none');
+                pulseRing.setAttribute('stroke', 'var(--accent)');
+                pulseRing.setAttribute('stroke-width', '2');
+                pulseRing.setAttribute('class', 'pulse-ring');
+                this.mainGroup.insertBefore(pulseRing, hub);
+                
+                // Phases positioned around the circle
+                const phases = [
+                    { id: 'observe', angle: -90 },
+                    { id: 'reason', angle: -18 },
+                    { id: 'plan', angle: 54 },
+                    { id: 'action', angle: 126 },
+                    { id: 'reflect', angle: 198 }
+                ];
+                
+                // Draw connecting arcs first
+                phases.forEach((phase, i) => {
+                    const nextPhase = phases[(i + 1) % phases.length];
+                    const startAngle = phase.angle * Math.PI / 180;
+                    const endAngle = nextPhase.angle * Math.PI / 180;
+                    
+                    // Arrow path
+                    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                    const r = radius + 35;
+
+                    const x1 = centerX + (radius - 25) * Math.cos(startAngle);
+                    const y1 = centerY + (radius - 25) * Math.sin(startAngle);
+                    const x2 = centerX + (radius - 25) * Math.cos(endAngle);
+                    const y2 = centerY + (radius - 25) * Math.sin(endAngle);
+                    
+                    const midAngle = (startAngle + endAngle) / 2 + (i < 2 ? 0 : Math.PI);
+                    const ctrl1X = centerX + r * Math.cos(startAngle + 0.3);
+                    const ctrl1Y = centerY + r * Math.sin(startAngle + 0.3);
+                    const ctrl2X = centerX + r * Math.cos(endAngle - 0.3);
+                    const ctrl2Y = centerY + r * Math.sin(endAngle - 0.3);
+                    
+                    path.setAttribute('d', `M ${x1} ${y1} C ${ctrl1X} ${ctrl1Y}, ${ctrl2X} ${ctrl2Y}, ${x2} ${y2}`);
+                    path.setAttribute('fill', 'none');
+                    path.setAttribute('stroke', 'var(--connection-line)');
+                    path.setAttribute('stroke-width', '2');
+                    path.setAttribute('marker-end', 'url(#arrowhead)');
+                    path.setAttribute('stroke-dasharray', '6 3');
+                    this.cycleGroup.appendChild(path);
+                });
+                
+                // Draw phase nodes
+                phases.forEach((phase, i) => {
+                    const data = phaseData[phase.id];
+                    const angle = phase.angle * Math.PI / 180;
+                    const x = centerX + radius * Math.cos(angle);
+                    const y = centerY + radius * Math.sin(angle);
+                    
+                    const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+                    g.setAttribute('class', 'state-node');
+                    g.setAttribute('data-phase', phase.id);
+                    g.style.transformOrigin = `${x}px ${y}px`;
+                    
+                    // Node circle
+                    const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+                    circle.setAttribute('class', 'state-circle');
+                    circle.setAttribute('cx', x);
+                    circle.setAttribute('cy', y);
+                    circle.setAttribute('r', 48);
+                    circle.setAttribute('fill', data.color);
+                    circle.setAttribute('opacity', '0.9');
+                    g.appendChild(circle);
+                    
+                    // Icon
+                    const icon = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                    icon.setAttribute('x', x);
+                    icon.setAttribute('y', y - 8);
+                    icon.setAttribute('text-anchor', 'middle');
+                    icon.setAttribute('font-size', '24px');
+                    icon.textContent = data.icon;
+                    g.appendChild(icon);
+                    
+                    // Label
+                    const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                    label.setAttribute('x', x);
+                    label.setAttribute('y', y + 18);
+                    label.setAttribute('text-anchor', 'middle');
+                    label.setAttribute('fill', 'white');
+                    label.setAttribute('font-weight', '700');
+                    label.setAttribute('font-size', '14px');
+                    label.textContent = data.title;
+                    g.appendChild(label);
+                    
+                    // Click handler
+                    g.addEventListener('click', () => highlightPhase(phase.id));
+                    
+                    this.mainGroup.appendChild(g);
+                });
+                
+                // Initial state indicator
+                const initG = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+                const initX = centerX + radius * Math.cos(-90 * Math.PI / 180);
+                const initY = centerY + radius * Math.sin(-90 * Math.PI / 180) - 70;
+                
+                const initCircle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+                initCircle.setAttribute('cx', initX);
+                initCircle.setAttribute('cy', initY);
+                initCircle.setAttribute('r', 8);
+                initCircle.setAttribute('fill', 'var(--accent)');
+                initG.appendChild(initCircle);
+                
+                const initArrow = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                initArrow.setAttribute('x1', initX);
+                initArrow.setAttribute('y1', initY + 8);
+                initArrow.setAttribute('x2', initX);
+                initArrow.setAttribute('y2', initY + 25);
+                initArrow.setAttribute('stroke', 'var(--accent)');
+                initArrow.setAttribute('stroke-width', '2');
+                initArrow.setAttribute('marker-end', 'url(#arrowhead)');
+                initG.appendChild(initArrow);
+                
+                const initLabel = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                initLabel.setAttribute('x', initX);
+                initLabel.setAttribute('y', initY - 15);
+                initLabel.setAttribute('text-anchor', 'middle');
+                initLabel.setAttribute('fill', 'var(--text-muted)');
+                initLabel.setAttribute('font-size', '12px');
+                initLabel.textContent = 'Initialize';
+                initG.appendChild(initLabel);
+                
+                this.mainGroup.appendChild(initG);
+            }
+        }
+        
+        function highlightPhase(phaseId) {
+            const data = phaseData[phaseId];
+            if (!data) return;
+            
+            // Update details panel
+            document.getElementById('phaseIcon').textContent = data.icon;
+            document.getElementById('phaseTitle').textContent = data.title;
+            document.getElementById('phaseDesc').textContent = data.desc;
+            
+            const featuresList = document.getElementById('phaseFeatures');
+            featuresList.innerHTML = data.features.map(f => `<li>${f}</li>`).join('');
+            
+            document.getElementById('phaseDetails').classList.add('visible');
+            
+            // Highlight node
+            document.querySelectorAll('.state-node').forEach(node => {
+                node.classList.toggle('active', node.dataset.phase === phaseId);
+            });
+            
+            // Update buttons
+            document.querySelectorAll('.control-btn').forEach(btn => {
+                if (btn.textContent.toLowerCase() === phaseId) {
+                    btn.classList.add('active');
+                } else if (!btn.id) {
+                    btn.classList.remove('active');
+                }
+            });
+        }
+        
+        function toggleAnimation() {
+            isAnimating = !isAnimating;
+            const cycleGroup = document.querySelector('.cycle-animation');
+            cycleGroup.classList.toggle('paused', !isAnimating);
+            document.getElementById('animateIcon').textContent = isAnimating ? '⏸' : '▶';
+        }
+        
+        // Initialize
+        const diagram = new ORPARDiagram('diagram-container', {
+            width: 700,
+            height: 580
+        });
+        diagram.render();
+        
+        // Show initial phase details
+        setTimeout(() => {
+            document.getElementById('phaseDetails').classList.add('visible');
+        }, 500);
+    </script>
+</body>
+</html>

@@ -6,6 +6,8 @@ The Model Exchange Framework (MXF) is a comprehensive platform for building and 
 
 MXF employs a layered architecture that separates concerns and enables independent scaling:
 
+<div class="mermaid-fallback">
+
 ```mermaid
 graph TB
     subgraph "Presentation Layer"
@@ -13,13 +15,13 @@ graph TB
         CLI[CLI Tools]
         API[REST API Clients]
     end
-    
+
     subgraph "Application Layer"
         WS[WebSocket Server]
         REST[REST API Server]
         AUTH[Auth Service]
     end
-    
+
     subgraph "Service Layer"
         AS[Agent Service]
         CS[Channel Service]
@@ -28,54 +30,58 @@ graph TB
         MCP[MCP Service]
         CL[Control Loop Service]
     end
-    
+
     subgraph "Intelligence Layer"
         VPS[Validation Performance]
         PLS[Pattern Learning]
         ACS[Auto-Correction]
         RWS[Recovery Workflow]
     end
-    
+
     subgraph "Data Layer"
         EV[EventBus]
         CACHE[Cache Layer]
         DB[(MongoDB)]
     end
-    
+
     subgraph "Integration Layer"
         LLM[LLM Providers]
         TOOLS[External Tools]
         HOOKS[Webhooks]
     end
-    
+
     D --> REST
     CLI --> WS
     API --> REST
-    
+
     WS --> EV
     REST --> AUTH
     AUTH --> AS
-    
+
     AS --> DB
     CS --> DB
     TS --> DB
     MS --> DB
-    
+
     AS --> LLM
     MCP --> TOOLS
-    
+
     MCP --> ACS
     ACS --> VPS
     ACS --> PLS
     ACS --> RWS
     VPS --> DB
     PLS --> DB
-    
+
     style D fill:#f9f,stroke:#333,stroke-width:2px
     style EV fill:#bbf,stroke:#333,stroke-width:2px
     style DB fill:#bfb,stroke:#333,stroke-width:2px
     style ACS fill:#ffa,stroke:#333,stroke-width:2px
 ```
+
+</div>
+
+<iframe src="../diagram/architecture-high-level.html" width="100%" height="800" style="border: none; border-radius: 10px; background: var(--bg-secondary);"></iframe>
 
 ## Core Components
 
@@ -223,6 +229,8 @@ Orchestrates complex error recovery workflows:
 #### **Integration Architecture**
 The Intelligence Layer integrates seamlessly with existing components:
 
+<div class="mermaid-fallback">
+
 ```mermaid
 graph TB
     subgraph "Tool Execution Pipeline"
@@ -231,31 +239,35 @@ graph TB
         ACS --> CSE[Correction Strategy Engine]
         CSE --> RWS[Recovery Workflow Service]
     end
-    
+
     subgraph "Learning Pipeline"
         PLS[Pattern Learning Service]
         VPS[Validation Performance Service]
         AIS[AutoCorrection Integration Service]
     end
-    
+
     subgraph "Data & Analytics"
         CP[Correction Patterns]
         VP[Validation Performance]
         RM[Recovery Metrics]
     end
-    
+
     ACS --> PLS
     ACS --> VPS
     RWS --> AIS
-    
+
     PLS --> CP
     VPS --> VP
     AIS --> RM
-    
+
     style ACS fill:#ffa,stroke:#333,stroke-width:2px
     style PLS fill:#aff,stroke:#333,stroke-width:2px
     style VPS fill:#faf,stroke:#333,stroke-width:2px
 ```
+
+</div>
+
+<iframe src="../diagram/validation-system.html" width="100%" height="680" style="border: none; border-radius: 10px; background: var(--bg-secondary);"></iframe>
 
 ### 4. Dashboard (`/dashboard`)
 
@@ -270,28 +282,30 @@ Vue 3-based web interface:
 
 #### **Dashboard Sitemap**
 
+<div class="mermaid-fallback">
+
 ```mermaid
 graph LR
     ROOT[Root] --> LOGIN[Login]
     ROOT --> MAGIC[Magic Link]
     ROOT --> DASH[Dashboard]
-    
+
     DASH --> HOME[Home]
     DASH --> ACCOUNT[Account]
     DASH --> ANALYTICS[Analytics]
     DASH --> CHANNELS[Channels]
     DASH --> ADMIN[Admin]
-    
+
     ANALYTICS --> ADATA[Data]
     ANALYTICS --> ACHARTS[Charts]
-    
+
     CHANNELS --> CMEMORY[Memory]
     CHANNELS --> CCONTEXT[Context]
     CHANNELS --> CDOCS[Docs]
     CHANNELS --> CAGENTS[Agents]
     CHANNELS --> CTOOLS[Tools]
     CHANNELS --> CTASKS[Tasks]
-    
+
     ADMIN --> AUSERS[Users]
     ADMIN --> ACHANNELS[Channels]
     ADMIN --> AAGENTS[Agents]
@@ -301,13 +315,17 @@ graph LR
     ADMIN --> AAUDIT[Audit Logs]
     ADMIN --> ASEC[Security]
     ADMIN --> ASYS[System]
-    
+
     style LOGIN fill:#e1f5ff
     style DASH fill:#f3e5f5
     style ADMIN fill:#ffebee
     style ANALYTICS fill:#e8f5e9
     style CHANNELS fill:#fff3e0
 ```
+
+</div>
+
+<iframe src="../diagram/navigation-sitemap.html" width="100%" height="600" style="border: none; border-radius: 10px; background: var(--bg-secondary);"></iframe>
 
 #### **Features**
 - Real-time agent monitoring
@@ -344,6 +362,8 @@ Common code between server and client:
 
 MXF uses an event-driven architecture for maximum flexibility:
 
+<div class="mermaid-fallback">
+
 ```mermaid
 sequenceDiagram
     participant Agent
@@ -351,7 +371,7 @@ sequenceDiagram
     participant EventBus
     participant Service
     participant Database
-    
+
     Agent->>WebSocket: Connect & Authenticate
     WebSocket->>EventBus: Emit agent:register
     EventBus->>Service: Handle registration
@@ -361,6 +381,10 @@ sequenceDiagram
     EventBus->>WebSocket: Forward event
     WebSocket->>Agent: Registration complete
 ```
+
+</div>
+
+<iframe src="../diagram/architecture-communication-flow.html" width="100%" height="600" style="border: none; border-radius: 10px; background: var(--bg-secondary);"></iframe>
 
 ### Message Flow
 
@@ -395,6 +419,8 @@ sequenceDiagram
 
 ### Core Entities
 
+<div class="mermaid-fallback">
+
 ```mermaid
 erDiagram
     User ||--o{ Channel : creates
@@ -410,180 +436,11 @@ erDiagram
     Channel ||--o{ AuditLog : generates
     Agent ||--o{ AuditLog : generates
     Task ||--o{ TaskEffectiveness : tracks
-    
-    User {
-        ObjectId _id PK
-        string username
-        string email
-        string password
-        string firstName
-        string lastName
-        string company
-        string role
-        boolean isActive
-        timestamp lastLogin
-        timestamp createdAt
-    }
-    
-    Channel {
-        ObjectId _id PK
-        string channelId UK
-        string name
-        string description
-        boolean isPrivate
-        boolean requireApproval
-        int maxAgents
-        boolean allowAnonymous
-        boolean active
-        array participants
-        ObjectId createdBy FK
-        json context
-        json sharedMemory
-        timestamp lastActive
-        timestamp createdAt
-    }
-    
-    Agent {
-        ObjectId _id PK
-        string agentId UK
-        string status
-        array capabilities
-        array serviceTypes
-        timestamp lastActive
-        timestamp createdAt
-    }
-    
-    Task {
-        ObjectId _id PK
-        string channelId FK
-        string title
-        string description
-        string priority
-        array requiredRoles
-        array requiredCapabilities
-        string assignmentStrategy
-        string status
-        int progress
-        string createdBy
-        array tags
-        array dependsOn
-        array blockedBy
-        string assignedAgentId FK
-        timestamp createdAt
-    }
-    
-    ChannelKey {
-        ObjectId _id PK
-        string keyId UK
-        string secretKey
-        string channelId FK
-        string name
-        ObjectId createdBy FK
-        boolean isActive
-        timestamp lastUsed
-        timestamp createdAt
-    }
-    
-    ChannelMemory {
-        ObjectId _id PK
-        string channelId UK
-        string id
-        array conversationHistory
-        json sharedState
-        json notes
-        json customData
-        string persistenceLevel
-        timestamp createdAt
-        timestamp updatedAt
-    }
-    
-    AgentMemory {
-        ObjectId _id PK
-        string agentId UK
-        string id
-        array conversationHistory
-        json notes
-        json customData
-        string persistenceLevel
-        timestamp createdAt
-        timestamp updatedAt
-    }
-    
-    RelationshipMemory {
-        ObjectId _id PK
-        string agent1Id FK
-        string agent2Id FK
-        json interactions
-        json sharedKnowledge
-        timestamp lastInteraction
-        timestamp createdAt
-    }
-    
-    MCPTool {
-        ObjectId _id PK
-        string name
-        string description
-        json inputSchema
-        boolean enabled
-        array parameters
-        string providerId
-        string channelId FK
-        json metadata
-        timestamp createdAt
-    }
-    
-    AuditLog {
-        ObjectId _id PK
-        string eventType
-        string channelId FK
-        string agentId FK
-        json details
-        string severity
-        json error
-        timestamp timestamp
-    }
-    
-    TaskEffectiveness {
-        ObjectId _id PK
-        string taskId FK
-        string channelId FK
-        json metrics
-        int completionTime
-        string outcome
-        timestamp measuredAt
-    }
-    
-    ParameterPattern {
-        ObjectId _id PK
-        string toolName
-        json patterns
-        int usageCount
-        timestamp lastUsed
-    }
-    
-    PatternEvolution {
-        ObjectId _id PK
-        string patternId
-        json evolution
-        timestamp tracked
-    }
-    
-    PatternSharingAnalytics {
-        ObjectId _id PK
-        string channelId FK
-        json sharingMetrics
-        timestamp analyzed
-    }
-    
-    Document {
-        ObjectId _id PK
-        string channelId FK
-        string title
-        string content
-        json metadata
-        timestamp createdAt
-    }
 ```
+
+</div>
+
+<iframe src="../diagram/data-model-er.html" width="100%" height="620" style="border: none; border-radius: 10px; background: var(--bg-secondary);"></iframe>
 
 ### MongoDB Collections
 

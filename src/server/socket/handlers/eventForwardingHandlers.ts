@@ -26,12 +26,14 @@
 
 import { Socket } from 'socket.io';
 import { ISocketService } from '../../../shared/interfaces/SocketServiceInterface';
-import { 
+import {
     Events,
     CoreSocketEvents,
     ControlLoopEvents,
+    OrparEvents,
     SOCKET_RESERVED_EVENTS
 } from '../../../shared/events/EventNames';
+import { clearAgentOrparState } from '../../../shared/protocols/mcp/tools/OrparTools';
 import { TaskEvents } from '../../../shared/events/event-definitions/TaskEvents';
 import { createStrictValidator } from '../../../shared/utils/validation';
 import { logger , Logger } from '../../../shared/utils/Logger';
@@ -93,13 +95,15 @@ interface EventQueueConfig {
     maxRetries: number;
 }
 
-// Default configuration - enabled for testing
+// Default configuration - configurable via environment variables for performance tuning
+// Original values were: enabled=true, batchSize=10, processingDelayMs=25 (for testing)
+// Reduced processingDelayMs default from 25 to 5 for production performance
 const defaultQueueConfig: EventQueueConfig = {
-    enabled: true,  // Enabled by default for testing
-    batchSize: 10,
-    processingDelayMs: 25,
-    maxQueueSize: 1000,
-    maxRetries: 3
+    enabled: process.env.EVENT_QUEUE_ENABLED !== 'false',
+    batchSize: parseInt(process.env.EVENT_QUEUE_BATCH_SIZE || '10', 10),
+    processingDelayMs: parseInt(process.env.EVENT_QUEUE_DELAY_MS || '5', 10),
+    maxQueueSize: parseInt(process.env.EVENT_QUEUE_MAX_SIZE || '1000', 10),
+    maxRetries: parseInt(process.env.EVENT_QUEUE_MAX_RETRIES || '3', 10)
 };
 
 // Priority queue implementation
@@ -590,7 +594,7 @@ export const setupEventBusToSocketForwarding = (socketService: ISocketService): 
             Events.Agent.REGISTRATION_FAILED,
             Events.Agent.STATUS_CHANGE,
 
-            // Control loop events
+            // Control loop events (server-orchestrated)
             ControlLoopEvents.INITIALIZE,
             ControlLoopEvents.INITIALIZED,
             ControlLoopEvents.STARTED,
@@ -601,7 +605,17 @@ export const setupEventBusToSocketForwarding = (socketService: ISocketService): 
             ControlLoopEvents.REFLECTION,
             ControlLoopEvents.ACTION,
             ControlLoopEvents.STOPPED,
-            ControlLoopEvents.ERROR
+            ControlLoopEvents.ERROR,
+
+            // ORPAR events (agent-driven cognitive documentation)
+            OrparEvents.OBSERVE,
+            OrparEvents.REASON,
+            OrparEvents.PLAN,
+            OrparEvents.ACT,
+            OrparEvents.REFLECT,
+            OrparEvents.STATUS,
+            OrparEvents.ERROR,
+            OrparEvents.CLEAR_STATE
 
         ].forEach(eventName => {
             EventBus.server.on(eventName, (payload) => {
@@ -619,7 +633,20 @@ export const setupEventBusToSocketForwarding = (socketService: ISocketService): 
                 }
             });
         });
-        
+
+        // Special handler for ORPAR CLEAR_STATE - actually clears the state
+        EventBus.server.on(OrparEvents.CLEAR_STATE, (payload) => {
+            try {
+                const { agentId, channelId } = payload;
+                if (agentId && channelId) {
+                    clearAgentOrparState(agentId, channelId);
+                    moduleLogger.debug(`[ORPAR] Cleared state for ${agentId}:${channelId} via CLEAR_STATE event`);
+                }
+            } catch (error) {
+                moduleLogger.error(`Error handling ORPAR CLEAR_STATE: ${error}`);
+            }
+        });
+
         // Handle agent disconnection events specially
         // These should be broadcast to OTHER agents in the channel, not to the disconnecting agent
         EventBus.server.on(Events.Agent.DISCONNECTED, (payload) => {

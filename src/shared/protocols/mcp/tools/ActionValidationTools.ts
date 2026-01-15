@@ -131,10 +131,11 @@ Available tools to recommend from: messaging_send, messaging_discover, messaging
             // const systemLlmService = new SystemLlmService();
             // const validationResponse = await systemLlmService.analyzeChannelForCoordination(context.channelId);
 
-            // For now, use a simpler approach with basic logic validation
-            // TODO: Implement dedicated validation analysis method in SystemLlmService
+            // Use basic rule-based validation logic for action validation
+            // LLM-based validation can be added as an enhancement by uncommenting SystemLlmService integration above
+            // and implementing analyzeActionValidation method in SystemLlmService
 
-            // Basic validation logic (can be enhanced with proper LLM integration)
+            // Basic validation logic using rule-based approach
             const isRedundant = input.proposedTool === input.justCompleted && input.justCompletedResult === 'success';
             const approved = !isRedundant;
             

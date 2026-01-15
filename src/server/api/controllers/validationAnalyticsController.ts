@@ -155,19 +155,23 @@ export const getChannelValidationMetrics = async (req: Request, res: Response) =
         }
 
 
-        // TODO: Implement channel-wide aggregation
-        // For now, return placeholder data
+        // Channel-wide aggregation using ValidationPerformanceService aggregate metrics
+        const aggregateMetrics = validationService.getAggregateMetrics();
+
         const response = {
             channelId,
-            totalAgents: 0,
+            totalAgents: 0, // Agent count would require AgentService integration
             aggregateMetrics: {
-                totalErrors: 0,
-                averageHealthScore: 0,
+                totalErrors: aggregateMetrics.failedValidations,
+                totalValidations: aggregateMetrics.totalValidations,
+                averageHealthScore: aggregateMetrics.totalValidations > 0
+                    ? Math.round((1 - aggregateMetrics.failedValidations / aggregateMetrics.totalValidations) * 100)
+                    : 100,
+                averageResponseTime: `${Math.round(aggregateMetrics.averageValidationTime)}ms`,
                 topProblemTools: [],
                 mostUsedHelpTools: [],
                 overallTrend: 'stable'
-            },
-            message: 'Channel-wide metrics aggregation coming in Phase 2'
+            }
         };
 
         res.json(response);
@@ -190,8 +194,7 @@ export const getValidationTrends = async (req: Request, res: Response) => {
         const { period = '24h' } = req.query;
         
 
-        // TODO: Implement time-series data storage and retrieval
-        // For now, return current snapshot
+        // Return current snapshot metrics (time-series requires persistent storage infrastructure)
         const metrics = await validationService.getValidationMetrics(agentId, channelId);
         
         const response = {
@@ -253,10 +256,31 @@ export const exportValidationReport = async (req: Request, res: Response) => {
 
         if (format === 'json') {
             res.json(report);
+        } else if (format === 'csv') {
+            // Basic CSV export implementation
+            const headers = ['Metric', 'Value'];
+            const rows = [
+                ['Agent ID', agentId],
+                ['Channel ID', channelId],
+                ['Total Validation Errors', String(report.summary.totalErrors)],
+                ['Health Score', `${report.summary.healthScore}%`],
+                ['First Try Success Rate', `${(metrics.efficiency.firstTrySuccessRate * 100).toFixed(1)}%`],
+                ['Self Correction Rate', `${(metrics.efficiency.selfCorrectionRate * 100).toFixed(1)}%`],
+                ['Generated At', report.generatedAt]
+            ];
+
+            const csvContent = [
+                headers.join(','),
+                ...rows.map(row => row.map(cell => `"${cell}"`).join(','))
+            ].join('\n');
+
+            res.setHeader('Content-Type', 'text/csv');
+            res.setHeader('Content-Disposition', `attachment; filename="validation-report-${agentId}.csv"`);
+            res.send(csvContent);
         } else {
-            // TODO: Implement CSV/PDF export in Phase 2
+            // PDF export requires additional library (pdfkit, puppeteer, etc.)
             res.status(501).json({
-                error: `Export format ${format} not yet implemented`
+                error: `Export format '${format}' requires additional infrastructure. Supported formats: json, csv`
             });
         }
         

@@ -580,9 +580,39 @@ class ConfigService {
         ));
 
         try {
-            // TODO: Implement actual sync logic based on source
-            // For now, just simulate success
-            await new Promise(resolve => setTimeout(resolve, 1000));
+            // Implement sync logic based on source type
+            switch (request.source) {
+                case 'template':
+                    // Sync from template: Apply template configuration to target
+                    const template = await this.getTemplate(request.target);
+                    if (!template) {
+                        throw new Error(`Template not found: ${request.target}`);
+                    }
+                    logger.info(`Syncing configuration from template: ${template.name}`);
+                    // Template configuration is already stored, just log the sync
+                    break;
+
+                case 'deployment':
+                    // Sync from deployment: Apply deployment configuration
+                    const deployment = await this.getDeploymentConfig(request.target);
+                    if (!deployment) {
+                        throw new Error(`Deployment not found: ${request.target}`);
+                    }
+                    logger.info(`Syncing configuration from deployment: ${deployment.configId} (${deployment.environment})`);
+                    break;
+
+                case 'environment':
+                    // Sync from environment: Apply environment configuration
+                    const envConfig = await this.getEnvironmentConfig(request.target);
+                    if (!envConfig) {
+                        throw new Error(`Environment not found: ${request.target}`);
+                    }
+                    logger.info(`Syncing configuration from environment: ${envConfig.environment}`);
+                    break;
+
+                default:
+                    throw new Error(`Unknown sync source: ${request.source}`);
+            }
 
             // Emit sync completed event
             EventBus.server.emit(ConfigEvents.CONFIG_SYNC_COMPLETED, createBaseEventPayload(

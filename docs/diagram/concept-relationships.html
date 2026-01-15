@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MXF Concept Relationships</title>
+    <link rel="stylesheet" href="diagram-base.css">
+    <style>
+        .concept-node {
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        .concept-node:hover {
+            filter: brightness(1.1) drop-shadow(0 4px 12px var(--shadow));
+        }
+        .concept-node.highlighted {
+            filter: drop-shadow(0 0 15px var(--accent));
+        }
+        .relationship-path {
+            stroke-width: 2;
+            fill: none;
+        }
+        .relationship-label {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 9px;
+            fill: var(--text-muted);
+        }
+    </style>
+</head>
+<body>
+    <div class="diagram-container">
+        <header class="diagram-header">
+            <div>
+                <h1 class="diagram-title">Concept Relationships</h1>
+                <p class="diagram-subtitle">How MXF core entities and supporting systems interact</p>
+            </div>
+            <button class="theme-toggle" onclick="toggleTheme()">
+                <span class="theme-toggle-icon">🌙</span>
+                <span class="theme-toggle-label">Dark</span>
+            </button>
+        </header>
+
+        <div id="diagram-container"></div>
+
+        <div class="legend">
+            <div class="legend-item">
+                <div class="legend-color" style="background: #3b82f6;"></div>
+                <span>Core Entities</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #f59e0b;"></div>
+                <span>Supporting Systems</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #22c55e;"></div>
+                <span>Primary Relationships</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #a855f7;"></div>
+                <span>Enhancement Relationships</span>
+            </div>
+        </div>
+    </div>
+
+    <script src="diagram-utils.js"></script>
+    <script>
+        const conceptData = {
+            // Core Entities
+            agents: {
+                icon: '🤖',
+                title: 'Agents',
+                color: '#3b82f6',
+                desc: 'Autonomous units of intelligence'
+            },
+            channels: {
+                icon: '📢',
+                title: 'Channels',
+                color: '#3b82f6',
+                desc: 'Collaborative spaces for interaction'
+            },
+            tasks: {
+                icon: '📋',
+                title: 'Tasks',
+                color: '#3b82f6',
+                desc: 'Units of work with tracking'
+            },
+            memory: {
+                icon: '🧠',
+                title: 'Memory',
+                color: '#3b82f6',
+                desc: 'Persistent context storage'
+            },
+            // Supporting Systems
+            events: {
+                icon: '⚡',
+                title: 'Events',
+                color: '#f59e0b',
+                desc: 'Event-driven communication'
+            },
+            auth: {
+                icon: '🔐',
+                title: 'Auth',
+                color: '#f59e0b',
+                desc: 'Dual authentication system'
+            },
+            mcp: {
+                icon: '🔧',
+                title: 'MCP',
+                color: '#f59e0b',
+                desc: 'Tool extension system'
+            },
+            controlLoop: {
+                icon: '🔄',
+                title: 'Control',
+                color: '#f59e0b',
+                desc: 'ORPAR cognitive cycles'
+            }
+        };
+
+        class ConceptRelationshipsDiagram extends MXFDiagram {
+            render() {
+                // Draw section backgrounds
+                this.drawSection(130, 55, 290, 220, 'Core Entities');
+                this.drawSection(450, 55, 160, 220, 'Supporting');
+
+                // Position core entities in a 2x2 grid
+                const coreEntities = [
+                    { id: 'agents', x: 205, y: 115 },
+                    { id: 'channels', x: 345, y: 115 },
+                    { id: 'memory', x: 205, y: 215 },
+                    { id: 'tasks', x: 345, y: 215 }
+                ];
+
+                // Position supporting systems in a column
+                const supportSystems = [
+                    { id: 'events', x: 530, y: 95 },
+                    { id: 'auth', x: 530, y: 155 },
+                    { id: 'mcp', x: 530, y: 215 },
+                    { id: 'controlLoop', x: 530, y: 275 }
+                ];
+
+                // Define relationships
+                const relationships = [
+                    // Core entity relationships (green)
+                    { from: 'agents', to: 'channels', label: 'participate', color: '#22c55e' },
+                    { from: 'agents', to: 'tasks', label: 'execute', color: '#22c55e' },
+                    { from: 'agents', to: 'memory', label: 'maintain', color: '#22c55e' },
+                    { from: 'channels', to: 'tasks', label: 'contain', color: '#22c55e' },
+                    { from: 'channels', to: 'memory', label: 'share', color: '#22c55e' },
+                    // Supporting system relationships (purple)
+                    { from: 'events', to: 'agents', color: '#a855f7' },
+                    { from: 'auth', to: 'agents', color: '#a855f7' },
+                    { from: 'mcp', to: 'agents', color: '#a855f7' },
+                    { from: 'controlLoop', to: 'agents', color: '#a855f7' }
+                ];
+
+                // Draw relationships first (so they appear behind nodes)
+                const allNodes = [...coreEntities, ...supportSystems];
+                relationships.forEach(rel => {
+                    const fromNode = allNodes.find(n => n.id === rel.from);
+                    const toNode = allNodes.find(n => n.id === rel.to);
+                    if (fromNode && toNode) {
+                        this.drawRelationship(fromNode, toNode, rel.label, rel.color);
+                    }
+                });
+
+                // Draw core entity nodes
+                coreEntities.forEach(node => {
+                    const data = conceptData[node.id];
+                    this.drawConcept(node.x, node.y, data, node.id);
+                });
+
+                // Draw supporting system nodes
+                supportSystems.forEach(node => {
+                    const data = conceptData[node.id];
+                    this.drawConcept(node.x, node.y, data, node.id);
+                });
+            }
+
+            drawSection(x, y, w, h, label) {
+                const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+
+                const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                rect.setAttribute('x', x);
+                rect.setAttribute('y', y);
+                rect.setAttribute('width', w);
+                rect.setAttribute('height', h);
+                rect.setAttribute('rx', 10);
+                rect.setAttribute('fill', 'var(--bg-tertiary)');
+                rect.setAttribute('stroke', 'var(--border)');
+                g.appendChild(rect);
+
+                const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                text.setAttribute('x', x + w/2);
+                text.setAttribute('y', y + 18);
+                text.setAttribute('text-anchor', 'middle');
+                text.setAttribute('fill', 'var(--text-muted)');
+                text.setAttribute('font-size', '10px');
+                text.setAttribute('font-weight', '600');
+                text.textContent = label.toUpperCase();
+                g.appendChild(text);
+
+                this.mainGroup.appendChild(g);
+            }
+
+            drawConcept(x, y, data, id) {
+                const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+                g.setAttribute('class', 'concept-node');
+                g.setAttribute('data-concept', id);
+
+                const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                rect.setAttribute('x', x - 45);
+                rect.setAttribute('y', y - 28);
+                rect.setAttribute('width', 90);
+                rect.setAttribute('height', 56);
+                rect.setAttribute('rx', 10);
+                rect.setAttribute('fill', data.color);
+                rect.setAttribute('opacity', '0.9');
+                g.appendChild(rect);
+
+                // Icon centered above text
+                const icon = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                icon.setAttribute('x', x);
+                icon.setAttribute('y', y - 5);
+                icon.setAttribute('text-anchor', 'middle');
+                icon.setAttribute('font-size', '18px');
+                icon.textContent = data.icon;
+                g.appendChild(icon);
+
+                // Label centered below icon
+                const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                label.setAttribute('x', x);
+                label.setAttribute('y', y + 16);
+                label.setAttribute('text-anchor', 'middle');
+                label.setAttribute('fill', 'white');
+                label.setAttribute('font-weight', '600');
+                label.setAttribute('font-size', '11px');
+                label.textContent = data.title;
+                g.appendChild(label);
+
+                // Tooltip on hover
+                g.addEventListener('mouseenter', (e) => this.showTooltip(e, data.title, data.desc));
+                g.addEventListener('mouseleave', () => this.hideTooltip());
+
+                g.addEventListener('click', () => {
+                    document.querySelectorAll('.concept-node').forEach(n => n.classList.remove('highlighted'));
+                    g.classList.add('highlighted');
+                });
+
+                this.mainGroup.appendChild(g);
+            }
+
+            drawRelationship(from, to, label, color) {
+                const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+
+                const dx = to.x - from.x;
+                const dy = to.y - from.y;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+                const offsetStart = 50;
+                const offsetEnd = 50;
+
+                const x1 = from.x + (dx / dist) * offsetStart;
+                const y1 = from.y + (dy / dist) * offsetStart;
+                const x2 = to.x - (dx / dist) * offsetEnd;
+                const y2 = to.y - (dy / dist) * offsetEnd;
+
+                const midX = (x1 + x2) / 2;
+                const midY = (y1 + y2) / 2;
+
+                const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                const d = `M ${x1} ${y1} Q ${midX} ${midY}, ${x2} ${y2}`;
+                path.setAttribute('d', d);
+                path.setAttribute('class', 'relationship-path');
+                path.setAttribute('stroke', color);
+                path.setAttribute('marker-end', color === '#22c55e' ? 'url(#arrowhead-green)' : 'url(#arrowhead-purple)');
+                g.appendChild(path);
+
+                // Label (only for core relationships)
+                if (label) {
+                    const labelX = midX;
+                    const labelY = midY;
+
+                    const bg = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                    bg.setAttribute('x', labelX - 28);
+                    bg.setAttribute('y', labelY - 7);
+                    bg.setAttribute('width', 56);
+                    bg.setAttribute('height', 12);
+                    bg.setAttribute('fill', 'var(--bg-primary)');
+                    bg.setAttribute('rx', 3);
+                    g.appendChild(bg);
+
+                    const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                    text.setAttribute('x', labelX);
+                    text.setAttribute('y', labelY + 3);
+                    text.setAttribute('class', 'relationship-label');
+                    text.setAttribute('text-anchor', 'middle');
+                    text.textContent = label;
+                    g.appendChild(text);
+                }
+
+                this.mainGroup.insertBefore(g, this.mainGroup.firstChild);
+            }
+        }
+
+        // Initialize
+        const diagram = new ConceptRelationshipsDiagram('diagram-container', {
+            width: 650,
+            height: 320
+        });
+        diagram.render();
+    </script>
+</body>
+</html>

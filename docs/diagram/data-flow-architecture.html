@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MXF Data Flow Architecture</title>
+    <link rel="stylesheet" href="diagram-base.css">
+    <style>
+        .data-particle {
+            fill: var(--accent);
+            opacity: 0;
+        }
+        .flow-active .data-particle {
+            animation: flowParticle 2s ease-in-out infinite;
+        }
+        @keyframes flowParticle {
+            0% { opacity: 0; offset-distance: 0%; }
+            10% { opacity: 1; }
+            90% { opacity: 1; }
+            100% { opacity: 0; offset-distance: 100%; }
+        }
+        .pipeline-section {
+            transition: all 0.3s ease;
+        }
+        .pipeline-section:hover {
+            filter: brightness(1.05);
+        }
+        .pipeline-section.dimmed {
+            opacity: 0.3;
+        }
+    </style>
+</head>
+<body>
+    <div class="diagram-container">
+        <header class="diagram-header">
+            <div>
+                <h1 class="diagram-title">Data Flow Architecture</h1>
+                <p class="diagram-subtitle">Input → Processing → Distribution → Storage</p>
+            </div>
+            <button class="theme-toggle" onclick="toggleTheme()">
+                <span class="theme-toggle-icon">🌙</span>
+                <span class="theme-toggle-label">Dark</span>
+            </button>
+        </header>
+        
+        <div class="controls">
+            <button class="control-btn active" onclick="showAll()">All Stages</button>
+            <button class="control-btn" onclick="highlightStage('input')">📥 Input</button>
+            <button class="control-btn" onclick="highlightStage('processing')">⚙️ Processing</button>
+            <button class="control-btn" onclick="highlightStage('distribution')">📡 Distribution</button>
+            <button class="control-btn" onclick="highlightStage('storage')">💾 Storage</button>
+        </div>
+        
+        <div id="diagram-container"></div>
+        
+        <div class="legend">
+            <div class="legend-item">
+                <div class="legend-color" style="background: #3b82f6;"></div>
+                <span>Input Sources</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #22c55e;"></div>
+                <span>Processing Pipeline</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #f59e0b;"></div>
+                <span>Event Distribution</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #a855f7;"></div>
+                <span>Storage Layer</span>
+            </div>
+        </div>
+    </div>
+
+    <script src="diagram-utils.js"></script>
+    <script>
+        class DataFlowDiagram extends MXFDiagram {
+            render() {
+                // Input Sources
+                const inputGroup = this.createGroup(30, 40, 'Input Sources', 180, 320);
+                inputGroup.setAttribute('data-stage', 'input');
+                inputGroup.classList.add('pipeline-section');
+                this.mainGroup.appendChild(inputGroup);
+                
+                const inputs = [
+                    { icon: '👤', label: 'User Input', y: 100 },
+                    { icon: '🤖', label: 'Agent Messages', y: 180 },
+                    { icon: '🔌', label: 'API Calls', y: 260 },
+                    { icon: '⏰', label: 'Scheduled Tasks', y: 340 }
+                ];
+                
+                inputs.forEach((inp, i) => {
+                    this.createFlowNode(120, inp.y, inp.icon, inp.label, '#3b82f6', i * 80);
+                });
+                
+                // Processing Pipeline
+                const processGroup = this.createGroup(230, 40, 'Processing Pipeline', 180, 320);
+                processGroup.setAttribute('data-stage', 'processing');
+                processGroup.classList.add('pipeline-section');
+                this.mainGroup.appendChild(processGroup);
+                
+                const processing = [
+                    { icon: '✅', label: 'Input Validation', y: 100, color: '#ef4444' },
+                    { icon: '🔐', label: 'Authentication', y: 160, color: '#22c55e' },
+                    { icon: '🛡️', label: 'Authorization', y: 220, color: '#22c55e' },
+                    { icon: '⚙️', label: 'Business Logic', y: 280, color: '#22c55e' },
+                    { icon: '🔄', label: 'Data Transform', y: 340, color: '#22c55e' }
+                ];
+                
+                processing.forEach((proc, i) => {
+                    this.createFlowNode(320, proc.y, proc.icon, proc.label, proc.color, i * 80 + 200);
+                    
+                    // Connect vertically
+                    if (i > 0) {
+                        this.createFlowEdge(320, processing[i-1].y + 20, 320, proc.y - 20);
+                    }
+                });
+                
+                // Connect inputs to validation
+                inputs.forEach(inp => {
+                    this.createFlowEdge(195, inp.y, 245, 100);
+                });
+                
+                // Event Distribution
+                const distGroup = this.createGroup(430, 40, 'Event Distribution', 180, 320);
+                distGroup.setAttribute('data-stage', 'distribution');
+                distGroup.classList.add('pipeline-section');
+                this.mainGroup.appendChild(distGroup);
+                
+                const distribution = [
+                    { icon: '📢', label: 'EventBus', y: 140 },
+                    { icon: '📬', label: 'Message Queue', y: 220 },
+                    { icon: '🔌', label: 'WebSocket', y: 300 },
+                    { icon: '🪝', label: 'Webhook Dispatch', y: 380 }
+                ];
+                
+                distribution.forEach((dist, i) => {
+                    this.createFlowNode(520, dist.y, dist.icon, dist.label, '#f59e0b', i * 80 + 600);
+                });
+                
+                // Connect transform to EventBus
+                this.createFlowEdge(395, 340, 445, 140);
+                
+                // Connect EventBus to others
+                distribution.slice(1).forEach(dist => {
+                    this.createFlowEdge(520, 160, 520, dist.y - 20);
+                });
+                
+                // Storage Layer
+                const storageGroup = this.createGroup(630, 40, 'Storage', 180, 320);
+                storageGroup.setAttribute('data-stage', 'storage');
+                storageGroup.classList.add('pipeline-section');
+                this.mainGroup.appendChild(storageGroup);
+                
+                const storage = [
+                    { icon: '🗄️', label: 'Primary DB', y: 100 },
+                    { icon: '⚡', label: 'Cache', y: 180 },
+                    { icon: '📁', label: 'File Storage', y: 260 },
+                    { icon: '📝', label: 'Logs', y: 340 }
+                ];
+                
+                storage.forEach((store, i) => {
+                    this.createStorageNode(720, store.y, store.icon, store.label, i * 80 + 800);
+                });
+                
+                // Connect transform to storage
+                this.createFlowEdge(395, 340, 645, 100);
+                this.createFlowEdge(395, 280, 645, 180);
+                this.createFlowEdge(395, 340, 645, 260);
+                this.createFlowEdge(520, 160, 645, 340);
+            }
+            
+            createFlowNode(x, y, icon, label, color, delay) {
+                const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+                g.setAttribute('class', 'node');
+                g.style.opacity = '0';
+                
+                setTimeout(() => {
+                    g.style.transition = 'all 0.4s ease';
+                    g.style.opacity = '1';
+                }, delay);
+                
+                const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                rect.setAttribute('x', x - 75);
+                rect.setAttribute('y', y - 20);
+                rect.setAttribute('width', 150);
+                rect.setAttribute('height', 40);
+                rect.setAttribute('rx', 6);
+                rect.setAttribute('fill', color);
+                rect.setAttribute('opacity', '0.9');
+                g.appendChild(rect);
+                
+                const iconEl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                iconEl.setAttribute('x', x - 55);
+                iconEl.setAttribute('y', y + 6);
+                iconEl.setAttribute('font-size', '16px');
+                iconEl.textContent = icon;
+                g.appendChild(iconEl);
+                
+                const labelEl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                labelEl.setAttribute('x', x - 30);
+                labelEl.setAttribute('y', y + 5);
+                labelEl.setAttribute('fill', 'white');
+                labelEl.setAttribute('font-weight', '600');
+                labelEl.setAttribute('font-size', '12px');
+                labelEl.textContent = label;
+                g.appendChild(labelEl);
+                
+                this.mainGroup.appendChild(g);
+                return g;
+            }
+            
+            createStorageNode(x, y, icon, label, delay) {
+                const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+                g.setAttribute('class', 'node');
+                g.style.opacity = '0';
+                
+                setTimeout(() => {
+                    g.style.transition = 'all 0.4s ease';
+                    g.style.opacity = '1';
+                }, delay);
+                
+                // Cylinder shape for storage
+                const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                const w = 140, h = 50;
+                const rx = w/2, ry = 8;
+                
+                const d = `
+                    M ${x - w/2} ${y - h/2 + ry}
+                    A ${rx} ${ry} 0 0 1 ${x + w/2} ${y - h/2 + ry}
+                    L ${x + w/2} ${y + h/2 - ry}
+                    A ${rx} ${ry} 0 0 1 ${x - w/2} ${y + h/2 - ry}
+                    Z
+                `;
+                
+                path.setAttribute('d', d);
+                path.setAttribute('fill', '#a855f7');
+                path.setAttribute('opacity', '0.9');
+                g.appendChild(path);
+                
+                // Top ellipse
+                const topEllipse = document.createElementNS('http://www.w3.org/2000/svg', 'ellipse');
+                topEllipse.setAttribute('cx', x);
+                topEllipse.setAttribute('cy', y - h/2 + ry);
+                topEllipse.setAttribute('rx', rx);
+                topEllipse.setAttribute('ry', ry);
+                topEllipse.setAttribute('fill', '#c084fc');
+                g.appendChild(topEllipse);
+                
+                const iconEl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                iconEl.setAttribute('x', x - 50);
+                iconEl.setAttribute('y', y + 5);
+                iconEl.setAttribute('font-size', '16px');
+                iconEl.textContent = icon;
+                g.appendChild(iconEl);
+                
+                const labelEl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                labelEl.setAttribute('x', x - 25);
+                labelEl.setAttribute('y', y + 5);
+                labelEl.setAttribute('fill', 'white');
+                labelEl.setAttribute('font-weight', '600');
+                labelEl.setAttribute('font-size', '12px');
+                labelEl.textContent = label;
+                g.appendChild(labelEl);
+                
+                this.mainGroup.appendChild(g);
+                return g;
+            }
+            
+            createFlowEdge(x1, y1, x2, y2) {
+                const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                
+                const dx = x2 - x1;
+                const dy = y2 - y1;
+                let d;
+                
+                if (Math.abs(dx) > Math.abs(dy)) {
+                    const midX = (x1 + x2) / 2;
+                    d = `M ${x1} ${y1} C ${midX} ${y1}, ${midX} ${y2}, ${x2} ${y2}`;
+                } else {
+                    d = `M ${x1} ${y1} L ${x2} ${y2}`;
+                }
+                
+                path.setAttribute('d', d);
+                path.setAttribute('class', 'edge');
+                path.setAttribute('stroke-dasharray', '6 3');
+                path.setAttribute('marker-end', 'url(#arrowhead)');
+                
+                this.mainGroup.insertBefore(path, this.mainGroup.firstChild);
+                return path;
+            }
+        }
+        
+        function highlightStage(stage) {
+            document.querySelectorAll('.pipeline-section').forEach(section => {
+                section.classList.toggle('dimmed', section.dataset.stage !== stage);
+            });
+            
+            document.querySelectorAll('.control-btn').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            event.target.classList.add('active');
+        }
+        
+        function showAll() {
+            document.querySelectorAll('.pipeline-section').forEach(section => {
+                section.classList.remove('dimmed');
+            });
+            
+            document.querySelectorAll('.control-btn').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            document.querySelector('.control-btn').classList.add('active');
+        }
+        
+        // Initialize
+        const diagram = new DataFlowDiagram('diagram-container', {
+            width: 850,
+            height: 420
+        });
+        diagram.render();
+    </script>
+</body>
+</html>

@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MXF Data Flow Architecture</title>
+    <link rel="stylesheet" href="diagram-base.css">
+    <style>
+        .flow-stage {
+            opacity: 0;
+            animation: stageAppear 0.5s ease forwards;
+        }
+        @keyframes stageAppear {
+            to { opacity: 1; }
+        }
+        .data-packet {
+            fill: var(--accent);
+            r: 6;
+        }
+        .animated-flow {
+            stroke-dasharray: 12 6;
+            animation: flowAnimation 1s linear infinite;
+        }
+        @keyframes flowAnimation {
+            to { stroke-dashoffset: -18; }
+        }
+        .stage-highlight {
+            filter: drop-shadow(0 0 12px var(--accent));
+        }
+    </style>
+</head>
+<body>
+    <div class="diagram-container">
+        <header class="diagram-header">
+            <div>
+                <h1 class="diagram-title">Data Flow Architecture</h1>
+                <p class="diagram-subtitle">Input → Processing → Distribution → Storage</p>
+            </div>
+            <button class="theme-toggle" onclick="toggleTheme()">
+                <span class="theme-toggle-icon">🌙</span>
+                <span class="theme-toggle-label">Dark</span>
+            </button>
+        </header>
+        
+        <div class="controls">
+            <button class="control-btn active" data-stage="all">All Stages</button>
+            <button class="control-btn" data-stage="input">Input Sources</button>
+            <button class="control-btn" data-stage="processing">Processing</button>
+            <button class="control-btn" data-stage="distribution">Distribution</button>
+            <button class="control-btn" data-stage="storage">Storage</button>
+        </div>
+        
+        <div id="diagram-container"></div>
+        
+        <div class="legend">
+            <div class="legend-item">
+                <div class="legend-color" style="background: #3b82f6;"></div>
+                <span>Input Sources</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #22c55e;"></div>
+                <span>Processing Pipeline</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #f59e0b;"></div>
+                <span>Event Distribution</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #6366f1;"></div>
+                <span>Storage</span>
+            </div>
+        </div>
+    </div>
+
+    <script src="diagram-utils.js"></script>
+    <script>
+        class DataFlowDiagram extends MXFDiagram {
+            render() {
+                const stages = {
+                    input: { x: 60, width: 180, color: '#3b82f6', label: 'Input Sources' },
+                    processing: { x: 280, width: 260, color: '#22c55e', label: 'Processing Pipeline' },
+                    distribution: { x: 580, width: 200, color: '#f59e0b', label: 'Event Distribution' },
+                    storage: { x: 820, width: 180, color: '#6366f1', label: 'Storage' }
+                };
+                
+                // Draw stage backgrounds
+                Object.entries(stages).forEach(([key, stage], i) => {
+                    const group = this.createGroup(stage.x - 10, 40, stage.label, stage.width, 380, `flow-stage stage-${key}`);
+                    group.style.animationDelay = `${i * 150}ms`;
+                    group.setAttribute('data-stage', key);
+                    this.mainGroup.appendChild(group);
+                });
+                
+                // Input Sources
+                const inputs = [
+                    { icon: '👤', label: 'User Input', y: 120 },
+                    { icon: '🤖', label: 'Agent Messages', y: 200 },
+                    { icon: '🔌', label: 'API Calls', y: 280 },
+                    { icon: '⏰', label: 'Scheduled Tasks', y: 360 }
+                ];
+                
+                inputs.forEach((input, i) => {
+                    const node = this.createStageNode(150, input.y, input.icon, input.label, stages.input.color, i * 80);
+                    node.setAttribute('data-stage', 'input');
+                    this.mainGroup.appendChild(node);
+                });
+                
+                // Processing Pipeline
+                const processing = [
+                    { icon: '✅', label: 'Input Validation', y: 100 },
+                    { icon: '🔐', label: 'Authentication', y: 170 },
+                    { icon: '🔒', label: 'Authorization', y: 240 },
+                    { icon: '⚙️', label: 'Business Logic', y: 310 },
+                    { icon: '🔄', label: 'Data Transform', y: 380 }
+                ];
+                
+                processing.forEach((proc, i) => {
+                    const node = this.createStageNode(410, proc.y, proc.icon, proc.label, stages.processing.color, 300 + i * 60);
+                    node.setAttribute('data-stage', 'processing');
+                    this.mainGroup.appendChild(node);
+                    
+                    // Connect pipeline stages
+                    if (i > 0) {
+                        const edge = this.createFlowEdge(410, processing[i-1].y + 20, 410, proc.y - 20);
+                        edge.setAttribute('data-stage', 'processing');
+                        this.mainGroup.insertBefore(edge, this.mainGroup.firstChild);
+                    }
+                });
+                
+                // Connect inputs to validation
+                inputs.forEach((input, i) => {
+                    if (i < 3) {
+                        const edge = this.createFlowEdge(225, input.y, 335, 100);
+                        edge.setAttribute('data-stage', 'input');
+                        this.mainGroup.insertBefore(edge, this.mainGroup.firstChild);
+                    } else {
+                        // Scheduled tasks go directly to business logic
+                        const edge = this.createFlowEdge(225, input.y, 335, 310);
+                        edge.setAttribute('data-stage', 'input');
+                        this.mainGroup.insertBefore(edge, this.mainGroup.firstChild);
+                    }
+                });
+                
+                // Event Distribution
+                const distribution = [
+                    { icon: '📡', label: 'EventBus', y: 140 },
+                    { icon: '📬', label: 'Message Queue', y: 220 },
+                    { icon: '🔌', label: 'WebSocket', y: 300 },
+                    { icon: '🪝', label: 'Webhooks', y: 380 }
+                ];
+                
+                distribution.forEach((dist, i) => {
+                    const node = this.createStageNode(680, dist.y, dist.icon, dist.label, stages.distribution.color, 600 + i * 60);
+                    node.setAttribute('data-stage', 'distribution');
+                    this.mainGroup.appendChild(node);
+                });
+                
+                // Connect transform to EventBus
+                const transformToEvent = this.createFlowEdge(485, 380, 605, 140);
+                transformToEvent.setAttribute('data-stage', 'distribution');
+                this.mainGroup.insertBefore(transformToEvent, this.mainGroup.firstChild);
+                
+                // Connect EventBus to others
+                [220, 300, 380].forEach(y => {
+                    const edge = this.createFlowEdge(680, 160, 680, y - 20);
+                    edge.setAttribute('data-stage', 'distribution');
+                    this.mainGroup.insertBefore(edge, this.mainGroup.firstChild);
+                });
+                
+                // Storage
+                const storage = [
+                    { icon: '🗄️', label: 'Primary DB', y: 120, isDb: true },
+                    { icon: '💾', label: 'Cache', y: 200 },
+                    { icon: '📁', label: 'File Storage', y: 280 },
+                    { icon: '📋', label: 'Logs', y: 360 }
+                ];
+                
+                storage.forEach((store, i) => {
+                    let node;
+                    if (store.isDb) {
+                        node = this.createDatabase(910, store.y, store.label, { tooltip: 'MongoDB primary storage' });
+                    } else {
+                        node = this.createStageNode(910, store.y, store.icon, store.label, stages.storage.color, 850 + i * 60);
+                    }
+                    node.setAttribute('data-stage', 'storage');
+                    this.mainGroup.appendChild(node);
+                });
+                
+                // Connect data transform to storage
+                const toDb = this.createFlowEdge(485, 380, 835, 120);
+                toDb.setAttribute('data-stage', 'storage');
+                this.mainGroup.insertBefore(toDb, this.mainGroup.firstChild);
+                
+                const toCache = this.createFlowEdge(485, 310, 835, 200);
+                toCache.setAttribute('data-stage', 'storage');
+                this.mainGroup.insertBefore(toCache, this.mainGroup.firstChild);
+                
+                const toFiles = this.createFlowEdge(485, 380, 835, 280);
+                toFiles.setAttribute('data-stage', 'storage');
+                this.mainGroup.insertBefore(toFiles, this.mainGroup.firstChild);
+                
+                const toLogs = this.createFlowEdge(755, 140, 835, 360);
+                toLogs.setAttribute('data-stage', 'storage');
+                this.mainGroup.insertBefore(toLogs, this.mainGroup.firstChild);
+                
+                this.setupStageFilters();
+            }
+            
+            createStageNode(x, y, icon, label, color, delay) {
+                const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+                g.setAttribute('class', 'node flow-stage');
+                g.style.animationDelay = `${delay}ms`;
+                
+                const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                rect.setAttribute('x', x - 75);
+                rect.setAttribute('y', y - 20);
+                rect.setAttribute('width', 150);
+                rect.setAttribute('height', 40);
+                rect.setAttribute('rx', 6);
+                rect.setAttribute('fill', color);
+                rect.setAttribute('opacity', '0.9');
+                g.appendChild(rect);
+                
+                const iconEl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                iconEl.setAttribute('x', x - 55);
+                iconEl.setAttribute('y', y + 5);
+                iconEl.setAttribute('font-size', '16px');
+                iconEl.textContent = icon;
+                g.appendChild(iconEl);
+                
+                const labelEl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                labelEl.setAttribute('x', x - 30);
+                labelEl.setAttribute('y', y + 5);
+                labelEl.setAttribute('fill', 'white');
+                labelEl.setAttribute('font-weight', '600');
+                labelEl.setAttribute('font-size', '12px');
+                labelEl.textContent = label;
+                g.appendChild(labelEl);
+                
+                return g;
+            }
+            
+            createFlowEdge(x1, y1, x2, y2) {
+                const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+                
+                const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                const midX = (x1 + x2) / 2;
+                const d = `M ${x1} ${y1} C ${midX} ${y1}, ${midX} ${y2}, ${x2} ${y2}`;
+                
+                path.setAttribute('d', d);
+                path.setAttribute('class', 'edge animated-flow');
+                path.setAttribute('marker-end', 'url(#arrowhead)');
+                g.appendChild(path);
+                
+                return g;
+            }
+            
+            setupStageFilters() {
+                document.querySelectorAll('.control-btn').forEach(btn => {
+                    btn.addEventListener('click', () => {
+                        document.querySelectorAll('.control-btn').forEach(b => b.classList.remove('active'));
+                        btn.classList.add('active');
+                        
+                        const stage = btn.dataset.stage;
+                        const elements = document.querySelectorAll('[data-stage]');
+                        
+                        elements.forEach(el => {
+                            if (stage === 'all') {
+                                el.style.opacity = '1';
+                                el.classList.remove('stage-highlight');
+                            } else {
+                                const isMatch = el.dataset.stage === stage;
+                                el.style.opacity = isMatch ? '1' : '0.15';
+                                el.classList.toggle('stage-highlight', isMatch);
+                            }
+                        });
+                    });
+                });
+            }
+        }
+        
+        // Initialize
+        const diagram = new DataFlowDiagram('diagram-container', {
+            width: 1050,
+            height: 440
+        });
+        diagram.render();
+    </script>
+</body>
+</html>

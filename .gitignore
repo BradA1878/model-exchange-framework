@@ -47,6 +47,10 @@ yarn-error.log*
 # Coverage directory
 coverage/
 
+# Stryker mutation testing
+.stryker-tmp/
+reports/
+
 # Cache
 .npm
 .eslintcache
@@ -75,8 +79,6 @@ docs/tmp/
 dist-sdk/
 .windsurf/
 .windsurfrules
-.claude/
-CLAUDE.md
 .env.bak
 build-config/
 presentation/

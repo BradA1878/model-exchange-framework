@@ -112,6 +112,7 @@ export interface AgentCreationConfig {
     apiKey?: string;
     temperature?: number;
     maxTokens?: number;
+    maxHistory?: number;  // Max conversation history entries (default: 50) - keep low for long-running agents
     reasoning?: LlmReasoningConfig;  // Claude extended thinking: { enabled: true, effort: 'medium', maxTokens: 10000 }
     allowedTools?: string[];
     circuitBreakerExemptTools?: string[];  // Tools exempt from circuit breaker detection (for game tools, etc.)
@@ -125,6 +126,10 @@ export interface AgentCreationConfig {
     mxpEnabled?: boolean;
     mxpPreferredFormat?: 'auto' | 'mxp' | 'natural-language';
     mxpForceEncryption?: boolean;
+
+    // Optional connection settings
+    reconnectAttempts?: number;  // Number of reconnection attempts (default: 5)
+    reconnectDelay?: number;     // Delay between reconnection attempts in ms (default: 5000)
 }
 
 /**
@@ -274,6 +279,7 @@ export class MxfSDK {
             // Pass through all optional LLM settings
             temperature: config.temperature,
             maxTokens: config.maxTokens,
+            maxHistory: config.maxHistory,
             reasoning: config.reasoning,
             allowedTools: config.allowedTools,
             circuitBreakerExemptTools: config.circuitBreakerExemptTools,
@@ -285,6 +291,9 @@ export class MxfSDK {
             mxpEnabled: config.mxpEnabled,
             mxpPreferredFormat: config.mxpPreferredFormat,
             mxpForceEncryption: config.mxpForceEncryption,
+            // Pass through connection settings
+            reconnectAttempts: config.reconnectAttempts,
+            reconnectDelay: config.reconnectDelay,
             // Add domain key to agent auth
             sdkDomainKey: this.config.domainKey
         };

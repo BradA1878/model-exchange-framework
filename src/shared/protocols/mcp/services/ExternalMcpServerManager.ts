@@ -786,13 +786,16 @@ export class ExternalMcpServerManager extends EventEmitter {
 
     /**
      * Handle server output for tool discovery
+     *
+     * MCP protocol message parsing is handled in:
+     * - initializeMcpConnection(): Handles MCP initialize handshake
+     * - discoverRealToolsFromServer(): Handles tools/list JSON-RPC calls
+     * - executeToolOnServer(): Handles tools/call JSON-RPC calls
      */
     private handleServerOutput(serverId: string, output: string): void {
-        // For now, log the output. In the future, we'll parse MCP protocol messages
-        //;
-        
-        // TODO: Parse MCP protocol messages for tool discovery
-        // This will be implemented when we add the MCP client integration
+        // Server stdout is processed by the MCP JSON-RPC handlers in initializeMcpConnection,
+        // discoverRealToolsFromServer, and executeToolOnServer methods.
+        // This handler is used for any additional output logging if needed.
     }
 
     /**

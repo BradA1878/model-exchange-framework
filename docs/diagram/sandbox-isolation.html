@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MXF Sandbox Isolation Architecture</title>
+    <link rel="stylesheet" href="diagram-base.css">
+    <style>
+        .flow-node {
+            transition: all 0.3s ease;
+        }
+        .flow-node:hover {
+            filter: brightness(1.1) drop-shadow(0 4px 12px var(--shadow));
+        }
+        .security-badge {
+            font-size: 10px;
+            fill: white;
+        }
+        .flow-arrow {
+            stroke-dasharray: 6 3;
+            animation: flowPulse 1s linear infinite;
+        }
+        @keyframes flowPulse {
+            to { stroke-dashoffset: -9; }
+        }
+        .restriction-item {
+            font-size: 9px;
+        }
+        .restriction-bad { fill: #ef4444; }
+        .restriction-good { fill: #22c55e; }
+    </style>
+</head>
+<body>
+    <div class="diagram-container">
+        <header class="diagram-header">
+            <div>
+                <h1 class="diagram-title">Sandbox Isolation Architecture</h1>
+                <p class="diagram-subtitle">Secure code execution with VM2 isolation and validation</p>
+            </div>
+            <button class="theme-toggle" onclick="toggleTheme()">
+                <span class="theme-toggle-icon">🌙</span>
+                <span class="theme-toggle-label">Dark</span>
+            </button>
+        </header>
+
+        <div id="diagram-container"></div>
+
+        <div class="legend">
+            <div class="legend-item">
+                <div class="legend-color" style="background: #3b82f6;"></div>
+                <span>Request</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #f59e0b;"></div>
+                <span>Validation</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #a855f7;"></div>
+                <span>Security</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #ef4444;"></div>
+                <span>Sandbox</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #22c55e;"></div>
+                <span>Persistence</span>
+            </div>
+        </div>
+    </div>
+
+    <script src="diagram-utils.js"></script>
+    <script>
+        class SandboxDiagram extends MXFDiagram {
+            render() {
+                const centerX = 200;
+                let y = 50;
+
+                // Agent Code Request
+                this.drawFlowNode(centerX, y, '📥', 'Agent Code Request', '#3b82f6');
+                y += 70;
+
+                // Arrow
+                this.drawFlowArrow(centerX, y - 45, centerX, y - 25);
+
+                // ProactiveValidationService
+                this.drawFlowNode(centerX, y, '🔒', 'ProactiveValidationService', '#f59e0b', ['BLOCKING - validation required']);
+                y += 80;
+
+                // Arrow
+                this.drawFlowArrow(centerX, y - 55, centerX, y - 25);
+
+                // CodeExecutionSandboxService
+                this.drawFlowNode(centerX, y, '🛡️', 'CodeExecutionSandboxService', '#a855f7', [
+                    'Pattern Detection',
+                    'Security Validation',
+                    'Resource Monitoring'
+                ]);
+                y += 95;
+
+                // Arrow
+                this.drawFlowArrow(centerX, y - 65, centerX, y - 30);
+
+                // VM2 Sandbox with restrictions
+                this.drawSandboxNode(centerX, y);
+                y += 100;
+
+                // Arrow
+                this.drawFlowArrow(centerX, y - 65, centerX, y - 30);
+
+                // Execution Result
+                this.drawFlowNode(centerX, y, '💾', 'Result + Persistence', '#22c55e', [
+                    'MongoDB audit trail',
+                    'Event emission',
+                    'Pattern learning'
+                ]);
+            }
+
+            drawFlowNode(x, y, icon, label, color, details = []) {
+                const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+                g.setAttribute('class', 'flow-node');
+
+                const height = 50 + (details.length * 14);
+                const width = 280;
+
+                const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                rect.setAttribute('x', x - width/2);
+                rect.setAttribute('y', y - height/2);
+                rect.setAttribute('width', width);
+                rect.setAttribute('height', height);
+                rect.setAttribute('rx', 10);
+                rect.setAttribute('fill', color);
+                rect.setAttribute('opacity', '0.9');
+                g.appendChild(rect);
+
+                // Icon
+                const iconEl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                iconEl.setAttribute('x', x);
+                iconEl.setAttribute('y', y - height/2 + 22);
+                iconEl.setAttribute('text-anchor', 'middle');
+                iconEl.setAttribute('font-size', '16px');
+                iconEl.textContent = icon;
+                g.appendChild(iconEl);
+
+                // Label
+                const labelEl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                labelEl.setAttribute('x', x);
+                labelEl.setAttribute('y', y - height/2 + 38);
+                labelEl.setAttribute('text-anchor', 'middle');
+                labelEl.setAttribute('fill', 'white');
+                labelEl.setAttribute('font-weight', '700');
+                labelEl.setAttribute('font-size', '12px');
+                labelEl.textContent = label;
+                g.appendChild(labelEl);
+
+                // Details
+                details.forEach((detail, i) => {
+                    const detailEl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                    detailEl.setAttribute('x', x);
+                    detailEl.setAttribute('y', y - height/2 + 54 + (i * 14));
+                    detailEl.setAttribute('text-anchor', 'middle');
+                    detailEl.setAttribute('fill', 'rgba(255,255,255,0.8)');
+                    detailEl.setAttribute('font-size', '10px');
+                    detailEl.textContent = '• ' + detail;
+                    g.appendChild(detailEl);
+                });
+
+                this.mainGroup.appendChild(g);
+            }
+
+            drawSandboxNode(x, y) {
+                const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+                g.setAttribute('class', 'flow-node');
+
+                const width = 280;
+                const height = 90;
+
+                const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                rect.setAttribute('x', x - width/2);
+                rect.setAttribute('y', y - height/2);
+                rect.setAttribute('width', width);
+                rect.setAttribute('height', height);
+                rect.setAttribute('rx', 10);
+                rect.setAttribute('fill', '#ef4444');
+                rect.setAttribute('opacity', '0.9');
+                g.appendChild(rect);
+
+                // Icon and label
+                const iconEl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                iconEl.setAttribute('x', x);
+                iconEl.setAttribute('y', y - 25);
+                iconEl.setAttribute('text-anchor', 'middle');
+                iconEl.setAttribute('font-size', '16px');
+                iconEl.textContent = '🔐';
+                g.appendChild(iconEl);
+
+                const labelEl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                labelEl.setAttribute('x', x);
+                labelEl.setAttribute('y', y - 8);
+                labelEl.setAttribute('text-anchor', 'middle');
+                labelEl.setAttribute('fill', 'white');
+                labelEl.setAttribute('font-weight', '700');
+                labelEl.setAttribute('font-size', '12px');
+                labelEl.textContent = 'VM2 Isolated Sandbox';
+                g.appendChild(labelEl);
+
+                // Restrictions - two columns
+                const restrictions = [
+                    { text: '❌ No file system', x: x - 65 },
+                    { text: '❌ No network', x: x + 65 },
+                    { text: '❌ No process', x: x - 65 },
+                    { text: '✅ Safe built-ins', x: x + 65 }
+                ];
+
+                restrictions.forEach((r, i) => {
+                    const row = Math.floor(i / 2);
+                    const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                    el.setAttribute('x', r.x);
+                    el.setAttribute('y', y + 10 + (row * 14));
+                    el.setAttribute('text-anchor', 'middle');
+                    el.setAttribute('fill', 'rgba(255,255,255,0.9)');
+                    el.setAttribute('font-size', '10px');
+                    el.textContent = r.text;
+                    g.appendChild(el);
+                });
+
+                this.mainGroup.appendChild(g);
+            }
+
+            drawFlowArrow(x1, y1, x2, y2) {
+                const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                path.setAttribute('d', `M ${x1} ${y1} L ${x2} ${y2}`);
+                path.setAttribute('class', 'edge flow-arrow');
+                path.setAttribute('marker-end', 'url(#arrowhead)');
+                this.mainGroup.insertBefore(path, this.mainGroup.firstChild);
+            }
+        }
+
+        // Initialize
+        const diagram = new SandboxDiagram('diagram-container', {
+            width: 400,
+            height: 520
+        });
+        diagram.render();
+    </script>
+</body>
+</html>

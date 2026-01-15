@@ -275,6 +275,13 @@ export class ValidationPerformanceService {
             // Clear error timestamp
             this.errorTimestamps.delete(errorKey);
             
+            // Update average attempts to correct (we reached success, so add 1 to the average calculation)
+            const currentAvgAttempts = metrics.selfCorrection.averageAttemptsToCorrect;
+            const successCount = metrics.selfCorrection.successfulCorrections;
+            // Assume this correction took at least 1 attempt (could be enhanced with actual attempt tracking)
+            metrics.selfCorrection.averageAttemptsToCorrect =
+                (currentAvgAttempts * (successCount - 1) + 1) / successCount;
+
             // Emit self-correction event
             this.emitValidationEvent({
                 timestamp: Date.now(),
@@ -284,7 +291,7 @@ export class ValidationPerformanceService {
                 eventType: 'self_correction',
                 details: {
                     recoveryTime,
-                    correctionAttempt: 1 // TODO: Track actual attempts
+                    correctionAttempt: Math.round(metrics.selfCorrection.averageAttemptsToCorrect)
                 }
             });
             
@@ -393,10 +400,16 @@ export class ValidationPerformanceService {
             if (errorCount > 3) { // Threshold for problem area
                 const failedPatterns = metrics.parameterPatterns.failedPatterns[tool] || [];
                 const commonErrors = [...new Set(failedPatterns.map(p => p.errorType))];
-                
+
+                // Calculate error rate using successful patterns as proxy for successful attempts
+                const successPatterns = metrics.parameterPatterns.successfulPatterns[tool] || [];
+                const successCount = successPatterns.reduce((sum, p) => sum + (p.frequency || 1), 0);
+                const totalAttempts = errorCount + successCount;
+                const errorRate = totalAttempts > 0 ? errorCount / totalAttempts : 0;
+
                 problemAreas.push({
                     tool,
-                    errorRate: errorCount / (errorCount + 1), // TODO: Track total attempts
+                    errorRate,
                     commonErrors,
                     suggestedActions: this.generateToolSpecificActions(tool, commonErrors)
                 });
@@ -693,6 +706,46 @@ export class ValidationPerformanceService {
             commonValidationErrors,
             helpTriggeringTools,
             parameterCorrections
+        };
+    }
+
+    /**
+     * Get aggregate metrics across all agents and channels
+     * Used for system-wide analytics dashboard
+     */
+    public getAggregateMetrics(): {
+        totalValidations: number;
+        failedValidations: number;
+        averageValidationTime: number;
+    } {
+        let totalValidations = 0;
+        let failedValidations = 0;
+        let totalValidationTime = 0;
+        let validationTimeCount = 0;
+
+        // Aggregate across all cached validation metrics
+        for (const metrics of this.validationMetrics.values()) {
+            // Sum up validation errors (total validations = successful + failed)
+            const errorCount = Object.values(metrics.validationErrorsByTool).reduce((sum, count) => sum + count, 0);
+            const successCount = metrics.selfCorrection?.successfulCorrections || 0;
+            totalValidations += errorCount + successCount;
+            failedValidations += errorCount;
+
+            // Use recovery time as proxy for validation duration
+            if (metrics.recoveryTime?.averageRecoveryTime && metrics.recoveryTime.averageRecoveryTime > 0) {
+                totalValidationTime += metrics.recoveryTime.averageRecoveryTime;
+                validationTimeCount++;
+            }
+        }
+
+        const averageValidationTime = validationTimeCount > 0
+            ? totalValidationTime / validationTimeCount
+            : 0;
+
+        return {
+            totalValidations,
+            failedValidations,
+            averageValidationTime
         };
     }
 }

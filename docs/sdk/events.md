@@ -128,6 +128,13 @@ agent.on(Events.Agent.JOIN_CHANNEL, (payload) => {
 agent.on(Events.Agent.LEAVE_CHANNEL, (payload) => {
     console.log('Left channel:', payload.data.channelId);
 });
+
+// Tool configuration updates (for dynamic tool gating)
+agent.on(Events.Agent.ALLOWED_TOOLS_UPDATED, (payload) => {
+    console.log('Tools updated for agent:', payload.agentId);
+    console.log('New allowed tools:', payload.allowedTools);
+    console.log('Success:', payload.success);
+});
 ```
 
 ### Message Events
@@ -365,6 +372,8 @@ All available events organized by category:
 - `Events.Agent.ERROR`
 - `Events.Agent.JOIN_CHANNEL`
 - `Events.Agent.LEAVE_CHANNEL`
+- `Events.Agent.ALLOWED_TOOLS_UPDATE` - Request to update allowed tools
+- `Events.Agent.ALLOWED_TOOLS_UPDATED` - Confirmation of tool update
 
 ### Channel Events
 - `Events.Channel.AGENT_JOINED`

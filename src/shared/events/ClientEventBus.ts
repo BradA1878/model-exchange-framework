@@ -27,6 +27,8 @@
 
 import { Subject, Subscription, filter, map } from 'rxjs';
 import { EventMap, Events } from './EventNames';
+import { ControlLoopEvents } from './event-definitions/ControlLoopEvents';
+import { OrparEvents } from './event-definitions/OrparEvents';
 import { 
     AnyEventName, 
     BaseEventBusImplementation, 
@@ -205,23 +207,36 @@ export class ClientEventBus extends BaseEventBusImplementation implements IClien
             
             // Catch every event with onAny (Socket.IO specific)
             if (socket.onAny) {
+                // Build a set of events that are handled specifically by MxfService.setupControlLoopSocketListeners()
+                // These events should NOT be forwarded by onAny to avoid double-forwarding
+                const specificlyHandledEvents = new Set([
+                    // ControlLoop events (server-orchestrated)
+                    ...Object.values(ControlLoopEvents),
+                    // ORPAR events (agent-driven cognitive documentation)
+                    ...Object.values(OrparEvents)
+                ]);
+
                 const handleAnyEvent = (event: string, ...args: any[]) => {
                     // Skip processing of some internal socket.io events
                     if (event.startsWith('$') || event === 'ping' || event === 'pong') {
                         return;
                     }
-                    
-                    // ;
-                    
+
+                    // Skip events that are specifically handled by MxfService.setupControlLoopSocketListeners()
+                    // to prevent double-forwarding (these events have specific socket.on() handlers)
+                    if (specificlyHandledEvents.has(event)) {
+                        return;
+                    }
+
                     const payload = args.length > 0 ? args[0] : {};
-                    
+
                     // Forward to event bus
                     this.eventSubject.next({
                         type: event,
                         payload
                     });
                 };
-                
+
                 socket.onAny(handleAnyEvent);
                 this.socketListeners.set('any', handleAnyEvent);
             }

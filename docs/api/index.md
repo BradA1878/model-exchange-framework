@@ -161,6 +161,7 @@ agent.on(Events.Message.CHANNEL_MESSAGE, (payload) => {
 - **[WebSocket Events](websocket.md)** - Complete Socket.IO event reference
 - **[Control Loop API](control-loop.md)** - ORPAR cycle management and events
 - **[MCP API](mcp.md)** - Model Context Protocol tool execution
+- **[Prompt Assembly Pipeline](prompt-assembly.md)** - ORPAR phase-aware prompt construction
 
 ### Memory & Search
 

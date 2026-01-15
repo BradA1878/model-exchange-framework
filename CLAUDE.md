@@ -2,75 +2,21 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Recent Major Updates
+## IMPORTANT: Brad's Rules
 
-### Meilisearch Semantic Search Integration (Latest)
-- **Complete Docker Stack**: Docker Compose deployment with 5 services (MXF + MongoDB + Meilisearch + Redis + Dashboard)
-- **Semantic Memory & Search**: Meilisearch integration for intelligent conversation and tool usage retrieval
-  - **Efficient Context Retrieval**: Semantic search reduces context size by retrieving only relevant information
-  - **Extended Memory**: Search entire conversation history beyond sliding window limits
-  - **Hybrid Search**: Configurable keyword + semantic (default 70% semantic, 30% keyword)
-  - **Fast Search**: Optimized for real-time agent queries
-- **Four Specialized Indexes**: Conversations, actions, patterns, and observations
-- **OpenAI Embeddings**: Using text-embedding-3-small (1536 dimensions) for semantic understanding
-- **Three New MCP Tools**:
-  - `memory_search_conversations` - Semantic search across entire conversation history
-  - `memory_search_actions` - Search tool usage patterns and outcomes
-  - `memory_search_patterns` - Discover cross-channel patterns and learnings
-- **Dual-Write Pattern**: MongoDB for persistence, Meilisearch for search (graceful degradation if Meilisearch fails)
-- **Automatic Indexing**: All conversations and tool executions indexed in real-time
-- **Production Deployment**:
-  - Docker Compose orchestration with health checks
-  - One-command deployment via `npm run docker:up`
-  - Complete documentation in docs/deployment.md and docs/meilisearch-integration.md
-
-**Key Files**:
-- `src/shared/services/MxfMeilisearchService.ts` - Core Meilisearch integration
-- `src/shared/protocols/mcp/tools/MemorySearchTools.ts` - 3 new search tools
-- `docker-compose.yml` - Complete stack orchestration
-- `docs/deployment.md` - Production deployment guide
-- `docs/meilisearch-integration.md` - Integration and usage guide
-
-### Advanced Validation & Error Prevention System
-- **Proactive Validation Engine**: Pre-execution validation with low latency and risk-based validation levels (ASYNC, BLOCKING, STRICT)
-- **Intelligent Auto-Correction**: Automatic parameter correction with loop prevention and pattern learning
-- **ML-based Error Prediction**: Error prediction before execution using ensemble models (Random Forest + Gradient Boosting)
-- **Enhanced Meta-Tools**: 8 new validation-aware tools including:
-  - `tools_recommend` - Enhanced with validation insights, parameter examples, and pattern recommendations
-  - `tools_recommend_on_error` - Specialized error recovery assistance with alternative suggestions
-  - `validation_preview` - Pre-execution validation results with risk assessment
-  - `validation_hints` - IDE-style parameter hints and auto-completion
-  - `error_diagnose` - Advanced error analysis with correction suggestions
-  - `predict_errors` - ML-based error prediction and prevention strategies
-  - `analytics_aggregate` - Validation and performance analytics
-  - `validation_config` - Dynamic validation system configuration
-- **Advanced Analytics**: Real-time metrics, trend analysis, A/B testing framework, and ROI calculation
-- **Performance Optimization**: Automated bottleneck detection, parameter tuning, and multi-level caching (Memory, Redis, MongoDB)
-
-### Channel-Scoped Features
-- **Channel-Scoped MCP Servers**: Register MCP servers available only within specific channels via `registerChannelMcpServer()`
-- **Channel-Level Tool Access Control**: Restrict which tools are available per channel using `allowedTools` configuration
-- **Disable Task Handling**: Option to disable SystemLLM task handling per channel with `disableTaskHandling`
-- **SystemLLM Cascading Control**: Fine-grained control over SystemLLM usage at channel level
-
-### Game Example Demos
-- **Fog of War Game** (`examples/fog-of-war-game/`): Team strategy game with 8 AI commanders, Vue.js dashboard
-- **Tic-Tac-Toe** (`examples/tic-tac-toe/`): AI vs AI with personality-driven gameplay
-- **Go Fish** (`examples/go-fish/`): Card game with memory and strategy
-
-### MCP Tool Validation Improvements
-- **Enhanced Validation System**: Replaced boolean validation with AJV-based JSON Schema validation providing detailed error messages
-- **New Help Tools**: Added 4 meta-tools for agent self-service:
-  - `tool_help` - Get detailed documentation, schema, and examples
-  - `tool_validate` - Pre-validate tool calls before execution
-  - `tool_quick_reference` - List all available tools
-  - `tool_validation_tips` - Get common mistakes and best practices
-- **Improved Error Messages**: From generic "Invalid input" to specific, actionable feedback showing:
-  - Missing required properties with descriptions
-  - Unknown properties that were provided
-  - Expected schema format
-  - Concrete examples of correct usage
-- **Test Suite**: Added comprehensive validation tests including LLM behavior testing
+- **Do not make assumptions - follow the code**
+- **No TODOs! Do the work**
+- **Add comments and update them**
+- **Add tests and update them**
+- **Add documentation and update it**
+- **Test scripts are meant to find and fix errors - please do not change them to ignore real errors and issues in the framework and SDK.**
+- **Logging should use the logger provided by the framework**
+- **Do not add fallbacks, timeouts, or simulation to the codebase.**
+- **Do not add smoke and mirrors to the codebase.**
+- **Add validation for fail-fast behavior in the framework and SDK.**
+- **When refactoring please take a clean break approach.**
+- **Do not add unit tests to the codebase unless asked.**
+- **NEVER run the MXF server in a background process.** The server has SystemLLM enabled which uses Claude Opus 4.5 credits - leaving it running burns through OpenRouter budget ($18+ per day). Always let the user start/stop the server in their own terminal.
 
 ## Essential Commands
 
@@ -93,20 +39,116 @@ npm run rebuild
 ```
 
 ### Testing
+
+**Three-Tier Test Architecture:**
+| Tier | Command | Tests | Speed | Server Required |
+|------|---------|-------|-------|-----------------|
+| Unit + Property | `npm run test:unit` | 159 | ~2s | No |
+| Integration | `npm run test:integration` | 92 | ~60s | Yes (start manually) |
+| Mutation | `npm run test:mutation` | 2317 mutants | ~5m | No |
+
+**Unit & Property Tests (Fast, No Server):**
 ```bash
-# Run all tests
-npm test
+npm run test:unit              # Run all unit + property tests
+npm run test:property          # Property tests only
+npm run test:unit:watch        # Watch mode
+npm run test:unit:coverage     # With coverage
+npm run test:mutation          # Mutation testing (test quality)
+```
 
-# Run specific test files
-NODE_ENV=test ts-node tests/simple-agent-test.ts
-NODE_ENV=test ts-node tests/llm-agent-demo.ts
-NODE_ENV=test ts-node tests/control-loop-lifecycle-test.ts
+**Integration Tests (Jest-based):**
 
-# Run multi-agent demos
+**IMPORTANT:** Start the server manually before running integration tests:
+```bash
+# Terminal 1: Start the server
+npm run dev
+
+# Terminal 2: Run integration tests
+npm run test:integration
+```
+
+```bash
+# Run all integration tests
+npm run test:integration
+
+# Run specific test suites
+npm run test:integration -- --testPathPattern=agent      # Agent tests
+npm run test:integration -- --testPathPattern=channel    # Channel tests
+npm run test:integration -- --testPathPattern=tool       # Tool tests
+npm run test:integration -- --testPathPattern=prompt     # Prompt system tests
+npm run test:integration -- --testPathPattern=task       # Task system tests
+npm run test:integration -- --testPathPattern=orpar      # ORPAR tests
+npm run test:integration -- --testPathPattern=memory     # Memory tests
+npm run test:integration -- --testPathPattern=meilisearch # Meilisearch tests
+
+# Watch mode for development
+npm run test:watch
+
+# CI mode
+npm run test:ci
+
+# Coverage report
+npm run test:coverage
+```
+
+**Claude Code Test Commands:**
+- `/test` - Run full integration test suite (requires server running)
+- `/test-quick` - Run quick smoke tests
+- `/test-path` - Run tests for specific path
+- `/test-watch` - Run tests in watch mode
+- `/test-ci` - Run full test suite (CI mode)
+
+**IMPORTANT: Run tests before completing implementation tasks!**
+
+### Post-Coding Workflow
+
+After completing code changes, spawn these agents in sequence to ensure quality:
+
+1. **test-builder** - Generate unit/property tests for new code
+2. **code-cleanup** - Remove unused imports, dead code, formatting issues
+3. **docs-updater** - Update documentation to reflect changes
+
+**Quick workflow:**
+```
+After implementing a feature or fix:
+1. Spawn test-builder agent → writes tests for your changes
+2. Run npm run test:unit → verify tests pass
+3. Spawn code-cleanup agent → clean up the code
+4. Spawn docs-updater agent → update docs
+5. Run /finalize → commit, test, and create PR
+```
+
+**Or use the `/finalize` command** which runs cleanup, docs, tests, and creates a PR automatically.
+
+**Legacy Tests & Demos:**
+```bash
+# Legacy integration tests
+npm run test:meilisearch     # Meilisearch-specific integration test
+npm run test:code-execution  # Code execution demo
+
+# Multi-agent demos
 npm run demo:first-contact   # 6 agents in first contact scenario
 npm run demo:fog-of-war      # 8 agents in strategy game
-npm run demo:tic-tac-toe     # 2 agents playing tic-tac-toe
-npm run demo:go-fish         # 2 agents playing Go Fish
+npm run demo:interview       # Interview scheduling demo
+npm run demo:external-mcp    # External MCP server registration demo
+npm run demo:channel-mcp     # Channel MCP demo
+```
+
+**Test Structure:**
+```
+tests/
+├── setup/                    # Jest global setup/teardown
+├── utils/                    # Test utilities (TestSDK, waitFor, etc.)
+└── integration/
+    ├── agent/                # Agent lifecycle tests
+    ├── channel/              # Channel communication tests
+    ├── tool/                 # Tool execution tests
+    ├── prompt/               # Prompt system tests
+    ├── task/                 # Task management tests
+    ├── orpar/                # ORPAR control loop tests
+    ├── memory/               # Memory operation tests
+    ├── meilisearch/          # Semantic search tests
+    └── external-mcp/         # External MCP server tests
 ```
 
 ### Dashboard Development
@@ -258,13 +300,23 @@ The Model Exchange Framework (MXF) is a sophisticated multi-agent collaboration 
 1. **SDK Layer (`src/sdk/`)** - Agent client implementation
    - `MxfClient.ts` - Main agent client class with lazy connection and retry logic
    - `handlers/` - Modular event and message handlers:
-     - `MessageHandlers` - Chat and MXP protocol handling
-     - `ControlLoopHandlers` - ORPAR cycle management
-     - `MemoryHandlers` - Agent/channel memory operations
-     - `McpToolHandlers` - Tool discovery and execution
-     - `TaskHandlers` - Task lifecycle management
-   - `managers/` - MCP client, memory, and task execution managers
-   - `services/` - API, event handling, and tool services
+     - `Handler.ts` - Base handler class
+     - `MessageHandlers.ts` - Chat and MXP protocol handling
+     - `ControlLoopHandlers.ts` - ORPAR cycle management
+     - `MemoryHandlers.ts` - Agent/channel memory operations
+     - `McpToolHandlers.ts` - Tool discovery and execution
+     - `McpHandler.ts` and `McpResourceHandlers.ts` - MCP resource handling
+     - `TaskHandlers.ts` - Task lifecycle management
+   - `managers/` - MCP client, memory, system prompt, and task execution managers:
+     - `MxfMcpClientManager.ts`, `MxfMemoryManager.ts`, `MxfSystemPromptManager.ts`, `MxfTaskExecutionManager.ts`
+   - `services/` - Core SDK services:
+     - `MxfService.ts` - Main service orchestrator
+     - `MxfApiService.ts` - REST API interactions
+     - `MxfToolService.ts` - Tool execution
+     - `MxfEventHandlerService.ts` - Event handling
+     - `MxfMemoryService.ts` - Memory operations
+     - `MxfContextBuilder.ts`, `MxfLayeredPromptAssembler.ts`, `MxfStructuredPromptBuilder.ts` - Prompt building
+     - `MxfActionHistoryService.ts`, `MxfReasoningHistoryService.ts` - History tracking
 
 2. **Server Layer (`src/server/`)** - Core server infrastructure
    - `socket/` - Real-time Socket.IO services with:
@@ -274,42 +326,67 @@ The Model Exchange Framework (MXF) is a sophisticated multi-agent collaboration 
      - 30-second heartbeat with 5-minute timeout
      - Event-to-Socket bridging via EventBus
    - `api/` - REST API with comprehensive endpoints:
-     - `/api/agents` - Agent CRUD and lifecycle
-     - `/api/channels` - Channel management
+     - `/api/agents` - Agent CRUD and lifecycle (agentKeyRoutes, agentLifecycle)
+     - `/api/channels` - Channel management (channelKeyRoutes, channelContextRoutes)
      - `/api/tasks` - Task creation/monitoring
      - `/api/mcp` - MCP tool operations
      - `/api/hybrid-mcp` - Hybrid registry access
      - `/api/dashboard` - Analytics/monitoring
+     - `/api/analytics` - Comprehensive analytics
      - `/api/effectiveness` - Task metrics
+     - `/api/config` - Configuration management
+     - `/api/validation-analytics` - Validation metrics
+     - `/api/documents` - Document operations
+     - `/api/n8n` - n8n webhook integrations
    - Dual authentication system:
      - JWT tokens for users
      - API keys for agents
      - Combined middleware for flexible auth
 
-3. **Shared Layer (`src/shared/`)** - Common utilities and types
-   - `mcp/tools/` - 100+ built-in MCP tools organized by category (see [Tool Reference](docs/mxf/tool-reference.md))
+3. **Shared Layer (`src/shared/`)** - Common utilities, types, and services
+   - `protocols/mcp/tools/` - ~95 built-in MCP tools organized by category
    - `events/` - Three-layer EventBus architecture:
-     - `EventBusImplementation` - Core RxJS Subject-based
-     - `ClientEventBus` - Client-specific with socket integration
-     - `ServerEventBus` - Server broadcasting and room management
+     - `EventBusBase.ts` - Core RxJS Subject-based implementation
+     - `ClientEventBus.ts` - Client-specific with socket integration
+     - `ServerEventBus.ts` - Server broadcasting and room management
+     - `EventNames.ts` - Centralized event name definitions
    - `interfaces/` and `types/` - TypeScript interfaces and types
    - `models/` - MongoDB models for persistence
+   - `services/` - Shared services (validation, analytics, pattern learning, etc.)
+   - `adapters/` - Data adapters
+   - `config/` - Configuration utilities
+   - `constants/` - Framework constants
+   - `middleware/` - Express middleware
+   - `mxp/` - MXP (Model Exchange Protocol) implementation
+   - `prompts/` - Prompt templates and builders
+   - `schemas/` - JSON schemas for validation
+   - `utils/` - Utility functions (Logger, etc.)
 
 ### Key Concepts
 
 1. **ORPAR Control Loop** - The cognitive cycle for agent intelligence:
-   - Observation → Reasoning → Action → Planning → Reflection
+   - Observation → Reasoning → Planning → Action → Reflection
    - Powered by SystemLlmService with phase-optimized model selection:
      - `observation`: Fast model for quick data processing
      - `reasoning`: Deep model for complex analysis
-     - `action`: Reliable model for tool execution
      - `planning`: Strategic model for long-term planning
+     - `action`: Reliable model for tool execution
      - `reflection`: Meta model for learning & evaluation
    - Performance tracking with timing metrics
    - Structured output parsing for reasoning results
 
+   **ORPAR Tool Semantics (IMPORTANT):**
+   - ORPAR tools (`orpar_observe`, `orpar_reason`, `orpar_plan`, `orpar_act`, `orpar_reflect`) are **documentation tools**
+   - They record what the agent did/thought, marking phase completion
+   - Correct flow:
+     - PLAN phase: Think → call `orpar_plan` with plan → transition to ACT
+     - ACT phase: Execute plan (call tools) → call `orpar_act` to document → transition to REFLECT
+     - REFLECT phase: Reflect → call `orpar_reflect` → done or new cycle
+   - ORPAR tools must be **tool-agnostic** - never reference specific external tools in descriptions
+   - Phase-gating: Each `orpar_*` event triggers transition to the next phase's tools
+
 2. **Hybrid Tool System**:
-   - Internal tools in `src/shared/mcp/tools/` (100+ tools) - See [Tool Reference](docs/mxf/tool-reference.md)
+   - Internal tools in `src/shared/protocols/mcp/tools/` (~95 tools) - See [Tool Reference](docs/mxf/tool-reference.md)
    - External MCP server integration via stdio/HTTP protocols
    - Three-tier registry architecture:
      - `McpToolRegistry` - Internal tool management
@@ -388,17 +465,26 @@ The Model Exchange Framework (MXF) is a sophisticated multi-agent collaboration 
 
 ### Tool Categories and Capabilities
 
-1. **Meta Tools & Validation**: Enhanced tool discovery, validation insights, error recovery, and intelligent recommendations
-2. **Communication**: Messaging, broadcasting, coordination, discovery
-3. **Control Loop**: ORPAR cycle management and state tracking
-4. **Infrastructure**: File system, shell commands, memory operations
-5. **Context Memory**: Channel and agent memory management
-6. **Testing**: Multi-framework test runners and validation
-7. **Code Analysis**: TypeScript, Git, and development tools
-8. **Safety & Validation**: Pre-execution validation, auto-correction, and approval workflows
-9. **Coordination**: Formal collaboration and workflow management
-10. **Analytics & Optimization**: Performance tracking, error prediction, and automated optimization
-11. **Predictive Tools**: ML-based error prediction, anomaly detection, and risk assessment
+Tools are organized in `src/shared/protocols/mcp/tools/`:
+
+1. **MetaTools**: Tool discovery, recommendations, validation, error recovery
+2. **AgentCommunicationTools**: Messaging, broadcasting, agent discovery
+3. **CoordinationTools**: Formal collaboration workflows, state tracking
+4. **ControlLoopTools/Lifecycle/Phases**: ORPAR cycle management
+5. **OrparTools**: ORPAR-specific operations
+6. **TaskBridgeTools & TaskPlanningTools**: Task creation, tracking, planning
+7. **EffectivenessTools**: Task effectiveness metrics
+8. **InfrastructureTools**: File system, shell commands
+9. **ContextMemoryTools & MemorySearchTools**: Memory operations, semantic search
+10. **TestTools**: Multi-framework test runners
+11. **CodeAnalysisTools & TypeScriptTools**: Code analysis, TypeScript operations
+12. **GitTools**: Version control operations
+13. **SafetyTools & ActionValidationTools**: Pre-execution validation, safety checks
+14. **AnalyticsTools**: Performance tracking, metrics
+15. **PlanningTools**: Planning operations
+16. **ToolHelpTools**: Tool documentation and help
+17. **DateTimeTools**: Date/time operations
+18. **JsonTools & WebTools**: JSON and web utilities
 
 ### Environment Variables
 
@@ -435,9 +521,17 @@ Key environment variables needed:
 - `PREDICTION_MODEL_VERSION` - ML model version for error prediction (default: latest)
 - `PREDICTION_RETRAIN_INTERVAL` - Model retraining interval in ms (default: 3600000)
 
+#### Performance Tuning Configuration
+- `EVENT_QUEUE_ENABLED` - Enable event forwarding queue (default: true, set to 'false' to disable)
+- `EVENT_QUEUE_DELAY_MS` - Delay between event batch processing in ms (default: 5, was 25)
+- `EVENT_QUEUE_BATCH_SIZE` - Events per batch (default: 10)
+- `EVENT_QUEUE_MAX_SIZE` - Maximum queue size (default: 1000)
+- `EVENT_QUEUE_MAX_RETRIES` - Retry count for failed events (default: 3)
+- `OPENROUTER_REQUEST_QUEUE_DELAY_MS` - Delay between LLM API requests in ms (default: 100, was 500)
+
 ### Development Tips
 
-1. When modifying tools, ensure they follow the McpTool interface in `src/shared/types/toolTypes.ts`
+1. When modifying tools in `src/shared/protocols/mcp/tools/`, ensure they follow the McpTool interface in `src/shared/types/toolTypes.ts`
 
 2. All new events must be added to `src/shared/events/EventNames.ts` and have corresponding handlers
 
@@ -477,7 +571,7 @@ The server follows a carefully orchestrated initialization order to ensure prope
    - ChannelService - Channel operations
    - AgentService - Agent lifecycle
 7. **Hybrid MCP Service**: Unified tool interface with graceful failure handling
-8. **Tool Pre-Registration**: 100+ internal tools registered at startup (including 3 memory search tools)
+8. **Tool Pre-Registration**: ~95 internal tools registered at startup (including 3 memory search tools)
 9. **API Route Mounting**: Routes mounted after all services ready
 
 **Design Patterns Used**:
@@ -513,10 +607,13 @@ The SDK uses a modular handler system for clean separation of concerns:
 
 ```typescript
 handlers/
+├── Handler.ts              // Base handler class
 ├── MessageHandlers.ts      // Chat and MXP protocol
 ├── ControlLoopHandlers.ts  // ORPAR cycle events
 ├── MemoryHandlers.ts       // Memory operations
 ├── McpToolHandlers.ts      // Tool discovery/execution
+├── McpHandler.ts           // MCP base handler
+├── McpResourceHandlers.ts  // MCP resource handling
 └── TaskHandlers.ts         // Task management
 ```
 

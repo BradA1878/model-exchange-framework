@@ -14,6 +14,8 @@ The Memory system enables:
 
 ## Memory Scopes
 
+<div class="mermaid-fallback">
+
 ```mermaid
 graph TB
     subgraph "Memory Scopes"
@@ -21,17 +23,21 @@ graph TB
         C[Channel Memory] --> CS[Shared Context]
         R[Relationship Memory] --> RS[Agent Interactions]
     end
-    
+
     subgraph "Access Patterns"
         AS --> P1[Private to Agent]
         CS --> P2[Shared with Channel]
         RS --> P3[Between Two Agents]
     end
-    
+
     style A fill:#f9f,stroke:#333,stroke-width:2px
     style C fill:#bbf,stroke:#333,stroke-width:2px
     style R fill:#bfb,stroke:#333,stroke-width:2px
 ```
+
+</div>
+
+<iframe src="../diagram/architecture-memory-system.html" width="100%" height="550" style="border: none; border-radius: 10px; background: var(--bg-secondary);"></iframe>
 
 ## REST Endpoints
 

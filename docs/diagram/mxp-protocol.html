@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MXP Protocol Architecture</title>
+    <link rel="stylesheet" href="diagram-base.css">
+    <style>
+        .module-card {
+            transition: all 0.3s ease;
+            cursor: pointer;
+        }
+        .module-card:hover {
+            transform: translateY(-3px);
+            filter: drop-shadow(0 8px 16px var(--shadow));
+        }
+        .module-card.active {
+            filter: drop-shadow(0 0 20px var(--accent));
+        }
+        .optimization-badge {
+            font-size: 10px;
+            fill: white;
+            font-weight: 700;
+        }
+        .stat-card {
+            display: inline-flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 1rem 1.5rem;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            margin: 0 0.5rem;
+        }
+        .stat-value {
+            font-size: 1.75rem;
+            font-weight: 700;
+            color: var(--accent);
+        }
+        .stat-label {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+        }
+        .stats-row {
+            display: flex;
+            justify-content: center;
+            margin-top: 1.5rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="diagram-container">
+        <header class="diagram-header">
+            <div>
+                <h1 class="diagram-title">MXP 2.0 Protocol Architecture</h1>
+                <p class="diagram-subtitle">Token optimization, bandwidth compression, and security</p>
+            </div>
+            <button class="theme-toggle" onclick="toggleTheme()">
+                <span class="theme-toggle-icon">🌙</span>
+                <span class="theme-toggle-label">Dark</span>
+            </button>
+        </header>
+        
+        <div id="diagram-container"></div>
+        
+        <div class="stats-row">
+            <div class="stat-card">
+                <div class="stat-value">40%</div>
+                <div class="stat-label">Token Reduction</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">60%</div>
+                <div class="stat-label">Bandwidth Savings</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">AES-256</div>
+                <div class="stat-label">Encryption</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">Real-time</div>
+                <div class="stat-label">Analytics</div>
+            </div>
+        </div>
+        
+        <div class="legend">
+            <div class="legend-item">
+                <div class="legend-color" style="background: #ec4899;"></div>
+                <span>Agent Layer</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #a855f7;"></div>
+                <span>Token Optimization</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #3b82f6;"></div>
+                <span>Bandwidth Optimization</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #ef4444;"></div>
+                <span>Security Module</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #22c55e;"></div>
+                <span>Analytics Module</span>
+            </div>
+        </div>
+    </div>
+
+    <script src="diagram-utils.js"></script>
+    <script>
+        class MXPDiagram extends MXFDiagram {
+            render() {
+                // Agent Layer
+                const agentGroup = this.createGroup(30, 30, 'Agent Layer', 200, 120);
+                this.mainGroup.appendChild(agentGroup);
+                
+                this.createModuleCard(130, 70, '🤖', 'MxfAgent', '#ec4899', 0);
+                this.createModuleCard(130, 120, '⚙️', 'MxpConfigManager', '#ec4899', 50);
+                
+                // Token Optimization Module
+                const tokenGroup = this.createGroup(250, 30, 'Token Optimization', 220, 180);
+                this.mainGroup.appendChild(tokenGroup);
+                
+                this.createModuleCard(360, 80, '🔤', 'Mxp2TokenOptimizer', '#a855f7', 100);
+                this.createModuleCard(300, 140, '🧠', 'SystemLlmService', '#a855f7', 150, 100);
+                this.createModuleCard(420, 140, '📚', 'PatternLearning', '#a855f7', 200, 100);
+                
+                // Badge showing optimization percentage
+                this.createBadge(430, 60, '-40%', '#a855f7');
+                
+                // Bandwidth Optimization Module
+                const bwGroup = this.createGroup(490, 30, 'Bandwidth Optimization', 220, 180);
+                this.mainGroup.appendChild(bwGroup);
+                
+                this.createModuleCard(600, 80, '📦', 'MessageAggregator', '#3b82f6', 250);
+                this.createModuleCard(540, 140, '🔢', 'Binary Encoding', '#3b82f6', 300, 100);
+                this.createModuleCard(660, 140, '⚡', 'Priority Compress', '#3b82f6', 350, 100);
+                
+                this.createBadge(670, 60, '-60%', '#3b82f6');
+                
+                // Security Module
+                const secGroup = this.createGroup(730, 30, 'Security Module', 200, 180);
+                this.mainGroup.appendChild(secGroup);
+                
+                this.createModuleCard(830, 80, '🔐', 'ChannelKeyService', '#ef4444', 400);
+                this.createModuleCard(770, 140, '🛡️', 'Progressive Enc', '#ef4444', 450, 90);
+                this.createModuleCard(890, 140, '📝', 'Audit Logging', '#ef4444', 500, 90);
+                
+                // Analytics Module
+                const analyticsGroup = this.createGroup(950, 30, 'Analytics', 180, 180);
+                this.mainGroup.appendChild(analyticsGroup);
+                
+                this.createModuleCard(1040, 80, '📊', 'Real-time Metrics', '#22c55e', 550);
+                this.createModuleCard(980, 140, '💰', 'Cost Calc', '#22c55e', 600, 80);
+                this.createModuleCard(1100, 140, '📈', 'Performance', '#22c55e', 650, 80);
+                
+                // Existing MXF Services (bottom)
+                const existingGroup = this.createGroup(350, 240, 'Existing MXF Services', 440, 100);
+                this.mainGroup.appendChild(existingGroup);
+                
+                this.createModuleCard(430, 290, '📢', 'EventBus', '#14b8a6', 700, 100);
+                this.createModuleCard(570, 290, '🧠', 'ChannelContextMemory', '#14b8a6', 750, 140);
+                this.createModuleCard(750, 290, '📚', 'PatternLearningService', '#14b8a6', 800, 140);
+                
+                // Draw connections
+                this.drawConnections();
+            }
+            
+            createModuleCard(x, y, icon, label, color, delay, width = 120) {
+                const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+                g.setAttribute('class', 'module-card');
+                g.style.opacity = '0';
+                
+                setTimeout(() => {
+                    g.style.transition = 'all 0.4s ease';
+                    g.style.opacity = '1';
+                }, delay);
+                
+                const height = 40;
+                
+                const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                rect.setAttribute('x', x - width/2);
+                rect.setAttribute('y', y - height/2);
+                rect.setAttribute('width', width);
+                rect.setAttribute('height', height);
+                rect.setAttribute('rx', 6);
+                rect.setAttribute('fill', color);
+                rect.setAttribute('opacity', '0.9');
+                g.appendChild(rect);
+                
+                const iconEl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                iconEl.setAttribute('x', x - width/2 + 15);
+                iconEl.setAttribute('y', y + 5);
+                iconEl.setAttribute('font-size', '14px');
+                iconEl.textContent = icon;
+                g.appendChild(iconEl);
+                
+                const labelEl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                labelEl.setAttribute('x', x - width/2 + 32);
+                labelEl.setAttribute('y', y + 4);
+                labelEl.setAttribute('fill', 'white');
+                labelEl.setAttribute('font-size', '10px');
+                labelEl.setAttribute('font-weight', '600');
+                labelEl.textContent = label;
+                g.appendChild(labelEl);
+                
+                this.mainGroup.appendChild(g);
+                return g;
+            }
+            
+            createBadge(x, y, text, color) {
+                const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+                
+                const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                rect.setAttribute('x', x - 20);
+                rect.setAttribute('y', y - 10);
+                rect.setAttribute('width', 40);
+                rect.setAttribute('height', 20);
+                rect.setAttribute('rx', 10);
+                rect.setAttribute('fill', color);
+                g.appendChild(rect);
+                
+                const text_el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                text_el.setAttribute('x', x);
+                text_el.setAttribute('y', y + 4);
+                text_el.setAttribute('class', 'optimization-badge');
+                text_el.setAttribute('text-anchor', 'middle');
+                text_el.textContent = text;
+                g.appendChild(text_el);
+                
+                this.mainGroup.appendChild(g);
+            }
+            
+            drawConnections() {
+                // Agent to modules
+                this.drawDottedLine(205, 95, 290, 80);
+                this.drawDottedLine(205, 95, 530, 80);
+                this.drawDottedLine(205, 95, 760, 80);
+                this.drawDottedLine(205, 95, 970, 80);
+                
+                // Token optimizer to existing services
+                this.drawDottedLine(360, 100, 360, 240);
+                
+                // Aggregator to EventBus
+                this.drawDottedLine(600, 100, 430, 240);
+            }
+            
+            drawDottedLine(x1, y1, x2, y2) {
+                const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                line.setAttribute('x1', x1);
+                line.setAttribute('y1', y1);
+                line.setAttribute('x2', x2);
+                line.setAttribute('y2', y2);
+                line.setAttribute('stroke', 'var(--connection-line)');
+                line.setAttribute('stroke-width', '1.5');
+                line.setAttribute('stroke-dasharray', '4 3');
+                
+                this.mainGroup.insertBefore(line, this.mainGroup.firstChild);
+            }
+        }
+        
+        // Initialize
+        const diagram = new MXPDiagram('diagram-container', {
+            width: 1150,
+            height: 360
+        });
+        diagram.render();
+    </script>
+</body>
+</html>

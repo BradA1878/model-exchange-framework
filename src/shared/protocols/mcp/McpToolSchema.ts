@@ -267,8 +267,93 @@ export const createToolDefinition = (
 };
 
 /**
+ * Parse XML-style item content into an object
+ * Handles: <item><action>...</action><tool>...</tool></item>
+ * @param itemContent - Content between <item> tags
+ * @returns Parsed object or the original string if not parseable
+ */
+const parseXmlItemToObject = (itemContent: string): Record<string, string> | string => {
+    const trimmed = itemContent.trim();
+
+    // Check if content has XML-style child elements
+    const tagMatches = trimmed.match(/<(\w+)>([\s\S]*?)<\/\1>/g);
+    if (!tagMatches || tagMatches.length === 0) {
+        return trimmed; // No child elements, return as string
+    }
+
+    // Parse child elements into object
+    const obj: Record<string, string> = {};
+    for (const tagMatch of tagMatches) {
+        const match = tagMatch.match(/<(\w+)>([\s\S]*?)<\/\1>/);
+        if (match) {
+            const [, key, value] = match;
+            obj[key] = value.trim();
+        }
+    }
+
+    return Object.keys(obj).length > 0 ? obj : trimmed;
+};
+
+/**
+ * Coerce a string value to an array
+ * Handles various LLM output formats: JSON arrays, XML-style items, newline-separated
+ * @param value - String value that should be an array
+ * @param itemSchema - Optional schema for array items (to determine if items should be objects)
+ * @returns Array if coercion successful, undefined otherwise
+ */
+const coerceStringToArray = (value: string, itemSchema?: Record<string, any>): any[] | undefined => {
+    const trimmed = value.trim();
+
+    // Try JSON array first
+    if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+        try {
+            const parsed = JSON.parse(trimmed);
+            if (Array.isArray(parsed)) {
+                return parsed;
+            }
+        } catch {
+            // Not valid JSON, try other formats
+        }
+    }
+
+    // Handle XML-style items: <item>...</item>
+    // Use [\s\S] instead of . with s flag for ES2015 compatibility
+    const xmlMatches = trimmed.match(/<item>([\s\S]*?)<\/item>/g);
+    if (xmlMatches && xmlMatches.length > 0) {
+        const items = xmlMatches.map(m => {
+            const content = m.replace(/<\/?item>/g, '').trim();
+            // If item schema expects object, try to parse XML children into object
+            if (itemSchema?.type === 'object') {
+                return parseXmlItemToObject(content);
+            }
+            return content;
+        });
+        return items;
+    }
+
+    // Handle newline-separated items (possibly with <item> tags or other markup)
+    if (trimmed.includes('\n') || trimmed.includes('<item>')) {
+        const lines = trimmed
+            .split(/\n|<item>|<\/item>|<\/invoke>/)
+            .map(l => l.trim())
+            .filter(l => l.length > 0 && !l.startsWith('<') && !l.endsWith('>'));
+        if (lines.length > 0) {
+            return lines;
+        }
+    }
+
+    // Single non-empty string becomes single-element array
+    if (trimmed.length > 0 && !trimmed.includes('\n')) {
+        return [trimmed];
+    }
+
+    return undefined;
+};
+
+/**
  * Coerce common LLM type errors before validation
- * LLMs often return "true"/"false" strings instead of booleans
+ * LLMs often return "true"/"false" strings instead of booleans,
+ * arrays as strings, numbers as strings, etc.
  * @param schema - JSON schema with property types
  * @param input - Tool input to coerce
  * @returns Coerced input object
@@ -277,15 +362,15 @@ const coerceLlmTypes = (schema: Record<string, any>, input: any): any => {
     if (!input || typeof input !== 'object' || !schema.properties) {
         return input;
     }
-    
+
     const coerced = { ...input };
-    
+
     for (const [key, propSchema] of Object.entries(schema.properties as Record<string, any>)) {
         if (!(key in coerced)) continue;
-        
+
         const value = coerced[key];
         const expectedType = propSchema.type;
-        
+
         // Coerce string "true"/"false" to boolean
         if (expectedType === 'boolean' && typeof value === 'string') {
             const lowerValue = value.toLowerCase().trim();
@@ -295,7 +380,7 @@ const coerceLlmTypes = (schema: Record<string, any>, input: any): any => {
                 coerced[key] = false;
             }
         }
-        
+
         // Coerce string numbers to numbers
         if ((expectedType === 'number' || expectedType === 'integer') && typeof value === 'string') {
             const num = Number(value);
@@ -303,13 +388,22 @@ const coerceLlmTypes = (schema: Record<string, any>, input: any): any => {
                 coerced[key] = expectedType === 'integer' ? Math.floor(num) : num;
             }
         }
-        
-        // Coerce JSON string to object/array
-        if ((expectedType === 'object' || expectedType === 'array') && typeof value === 'string') {
+
+        // Coerce string to array (handles JSON, XML-style, newline-separated)
+        if (expectedType === 'array' && typeof value === 'string') {
+            // Pass item schema so we can parse XML items into objects if needed
+            const itemSchema = propSchema.items;
+            const arrayValue = coerceStringToArray(value, itemSchema);
+            if (arrayValue !== undefined) {
+                coerced[key] = arrayValue;
+            }
+        }
+
+        // Coerce JSON string to object
+        if (expectedType === 'object' && typeof value === 'string') {
             try {
                 const parsed = JSON.parse(value);
-                if ((expectedType === 'object' && typeof parsed === 'object' && !Array.isArray(parsed)) ||
-                    (expectedType === 'array' && Array.isArray(parsed))) {
+                if (typeof parsed === 'object' && !Array.isArray(parsed)) {
                     coerced[key] = parsed;
                 }
             } catch {
@@ -317,7 +411,7 @@ const coerceLlmTypes = (schema: Record<string, any>, input: any): any => {
             }
         }
     }
-    
+
     return coerced;
 };
 

@@ -56,6 +56,7 @@ import { analyticsTools } from './AnalyticsTools';
 import { dateTimeTools } from './DateTimeTools';
 import { MemorySearchTools } from './MemorySearchTools';
 import { JsonTools } from './JsonTools';
+import { orparTools } from './OrparTools';
 
 /**
  * All available MXF MCP tools organized by category
@@ -119,7 +120,10 @@ export const mxfMcpTools = {
     dateTime: dateTimeTools,
 
     // JSON file manipulation tools
-    json: [JsonTools.jsonAppend, JsonTools.jsonRead]
+    json: [JsonTools.jsonAppend, JsonTools.jsonRead],
+
+    // ORPAR cognitive cycle tools for explicit agent cognition
+    orpar: orparTools
 };
 
 /**
@@ -148,7 +152,8 @@ export const allMxfMcpTools = [
     ...analyticsTools,
     ...dateTimeTools,
     JsonTools.jsonAppend,
-    JsonTools.jsonRead
+    JsonTools.jsonRead,
+    ...orparTools
 ];
 
 /**

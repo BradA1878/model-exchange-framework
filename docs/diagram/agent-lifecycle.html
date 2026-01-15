@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MXF Agent Lifecycle</title>
+    <link rel="stylesheet" href="diagram-base.css">
+    <style>
+        .state-box {
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        .state-box:hover {
+            filter: brightness(1.1) drop-shadow(0 4px 12px var(--shadow));
+        }
+        .state-box.active {
+            filter: drop-shadow(0 0 20px var(--accent));
+        }
+        .initial-state {
+            fill: var(--accent);
+        }
+        .final-state {
+            fill: none;
+            stroke: var(--accent);
+            stroke-width: 3;
+        }
+        .transition-label {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 10px;
+            fill: var(--text-muted);
+        }
+        .state-info {
+            position: relative;
+            width: 260px;
+            min-width: 220px;
+            flex-shrink: 0;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 1rem;
+            transition: all 0.3s ease;
+            max-height: fit-content;
+            align-self: flex-start;
+        }
+
+        @media (max-width: 900px) {
+            .state-info {
+                display: none;
+            }
+        }
+        .state-info h3 {
+            color: var(--accent);
+            margin-bottom: 0.5rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .state-info p {
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+            line-height: 1.5;
+            margin-bottom: 0.75rem;
+        }
+        .state-transitions {
+            font-size: 0.85rem;
+        }
+        .state-transitions strong {
+            color: var(--text-primary);
+        }
+        .state-transitions ul {
+            list-style: none;
+            margin-top: 0.5rem;
+        }
+        .state-transitions li {
+            padding: 0.25rem 0;
+            color: var(--text-muted);
+        }
+        .state-transitions li::before {
+            content: '→ ';
+            color: var(--accent);
+        }
+    </style>
+</head>
+<body>
+    <div class="diagram-container">
+        <header class="diagram-header">
+            <div>
+                <h1 class="diagram-title">Agent Lifecycle States</h1>
+                <p class="diagram-subtitle">State transitions for MxfAgent instances</p>
+            </div>
+            <button class="theme-toggle" onclick="toggleTheme()">
+                <span class="theme-toggle-icon">🌙</span>
+                <span class="theme-toggle-label">Dark</span>
+            </button>
+        </header>
+        
+        <div style="display: flex; gap: 2rem;">
+            <div id="diagram-container" style="flex: 1;"></div>
+            
+            <div class="state-info" id="stateInfo">
+                <h3><span id="stateIcon">🔵</span> <span id="stateTitle">Select a State</span></h3>
+                <p id="stateDesc">Click on any state in the diagram to see details about that lifecycle phase.</p>
+                <div class="state-transitions">
+                    <strong>Transitions:</strong>
+                    <ul id="stateTransitions">
+                        <li>Hover over states to explore</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+        
+        <div class="legend">
+            <div class="legend-item">
+                <div class="legend-color" style="background: #14b8a6; border-radius: 50%;"></div>
+                <span>Initial State</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: transparent; border: 2px solid #14b8a6; border-radius: 50%;"></div>
+                <span>Final State</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #22c55e;"></div>
+                <span>Active States</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #f59e0b;"></div>
+                <span>Transitional States</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #6b7280;"></div>
+                <span>Inactive States</span>
+            </div>
+        </div>
+    </div>
+
+    <script src="diagram-utils.js"></script>
+    <script>
+        const stateData = {
+            created: {
+                icon: '🆕',
+                title: 'Created',
+                color: '#f59e0b',
+                desc: 'Agent instance has been created but not yet connected to the server.',
+                transitions: ['connect() → Connecting']
+            },
+            connecting: {
+                icon: '🔗',
+                title: 'Connecting',
+                color: '#f59e0b',
+                desc: 'Agent is establishing WebSocket connection and authenticating.',
+                transitions: ['authenticated → Authenticated', 'error → Disconnected']
+            },
+            authenticated: {
+                icon: '🔐',
+                title: 'Authenticated',
+                color: '#22c55e',
+                desc: 'Agent is authenticated but not yet in a channel.',
+                transitions: ['join channel → InChannel', 'disconnect() → Disconnected']
+            },
+            inchannel: {
+                icon: '📢',
+                title: 'InChannel',
+                color: '#22c55e',
+                desc: 'Agent has joined a channel and is preparing to receive tasks.',
+                transitions: ['ready → Ready', 'leave channel → Authenticated']
+            },
+            ready: {
+                icon: '✅',
+                title: 'Ready',
+                color: '#22c55e',
+                desc: 'Agent is fully operational and ready to receive and process tasks.',
+                transitions: ['processing task → Busy', 'idle timeout → Away', 'leave channel → Authenticated', 'disconnect() → Disconnected']
+            },
+            busy: {
+                icon: '⚡',
+                title: 'Busy',
+                color: '#3b82f6',
+                desc: 'Agent is actively processing a task or responding to messages.',
+                transitions: ['complete → Ready', 'error → Ready']
+            },
+            away: {
+                icon: '💤',
+                title: 'Away',
+                color: '#6b7280',
+                desc: 'Agent is idle and may be temporarily unavailable.',
+                transitions: ['activity → Ready']
+            },
+            disconnected: {
+                icon: '🔴',
+                title: 'Disconnected',
+                color: '#6b7280',
+                desc: 'Agent has disconnected from the server.',
+                transitions: ['(terminal state)']
+            }
+        };
+        
+        class AgentLifecycleDiagram extends MXFDiagram {
+            render() {
+                // State positions - compact layout
+                const states = [
+                    { id: 'initial', x: 80, y: 90, isInitial: true },
+                    { id: 'created', x: 210, y: 90 },
+                    { id: 'connecting', x: 380, y: 90 },
+                    { id: 'authenticated', x: 560, y: 90 },
+                    { id: 'inchannel', x: 560, y: 195 },
+                    { id: 'ready', x: 380, y: 305 },
+                    { id: 'busy', x: 210, y: 305 },
+                    { id: 'away', x: 210, y: 420 },
+                    { id: 'disconnected', x: 560, y: 420, isFinal: true }
+                ];
+                
+                // Transitions
+                const transitions = [
+                    { from: 'initial', to: 'created', label: '' },
+                    { from: 'created', to: 'connecting', label: 'connect()' },
+                    { from: 'connecting', to: 'authenticated', label: 'authenticated' },
+                    { from: 'authenticated', to: 'inchannel', label: 'join channel' },
+                    { from: 'inchannel', to: 'ready', label: 'ready' },
+                    { from: 'ready', to: 'busy', label: 'processing' },
+                    { from: 'busy', to: 'ready', label: 'complete' },
+                    { from: 'ready', to: 'away', label: 'idle timeout' },
+                    { from: 'away', to: 'ready', label: 'activity' },
+                    { from: 'ready', to: 'authenticated', label: 'leave', curved: true },
+                    { from: 'authenticated', to: 'inchannel', label: 'join different', curved: true },
+                    { from: 'ready', to: 'disconnected', label: 'disconnect()' },
+                    { from: 'authenticated', to: 'disconnected', label: 'disconnect()' }
+                ];
+                
+                // Draw transitions first
+                transitions.forEach(t => {
+                    const fromState = states.find(s => s.id === t.from);
+                    const toState = states.find(s => s.id === t.to);
+                    if (fromState && toState) {
+                        this.drawTransition(fromState, toState, t.label, t.curved);
+                    }
+                });
+                
+                // Draw states
+                states.forEach(state => {
+                    if (state.isInitial) {
+                        this.drawInitialState(state.x, state.y);
+                    } else if (state.isFinal) {
+                        this.drawFinalState(state.x, state.y, stateData.disconnected);
+                    } else {
+                        this.drawState(state.x, state.y, stateData[state.id], state.id);
+                    }
+                });
+            }
+            
+            drawInitialState(x, y) {
+                const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+                circle.setAttribute('cx', x);
+                circle.setAttribute('cy', y);
+                circle.setAttribute('r', 12);
+                circle.setAttribute('class', 'initial-state');
+                this.mainGroup.appendChild(circle);
+            }
+            
+            drawFinalState(x, y, data) {
+                const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+                g.setAttribute('class', 'state-box');
+                g.setAttribute('data-state', 'disconnected');
+                
+                // Double circle for final state
+                const outerCircle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+                outerCircle.setAttribute('cx', x);
+                outerCircle.setAttribute('cy', y);
+                outerCircle.setAttribute('r', 45);
+                outerCircle.setAttribute('fill', data.color);
+                outerCircle.setAttribute('opacity', '0.2');
+                outerCircle.setAttribute('stroke', data.color);
+                outerCircle.setAttribute('stroke-width', '2');
+                g.appendChild(outerCircle);
+                
+                const innerCircle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+                innerCircle.setAttribute('cx', x);
+                innerCircle.setAttribute('cy', y);
+                innerCircle.setAttribute('r', 35);
+                innerCircle.setAttribute('fill', 'var(--bg-secondary)');
+                innerCircle.setAttribute('stroke', data.color);
+                innerCircle.setAttribute('stroke-width', '3');
+                g.appendChild(innerCircle);
+                
+                // Icon
+                const icon = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                icon.setAttribute('x', x);
+                icon.setAttribute('y', y - 5);
+                icon.setAttribute('text-anchor', 'middle');
+                icon.setAttribute('font-size', '18px');
+                icon.textContent = data.icon;
+                g.appendChild(icon);
+                
+                // Label
+                const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                label.setAttribute('x', x);
+                label.setAttribute('y', y + 15);
+                label.setAttribute('class', 'node-text');
+                label.setAttribute('font-size', '11px');
+                label.textContent = data.title;
+                g.appendChild(label);
+                
+                g.addEventListener('click', () => showStateInfo('disconnected'));
+                this.mainGroup.appendChild(g);
+            }
+            
+            drawState(x, y, data, id) {
+                const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+                g.setAttribute('class', 'state-box');
+                g.setAttribute('data-state', id);
+                
+                // Rounded rect
+                const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                rect.setAttribute('x', x - 70);
+                rect.setAttribute('y', y - 35);
+                rect.setAttribute('width', 140);
+                rect.setAttribute('height', 70);
+                rect.setAttribute('rx', 35);
+                rect.setAttribute('fill', data.color);
+                rect.setAttribute('opacity', '0.9');
+                g.appendChild(rect);
+                
+                // Icon
+                const icon = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                icon.setAttribute('x', x);
+                icon.setAttribute('y', y - 5);
+                icon.setAttribute('text-anchor', 'middle');
+                icon.setAttribute('font-size', '20px');
+                icon.textContent = data.icon;
+                g.appendChild(icon);
+                
+                // Label
+                const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                label.setAttribute('x', x);
+                label.setAttribute('y', y + 18);
+                label.setAttribute('text-anchor', 'middle');
+                label.setAttribute('fill', 'white');
+                label.setAttribute('font-weight', '700');
+                label.setAttribute('font-size', '13px');
+                label.textContent = data.title;
+                g.appendChild(label);
+                
+                g.addEventListener('click', () => showStateInfo(id));
+                this.mainGroup.appendChild(g);
+            }
+            
+            drawTransition(from, to, label, curved = false) {
+                const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+                
+                // Calculate offset for state borders
+                const dx = to.x - from.x;
+                const dy = to.y - from.y;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+                const offsetStart = from.isInitial ? 12 : 70;
+                const offsetEnd = to.isFinal ? 45 : 70;
+                
+                let x1 = from.x + (dx / dist) * offsetStart;
+                let y1 = from.y + (dy / dist) * offsetStart;
+                let x2 = to.x - (dx / dist) * offsetEnd;
+                let y2 = to.y - (dy / dist) * offsetEnd;
+                
+                const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                
+                let d;
+                if (curved) {
+                    const midX = (x1 + x2) / 2;
+                    const midY = (y1 + y2) / 2;
+                    const perpX = -(y2 - y1) / dist * 50;
+                    const perpY = (x2 - x1) / dist * 50;
+                    d = `M ${x1} ${y1} Q ${midX + perpX} ${midY + perpY}, ${x2} ${y2}`;
+                } else if (Math.abs(dx) > Math.abs(dy)) {
+                    d = `M ${x1} ${y1} L ${x2} ${y2}`;
+                } else {
+                    d = `M ${x1} ${y1} L ${x2} ${y2}`;
+                }
+                
+                path.setAttribute('d', d);
+                path.setAttribute('class', 'edge');
+                path.setAttribute('marker-end', 'url(#arrowhead)');
+                g.appendChild(path);
+                
+                // Label
+                if (label) {
+                    const midX = (x1 + x2) / 2 + (curved ? 20 : 0);
+                    const midY = (y1 + y2) / 2 + (curved ? -20 : -8);
+                    
+                    const bg = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                    bg.setAttribute('x', midX - 35);
+                    bg.setAttribute('y', midY - 8);
+                    bg.setAttribute('width', 70);
+                    bg.setAttribute('height', 14);
+                    bg.setAttribute('fill', 'var(--bg-primary)');
+                    bg.setAttribute('rx', 2);
+                    g.appendChild(bg);
+                    
+                    const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                    text.setAttribute('x', midX);
+                    text.setAttribute('y', midY + 3);
+                    text.setAttribute('class', 'transition-label');
+                    text.setAttribute('text-anchor', 'middle');
+                    text.textContent = label;
+                    g.appendChild(text);
+                }
+                
+                this.mainGroup.insertBefore(g, this.mainGroup.firstChild);
+            }
+        }
+        
+        function showStateInfo(stateId) {
+            const data = stateData[stateId];
+            if (!data) return;
+            
+            document.getElementById('stateIcon').textContent = data.icon;
+            document.getElementById('stateTitle').textContent = data.title;
+            document.getElementById('stateDesc').textContent = data.desc;
+            
+            const transitionsList = document.getElementById('stateTransitions');
+            transitionsList.innerHTML = data.transitions.map(t => `<li>${t}</li>`).join('');
+            
+            // Highlight active state
+            document.querySelectorAll('.state-box').forEach(box => {
+                box.classList.toggle('active', box.dataset.state === stateId);
+            });
+        }
+        
+        // Initialize with compact dimensions
+        const diagram = new AgentLifecycleDiagram('diagram-container', {
+            width: 720,
+            height: 500
+        });
+        diagram.render();
+    </script>
+</body>
+</html>

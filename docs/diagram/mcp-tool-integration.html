@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MXF MCP Tool Integration</title>
+    <link rel="stylesheet" href="diagram-base.css">
+    <style>
+        .provider-card {
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        .provider-card:hover {
+            filter: brightness(1.1);
+        }
+        .service-node {
+            transition: all 0.3s ease;
+        }
+        .service-node:hover {
+            filter: drop-shadow(0 4px 8px var(--shadow));
+        }
+        .tool-flow {
+            stroke-dasharray: 8 4;
+            animation: toolFlow 1.5s linear infinite;
+        }
+        @keyframes toolFlow {
+            to { stroke-dashoffset: -12; }
+        }
+        .security-badge {
+            animation: pulse 2s ease infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.85; }
+        }
+    </style>
+</head>
+<body>
+    <div class="diagram-container">
+        <header class="diagram-header">
+            <div>
+                <h1 class="diagram-title">MCP Tool Integration Architecture</h1>
+                <p class="diagram-subtitle">Tool registry, execution, and sandboxing</p>
+            </div>
+            <button class="theme-toggle" onclick="toggleTheme()">
+                <span class="theme-toggle-icon">🌙</span>
+                <span class="theme-toggle-label">Dark</span>
+            </button>
+        </header>
+
+        <div id="diagram-container"></div>
+
+        <div class="legend">
+            <div class="legend-item">
+                <div class="legend-color" style="background: #ec4899;"></div>
+                <span>Tool Providers</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #6366f1;"></div>
+                <span>MCP Service</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #f59e0b;"></div>
+                <span>Tool Lifecycle</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #ef4444;"></div>
+                <span>Security</span>
+            </div>
+        </div>
+    </div>
+
+    <script src="diagram-utils.js"></script>
+    <script>
+        class MCPDiagram extends MXFDiagram {
+            render() {
+                // Tool Providers Section
+                this.drawSection(30, 30, 170, 290, 'Tool Providers');
+
+                const providers = [
+                    { icon: '🤖', label: 'Anthropic MCP', y: 85 },
+                    { icon: '🧠', label: 'OpenAI Functions', y: 150 },
+                    { icon: '⚡', label: 'XAI Tools', y: 215 },
+                    { icon: '🔧', label: 'Custom Tools', y: 280 }
+                ];
+
+                providers.forEach(p => {
+                    this.drawProviderCard(115, p.y, p.icon, p.label);
+                    this.drawFlowEdge(185, p.y, 230, 170);
+                });
+
+                // MCP Service Section
+                this.drawSection(220, 30, 170, 290, 'MCP Service');
+
+                const services = [
+                    { icon: '📋', label: 'Tool Registry', y: 85 },
+                    { icon: '✅', label: 'Validator', y: 150 },
+                    { icon: '⚡', label: 'Executor', y: 215 },
+                    { icon: '🔒', label: 'Sandbox', y: 280 }
+                ];
+
+                services.forEach((s, i) => {
+                    this.drawServiceNode(305, s.y, s.icon, s.label, '#6366f1');
+                    if (i < services.length - 1) {
+                        this.drawVerticalFlow(305, s.y + 25, 305, services[i+1].y - 25);
+                    }
+                });
+
+                // Tool Lifecycle Section
+                this.drawSection(410, 30, 170, 290, 'Tool Lifecycle');
+
+                const lifecycle = [
+                    { icon: '🔍', label: 'Discovery', y: 85 },
+                    { icon: '📦', label: 'Loading', y: 150 },
+                    { icon: '💾', label: 'Caching', y: 215 },
+                    { icon: '📊', label: 'Monitoring', y: 280 }
+                ];
+
+                lifecycle.forEach(l => {
+                    this.drawServiceNode(495, l.y, l.icon, l.label, '#f59e0b');
+                });
+
+                // Connect Executor to Caching
+                this.drawFlowEdge(375, 215, 425, 215);
+                // Connect Sandbox to Monitoring
+                this.drawFlowEdge(375, 280, 425, 280);
+
+                // Security Section
+                this.drawSection(600, 30, 160, 290, 'Security');
+
+                const security = [
+                    { icon: '🔐', label: 'Permissions', y: 110 },
+                    { icon: '⏱️', label: 'Rate Limiting', y: 185 },
+                    { icon: '📝', label: 'Audit Log', y: 260 }
+                ];
+
+                security.forEach(s => {
+                    this.drawSecurityNode(680, s.y, s.icon, s.label);
+                });
+
+                // Connect Sandbox to Security
+                this.drawFlowEdge(375, 280, 610, 110);
+                this.drawFlowEdge(375, 215, 610, 185);
+                this.drawFlowEdge(375, 280, 610, 260);
+            }
+
+            drawSection(x, y, w, h, label) {
+                const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+
+                const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                rect.setAttribute('x', x);
+                rect.setAttribute('y', y);
+                rect.setAttribute('width', w);
+                rect.setAttribute('height', h);
+                rect.setAttribute('rx', 10);
+                rect.setAttribute('fill', 'var(--bg-tertiary)');
+                rect.setAttribute('stroke', 'var(--border)');
+                g.appendChild(rect);
+
+                const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                text.setAttribute('x', x + w/2);
+                text.setAttribute('y', y + 18);
+                text.setAttribute('text-anchor', 'middle');
+                text.setAttribute('fill', 'var(--text-muted)');
+                text.setAttribute('font-size', '10px');
+                text.setAttribute('font-weight', '600');
+                text.textContent = label.toUpperCase();
+                g.appendChild(text);
+
+                this.mainGroup.appendChild(g);
+            }
+
+            drawProviderCard(x, y, icon, label) {
+                const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+                g.setAttribute('class', 'provider-card');
+
+                const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                rect.setAttribute('x', x - 70);
+                rect.setAttribute('y', y - 22);
+                rect.setAttribute('width', 140);
+                rect.setAttribute('height', 44);
+                rect.setAttribute('rx', 8);
+                rect.setAttribute('fill', '#ec4899');
+                rect.setAttribute('opacity', '0.15');
+                rect.setAttribute('stroke', '#ec4899');
+                rect.setAttribute('stroke-width', '2');
+                g.appendChild(rect);
+
+                // Icon centered above text
+                const iconEl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                iconEl.setAttribute('x', x);
+                iconEl.setAttribute('y', y - 3);
+                iconEl.setAttribute('text-anchor', 'middle');
+                iconEl.setAttribute('font-size', '14px');
+                iconEl.textContent = icon;
+                g.appendChild(iconEl);
+
+                // Label centered below icon
+                const labelEl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                labelEl.setAttribute('x', x);
+                labelEl.setAttribute('y', y + 13);
+                labelEl.setAttribute('text-anchor', 'middle');
+                labelEl.setAttribute('fill', 'var(--text-primary)');
+                labelEl.setAttribute('font-size', '11px');
+                labelEl.setAttribute('font-weight', '600');
+                labelEl.textContent = label;
+                g.appendChild(labelEl);
+
+                this.mainGroup.appendChild(g);
+            }
+
+            drawServiceNode(x, y, icon, label, color) {
+                const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+                g.setAttribute('class', 'service-node');
+
+                const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                rect.setAttribute('x', x - 70);
+                rect.setAttribute('y', y - 22);
+                rect.setAttribute('width', 140);
+                rect.setAttribute('height', 44);
+                rect.setAttribute('rx', 8);
+                rect.setAttribute('fill', color);
+                rect.setAttribute('opacity', '0.9');
+                g.appendChild(rect);
+
+                // Icon centered above text
+                const iconEl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                iconEl.setAttribute('x', x);
+                iconEl.setAttribute('y', y - 3);
+                iconEl.setAttribute('text-anchor', 'middle');
+                iconEl.setAttribute('font-size', '14px');
+                iconEl.textContent = icon;
+                g.appendChild(iconEl);
+
+                // Label centered below icon
+                const labelEl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                labelEl.setAttribute('x', x);
+                labelEl.setAttribute('y', y + 13);
+                labelEl.setAttribute('text-anchor', 'middle');
+                labelEl.setAttribute('fill', 'white');
+                labelEl.setAttribute('font-weight', '600');
+                labelEl.setAttribute('font-size', '11px');
+                labelEl.textContent = label;
+                g.appendChild(labelEl);
+
+                this.mainGroup.appendChild(g);
+            }
+
+            drawSecurityNode(x, y, icon, label) {
+                const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+                g.setAttribute('class', 'service-node security-badge');
+
+                const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                rect.setAttribute('x', x - 65);
+                rect.setAttribute('y', y - 25);
+                rect.setAttribute('width', 130);
+                rect.setAttribute('height', 50);
+                rect.setAttribute('rx', 8);
+                rect.setAttribute('fill', '#ef4444');
+                rect.setAttribute('opacity', '0.9');
+                g.appendChild(rect);
+
+                // Icon centered above text
+                const iconEl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                iconEl.setAttribute('x', x);
+                iconEl.setAttribute('y', y - 5);
+                iconEl.setAttribute('text-anchor', 'middle');
+                iconEl.setAttribute('font-size', '16px');
+                iconEl.textContent = icon;
+                g.appendChild(iconEl);
+
+                // Label centered below icon
+                const labelEl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                labelEl.setAttribute('x', x);
+                labelEl.setAttribute('y', y + 14);
+                labelEl.setAttribute('text-anchor', 'middle');
+                labelEl.setAttribute('fill', 'white');
+                labelEl.setAttribute('font-weight', '600');
+                labelEl.setAttribute('font-size', '11px');
+                labelEl.textContent = label;
+                g.appendChild(labelEl);
+
+                this.mainGroup.appendChild(g);
+            }
+
+            drawFlowEdge(x1, y1, x2, y2) {
+                const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                const midX = (x1 + x2) / 2;
+                const d = `M ${x1} ${y1} C ${midX} ${y1}, ${midX} ${y2}, ${x2} ${y2}`;
+
+                path.setAttribute('d', d);
+                path.setAttribute('class', 'edge tool-flow');
+                path.setAttribute('marker-end', 'url(#arrowhead)');
+
+                this.mainGroup.insertBefore(path, this.mainGroup.firstChild);
+            }
+
+            drawVerticalFlow(x1, y1, x2, y2) {
+                const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                path.setAttribute('d', `M ${x1} ${y1} L ${x2} ${y2}`);
+                path.setAttribute('class', 'edge tool-flow');
+                path.setAttribute('marker-end', 'url(#arrowhead)');
+
+                this.mainGroup.insertBefore(path, this.mainGroup.firstChild);
+            }
+        }
+
+        // Initialize
+        const diagram = new MCPDiagram('diagram-container', {
+            width: 800,
+            height: 350
+        });
+        diagram.render();
+    </script>
+</body>
+</html>

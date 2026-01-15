@@ -44,7 +44,8 @@ The SDK has **ONE** main entry point:
 - **Memory Search Tools**: 3 specialized tools for searching conversations, actions, and patterns
 - **Task Management**: Receive, execute, and report on assigned tasks
 - **MCP Tool Integration**: 100+ built-in tools plus external MCP server integration (global and channel-scoped) - See [Tool Reference](../mxf/tool-reference.md)
-- **Control Loop Support**: ORPAR (Observe-Reason-Act-Progress-Reflect) cycle
+- **Control Loop Support**: ORPAR (Observe-Reason-Plan-Act-Reflect) cognitive cycle with agent-driven tools
+- **ORPAR Tools**: 6 tools (`orpar_observe`, `orpar_reason`, `orpar_plan`, `orpar_act`, `orpar_reflect`, `orpar_status`) for explicit cognitive structuring
 - **MXP Protocol**: Efficient binary messaging with bandwidth optimization
 - **Validation & Auto-Correction**: Proactive error prevention with intelligent fixes
 
@@ -216,6 +217,64 @@ const status = agent.getConnectionStatus();
 // Disconnect
 await agent.disconnect();
 ```
+
+### Dynamic Tool Management
+
+Dynamically update an agent's allowed tools at runtime. This is essential for phase-gated tool access patterns like ORPAR cognitive cycles.
+
+```typescript
+// Update agent's allowed tools dynamically
+await agent.updateAllowedTools([
+    'orpar_observe',
+    'game_getState',
+    'memory_read'
+]);
+
+// After server-side changes, refresh the local tool cache
+const tools = await agent.refreshTools();
+console.log(`Agent now has access to ${tools.length} tools`);
+```
+
+**Phase-Gated Example (ORPAR):**
+
+```typescript
+// Define tools for each ORPAR phase
+const PHASE_TOOLS = {
+    observe: ['orpar_observe', 'game_getState', 'memory_read'],
+    reason: ['orpar_reason'],
+    plan: ['orpar_plan', 'planning_create'],
+    act: ['orpar_act', 'game_performAction'],
+    reflect: ['orpar_reflect', 'task_complete', 'memory_write']
+};
+
+// Listen to ORPAR phase events and update tools
+agent.on(Events.ControlLoop.OBSERVATION, async () => {
+    await agent.updateAllowedTools(PHASE_TOOLS.observe);
+});
+
+agent.on(Events.Orpar.REASON, async () => {
+    await agent.updateAllowedTools(PHASE_TOOLS.reason);
+});
+
+agent.on(Events.Orpar.PLAN, async () => {
+    await agent.updateAllowedTools(PHASE_TOOLS.plan);
+});
+
+agent.on(Events.Orpar.ACT, async () => {
+    await agent.updateAllowedTools(PHASE_TOOLS.act);
+});
+
+agent.on(Events.Orpar.REFLECT, async () => {
+    await agent.updateAllowedTools(PHASE_TOOLS.reflect);
+});
+```
+
+**How It Works:**
+
+1. `updateAllowedTools(tools)` - Updates both server-side AgentService AND refreshes local tool cache
+2. `refreshTools()` - Force-refreshes the local tool cache from the server (useful after external changes)
+
+The update is immediate and affects the next LLM iteration's tool selection.
 
 ### Messaging
 
@@ -505,6 +564,8 @@ agent.channelService.off(Events.Message.AGENT_MESSAGE);
 
 ## Architecture
 
+<div class="mermaid-fallback">
+
 ```mermaid
 graph TB
     subgraph "MXF SDK"
@@ -513,23 +574,27 @@ graph TB
         A --> D[Memory Manager]
         A --> E[Task Manager]
         A --> F[MCP Client]
-        
+
         C --> G[Message Handler]
         C --> H[Control Loop Handler]
         C --> I[Memory Handler]
-        
+
         B --> J[Socket.IO Client]
     end
-    
+
     subgraph "MXF Server"
         J --> K[Socket.IO Server]
         K --> L[Event Bus]
         L --> M[Services]
     end
-    
+
     style A fill:#f9f,stroke:#333,stroke-width:4px
     style K fill:#bbf,stroke:#333,stroke-width:2px
 ```
+
+</div>
+
+<iframe src="../diagram/architecture-high-level.html" width="100%" height="800" style="border: none; border-radius: 10px; background: var(--bg-secondary);"></iframe>
 
 ## Advanced Usage
 
@@ -823,7 +888,7 @@ const legacyAgent = await sdk.createAgent({
     secretKey: 'secret-456'
 });
 
-// After: Explicit tool restrictions  
+// After: Explicit tool restrictions
 const secureAgent = await sdk.createAgent({
     agentId: 'legacy-agent',
     name: 'Legacy Agent',
@@ -839,6 +904,22 @@ const secureAgent = await sdk.createAgent({
 ```
 
 **Testing Tip**: Start with unrestricted access during development, then gradually add restrictions as you identify which tools each agent actually uses.
+
+### Dynamic Tool Updates
+
+For scenarios where tool access needs to change at runtime (e.g., phase-gated ORPAR workflows), use the dynamic tool management methods:
+
+```typescript
+// Update tools dynamically based on current phase or context
+await agent.updateAllowedTools(['orpar_observe', 'game_getState']);
+
+// See "Dynamic Tool Management" section in Core API for full details
+```
+
+This is particularly useful for:
+- **ORPAR cognitive cycles** - Different tools per phase (observe, reason, plan, act, reflect)
+- **Game state machines** - Role-specific tools based on game phase
+- **Progressive trust models** - Gradually enabling more tools as trust is established
 
 ## Best Practices
 

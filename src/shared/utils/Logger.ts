@@ -47,11 +47,11 @@ interface LoggingConfig {
 // Default logging configuration
 const LOGGING_CONFIG: LoggingConfig = {
     server: {
-        enabled: true,  // Server logging disabled by default
+        enabled: false,  // Server logging disabled by default
         level: 'debug'
     },
     client: {
-        enabled: true, // Client logging disabled by default to keep demos clean
+        enabled: false, // Client logging disabled by default to keep demos clean
         level: 'debug'
     }
 };

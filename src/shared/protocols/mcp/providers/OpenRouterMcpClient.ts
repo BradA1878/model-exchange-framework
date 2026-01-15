@@ -185,7 +185,9 @@ export class OpenRouterMcpClient extends BaseMcpClient {
     // Request queue to prevent concurrent requests that might cause JSON parsing issues
     private static requestQueue: Array<() => Promise<any>> = [];
     private static isProcessingQueue = false;
-    private static readonly REQUEST_DELAY_MS = 500; // 500ms between requests
+    // Configurable delay between requests - reduced from 500ms to 100ms default for better performance
+    // Set OPENROUTER_REQUEST_QUEUE_DELAY_MS=0 to disable queueing delay entirely
+    private static readonly REQUEST_DELAY_MS = parseInt(process.env.OPENROUTER_REQUEST_QUEUE_DELAY_MS || '100', 10);
     
     // Network recovery manager
     private networkRecovery: NetworkRecoveryManager | null = null;

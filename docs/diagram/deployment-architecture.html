@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MXF Deployment Architecture</title>
+    <link rel="stylesheet" href="diagram-base.css">
+    <style>
+        .tier-box {
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        .tier-box:hover {
+            filter: brightness(1.05);
+        }
+        .instance-node {
+            transition: all 0.3s ease;
+        }
+        .instance-node:hover {
+            filter: drop-shadow(0 4px 8px var(--shadow));
+        }
+        .replica-link {
+            stroke-dasharray: 4 2;
+        }
+    </style>
+</head>
+<body>
+    <div class="diagram-container">
+        <header class="diagram-header">
+            <div>
+                <h1 class="diagram-title">Deployment Architecture</h1>
+                <p class="diagram-subtitle">Production deployment with high availability and monitoring</p>
+            </div>
+            <button class="theme-toggle" onclick="toggleTheme()">
+                <span class="theme-toggle-icon">🌙</span>
+                <span class="theme-toggle-label">Dark</span>
+            </button>
+        </header>
+
+        <div id="diagram-container"></div>
+
+        <div class="legend">
+            <div class="legend-item">
+                <div class="legend-color" style="background: #ef4444;"></div>
+                <span>Load Balancer</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #3b82f6;"></div>
+                <span>Application Tier</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #a855f7;"></div>
+                <span>Service Tier</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #22c55e;"></div>
+                <span>Data Tier</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #f59e0b;"></div>
+                <span>Monitoring</span>
+            </div>
+        </div>
+    </div>
+
+    <script src="diagram-utils.js"></script>
+    <script>
+        class DeploymentDiagram extends MXFDiagram {
+            render() {
+                // Load Balancer
+                this.drawTierGroup(290, 25, 'Load Balancer', 180, 60, '#ef4444');
+                this.drawInstance(380, 55, 'Nginx/HAProxy', '🔀', '#ef4444');
+
+                // Application Tier
+                this.drawTierGroup(100, 100, 'Application Tier', 560, 90, '#3b82f6');
+                this.drawInstance(180, 145, 'API Server 1', '🖥️', '#3b82f6');
+                this.drawInstance(310, 145, 'API Server 2', '🖥️', '#3b82f6');
+                this.drawInstance(440, 145, 'WS Server 1', '📡', '#3b82f6');
+                this.drawInstance(570, 145, 'WS Server 2', '📡', '#3b82f6');
+
+                // Service Tier
+                this.drawTierGroup(100, 205, 'Service Tier', 560, 90, '#a855f7');
+                this.drawInstance(180, 250, 'Service 1', '⚙️', '#a855f7');
+                this.drawInstance(310, 250, 'Service 2', '⚙️', '#a855f7');
+                this.drawInstance(440, 250, 'Worker 1', '👷', '#a855f7');
+                this.drawInstance(570, 250, 'Worker 2', '👷', '#a855f7');
+
+                // Data Tier
+                this.drawTierGroup(100, 310, 'Data Tier', 560, 95, '#22c55e');
+                this.drawDataInstance(180, 358, 'MongoDB', '🗄️', '#22c55e', 'Primary');
+                this.drawDataInstance(310, 358, 'MongoDB', '🗄️', '#22c55e', 'Secondary');
+                this.drawDataInstance(440, 358, 'Redis', '⚡', '#22c55e', 'Master');
+                this.drawDataInstance(570, 358, 'Redis', '⚡', '#22c55e', 'Replica');
+
+                // Monitoring
+                this.drawTierGroup(680, 100, 'Monitoring', 110, 200, '#f59e0b');
+                this.drawInstance(735, 145, 'Prometheus', '📊', '#f59e0b');
+                this.drawInstance(735, 210, 'Grafana', '📈', '#f59e0b');
+                this.drawInstance(735, 275, 'ELK Stack', '📝', '#f59e0b');
+
+                // Draw connections
+                this.drawConnections();
+            }
+
+            drawTierGroup(x, y, label, width, height, color) {
+                const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+                g.setAttribute('class', 'tier-box');
+
+                const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                rect.setAttribute('x', x);
+                rect.setAttribute('y', y);
+                rect.setAttribute('width', width);
+                rect.setAttribute('height', height);
+                rect.setAttribute('rx', 8);
+                rect.setAttribute('fill', color);
+                rect.setAttribute('opacity', '0.15');
+                rect.setAttribute('stroke', color);
+                rect.setAttribute('stroke-width', '2');
+                g.appendChild(rect);
+
+                const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                text.setAttribute('x', x + 10);
+                text.setAttribute('y', y + 16);
+                text.setAttribute('fill', color);
+                text.setAttribute('font-weight', '700');
+                text.setAttribute('font-size', '11px');
+                text.textContent = label;
+                g.appendChild(text);
+
+                this.mainGroup.appendChild(g);
+            }
+
+            drawInstance(x, y, label, icon, color) {
+                const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+                g.setAttribute('class', 'instance-node');
+
+                const width = 100;
+                const height = 50;
+
+                const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                rect.setAttribute('x', x - width/2);
+                rect.setAttribute('y', y - height/2);
+                rect.setAttribute('width', width);
+                rect.setAttribute('height', height);
+                rect.setAttribute('rx', 6);
+                rect.setAttribute('fill', color);
+                rect.setAttribute('opacity', '0.9');
+                g.appendChild(rect);
+
+                // Icon centered above text
+                const iconEl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                iconEl.setAttribute('x', x);
+                iconEl.setAttribute('y', y - 5);
+                iconEl.setAttribute('text-anchor', 'middle');
+                iconEl.setAttribute('font-size', '14px');
+                iconEl.textContent = icon;
+                g.appendChild(iconEl);
+
+                // Label centered below icon
+                const labelEl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                labelEl.setAttribute('x', x);
+                labelEl.setAttribute('y', y + 12);
+                labelEl.setAttribute('text-anchor', 'middle');
+                labelEl.setAttribute('fill', 'white');
+                labelEl.setAttribute('font-weight', '600');
+                labelEl.setAttribute('font-size', '10px');
+                labelEl.textContent = label;
+                g.appendChild(labelEl);
+
+                this.mainGroup.appendChild(g);
+            }
+
+            drawDataInstance(x, y, label, icon, color, sublabel) {
+                const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+                g.setAttribute('class', 'instance-node');
+
+                const width = 100;
+                const height = 58;
+
+                const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                rect.setAttribute('x', x - width/2);
+                rect.setAttribute('y', y - height/2);
+                rect.setAttribute('width', width);
+                rect.setAttribute('height', height);
+                rect.setAttribute('rx', 6);
+                rect.setAttribute('fill', color);
+                rect.setAttribute('opacity', '0.9');
+                g.appendChild(rect);
+
+                // Icon centered
+                const iconEl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                iconEl.setAttribute('x', x);
+                iconEl.setAttribute('y', y - 10);
+                iconEl.setAttribute('text-anchor', 'middle');
+                iconEl.setAttribute('font-size', '14px');
+                iconEl.textContent = icon;
+                g.appendChild(iconEl);
+
+                // Main label centered
+                const labelEl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                labelEl.setAttribute('x', x);
+                labelEl.setAttribute('y', y + 6);
+                labelEl.setAttribute('text-anchor', 'middle');
+                labelEl.setAttribute('fill', 'white');
+                labelEl.setAttribute('font-weight', '600');
+                labelEl.setAttribute('font-size', '10px');
+                labelEl.textContent = label;
+                g.appendChild(labelEl);
+
+                // Sublabel centered below
+                const subEl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                subEl.setAttribute('x', x);
+                subEl.setAttribute('y', y + 19);
+                subEl.setAttribute('text-anchor', 'middle');
+                subEl.setAttribute('fill', 'rgba(255,255,255,0.7)');
+                subEl.setAttribute('font-size', '9px');
+                subEl.textContent = sublabel;
+                g.appendChild(subEl);
+
+                this.mainGroup.appendChild(g);
+            }
+
+            drawConnections() {
+                // LB to App Tier
+                this.drawConnection(380, 85, 180, 120);
+                this.drawConnection(380, 85, 310, 120);
+                this.drawConnection(380, 85, 440, 120);
+                this.drawConnection(380, 85, 570, 120);
+
+                // App Tier to Service Tier
+                this.drawConnection(180, 170, 180, 225);
+                this.drawConnection(310, 170, 310, 225);
+                this.drawConnection(440, 170, 440, 225);
+                this.drawConnection(570, 170, 570, 225);
+
+                // Service Tier to Data Tier
+                this.drawConnection(180, 275, 180, 329);
+                this.drawConnection(310, 275, 310, 329);
+                this.drawConnection(440, 275, 440, 329);
+                this.drawConnection(570, 275, 570, 329);
+
+                // MongoDB replication
+                this.drawReplication(230, 358, 260, 358);
+                // Redis replication
+                this.drawReplication(490, 358, 520, 358);
+
+                // Monitoring connections (dashed)
+                this.drawMonitorConnection(310, 145, 680, 145);
+                this.drawMonitorConnection(310, 250, 680, 210);
+            }
+
+            drawConnection(x1, y1, x2, y2) {
+                const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                const midY = (y1 + y2) / 2;
+                const d = `M ${x1} ${y1} C ${x1} ${midY}, ${x2} ${midY}, ${x2} ${y2}`;
+                path.setAttribute('d', d);
+                path.setAttribute('class', 'edge');
+                path.setAttribute('marker-end', 'url(#arrowhead)');
+                this.mainGroup.insertBefore(path, this.mainGroup.firstChild);
+            }
+
+            drawReplication(x1, y1, x2, y2) {
+                const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                path.setAttribute('d', `M ${x1} ${y1} L ${x2} ${y2}`);
+                path.setAttribute('class', 'edge replica-link');
+                path.setAttribute('stroke', '#22c55e');
+                path.setAttribute('marker-end', 'url(#arrowhead-green)');
+                this.mainGroup.insertBefore(path, this.mainGroup.firstChild);
+            }
+
+            drawMonitorConnection(x1, y1, x2, y2) {
+                const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                const d = `M ${x1 + 45} ${y1} L ${x2} ${y2}`;
+                path.setAttribute('d', d);
+                path.setAttribute('stroke', '#f59e0b');
+                path.setAttribute('stroke-width', '1');
+                path.setAttribute('stroke-dasharray', '3 3');
+                path.setAttribute('fill', 'none');
+                path.setAttribute('opacity', '0.5');
+                this.mainGroup.insertBefore(path, this.mainGroup.firstChild);
+            }
+        }
+
+        // Initialize
+        const diagram = new DeploymentDiagram('diagram-container', {
+            width: 820,
+            height: 430
+        });
+        diagram.render();
+    </script>
+</body>
+</html>

@@ -31,9 +31,13 @@ import { Channel } from '../../../shared/models/channel';
 import { createStrictValidator } from '../../../shared/utils/validation';
 import { Logger } from '../../../shared/utils/Logger';
 import { EventBus } from '../../../shared/events/EventBus';
-import { Events, ChannelActionTypes } from '../../../shared/events/EventNames';
+import { Events, ChannelActionTypes, ChannelActionType } from '../../../shared/events/EventNames';
 import { ChannelService } from '../../socket/services/ChannelService';
 import channelKeyService from '../../socket/services/ChannelKeyService';
+import { createChannelEventPayload } from '../../../shared/schemas/EventPayloadSchema';
+import { MemoryPersistenceService } from '../services/MemoryPersistenceService';
+import { MemoryScope } from '../../../shared/types/MemoryTypes';
+import { firstValueFrom } from 'rxjs';
 
 // Create validator for this controller
 const validate = createStrictValidator('ChannelController');
@@ -1063,7 +1067,9 @@ export const updateChannel = async (req: Request, res: Response): Promise<void> 
 
 /**
  * Delete channel by channelId
- * 
+ *
+ * Also deletes the channel's persistent memory from MongoDB.
+ *
  * @param req - Express request object
  * @param res - Express response object
  */
@@ -1071,7 +1077,7 @@ export const deleteChannel = async (req: Request, res: Response): Promise<void> 
     try {
         const { channelId } = req.params;
         validate.assertIsNonEmptyString(channelId, 'channelId is required');
-        
+
         // Find channel first to check if it exists
         const channel = await Channel.findOne({ channelId });
         if (!channel) {
@@ -1081,21 +1087,41 @@ export const deleteChannel = async (req: Request, res: Response): Promise<void> 
             });
             return;
         }
-        
-        // Delete the channel
+
+        // Delete the channel document
         await Channel.deleteOne({ channelId });
-        
+
+        // Delete channel memory from MongoDB
+        const memoryPersistenceService = MemoryPersistenceService.getInstance();
+        try {
+            const memoryDeleted = await firstValueFrom(
+                memoryPersistenceService.deleteMemory(MemoryScope.CHANNEL, channelId)
+            );
+            if (memoryDeleted) {
+                logger.info(`Channel memory deleted for ${channelId}`);
+            }
+        } catch (memoryError) {
+            // Log but don't fail - channel is already deleted
+            logger.warn(`Could not delete channel memory for ${channelId}:`, memoryError);
+        }
+
         // Emit channel deleted event
-        EventBus.server.emit('CHANNEL_DELETED', {
+        const agentId = (req as any).agent?.agentId || 'system';
+        const deletedPayload = createChannelEventPayload(
+            Events.Channel.DELETED,
+            agentId,
             channelId,
-            deletedBy: (req as any).agent?.agentId || 'system',
-            timestamp: new Date()
-        });
-        
-        
+            {
+                action: 'deleted' as ChannelActionType,
+                channelId
+            }
+        );
+        EventBus.server.emit(Events.Channel.DELETED, deletedPayload);
+
+
         res.status(200).json({
             success: true,
-            message: 'Channel deleted successfully',
+            message: 'Channel and associated memory deleted successfully',
             channelId
         });
     } catch (error) {

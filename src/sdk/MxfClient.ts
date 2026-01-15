@@ -46,7 +46,7 @@ import { MemoryHandlers } from './handlers/MemoryHandlers';
 import { MessageHandlers } from './handlers/MessageHandlers';
 import { IAgentMemory, IChannelMemory, IRelationshipMemory, MemoryScope } from '../shared/types/MemoryTypes';
 import { TaskHandlers } from './handlers/TaskHandlers';
-import { MxfToolService, IToolService } from './services/MxfToolService';
+import { MxfToolService, IToolService, ClientTool } from './services/MxfToolService';
 
 /**
  * MxfClient class for connecting to the MXF
@@ -354,7 +354,7 @@ export class MxfClient {
 
     /**
      * Disconnect from MXF
-     * 
+     *
      * @returns Promise that resolves when disconnected
      * @public
      */
@@ -381,6 +381,56 @@ export class MxfClient {
         // Reset status
         this.status = ConnectionStatus.DISCONNECTED;
         this.emitStatusChange(this.status);
+    }
+
+    /**
+     * Update the agent's allowed tools dynamically.
+     * This updates both the server-side AgentService and refreshes the local tool cache.
+     * Use this for phase-gated tool access (e.g., ORPAR cognitive cycle phases).
+     *
+     * @param tools - The new list of allowed tool names
+     * @returns Promise that resolves when the update is complete
+     * @public
+     *
+     * @example
+     * // Update tools for OBSERVE phase
+     * await agent.updateAllowedTools(['orpar_observe', 'game_getState', 'memory_read']);
+     *
+     * // Update tools for ACT phase
+     * await agent.updateAllowedTools(['orpar_act', 'game_askQuestion']);
+     */
+    public async updateAllowedTools(tools: string[]): Promise<void> {
+        await this.ensureConnected();
+
+        // Update local config
+        this.config.allowedTools = tools;
+
+        // Emit event to update server-side AgentService
+        if (this.mxfService) {
+            this.mxfService.socketEmit(Events.Agent.ALLOWED_TOOLS_UPDATE, {
+                agentId: this.agentId,
+                allowedTools: tools
+            });
+        }
+
+        // Refresh local tool cache from server
+        await this.refreshTools();
+    }
+
+    /**
+     * Refresh the agent's cached tools from the server.
+     * Call this after the server-side allowedTools have been updated
+     * to get the new filtered tool list.
+     *
+     * @returns Promise resolving to the refreshed list of tools
+     * @public
+     */
+    public async refreshTools(): Promise<ClientTool[]> {
+        if (!this.toolService) {
+            throw new Error('Tool service not initialized');
+        }
+        // force=true bypasses cache and fetches fresh from server
+        return this.toolService.loadTools(undefined, true);
     }
 
     /**
