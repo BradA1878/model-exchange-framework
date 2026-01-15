@@ -11,7 +11,7 @@ Welcome to the comprehensive technical documentation for the Model Exchange Fram
 ### 📚 **Core Documentation**
 - **[SDK Reference](./sdk/index.md)** - TypeScript SDK for building agents
 - **[API Reference](./api/index.md)** - REST and WebSocket APIs
-- **[Tool Reference](./mxf/tool-reference.md)** - Complete guide to 100+ built-in tools
+- **[Tool Reference](./mxf/tool-reference.md)** - Complete guide to 95+ built-in tools
 - **[Core Architecture](./mxf/index.md)** - System design and patterns
 - **[Dashboard Guide](./dashboard/index.md)** - Web interface documentation (⚠️ in development)
 
@@ -43,7 +43,7 @@ The **Model Exchange Framework (MXF)** is a framework for building autonomous mu
 
 - **🤖 Multi-Agent Collaboration**: Agents work together naturally through goal-oriented task prompting
 - **⚡ Real-Time Communication**: WebSocket-based messaging with Socket.IO
-- **Hybrid Tool System**: 100+ built-in tools plus external MCP server integration (including 3 memory search tools)
+- **Hybrid Tool System**: 95+ built-in tools plus external MCP server integration (including 3 memory search tools)
 - **🔍 Semantic Search**: Meilisearch integration for intelligent memory retrieval
 - **🧠 ORPAR Control Loop**: Structured cognitive cycle (Observation, Reasoning, Planning, Action, Reflection)
 - **💾 Multi-Scope Memory**: Agent-private, channel-shared, and relationship memory with semantic search
@@ -219,7 +219,8 @@ npm run start
 ### Your First Agent
 
 ```typescript
-import { MxfSDK } from '@mxf/sdk';
+// Import from the SDK (use relative path within the monorepo)
+import { MxfSDK, LlmProviderType } from './src/sdk/index';
 
 // Initialize SDK
 const sdk = new MxfSDK({
@@ -231,25 +232,37 @@ const sdk = new MxfSDK({
 
 await sdk.connect();
 
+// Create channel and generate keys first
+await sdk.createChannel({
+    channelId: 'getting-started',
+    name: 'Getting Started',
+    description: 'First agent channel'
+});
+
+const keys = await sdk.generateKey({
+    channelId: 'getting-started',
+    name: 'first-agent-key'
+});
+
 // Create agent
 const agent = await sdk.createAgent({
     // Required: Agent identity
     agentId: 'my-first-agent',
     name: 'My First Agent',
     channelId: 'getting-started',
-    
-    // Required: Authentication
-    keyId: 'your-key-id',
-    secretKey: 'your-secret-key',
-    
+
+    // Required: Authentication (use generated keys)
+    keyId: keys.keyId,
+    secretKey: keys.secretKey,
+
     // Required: LLM configuration
-    llmProvider: 'openrouter',
+    llmProvider: LlmProviderType.OPENROUTER,
     apiKey: process.env.OPENROUTER_API_KEY!,
     defaultModel: 'anthropic/claude-3.5-sonnet',
-    
+
     // Required: Agent personality/behavior
     agentConfigPrompt: `You are a helpful AI assistant. Be concise and friendly.`,
-    
+
     // Optional: LLM parameters
     temperature: 0.7,
     maxTokens: 4000

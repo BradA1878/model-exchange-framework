@@ -1,10 +1,10 @@
 # Model Exchange Framework (MXF)
 
 Author: [Brad Anderson](brada1878@gmail.com)
-Copyright 2024 Brad Anderson
+Copyright 2024-2026 Brad Anderson
 
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](http://www.apache.org/licenses/LICENSE-2.0)
-[![Version](https://img.shields.io/badge/version-0.47.4-blue.svg)](https://github.com/BradA1878/model-exchange-framework)
+[![Version](https://img.shields.io/badge/version-1.1.0-blue.svg)](https://github.com/BradA1878/model-exchange-framework)
 [![Node.js](https://img.shields.io/badge/node.js-18+-green.svg)](https://nodejs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.0+-blue.svg)](https://www.typescriptlang.org/)
 
@@ -35,7 +35,7 @@ A sophisticated framework for **autonomous multi-agent collaboration**, communic
 - **Rich Agent Profiles**: Detailed agent metadata, capabilities, and role definitions
 
 ### 🛠️ **Hybrid Tool System**
-- **100+ Built-in Tools**: Comprehensive tool library across 11 categories including memory search, analytics, coordination, and more - See [Tool Reference](docs/mxf/tool-reference.md)
+- **95+ Built-in Tools**: Comprehensive tool library across 11 categories including memory search, analytics, coordination, and more - See [Tool Reference](docs/mxf/tool-reference.md)
 - **External MCP Server Integration**: Support for Model Context Protocol servers
 - **Channel-Scoped MCP Servers**: Register MCP servers available only within specific channels
 - **Channel-Level Tool Access Control**: Restrict which tools are available per channel using `allowedTools`
@@ -468,31 +468,15 @@ npm run start:dev
 npm run demo:first-contact
 ```
 
-#### Software Development Team Demo
-**Watch a realistic dev team build a web application with varying skill levels:**
+#### Fog of War Strategy Game
+**Watch 8 AI commanders compete for resources in a team strategy game:**
 
 ```bash
 # Start the MXF server (in one terminal)
 npm run start:dev
 
-# Run the software dev team demo (in another terminal)
-npx tsx examples/software-dev-team/software-dev-team.ts
-```
-
-#### MXP Protocol Demo
-**See the efficiency gains of MXP protocol in action:**
-
-```bash
-# Start the MXF server (in one terminal)
-npm run start:dev
-
-# Run the MXP demo (in another terminal)
-npm run demo:mxp
-
-# Commands in demo:
-# - sum 10 20 30      (sends MXP calculation)
-# - average 5 10 15   (sends MXP average)
-# - stats             (view protocol statistics)
+# Run the fog of war demo (in another terminal)
+npm run demo:fog-of-war
 ```
 
 **What you'll see in First Contact:**
@@ -503,12 +487,10 @@ npm run demo:mxp
 - **Dr. Xenara**: Translating alien language
 - **Commander Zenth**: Sending symbolic messages
 
-**What you'll see in Software Dev Team:**
-- **Sarah (PM)**: Managing sprint and tracking progress
-- **Alex (Architect)**: Designing system architecture
-- **David (Senior)**: Writing complex code and mentoring
-- **Emma (Mid-Level)**: Building features collaboratively
-- **Charlie (Junior)**: Learning and trying creative solutions (with realistic mistakes!)
+**What you'll see in Fog of War:**
+- **8 AI Commanders**: Competing in teams for territory and resources
+- **Strategic Planning**: Real-time decision making and coordination
+- **Multi-Agent Collaboration**: Team-based strategy and communication
 
 **✨ Clean, professional output with sophisticated cross-agent messaging!**
 
@@ -526,23 +508,30 @@ Explore our collection of multi-agent demos in the `/examples` directory:
 
 **Strategy & Collaboration:**
 - **First Contact Demo**: Starship crew encounters alien vessel (6 agents)
-- **Software Dev Team Demo**: PM, architect, and developers build web app (5 agents with varying skill levels)
 - **Interview Scheduling Demo**: Multi-agent coordination for scheduling
+- **Fog of War Game**: Team strategy game with 8 AI commanders competing for resources
 
 **AI Game Demos:**
-- **Fog of War Game**: Team strategy game with 8 AI commanders competing for resources
 - **Tic-Tac-Toe**: AI vs AI with personality-driven trash talk (2 agents)
 - **Go Fish**: Card game with memory, strategy, and character personalities (2 agents)
+- **Twenty Questions**: Classic guessing game with AI agents
 
 **SDK Patterns:**
 - **Channel MCP Registration**: Example of channel-scoped MCP server registration
 - **External MCP Registration**: Example of global MCP server registration
 
 ```bash
-# Run game demos
-npm run demo:fog-of-war    # Strategy game with 8 agents
-npm run demo:tic-tac-toe   # Quick AI vs AI game
-npm run demo:go-fish       # Card game with 2 agents
+# Run demos with npm scripts
+npm run demo:first-contact    # First contact scenario (6 agents)
+npm run demo:fog-of-war       # Strategy game with 8 agents
+npm run demo:interview        # Interview scheduling demo
+npm run demo:external-mcp     # External MCP server registration
+npm run demo:channel-mcp      # Channel-scoped MCP registration
+
+# Game demos (run directly with ts-node)
+npx ts-node examples/tic-tac-toe/connect-agents.ts
+npx ts-node examples/go-fish/connect-agents.ts
+npx ts-node examples/twenty-questions/connect-agents.ts
 ```
 
 ### 🧪 **Other Ways to Explore MXF**
@@ -711,15 +700,21 @@ Currently seeking opportunities to build the next generation of AI infrastructur
 ```
 src/
 ├── sdk/                    # Agent SDK and client libraries
+│   ├── MxfClient.ts       # Main agent client class
+│   ├── handlers/          # Modular event and message handlers
+│   ├── managers/          # MCP, memory, prompt, task managers
+│   └── services/          # Core SDK services
 ├── server/                 # Core server implementation
-│   ├── api/               # REST API controllers and services
+│   ├── api/               # REST API controllers and routes
 │   ├── socket/            # Socket.IO services and handlers
 │   └── index.ts           # Server entry point
 └── shared/                # Shared utilities and types
-    ├── mcp/               # MCP tool implementations
-    ├── models/            # Data models and schemas
-    ├── constants/         # Framework constants
-    └── utils/             # Utility functions
+    ├── protocols/mcp/tools/  # 95+ built-in MCP tools
+    ├── events/            # EventBus architecture
+    ├── models/            # MongoDB models
+    ├── services/          # Shared services
+    ├── interfaces/        # TypeScript interfaces
+    └── utils/             # Utility functions (Logger, etc.)
 ```
 
 ### Development Workflow
@@ -762,7 +757,8 @@ export const customTool: McpTool = {
 ### Basic Agent Setup
 
 ```typescript
-import { MxfSDK } from '@mxf/sdk';
+// Import from the SDK (use relative path within the monorepo)
+import { MxfSDK, LlmProviderType } from './src/sdk/index';
 
 // Initialize SDK
 const sdk = new MxfSDK({
@@ -774,21 +770,31 @@ const sdk = new MxfSDK({
 
 await sdk.connect();
 
+// Create channel first
+await sdk.createChannel({
+    channelId: 'data-analysis-project',
+    name: 'Data Analysis Project',
+    description: 'Channel for data analysis agents'
+});
+
+// Generate keys for the agent
+const keys = await sdk.generateKey({
+    channelId: 'data-analysis-project',
+    name: 'data-analyst-key'
+});
+
 // Create agent through SDK
 const agent = await sdk.createAgent({
     agentId: 'my-agent-01',
     name: 'Data Analyst',
     channelId: 'data-analysis-project',
-    keyId: 'key-abc123',
-    secretKey: 'secret-xyz789',
-    llmProvider: 'openai',
-    defaultModel: 'gpt-5.2',
-    apiKey: process.env.OPENAI_API_KEY,
-    capabilities: ['analysis', 'communication'],
-    metadata: {
-        role: 'Data Analyst',
-        expertise: ['statistics', 'visualization']
-    }
+    keyId: keys.keyId,
+    secretKey: keys.secretKey,
+    llmProvider: LlmProviderType.OPENROUTER,
+    defaultModel: 'anthropic/claude-3.5-sonnet',
+    apiKey: process.env.OPENROUTER_API_KEY!,
+    agentConfigPrompt: 'You are a data analyst specializing in statistics and visualization.',
+    allowedTools: ['messaging_send', 'agent_discover']
 });
 
 await agent.connect();

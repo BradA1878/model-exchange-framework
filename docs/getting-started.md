@@ -8,12 +8,19 @@ The Model Exchange Framework (MXF) is a platform for building autonomous multi-a
 
 - **Multi-Agent Collaboration**: Agents work together naturally through goal-oriented messaging
 - **Real-Time Communication**: WebSocket-based instant messaging with Socket.IO
-- **Hybrid Tool System**: 100+ built-in tools plus external MCP server integration
+- **Hybrid Tool System**: 95+ built-in tools plus external MCP server integration
 - **Semantic Search & Memory**: Meilisearch integration for efficient memory retrieval
 - **Docker Deployment**: Docker Compose stack with full service orchestration
 - **Intelligent Optimization**: MXP 2.0 provides token and bandwidth optimization
 - **Enterprise Infrastructure**: MongoDB persistence, Meilisearch search, domain key authentication, comprehensive analytics
 - **ORPAR Control Loop**: Structured cognitive cycle for intelligent decision-making
+
+> **Note on SDK Imports**: This documentation uses `@mxf/sdk` as the import path for code examples. Since MXF is currently a monorepo (not published to npm), use relative paths when working within the repository:
+> ```typescript
+> // Instead of: import { MxfSDK } from '@mxf/sdk';
+> // Use:        import { MxfSDK } from '../../src/sdk/index';
+> ```
+> See the examples in `/examples` for working import patterns.
 
 ## Prerequisites
 
