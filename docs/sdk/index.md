@@ -23,6 +23,9 @@ The MXF SDK provides TypeScript/JavaScript classes for building agents that conn
 - [Task Prompt Examples](task-prompt-example.md)
 - [Conversation Prompt Examples](conversation-prompt-example.md)
 
+### Development & Debugging
+- [Debug Mode & Logging](../troubleshooting.md#debug-mode--logging) - Enable/disable logging for server and SDK
+
 ## Overview
 
 The SDK has **ONE** main entry point:

@@ -1124,6 +1124,7 @@
                     { title: 'Deployment', file: 'deployment.md', icon: '🚀' },
                     { title: 'Use Cases', file: 'use-cases.md', icon: '💡' },
                     { title: 'Troubleshooting', file: 'troubleshooting.md', icon: '🔍' },
+                    { title: 'Debug Mode & Logging', file: 'troubleshooting.md#debug-mode--logging', icon: '📋' },
                     { title: 'Glossary', file: 'glossary.md', icon: '📖' },
                     { title: 'Architecture Diagram', file: 'diagram/mxf-architecture.html', icon: '🎨', isHtml: true, openInNewTab: true }
                 ]
@@ -1361,15 +1362,24 @@
         // Load document
         async function loadDoc(file, addToHistoryFlag = true) {
             const content = document.getElementById('content');
-            
+
+            // Parse anchor from file path (e.g., "file.md#section")
+            let anchor = null;
+            let filePath = file;
+            if (file.includes('#')) {
+                const parts = file.split('#');
+                filePath = parts[0];
+                anchor = parts[1];
+            }
+
             // Close sidebar on mobile
             closeSidebarOnMobile();
-            
+
             // Add to history if this is a new navigation (not back/forward)
             if (addToHistoryFlag) {
                 addToHistory(file);
             }
-            
+
             // Show loading
             content.innerHTML = `
                 <div class="loading">
@@ -1377,7 +1387,7 @@
                     <p>Loading...</p>
                 </div>
             `;
-            
+
             // Update active state
             document.querySelectorAll('.toc-item').forEach(item => {
                 item.classList.remove('active');
@@ -1385,21 +1395,21 @@
                     item.classList.add('active');
                 }
             });
-            
+
             // Check if it's an HTML file - load in iframe
-            if (file.endsWith('.html')) {
+            if (filePath.endsWith('.html')) {
                 content.innerHTML = `
-                    <iframe 
-                        src="${file}" 
+                    <iframe
+                        src="${file}"
                         style="width: 100%; height: 100vh; border: none; display: block;"
-                        title="${file}"
+                        title="${filePath}"
                     ></iframe>
                 `;
                 return;
             }
-            
+
             try {
-                const response = await fetch(file);
+                const response = await fetch(filePath);
                 if (!response.ok) throw new Error('File not found');
                 
                 const markdown = await response.text();
@@ -1494,9 +1504,21 @@
                     wrapper.appendChild(iframe);
                 });
 
-                // Scroll to top
-                content.scrollTop = 0;
-                
+                // Scroll to anchor or top
+                if (anchor) {
+                    // Wait a tick for DOM to settle, then scroll to anchor
+                    setTimeout(() => {
+                        const targetElement = document.getElementById(anchor);
+                        if (targetElement) {
+                            targetElement.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                        } else {
+                            content.scrollTop = 0;
+                        }
+                    }, 100);
+                } else {
+                    content.scrollTop = 0;
+                }
+
             } catch (error) {
                 content.innerHTML = `
                     <div class="welcome">

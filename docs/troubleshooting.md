@@ -419,23 +419,156 @@ bun run docker:logs mxf-server
 
 ---
 
-## Debug Mode
+## Debug Mode & Logging
 
-Enable verbose logging for detailed diagnostics:
+MXF provides a unified Logger utility for both server and client (SDK) components. By default, logging is **disabled** to keep output clean, especially for demos.
+
+### Logger Configuration
+
+The Logger is located at `src/shared/utils/Logger.ts` and supports separate server/client logging pathways.
+
+**Default Configuration (logging disabled):**
+```typescript
+const LOGGING_CONFIG = {
+    server: {
+        enabled: false,  // Server logging disabled by default
+        level: 'debug'
+    },
+    client: {
+        enabled: false,  // Client logging disabled by default
+        level: 'debug'
+    }
+};
+```
+
+### Enabling Logging
+
+#### Method 1: Convenience Functions (Recommended)
+
+Import and call the convenience functions to enable logging:
 
 ```typescript
-const agent = await sdk.createAgent({
-    logger: {
-        level: 'debug',
-        pretty: true
+import {
+    enableClientLogging,
+    disableClientLogging,
+    enableServerLogging,
+    disableServerLogging
+} from '../../src/shared/utils/Logger';
+
+// Enable client logging (SDK/agent side)
+enableClientLogging();           // Default: 'debug' level
+enableClientLogging('info');     // Specific level
+
+// Enable server logging (server side)
+enableServerLogging();           // Default: 'debug' level
+enableServerLogging('warn');     // Only warnings and errors
+
+// Disable logging when done
+disableClientLogging();
+disableServerLogging();
+```
+
+#### Method 2: Full Configuration
+
+For more control, use `configureLogging()`:
+
+```typescript
+import { configureLogging } from '../../src/shared/utils/Logger';
+
+// Enable both server and client logging
+configureLogging({
+    server: {
+        enabled: true,
+        level: 'debug'
+    },
+    client: {
+        enabled: true,
+        level: 'info'
+    }
+});
+
+// Enable only client logging
+configureLogging({
+    client: {
+        enabled: true,
+        level: 'debug'
     }
 });
 ```
 
-Or set environment variable:
-```bash
-DEBUG=mxf:* bun run start:dev
+### Log Levels
+
+Available log levels (from most to least severe):
+
+| Level | Value | Description |
+|-------|-------|-------------|
+| `error` | 0 | Error conditions |
+| `warn` | 1 | Warning conditions |
+| `info` | 2 | Informational messages |
+| `debug` | 3 | Debug-level messages |
+| `trace` | 4 | Detailed trace messages |
+
+### Using the Logger
+
+```typescript
+import { Logger, logger } from '../../src/shared/utils/Logger';
+
+// Use the default singleton logger (server target)
+logger.info('Server started');
+logger.debug('Processing request', { requestId: '123' });
+logger.error('Connection failed', error);
+
+// Create a custom logger with context
+const myLogger = new Logger('debug', 'MyService', 'server');
+myLogger.info('Service initialized');
+
+// Create a client-side logger
+const clientLogger = new Logger('debug', 'AgentHandler', 'client');
+clientLogger.debug('Agent connected');
+
+// Create child loggers with sub-context
+const childLogger = myLogger.child('SubComponent');
+childLogger.info('Sub-component ready');
+// Outputs: [timestamp][SERVER][INFO][MyService:SubComponent] Sub-component ready
 ```
+
+### Log Output Format
+
+Logs include timestamp, target (SERVER/CLIENT), level, and optional context:
+
+```
+[2025-01-26T10:30:00.000Z][SERVER][INFO][ChannelService] Channel created
+[2025-01-26T10:30:01.000Z][CLIENT][DEBUG][AgentHandler] Message received
+```
+
+### Logging in Demos and Tests
+
+For demos, keep logging disabled by default. Enable only when debugging:
+
+```typescript
+// At the top of your demo file, before any other imports
+import { enableClientLogging } from '../../src/shared/utils/Logger';
+
+// Enable logging only when needed
+if (process.env.DEBUG_DEMO) {
+    enableClientLogging('debug');
+}
+
+// Rest of your demo code...
+```
+
+**Run demo with logging:**
+```bash
+DEBUG_DEMO=true bun run demo:your-demo
+```
+
+### Best Practices
+
+1. **Keep logging disabled in production demos** - Default is disabled for clean output
+2. **Use appropriate log levels** - Don't use `debug` for everything
+3. **Add context** - Create loggers with context strings for easier filtering
+4. **Use child loggers** - Create child loggers for sub-components
+5. **Follow the target pathway** - Use `'client'` target for SDK code, `'server'` for server code
 
 ---
 

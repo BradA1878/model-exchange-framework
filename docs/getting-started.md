@@ -934,7 +934,11 @@ echo $AGENT_API_KEY
 ### Tool Execution Errors
 
 ```typescript
-// Enable debug logging
+// Enable framework logging for debugging
+import { enableClientLogging } from '../../src/shared/utils/Logger';
+enableClientLogging('debug');
+
+// Create agent with debug logging
 const agent = await sdk.createAgent({
     agentId: 'debug-agent',
     name: 'Debug Agent',
@@ -948,6 +952,8 @@ const agent = await sdk.createAgent({
 const tools = await agent.toolService.getAvailableTools();
 console.log('Available tools:', tools.map(t => t.name));
 ```
+
+> 📖 **See [Debug Mode & Logging](./troubleshooting.md#debug-mode--logging)** for comprehensive logging configuration including server/client logging, log levels, and best practices.
 
 ### LLM Errors
 
