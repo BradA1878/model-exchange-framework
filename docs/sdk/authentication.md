@@ -14,13 +14,13 @@ cd model-exchange-framework
 npm install
 
 # Build the project
-npm run build
+bun run build
 
 # Start the server
-npm run start
+bun run start
 
 # For development with hot reload
-npm run start:dev
+bun run start:dev
 ```
 
 ## Authentication Architecture
@@ -52,7 +52,7 @@ Server operators manage the MXF server and provide domain keys and user accounts
 
 ```bash
 # Generate a secure 64-char domain key
-npm run server:cli -- domain-key:generate
+bun run server:cli -- domain-key:generate
 
 # Output:
 # ✓ Domain key generated and saved to .env file
@@ -69,14 +69,14 @@ npm run server:cli -- domain-key:generate
 ### 2. View Current Domain Key
 
 ```bash
-npm run server:cli -- domain-key:show
+bun run server:cli -- domain-key:show
 ```
 
 ### 3. Create User Accounts
 
 ```bash
 # Create a user account for SDK developers
-npm run server:cli -- user:create \
+bun run server:cli -- user:create \
   --email developer@company.com \
   --password secure-password-123 \
   --username dev-user
@@ -87,7 +87,7 @@ npm run server:cli -- user:create \
 ### 4. List Users
 
 ```bash
-npm run server:cli -- user:list
+bun run server:cli -- user:list
 ```
 
 ### Security Best Practices for Server Operators
@@ -145,7 +145,7 @@ Use the SDK CLI interactive setup (recommended):
 
 ```bash
 # Run interactive setup
-npm run sdk:cli -- setup:interactive
+bun run sdk:cli -- setup:interactive
 
 # Follow the prompts:
 # ✔ User email: dev-user@company.com
@@ -163,14 +163,14 @@ Or use manual commands:
 
 ```bash
 # Create a channel
-npm run sdk:cli -- channel:create \
+bun run sdk:cli -- channel:create \
   --id my-channel \
   --name "My Channel" \
   --email dev-user@company.com \
   --password secure-password-123
 
 # Generate agent keys (saved to .env)
-npm run sdk:cli -- key:generate \
+bun run sdk:cli -- key:generate \
   --channel my-channel \
   --agents agent1,agent2,agent3 \
   --email dev-user@company.com \
@@ -328,7 +328,7 @@ Create `setup-config.json`:
 ```bash
 # Create user, channel, and generate all keys in one command
 # Credentials are written to .env file
-npm run sdk:cli -- setup \
+bun run sdk:cli -- setup \
   --config setup-config.json \
   --output .env
 
@@ -336,7 +336,7 @@ npm run sdk:cli -- setup \
 # ${MXF_USER_PASSWORD} will be replaced with the actual env var value
 ```
 
-**Note:** The interactive setup (`npm run sdk:cli -- setup:interactive`) is recommended for most use cases. Use config files for automation only.
+**Note:** The interactive setup (`bun run sdk:cli -- setup:interactive`) is recommended for most use cases. Use config files for automation only.
 
 ## Authentication Errors
 
@@ -368,7 +368,7 @@ MXF_DOMAIN_KEY=your-64-char-domain-key
 **Cause**: MXF server doesn't have `MXF_DOMAIN_KEY` set
 
 **Solution**:
-- **For server operators**: Run `npm run server:cli -- domain-key:generate`
+- **For server operators**: Run `bun run server:cli -- domain-key:generate`
 - Server cannot accept SDK connections without a domain key
 - This is a server-side issue, contact your server operator
 
@@ -399,7 +399,7 @@ const sdk = new MxfSDK({
 - Verify username and password are correct
 - For JWT tokens, they may have expired - request a new one
 - Contact server operator if account is disabled or deleted
-- Check that user account exists via `npm run server:cli -- user:list`
+- Check that user account exists via `bun run server:cli -- user:list`
 
 ### "Invalid agent key"
 
@@ -408,7 +408,7 @@ const sdk = new MxfSDK({
 **Solution**:
 ```bash
 # Regenerate agent keys via CLI
-npm run sdk:cli -- key:generate \
+bun run sdk:cli -- key:generate \
   --channel your-channel \
   --agents your-agent-id \
   --email your@email.com \
@@ -541,25 +541,25 @@ testAuthentication().catch(console.error);
 
 ```bash
 # Domain key management
-npm run server:cli -- domain-key:generate
-npm run server:cli -- domain-key:show
+bun run server:cli -- domain-key:generate
+bun run server:cli -- domain-key:show
 
 # User management
-npm run server:cli -- user:create --email <email> --password <password> [--username <username>]
-npm run server:cli -- user:list
+bun run server:cli -- user:create --email <email> --password <password> [--username <username>]
+bun run server:cli -- user:list
 ```
 
 ### SDK CLI Commands
 
 ```bash
 # Channel management
-npm run sdk:cli -- channel:create --id <id> --name <name> --email <email> --password <password>
+bun run sdk:cli -- channel:create --id <id> --name <name> --email <email> --password <password>
 
 # Key generation
-npm run sdk:cli -- key:generate --channel <id> --agents <agent1,agent2> --email <email> --password <password> [--output <file>]
+bun run sdk:cli -- key:generate --channel <id> --agents <agent1,agent2> --email <email> --password <password> [--output <file>]
 
 # Automated setup
-npm run sdk:cli -- setup --config <file> [--output <file>]
+bun run sdk:cli -- setup --config <file> [--output <file>]
 ```
 
 ## Next Steps

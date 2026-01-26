@@ -31,6 +31,7 @@ import { Logger } from '../../shared/utils/Logger';
 import { EventBus } from '../../shared/events/EventBus';
 import { createBaseEventPayload } from '../../shared/schemas/EventPayloadSchema';
 import { EventName } from '../../shared/events/EventNames';
+import { ChannelSystemLlmChangeEvent as SharedChannelSystemLlmChangeEvent } from '../../shared/events/event-definitions/ConfigEvents';
 
 /**
  * LLM model configuration
@@ -513,34 +514,9 @@ export interface LlmModelChangeEvent {
 
 /**
  * Channel SystemLLM state change event
+ * Re-exported from shared events for backward compatibility
  */
-export interface ChannelSystemLlmChangeEvent {
-    /**
-     * Whether SystemLLM is enabled
-     */
-    enabled: boolean;
-
-    /**
-     * Optional reason for the change
-     */
-    reason?: string;
-
-    /**
-     * Operation-specific overrides
-     */
-    operationOverrides?: Record<string, boolean>;
-
-    /**
-     * Optional channel ID for channel-specific changes
-     * If not provided, applies globally
-     */
-    channelId?: string;
-
-    /**
-     * Timestamp of the change
-     */
-    timestamp: number;
-}
+export type ChannelSystemLlmChangeEvent = SharedChannelSystemLlmChangeEvent;
 
 /**
  * Configuration manager interface

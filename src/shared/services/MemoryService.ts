@@ -66,6 +66,17 @@ import {
     MemoryGetResultEventData
 } from '../schemas/EventPayloadSchema';
 import { AgentId, ChannelId } from '../types/ChannelContext';
+import {
+    UtilityRetrievalOptions,
+    RetrievedMemoryWithUtility,
+    UtilityRetrievalResult,
+    MemoryCandidate,
+    OrparPhase,
+    MemoryUtilitySubdocument
+} from '../types/MemoryUtilityTypes';
+import { QValueManager } from './QValueManager';
+import { UtilityScorerService } from './UtilityScorerService';
+import { RewardSignalProcessor } from './RewardSignalProcessor';
 
 /**
  * Types of cognitive memory content
@@ -1555,7 +1566,208 @@ export class MemoryService {
     public deleteGeneralData(key: string): boolean {
         return this.generalData.delete(key);
     }
-    
+
+    // =========================================================================
+    // Memory Utility Learning System (MULS) Methods
+    // =========================================================================
+
+    /**
+     * Retrieve memories with utility-based scoring (MULS)
+     *
+     * Two-Phase Retrieval:
+     * Phase A: Query semantic search → filter by similarity threshold → take top k1
+     * Phase B: Fetch Q-values → z-score normalize → composite score → return top k2
+     *
+     * @param options Retrieval options including query, phase, and filters
+     * @returns Retrieved memories with utility scoring information
+     */
+    public async retrieveWithUtility(options: UtilityRetrievalOptions): Promise<UtilityRetrievalResult> {
+        const startTime = Date.now();
+        const qValueManager = QValueManager.getInstance();
+        const utilityScorer = UtilityScorerService.getInstance();
+
+        // If MULS is disabled, return empty result
+        if (!qValueManager.isEnabled()) {
+            return {
+                memories: [],
+                metadata: {
+                    query: options.query,
+                    phase: options.phase,
+                    lambda: 0,
+                    totalCandidates: 0,
+                    semanticSearchTimeMs: 0,
+                    utilityScoringTimeMs: 0,
+                    totalTimeMs: Date.now() - startTime
+                }
+            };
+        }
+
+        const semanticSearchStart = Date.now();
+
+        // Phase A: Semantic search to get candidates
+        // This would typically integrate with MxfMeilisearchService
+        // For now, we search cognitive memory as a fallback
+        const candidates: MemoryCandidate[] = [];
+
+        // Search cognitive memory entries matching the query
+        const allCognitiveEntries = Array.from(this.cognitiveMemory.values());
+        for (const entry of allCognitiveEntries) {
+            // Filter by agent/channel if specified
+            if (options.agentId && entry.agentId !== options.agentId) continue;
+            if (options.channelId && entry.channelId !== options.channelId) continue;
+
+            // Simple text similarity for cognitive memory (in production, use Meilisearch)
+            const contentStr = JSON.stringify(entry.content).toLowerCase();
+            const queryWords = options.query.toLowerCase().split(/\s+/);
+            const matchCount = queryWords.filter(word => contentStr.includes(word)).length;
+            const similarity = matchCount / Math.max(queryWords.length, 1);
+
+            // Apply similarity threshold
+            const threshold = options.similarityThreshold ?? 0.3;
+            if (similarity >= threshold) {
+                // Get Q-value from manager or use default
+                const qValue = qValueManager.getQValue(entry.id);
+
+                candidates.push({
+                    memoryId: entry.id,
+                    similarity,
+                    qValue,
+                    content: entry.content,
+                    metadata: {
+                        memoryType: entry.memoryType,
+                        labels: entry.labels,
+                        createdAt: entry.createdAt
+                    }
+                });
+            }
+        }
+
+        const semanticSearchTimeMs = Date.now() - semanticSearchStart;
+
+        // Limit candidates for Phase B
+        const maxCandidates = options.maxCandidates ?? 20;
+        candidates.sort((a, b) => b.similarity - a.similarity);
+        const topCandidates = candidates.slice(0, maxCandidates);
+
+        // Phase B: Utility scoring
+        const utilityScoringStart = Date.now();
+
+        const scoringResult = options.phase
+            ? utilityScorer.scoreForPhase(options.query, topCandidates, options.phase)
+            : utilityScorer.scoreMemories(options.query, topCandidates, {
+                lambda: options.lambda,
+                maxResults: options.maxResults,
+                includeBreakdown: options.includeBreakdown
+            });
+
+        const utilityScoringTimeMs = Date.now() - utilityScoringStart;
+
+        // Build result
+        const memories: RetrievedMemoryWithUtility[] = scoringResult.memories.map(scored => ({
+            memoryId: scored.memoryId,
+            content: scored.content,
+            score: scored.finalScore,
+            breakdown: scored.breakdown,
+            metadata: scored.metadata
+        }));
+
+        // Emit retrieval event
+        this.emitUtilityRetrievalEvent(options, memories, scoringResult.stats.lambdaUsed, {
+            semanticSearchTimeMs,
+            utilityScoringTimeMs,
+            totalCandidates: candidates.length
+        });
+
+        return {
+            memories,
+            metadata: {
+                query: options.query,
+                phase: options.phase,
+                lambda: scoringResult.stats.lambdaUsed,
+                totalCandidates: candidates.length,
+                semanticSearchTimeMs,
+                utilityScoringTimeMs,
+                totalTimeMs: Date.now() - startTime
+            }
+        };
+    }
+
+    /**
+     * Track memory usage for reward attribution
+     *
+     * @param taskId The task ID to track usage for
+     * @param memoryIds The memory IDs that were retrieved
+     * @param phase The ORPAR phase when retrieval occurred
+     */
+    public trackMemoryUsage(taskId: string, memoryIds: string[], phase: OrparPhase): void {
+        const rewardProcessor = RewardSignalProcessor.getInstance();
+
+        if (!rewardProcessor.isEnabled()) {
+            return;
+        }
+
+        rewardProcessor.trackMemoriesUsage(taskId, memoryIds, phase);
+        this.logger.debug(`[MemoryService] Tracked ${memoryIds.length} memories for task ${taskId} (phase=${phase})`);
+    }
+
+    /**
+     * Update Q-value for a specific memory
+     * Used by QValueManager persistence callback
+     */
+    public async updateMemoryUtility(memoryId: string, utilityUpdate: Partial<MemoryUtilitySubdocument>): Promise<void> {
+        // Find the memory in cognitive memory cache
+        const cognitiveEntry = this.cognitiveMemory.get(memoryId);
+        if (cognitiveEntry) {
+            // Update in-memory cache (cognitive memory doesn't have utility subdoc by default)
+            // For cognitive memory, we just rely on QValueManager's cache
+            return;
+        }
+
+        // For persistent memory, delegate to persistence service
+        if (this.persistenceService) {
+            try {
+                // Update agent memory with utility subdocument
+                // This is a partial update to just the utility field
+                await this.persistenceService.updateAgentMemoryUtility?.(memoryId, utilityUpdate);
+            } catch (error) {
+                this.logger.warn(`[MemoryService] Failed to update utility for memory ${memoryId}: ${error}`);
+            }
+        }
+    }
+
+    /**
+     * Emit utility retrieval completed event
+     */
+    private emitUtilityRetrievalEvent(
+        options: UtilityRetrievalOptions,
+        memories: RetrievedMemoryWithUtility[],
+        lambda: number,
+        timing: { semanticSearchTimeMs: number; utilityScoringTimeMs: number; totalCandidates: number }
+    ): void {
+        try {
+            EventBus.server.emit(Events.MemoryUtility.UTILITY_RETRIEVAL_COMPLETED, {
+                eventType: Events.MemoryUtility.UTILITY_RETRIEVAL_COMPLETED,
+                timestamp: Date.now(),
+                data: {
+                    query: options.query,
+                    phase: options.phase,
+                    lambda,
+                    totalCandidates: timing.totalCandidates,
+                    resultsReturned: memories.length,
+                    semanticSearchTimeMs: timing.semanticSearchTimeMs,
+                    utilityScoringTimeMs: timing.utilityScoringTimeMs,
+                    totalTimeMs: timing.semanticSearchTimeMs + timing.utilityScoringTimeMs,
+                    memoryIds: memories.map(m => m.memoryId),
+                    agentId: options.agentId,
+                    channelId: options.channelId
+                }
+            });
+        } catch (error) {
+            // EventBus may not be available in all contexts
+            this.logger.debug(`[MemoryService] Could not emit utility retrieval event: ${error}`);
+        }
+    }
+
     private getRelationshipKey(agentId1: string, agentId2: string, channelId?: string): string {
         const [sortedId1, sortedId2] = [agentId1, agentId2].sort();
         return channelId ? `${sortedId1}:${sortedId2}:${channelId}` : `${sortedId1}:${sortedId2}`;

@@ -28,7 +28,8 @@
 
 import { Subject, Observable, Subscription } from 'rxjs';
 import { filter, map } from 'rxjs/operators';
-import { EventMap, SOCKET_RESERVED_EVENTS, Events } from './EventNames';
+import { SOCKET_RESERVED_EVENTS, Events } from './EventNames';
+import type { EventMap } from './EventNames';
 import { MessageEvents } from './event-definitions/MessageEvents';
 import { createStrictValidator, assertIsEventPayload, assertIsChannelMessage, assertIsAgentMessage } from '../utils/validation';
 import { Logger } from '../utils/Logger';

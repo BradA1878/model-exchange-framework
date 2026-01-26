@@ -703,9 +703,22 @@ ORPAR is MXF's signature cognitive cycle pattern that enables sophisticated auto
 
 ORPAR represents MXF's commitment to building truly intelligent, self-improving autonomous agent systems.
 
+## Memory System Integration
+
+ORPAR integrates with the memory system through the ORPAR-Memory Integration layer. See [ORPAR-Memory Integration](orpar-memory-integration.md) for details on how memory retrieval and consolidation are phase-aware.
+
+Key integration points:
+- **Phase-Strata Routing**: Different phases access different memory strata
+- **Surprise Signals**: High surprise can trigger additional observation cycles
+- **Phase-Weighted Rewards**: Q-values updated based on phase contribution
+- **Cycle Consolidation**: Memory promotion/demotion on cycle completion
+
 ## Related Documentation
 
 - [Control Loop API](../api/control-loop.md) - REST and WebSocket APIs
+- [ORPAR-Memory Integration](orpar-memory-integration.md) - Phase-aware memory coupling
+- [Nested Learning](nested-learning.md) - Multi-timescale memory architecture
+- [Memory Utility Learning (MULS)](memory-utility-learning.md) - Q-value based retrieval
 - [SystemLLM Service](system-llm.md) - AI service powering ORPAR
 - [Key Concepts](key-concepts.md) - Fundamental MXF concepts
 - [SDK Handlers](../sdk/handlers.md) - Client-side ORPAR implementation

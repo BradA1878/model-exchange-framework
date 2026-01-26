@@ -58,6 +58,7 @@ For complete working projects, see the [Example Projects](../examples/first-cont
 - [Fog of War Game](../examples/fog-of-war.md) - Strategy game with 8 AI commanders
 - [Tic-Tac-Toe AI](../examples/tic-tac-toe.md) - AI vs AI gameplay
 - [Go Fish AI](../examples/go-fish.md) - Card game with memory and strategy
+- [Code Execution Demo](../examples/code-execution.md) - Secure code execution with Docker + Bun
 
 ---
 

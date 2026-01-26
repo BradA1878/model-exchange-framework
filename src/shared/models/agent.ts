@@ -154,11 +154,9 @@ const AgentSchema: Schema = new Schema(
     }
 );
 
-// Create indexes
-AgentSchema.index({ serviceTypes: 1 });
+// Create compound indexes (simple indexes are defined inline in schema)
 AgentSchema.index({ status: 1, serviceTypes: 1 });
 AgentSchema.index({ lastActive: -1 });
-AgentSchema.index({ keyId: 1 });
 
 // Export the model
 export const Agent = mongoose.model<IAgent>('Agent', AgentSchema);

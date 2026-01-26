@@ -446,6 +446,27 @@ console.log(result);
 
 ## Troubleshooting
 
+### Issue: Docker Not Available
+
+**Problem:** Error "Code execution is not available - Docker is not running"
+
+**Solution:**
+```bash
+# 1. Ensure Docker daemon is running
+docker info
+
+# 2. Restart MXF server - it will auto-build the image
+bun run start:dev
+
+# Note: The server automatically builds the mxf/code-executor:latest
+# image on startup if it doesn't exist.
+```
+
+**Manual build (if auto-build fails):**
+```bash
+docker build -t mxf/code-executor:latest ./docker/code-executor
+```
+
 ### Issue: Timeout Errors
 
 **Problem:** Code exceeds timeout limit
@@ -485,17 +506,25 @@ code = 'const data = context.fileData; return process(data);'
 **Problem:** Complex TypeScript features fail
 
 **Solution:**
+Bun handles TypeScript natively but some advanced features may not work:
 ```typescript
 // ❌ May not work
 code = `
     type Complex<T> = T extends Array<infer U> ? U : never;
+    // Advanced decorators, complex generics
     ...
 `;
 
-// ✅ Use simpler TypeScript or JavaScript
+// ✅ Use simpler TypeScript (Bun supports well)
 code = `
     interface Simple { name: string; }
     const obj: Simple = { name: 'test' };
+    return obj.name;
+`;
+
+// ✅ Or use JavaScript for maximum compatibility
+code = `
+    const obj = { name: 'test' };
     return obj.name;
 `;
 ```

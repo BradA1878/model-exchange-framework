@@ -683,11 +683,11 @@ Channel server registered but not starting when agent joins
 ### Working Examples
 
 - **Global Servers**: `examples/external-mcp-registration/`
-  - Run: `npm run demo:external-mcp`
+  - Run: `bun run demo:external-mcp`
   - Shows global server registration and tool usage
 
 - **Channel Servers**: `examples/channel-mcp-registration/`
-  - Run: `npm run demo:channel-mcp`
+  - Run: `bun run demo:channel-mcp`
   - Shows channel-scoped servers, multi-agent sharing, lifecycle management
 
 ---

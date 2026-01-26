@@ -18,8 +18,8 @@
  * @documentation https://brada1878.github.io/model-exchange-framework/
  */
 
-import { AgentMessageEvent } from './MessageEvents';
-import {
+import type { AgentMessageEvent } from './MessageEvents';
+import type {
     AgentEventData,
     AgentEventPayload,
     AgentRegistrationEventData as AgentRegistrationEventBase,

@@ -19,6 +19,10 @@ describe('User API Endpoints', () => {
         api = createTestAPI();
     });
 
+    afterAll(() => {
+        api.cleanup();
+    });
+
     // =========================================================================
     // POST /api/users/register - User registration
     // =========================================================================

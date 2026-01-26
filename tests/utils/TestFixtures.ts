@@ -69,9 +69,9 @@ export const ORPAR_TEST_AGENT_CONFIG: TestAgentConfig = {
     name: 'ORPAR Test Agent',
     capabilities: ['reasoning', 'planning', 'testing'],
     allowedTools: [
-        'control_loop_initialize',
-        'control_loop_submit_observation',
-        'control_loop_get_status'
+        'controlLoop_start',
+        'controlLoop_observe',
+        'controlLoop_status'
     ],
     agentConfigPrompt: `You are a test agent for ORPAR control loop testing.
 Follow the ORPAR cycle: Observe, Reason, Plan, Act, Reflect.
@@ -107,8 +107,10 @@ export const MEMORY_TEST_AGENT_CONFIG: TestAgentConfig = {
     name: 'Memory Test Agent',
     capabilities: ['memory', 'testing'],
     allowedTools: [
-        'memory_get',
-        'memory_set',
+        'agent_memory_read',
+        'agent_memory_write',
+        'channel_memory_read',
+        'channel_memory_write',
         'memory_search_conversations',
         'memory_search_actions'
     ],
@@ -295,3 +297,119 @@ export function createFailingPromise(error: string, delay: number = 0): Promise<
         setTimeout(() => reject(new Error(error)), delay)
     );
 }
+
+// =============================================================================
+// Code Execution Test Configurations
+// =============================================================================
+
+/**
+ * Agent configuration for code execution tests
+ */
+export const CODE_EXECUTION_AGENT_CONFIG: TestAgentConfig = {
+    name: 'Code Execution Test Agent',
+    capabilities: ['code-execution', 'testing'],
+    allowedTools: ['code_execute'],
+    agentConfigPrompt: 'Test agent for code execution',
+    temperature: 0.1,
+    maxTokens: 2000
+};
+
+/**
+ * Sample code execution inputs for testing
+ */
+export const CODE_EXECUTION_INPUTS = {
+    // Simple operations
+    simpleArithmetic: { code: 'return 1 + 1;' },
+    simpleMultiplication: { code: 'return 6 * 7;' },
+
+    // Array operations
+    arraySum: {
+        code: `
+            const numbers = [1, 2, 3, 4, 5];
+            return numbers.reduce((a, b) => a + b, 0);
+        `
+    },
+    arrayFilter: {
+        code: `
+            const items = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+            return items.filter(x => x > 5);
+        `
+    },
+
+    // TypeScript
+    typescript: {
+        language: 'typescript' as const,
+        code: `
+            interface Result { value: number; doubled: number; }
+            const x: number = 42;
+            const result: Result = { value: x, doubled: x * 2 };
+            return result;
+        `
+    },
+    typescriptInterface: {
+        language: 'typescript' as const,
+        code: `
+            interface Person { name: string; age: number; }
+            const person: Person = { name: 'Alice', age: 30 };
+            return person.name;
+        `
+    },
+
+    // Context usage
+    withContext: {
+        code: `
+            const filtered = context.data.filter(item => item.score > 0.8);
+            return { total: context.data.length, filtered: filtered.length };
+        `,
+        context: {
+            data: [
+                { name: 'A', score: 0.9 },
+                { name: 'B', score: 0.7 },
+                { name: 'C', score: 0.85 }
+            ]
+        }
+    },
+
+    // Console output
+    withConsoleLog: {
+        code: `
+            console.log('Step 1: Starting');
+            const result = Math.sqrt(144);
+            console.log('Step 2: Result is', result);
+            return result;
+        `
+    },
+
+    // Dangerous code (should be blocked)
+    dangerousEval: { code: 'eval("1 + 1")' },
+    dangerousRequire: { code: 'const fs = require("fs")' },
+    dangerousBunSpawn: { code: 'Bun.spawn(["ls"])' },
+    dangerousBunFile: { code: 'Bun.file("/etc/passwd")' },
+    dangerousBunWrite: { code: 'Bun.write("/tmp/test", "data")' },
+    dangerousProcessExit: { code: 'process.exit(1)' },
+    dangerousProto: { code: 'const obj = {}; obj.__proto__ = null;' },
+
+    // Timeout test
+    infiniteLoop: {
+        code: 'while(true) {}',
+        timeout: 1000
+    },
+
+    // Error scenarios
+    undefinedReference: { code: 'return undefinedVariable;' },
+    syntaxError: { code: 'return {' }
+};
+
+/**
+ * Expected results for code execution tests
+ */
+export const CODE_EXECUTION_EXPECTED = {
+    simpleArithmetic: { success: true, output: 2 },
+    simpleMultiplication: { success: true, output: 42 },
+    arraySum: { success: true, output: 15 },
+    arrayFilter: { success: true, output: [6, 7, 8, 9, 10] },
+    typescript: { success: true, output: { value: 42, doubled: 84 } },
+    withConsoleLog: { success: true, output: 12 },
+    dangerousEval: { success: false },
+    infiniteLoop: { success: false, timeout: true }
+};

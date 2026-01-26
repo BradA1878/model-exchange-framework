@@ -39,11 +39,16 @@ import {
 } from '../../../shared/types/MemoryTypes';
 
 import { Logger } from '../../../shared/utils/Logger';
-import { 
-    AgentMemory, 
-    ChannelMemory, 
+import {
+    AgentMemory,
+    ChannelMemory,
     RelationshipMemory
 } from '../../../shared/models/memory';
+import {
+    MemoryEntryModel,
+    SurpriseHistoryModel,
+    MemoryPatternModel
+} from '../../../shared/models/memoryStrata';
 
 /**
  * Memory Persistence Service interface
@@ -465,9 +470,42 @@ export class MemoryPersistenceService implements IMemoryPersistenceService {
         switch (scope) {
             case MemoryScope.AGENT:
                 if (typeof id === 'string') {
+                    // Delete from base AgentMemory collection
                     return from(AgentMemory.deleteOne({ agentId: id }).exec()).pipe(
-                        map(result => result.deletedCount > 0),
-                        tap(success => {
+                        switchMap(baseResult => {
+                            // Delete from all strata collections in parallel
+                            const strataDeletePromises = Promise.all([
+                                MemoryEntryModel.deleteMany({ agentId: id }).exec(),
+                                SurpriseHistoryModel.deleteMany({ agentId: id }).exec(),
+                                MemoryPatternModel.deleteMany({ agentId: id }).exec(),
+                                // Delete from RelationshipMemory (both sides of relationships)
+                                RelationshipMemory.deleteMany({
+                                    $or: [{ agentId1: id }, { agentId2: id }]
+                                }).exec()
+                            ]);
+
+                            return from(strataDeletePromises).pipe(
+                                map(([memoryEntries, surpriseHistory, patterns, relationships]) => {
+                                    const totalDeleted = baseResult.deletedCount +
+                                        memoryEntries.deletedCount +
+                                        surpriseHistory.deletedCount +
+                                        patterns.deletedCount +
+                                        relationships.deletedCount;
+
+                                    if (totalDeleted > 0) {
+                                        this.logger.info(
+                                            `Deleted agent memory for ${id}: ` +
+                                            `base=${baseResult.deletedCount}, ` +
+                                            `entries=${memoryEntries.deletedCount}, ` +
+                                            `surprise=${surpriseHistory.deletedCount}, ` +
+                                            `patterns=${patterns.deletedCount}, ` +
+                                            `relationships=${relationships.deletedCount}`
+                                        );
+                                    }
+
+                                    return baseResult.deletedCount > 0 || totalDeleted > 0;
+                                })
+                            );
                         }),
                         catchError(error => {
                             this.logger.error(`Error deleting agent memory for ${id}`, error);

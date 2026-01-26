@@ -18,42 +18,150 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Do not add unit tests to the codebase unless asked.**
 - **NEVER run the MXF server in a background process.** The server has SystemLLM enabled which uses Claude Opus 4.5 credits - leaving it running burns through OpenRouter budget ($18+ per day). Always let the user start/stop the server in their own terminal.
 
+## Event System Rules
+
+**All events MUST follow these patterns. No exceptions.**
+
+### Required Files
+- **Event names**: Import from `src/shared/events/EventNames.ts`
+- **Payload helpers**: Import from `src/shared/schemas/EventPayloadSchema.ts`
+- **New event types**: Create in `src/shared/events/event-definitions/`
+
+### ❌ WRONG - Never do this:
+```typescript
+// String literal for event name
+EventBus.server.emit('plan:step_completed', {
+    data: { planId, stepId, completedBy }
+});
+
+// Raw object payload without helper
+EventBus.server.emit(Events.Message.CHANNEL_MESSAGE, {
+    agentId: context.agentId,
+    data: { message }
+});
+```
+
+### ✅ RIGHT - Always do this:
+```typescript
+import { Events } from '../../../events/EventNames';
+import { createPlanStepCompletedEventPayload } from '../../../schemas/EventPayloadSchema';
+
+// Use constant for event name + helper for payload
+EventBus.server.emit(
+    Events.Plan.PLAN_STEP_COMPLETED,
+    createPlanStepCompletedEventPayload(
+        Events.Plan.PLAN_STEP_COMPLETED,
+        context.agentId,
+        context.channelId,
+        { planId, stepId, completedBy }
+    )
+);
+```
+
+### When Creating New Event Types
+
+1. **Create event definition** in `src/shared/events/event-definitions/YourEvents.ts`:
+   ```typescript
+   export const YourEvents = {
+       YOUR_EVENT: 'your:event',
+   } as const;
+
+   export interface YourEventData {
+       // typed payload fields
+   }
+
+   export interface YourPayloads {
+       'your:event': YourEventData;
+   }
+   ```
+
+2. **Export from EventNames.ts**:
+   ```typescript
+   import { YourEvents, YourPayloads } from './event-definitions/YourEvents';
+   export { YourEvents, YourPayloads };
+   // Add to Events namespace and EventMap
+   ```
+
+3. **Create payload helper** in `EventPayloadSchema.ts`:
+   ```typescript
+   export function createYourEventPayload(...): BaseEventPayload<YourEventData> {
+       // validation + createBaseEventPayload
+   }
+   ```
+
+4. **Use in code** with imports from the canonical locations above.
+
+### EventBus Usage - Never Use Direct Socket
+
+**ALWAYS use EventBus.client or EventBus.server - NEVER emit/listen directly on the socket.**
+
+❌ WRONG - Direct socket access:
+```typescript
+// Direct socket emit bypasses validation
+socket.emit('some:event', data);
+
+// Direct socket listener misses EventBus features
+socket.on('some:event', handler);
+```
+
+✅ RIGHT - Use EventBus:
+```typescript
+// Server-side: use EventBus.server
+EventBus.server.emit(Events.SomeCategory.SOME_EVENT, payload);
+EventBus.server.on(Events.SomeCategory.SOME_EVENT, handler);
+
+// Client/SDK-side: use EventBus.client
+EventBus.client.emit(Events.SomeCategory.SOME_EVENT, payload);
+EventBus.client.on(Events.SomeCategory.SOME_EVENT, handler);
+```
+
+**Why this matters:**
+- EventBus validates payloads and enforces structure
+- Direct socket calls bypass validation causing "Rejecting non-standard payload" errors
+- EventBus handles event forwarding, typing, and cross-component communication
+
 ## Essential Commands
 
 ### Development
 ```bash
-# Install dependencies
-npm install
+# Install dependencies (Bun for fast installation)
+bun install
 
-# Start development server (with hot reload)  
-npm run start:dev
+# Start development server (TypeScript hot-reload with Bun)
+bun run start:dev
 
 # Build the project
-npm run build
+bun run build
 
 # Clean build artifacts
-npm run clean
+bun run clean
 
 # Full rebuild
-npm run rebuild
+bun run rebuild
 ```
+
+**Note:** The project uses Bun:
+- **Bun** for package management (`bun install`, `bun.lock`)
+- **Bun** for server execution (`bun --watch src/server/index.ts`)
+- **Jest** for testing (Stryker mutation testing support)
+- **Dashboard Exception**: The `dashboard/` subdirectory uses npm (separate Vue.js project with its own dependencies)
 
 ### Testing
 
 **Three-Tier Test Architecture:**
 | Tier | Command | Tests | Speed | Server Required |
 |------|---------|-------|-------|-----------------|
-| Unit + Property | `npm run test:unit` | 159 | ~2s | No |
-| Integration | `npm run test:integration` | 92 | ~60s | Yes (start manually) |
-| Mutation | `npm run test:mutation` | 2317 mutants | ~5m | No |
+| Unit + Property | `bun run test:unit` | 159 | ~2s | No |
+| Integration | `bun run test:integration` | 92 | ~60s | Yes (start manually) |
+| Mutation | `bun run test:mutation` | 2317 mutants | ~5m | No |
 
 **Unit & Property Tests (Fast, No Server):**
 ```bash
-npm run test:unit              # Run all unit + property tests
-npm run test:property          # Property tests only
-npm run test:unit:watch        # Watch mode
-npm run test:unit:coverage     # With coverage
-npm run test:mutation          # Mutation testing (test quality)
+bun run test:unit              # Run all unit + property tests
+bun run test:property          # Property tests only
+bun run test:unit:watch        # Watch mode
+bun run test:unit:coverage     # With coverage
+bun run test:mutation          # Mutation testing (test quality)
 ```
 
 **Integration Tests (Jest-based):**
@@ -61,34 +169,35 @@ npm run test:mutation          # Mutation testing (test quality)
 **IMPORTANT:** Start the server manually before running integration tests:
 ```bash
 # Terminal 1: Start the server
-npm run dev
+bun run dev
 
 # Terminal 2: Run integration tests
-npm run test:integration
+bun run test:integration
 ```
 
 ```bash
 # Run all integration tests
-npm run test:integration
+bun run test:integration
 
 # Run specific test suites
-npm run test:integration -- --testPathPattern=agent      # Agent tests
-npm run test:integration -- --testPathPattern=channel    # Channel tests
-npm run test:integration -- --testPathPattern=tool       # Tool tests
-npm run test:integration -- --testPathPattern=prompt     # Prompt system tests
-npm run test:integration -- --testPathPattern=task       # Task system tests
-npm run test:integration -- --testPathPattern=orpar      # ORPAR tests
-npm run test:integration -- --testPathPattern=memory     # Memory tests
-npm run test:integration -- --testPathPattern=meilisearch # Meilisearch tests
+bun run test:integration -- --testPathPattern=agent      # Agent tests
+bun run test:integration -- --testPathPattern=channel    # Channel tests
+bun run test:integration -- --testPathPattern=tool       # Tool tests
+bun run test:integration -- --testPathPattern=prompt     # Prompt system tests
+bun run test:integration -- --testPathPattern=task       # Task system tests
+bun run test:integration -- --testPathPattern=orpar      # ORPAR tests
+bun run test:integration -- --testPathPattern=memory     # Memory tests
+bun run test:integration -- --testPathPattern=meilisearch # Meilisearch tests
+bun run test:integration -- --testPathPattern=code-execution # Code execution tests
 
 # Watch mode for development
-npm run test:watch
+bun run test:watch
 
 # CI mode
-npm run test:ci
+bun run test:ci
 
 # Coverage report
-npm run test:coverage
+bun run test:coverage
 ```
 
 **Claude Code Test Commands:**
@@ -112,7 +221,7 @@ After completing code changes, spawn these agents in sequence to ensure quality:
 ```
 After implementing a feature or fix:
 1. Spawn test-builder agent → writes tests for your changes
-2. Run npm run test:unit → verify tests pass
+2. Run bun run test:unit → verify tests pass
 3. Spawn code-cleanup agent → clean up the code
 4. Spawn docs-updater agent → update docs
 5. Run /finalize → commit, test, and create PR
@@ -123,15 +232,17 @@ After implementing a feature or fix:
 **Legacy Tests & Demos:**
 ```bash
 # Legacy integration tests
-npm run test:meilisearch     # Meilisearch-specific integration test
-npm run test:code-execution  # Code execution demo
+bun run test:meilisearch     # Meilisearch-specific integration test
 
 # Multi-agent demos
-npm run demo:first-contact   # 6 agents in first contact scenario
-npm run demo:fog-of-war      # 8 agents in strategy game
-npm run demo:interview       # Interview scheduling demo
-npm run demo:external-mcp    # External MCP server registration demo
-npm run demo:channel-mcp     # Channel MCP demo
+bun run demo:first-contact   # 6 agents in first contact scenario
+bun run demo:fog-of-war      # 8 agents in strategy game
+bun run demo:interview       # Interview scheduling demo
+bun run demo:external-mcp    # External MCP server registration demo
+bun run demo:channel-mcp     # Channel MCP demo
+bun run demo:code-execution  # Code execution sandbox demo
+bun run demo:muls            # Memory Utility Learning System demo
+bun run demo:orpar-memory    # ORPAR-Memory integration demo
 ```
 
 **Test Structure:**
@@ -139,6 +250,9 @@ npm run demo:channel-mcp     # Channel MCP demo
 tests/
 ├── setup/                    # Jest global setup/teardown
 ├── utils/                    # Test utilities (TestSDK, waitFor, etc.)
+├── unit/                     # Unit tests
+│   └── services/             # Service unit tests
+├── property/                 # Property-based tests (fast-check)
 └── integration/
     ├── agent/                # Agent lifecycle tests
     ├── channel/              # Channel communication tests
@@ -148,53 +262,54 @@ tests/
     ├── orpar/                # ORPAR control loop tests
     ├── memory/               # Memory operation tests
     ├── meilisearch/          # Semantic search tests
+    ├── code-execution/       # Code execution sandbox tests
     └── external-mcp/         # External MCP server tests
 ```
 
 ### Dashboard Development
 ```bash
 # Start dashboard development server (requires main server running)
-cd dashboard && npm run dev
+cd dashboard && bun run dev
 
 # Build dashboard for production
-npm run build:dashboard
+bun run build:dashboard
 ```
 
 ### Database Operations
 ```bash
 # Clean up database
-npm run cleanup:db
+bun run cleanup:db
 ```
 
 ### Docker Operations
 ```bash
 # Deploy full stack (MXF + MongoDB + Meilisearch + Redis + Dashboard)
-npm run docker:up
+bun run docker:up
 
 # Stop all services
-npm run docker:down
+bun run docker:down
 
 # View logs (all services)
-npm run docker:logs
+bun run docker:logs
 
 # View logs (specific service)
-npm run docker:logs mxf-server
-npm run docker:logs meilisearch
+bun run docker:logs mxf-server
+bun run docker:logs meilisearch
 
 # Check service health
-npm run docker:health
+bun run docker:health
 
 # Rebuild and restart services
-npm run docker:rebuild
+bun run docker:rebuild
 
 # Restart specific service
-npm run docker:restart mxf-server
+bun run docker:restart mxf-server
 
 # Clean volumes and system
-npm run docker:clean
+bun run docker:clean
 
 # Check Meilisearch stats
-npm run docker:meilisearch:stats
+bun run docker:meilisearch:stats
 ```
 
 ## Comprehensive Feature Analysis
@@ -250,6 +365,31 @@ npm run docker:meilisearch:stats
 - **PatternLearningService**: Learns from successful/failed parameter patterns for cross-agent knowledge sharing
 - **PredictiveAnalyticsService**: ML-based error prediction and anomaly detection
 - **A/B Testing Framework**: Statistical testing for validation strategies and system optimizations
+- **Memory Utility Learning System (MULS)**:
+  - **QValueManager**: Tracks which memories lead to successful task outcomes using EMA updates
+  - **UtilityScorerService**: Two-phase retrieval combining similarity with utility (Q-values)
+  - **RewardSignalProcessor**: Converts task outcomes to Q-value updates
+  - **ORPAR phase-specific lambda**: Different utility weights for observation, reasoning, planning, action, reflection
+  - **Score formula**: `score = (1-λ) × similarity + λ × Q_normalized`
+- **ORPAR-Memory Integration** (Feature flag: `ORPAR_MEMORY_INTEGRATION_ENABLED`):
+  - **OrparMemoryCoordinator**: Central orchestration service connecting ORPAR and memory systems
+  - **PhaseStrataRouter**: Routes memory queries to appropriate strata based on ORPAR phase:
+    - OBSERVATION: Working, Short-term (lambda=0.2)
+    - REASONING: Episodic, Semantic (lambda=0.5)
+    - PLANNING: Semantic, Long-term (lambda=0.7)
+    - ACTION: Working, Short-term (lambda=0.3)
+    - REFLECTION: All strata (lambda=0.6)
+  - **SurpriseOrparAdapter**: Converts Titans-style surprise signals to ORPAR decisions:
+    - High surprise (>0.7): Trigger 1-3 additional observation cycles
+    - Moderate surprise (0.4-0.7): Inject context into reasoning
+    - Plan surprise (>0.6): Flag plan for reconsideration
+  - **PhaseWeightedRewarder**: Attributes Q-value rewards by phase contribution:
+    - OBSERVATION: 15%, REASONING: 20%, PLANNING: 30%, ACTION: 25%, REFLECTION: 10%
+  - **CycleConsolidationTrigger**: Triggers memory consolidation on cycle completion:
+    - Q >= 0.7 + 3 successes: PROMOTE
+    - Q <= 0.3 + 5 failures: ARCHIVE
+  - **PhaseMemoryOperations**: Unified interface for phase-specific store/retrieve
+  - Located in: `src/shared/services/orpar-memory/`
 
 ### Monitoring and Analytics Systems
 - **Real-time dashboard** with Vue.js frontend showing:
@@ -528,6 +668,34 @@ Key environment variables needed:
 - `EVENT_QUEUE_MAX_SIZE` - Maximum queue size (default: 1000)
 - `EVENT_QUEUE_MAX_RETRIES` - Retry count for failed events (default: 3)
 - `OPENROUTER_REQUEST_QUEUE_DELAY_MS` - Delay between LLM API requests in ms (default: 100, was 500)
+
+#### Memory Utility Learning System (MULS) Configuration
+- `MEMORY_UTILITY_LEARNING_ENABLED` - Enable MULS utility-based retrieval (default: false)
+- `QVALUE_DEFAULT` - Default Q-value for new memories (default: 0.5)
+- `QVALUE_LEARNING_RATE` - Learning rate for EMA updates (default: 0.1)
+- `RETRIEVAL_LAMBDA_DEFAULT` - Default lambda for utility weighting (default: 0.5)
+- `RETRIEVAL_LAMBDA_OBSERVATION` - Lambda for OBSERVATION phase (default: 0.2)
+- `RETRIEVAL_LAMBDA_REASONING` - Lambda for REASONING phase (default: 0.5)
+- `RETRIEVAL_LAMBDA_PLANNING` - Lambda for PLANNING phase (default: 0.7)
+- `RETRIEVAL_LAMBDA_ACTION` - Lambda for ACTION phase (default: 0.3)
+- `RETRIEVAL_LAMBDA_REFLECTION` - Lambda for REFLECTION phase (default: 0.6)
+
+#### ORPAR-Memory Integration Configuration
+- `ORPAR_MEMORY_INTEGRATION_ENABLED` - Enable ORPAR-Memory integration (default: false, opt-in)
+- `PHASE_STRATA_OBSERVATION_PRIMARY` - Comma-separated strata for observation (default: working,short_term)
+- `PHASE_STRATA_REASONING_PRIMARY` - Comma-separated strata for reasoning (default: episodic,semantic)
+- `PHASE_STRATA_PLANNING_PRIMARY` - Comma-separated strata for planning (default: semantic,long_term)
+- `SURPRISE_HIGH_THRESHOLD` - Threshold for high surprise triggering re-observation (default: 0.7)
+- `SURPRISE_MODERATE_THRESHOLD` - Threshold for moderate surprise (default: 0.4)
+- `SURPRISE_MAX_EXTRA_OBSERVATIONS` - Max additional observations on high surprise (default: 3)
+- `PHASE_WEIGHT_OBSERVATION` - Reward weight for observation phase (default: 0.15)
+- `PHASE_WEIGHT_REASONING` - Reward weight for reasoning phase (default: 0.20)
+- `PHASE_WEIGHT_PLANNING` - Reward weight for planning phase (default: 0.30)
+- `PHASE_WEIGHT_ACTION` - Reward weight for action phase (default: 0.25)
+- `PHASE_WEIGHT_REFLECTION` - Reward weight for reflection phase (default: 0.10)
+- `CONSOLIDATION_PROMOTION_QVALUE` - Q-value threshold for promotion (default: 0.7)
+- `CONSOLIDATION_DEMOTION_QVALUE` - Q-value threshold for demotion/archive (default: 0.3)
+- `ORPAR_MEMORY_DEBUG` - Enable debug logging (default: false)
 
 ### Development Tips
 

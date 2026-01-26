@@ -82,9 +82,11 @@ export async function executeShellCommand(
     const startTime = Date.now();
     
     try {
-        // Build the full command string
-        const fullCommand = args ? `${command} ${args.join(' ')}` : command;
-        
+        // Build the full command string with properly escaped arguments
+        // Shell-escape each argument by wrapping in single quotes and escaping any embedded single quotes
+        const quotedArgs = args ? args.map(arg => `'${arg.replace(/'/g, "'\\''")}'`).join(' ') : '';
+        const fullCommand = args ? `${command} ${quotedArgs}` : command;
+
         // Execute the command
         const result = await execAsync(fullCommand, {
             cwd: options?.workingDirectory || process.cwd(),
@@ -423,11 +425,13 @@ export const shellExecTool = {
             const startTime = Date.now();
             
             try {
-                // Build the full command string
-                const fullCommand = input.args ? 
-                    `${input.command} ${input.args.join(' ')}` : 
+                // Build the full command string with properly escaped arguments
+                // Shell-escape each argument by wrapping in single quotes and escaping any embedded single quotes
+                const quotedArgs = input.args ? input.args.map(arg => `'${arg.replace(/'/g, "'\\''")}'`).join(' ') : '';
+                const fullCommand = input.args ?
+                    `${input.command} ${quotedArgs}` :
                     input.command;
-                
+
                 // Execute the command
                 const result = await execAsync(fullCommand, {
                     cwd: input.workingDirectory || process.cwd(),

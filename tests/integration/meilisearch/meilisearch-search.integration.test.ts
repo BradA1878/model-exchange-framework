@@ -174,7 +174,7 @@ describe('Meilisearch Integration', () => {
 
             // Execute some tools to create action history
             await agent.executeTool('tool_help', { toolName: 'messaging_send' });
-            await agent.executeTool('tool_help', { toolName: 'agent_discover' });
+            await agent.executeTool('tool_help', { toolName: 'messaging_discover' });
 
             await sleep(1000);
 

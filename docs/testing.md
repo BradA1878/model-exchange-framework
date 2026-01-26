@@ -12,29 +12,48 @@ MXF uses a comprehensive three-tier testing strategy to ensure code quality and 
 | **Integration (API)** | REST API endpoint tests | ~25s | Yes | Jest + TestAPI |
 | **Mutation** | Test quality verification | ~5m | No | Stryker |
 
-### Test Counts
+### Test Files
 
-| Type | Count |
-|------|-------|
-| Unit Tests | 159 |
-| Property Tests | 50 |
-| Controller Unit Tests | 31 |
-| API Property Tests | 19 |
-| Integration Tests (SDK) | 92 |
-| Integration Tests (API) | 123 |
-| **Total** | **454+** |
+| Category | Files |
+|----------|-------|
+| Unit Tests | 21 |
+| Property Tests | 7 |
+| Integration Tests (Socket.IO) | 20 |
+| Integration Tests (API) | 6 |
+| **Total Files** | **54** |
+
+### Test Coverage Categories
+
+| Category | Description |
+|----------|-------------|
+| **Agent** | Agent lifecycle, connection, reconnection |
+| **Channel** | Broadcast, messaging, discovery |
+| **Tool** | Execute, validate, authorize, dynamic updates |
+| **Prompt** | Config, tool-aware, dynamic, MCP prompts, compaction |
+| **Task** | Create, monitor, complete |
+| **ORPAR** | All phases + full cycle |
+| **Memory** | Agent, channel, relationship, nested learning |
+| **Meilisearch** | Conversations, actions, patterns |
+| **External MCP** | Registry, discovery, validation |
+| **Inference** | Dynamic parameters, model selection |
+| **Code Execution** | Docker sandbox, Bun runtime |
+| **Database** | Adapter factory, MongoDB operations |
+| **LSP** | Language server protocol bridge |
+| **P2P** | Task negotiation, federation |
+| **TOON** | Token optimization encoding |
+| **Workflow** | Sequential, parallel, loop patterns |
 
 ## Quick Start
 
 ```bash
 # Run fast tests (no server needed)
-npm run test:unit
+bun run test:unit
 
 # Run full integration tests (server must be running)
-npm run test:integration:manual
+bun run test:integration:manual
 
 # Check test quality with mutation testing
-npm run test:mutation
+bun run test:mutation
 ```
 
 ## Test Structure
@@ -113,9 +132,9 @@ describe('createMessageMetadata', () => {
 ### Running Unit Tests
 
 ```bash
-npm run test:unit                    # Run all unit tests
-npm run test:unit:watch              # Watch mode
-npm run test:unit:coverage           # With coverage report
+bun run test:unit                    # Run all unit tests
+bun run test:unit:watch              # Watch mode
+bun run test:unit:coverage           # With coverage report
 ```
 
 ### Controller Unit Tests
@@ -216,8 +235,8 @@ fc.uint8Array({ maxLength: 1000 })
 ### Running Property Tests
 
 ```bash
-npm run test:property                # Property tests only
-npm run test:unit                    # Includes property tests
+bun run test:property                # Property tests only
+bun run test:unit                    # Includes property tests
 ```
 
 ## Integration Tests
@@ -229,9 +248,9 @@ Integration tests verify end-to-end behavior with live services (MongoDB, MXF se
 The MXF server must be running:
 
 ```bash
-npm run dev                          # Start server with infrastructure
+bun run dev                          # Start server with infrastructure
 # or
-npm run test:integration             # Auto-starts server (slower)
+bun run test:integration             # Auto-starts server (slower)
 ```
 
 ### Example
@@ -262,24 +281,35 @@ describe('Agent Connection', () => {
 ### Running Integration Tests
 
 ```bash
-npm run test:integration:manual      # Requires running server
-npm run test:integration             # Auto-starts server
-npm run test:ci                      # CI mode with auto-start
+bun run test:integration:manual      # Requires running server
+bun run test:integration             # Auto-starts server
+bun run test:ci                      # CI mode with auto-start
 ```
 
 ### Test Suites (Socket.IO Based)
 
-| Suite | Tests | Coverage |
-|-------|-------|----------|
-| Agent Connection | 6 | Connect, disconnect, reconnect |
-| Channel Communication | 8 | Broadcast, messaging, discovery |
-| Tool Execution | 11 | Execute, validate, authorize |
-| Prompt System | 13 | Config, tool-aware, dynamic |
-| Task System | 7 | Create, monitor, complete |
-| ORPAR Lifecycle | 9 | All phases + full cycle |
-| Memory Operations | 8 | Agent, channel, relationship |
-| Meilisearch Search | 8 | Conversations, actions, patterns |
-| External MCP Server | 10 | Registry, discovery, validation |
+| Suite | File | Coverage |
+|-------|------|----------|
+| Agent Connection | `agent-connection.integration.test.ts` | Connect, disconnect, reconnect |
+| Channel Communication | `channel-communication.integration.test.ts` | Broadcast, messaging, discovery |
+| Tool Execution | `tool-execution.integration.test.ts` | Execute, validate, authorize |
+| Dynamic Tool Updates | `dynamic-tool-updates.integration.test.ts` | Runtime tool registration |
+| Prompt System | `prompt-system.integration.test.ts` | Config, tool-aware, dynamic |
+| MCP Prompts | `mcp-prompts.integration.test.ts` | Template discovery, argument resolution |
+| Prompt Compaction | `prompt-compaction.integration.test.ts` | Token optimization, residuals |
+| Task System | `task-system.integration.test.ts` | Create, monitor, complete |
+| ORPAR Lifecycle | `orpar-lifecycle.integration.test.ts` | All phases + full cycle |
+| Memory Operations | `memory-operations.integration.test.ts` | Agent, channel, relationship |
+| Nested Learning | `nested-learning.integration.test.ts` | SERC, verification, repair |
+| Meilisearch Search | `meilisearch-search.integration.test.ts` | Conversations, actions, patterns |
+| External MCP Server | `external-mcp-server.integration.test.ts` | Registry, discovery, validation |
+| Inference Parameters | `inference-parameters.integration.test.ts` | Dynamic model selection |
+| Code Execution | `code-execution.integration.test.ts` | Docker sandbox, Bun runtime |
+| Database Abstraction | `database-abstraction.integration.test.ts` | MongoDB adapter, repositories |
+| LSP Bridge | `lsp-bridge.integration.test.ts` | Language server protocol |
+| P2P Foundation | `p2p-foundation.integration.test.ts` | Task negotiation, federation |
+| TOON Optimization | `toon-optimization.integration.test.ts` | Token encoding |
+| Workflow System | `workflow-system.integration.test.ts` | Sequential, parallel, loop |
 
 ## API Integration Tests
 
@@ -348,12 +378,12 @@ describe('API Tests', () => {
 
 ```bash
 # All API tests (requires server running)
-npm run test:integration:manual -- --testPathPattern=".api.test"
+bun run test:integration:manual -- --testPathPattern=".api.test"
 
 # Specific API test suite
-npm run test:integration:manual -- --testPathPattern=agents.api
-npm run test:integration:manual -- --testPathPattern=channels.api
-npm run test:integration:manual -- --testPathPattern=tasks.api
+bun run test:integration:manual -- --testPathPattern=agents.api
+bun run test:integration:manual -- --testPathPattern=channels.api
+bun run test:integration:manual -- --testPathPattern=tasks.api
 ```
 
 ### Authentication Patterns
@@ -429,8 +459,8 @@ See `stryker.config.json` for configuration. Key settings:
 ### Running Mutation Tests
 
 ```bash
-npm run test:mutation                # Full run (~5 minutes)
-npm run test:mutation:incremental    # Faster after first run
+bun run test:mutation                # Full run (~5 minutes)
+bun run test:mutation:incremental    # Faster after first run
 ```
 
 ### Interpreting Results
@@ -511,8 +541,8 @@ jobs:
       - uses: actions/checkout@v3
       - uses: actions/setup-node@v3
       - run: npm ci
-      - run: npm run test:unit          # Fast tests first
-      - run: npm run test:ci             # Integration with auto-start
+      - run: bun run test:unit          # Fast tests first
+      - run: bun run test:ci             # Integration with auto-start
 ```
 
 ### Pre-commit Hook
@@ -520,7 +550,7 @@ jobs:
 Add to `.husky/pre-commit`:
 
 ```bash
-npm run test:unit
+bun run test:unit
 ```
 
 ## Troubleshooting

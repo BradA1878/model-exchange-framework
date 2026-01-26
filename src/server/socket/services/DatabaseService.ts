@@ -58,8 +58,6 @@ export const connectToDatabase = async (): Promise<typeof mongoose> => {
         
         // Connect with retry logic
         const options = {
-            useNewUrlParser: true,
-            useUnifiedTopology: true,
             serverSelectionTimeoutMS: 5000,
             maxPoolSize: 10
         };

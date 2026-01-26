@@ -117,6 +117,11 @@ Vue 3-based web interface for:
 - **[Development Lifecycle](development-lifecycle.md)** - From development to deployment
 - **[Validation System](validation-system.md)** - Comprehensive validation and error prevention architecture
 
+### Memory & Learning
+- **[Nested Learning](nested-learning.md)** - Multi-timescale memory architecture
+- **[Memory Utility Learning (MULS)](memory-utility-learning.md)** - Q-value based retrieval
+- **[ORPAR-Memory Integration](orpar-memory-integration.md)** - Phase-aware memory coupling
+
 ### Implementation Guides
 - **[Event System](../api/websocket.md)** - WebSocket and event architecture
 - **[Memory System](../api/memory.md)** - Persistent context management

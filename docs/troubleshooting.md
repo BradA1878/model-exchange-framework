@@ -16,7 +16,7 @@ curl http://localhost:3001/health
 docker ps
 
 # View server logs
-npm run docker:logs mxf-server
+bun run docker:logs mxf-server
 ```
 
 ---
@@ -269,7 +269,7 @@ npm run docker:logs mxf-server
 
 3. **Force reindex if needed:**
    ```bash
-   npm run docker:meilisearch:reindex
+   bun run docker:meilisearch:reindex
    ```
 
 ---
@@ -331,7 +331,7 @@ npm run docker:logs mxf-server
 
 3. **Rebuild containers:**
    ```bash
-   npm run docker:rebuild
+   bun run docker:rebuild
    ```
 
 ### MongoDB Connection Failed
@@ -356,9 +356,9 @@ npm run docker:logs mxf-server
 
 3. **Reset MongoDB if needed:**
    ```bash
-   npm run docker:down
-   npm run docker:clean
-   npm run docker:up
+   bun run docker:down
+   bun run docker:clean
+   bun run docker:up
    ```
 
 ---
@@ -414,7 +414,7 @@ npm run docker:logs mxf-server
 
 3. **Clean up old data:**
    ```bash
-   npm run cleanup:db
+   bun run cleanup:db
    ```
 
 ---
@@ -434,7 +434,7 @@ const agent = await sdk.createAgent({
 
 Or set environment variable:
 ```bash
-DEBUG=mxf:* npm run start:dev
+DEBUG=mxf:* bun run start:dev
 ```
 
 ---

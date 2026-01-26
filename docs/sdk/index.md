@@ -62,7 +62,7 @@ cd model-exchange-framework
 npm install
 
 # Build the project
-npm run build
+bun run build
 ```
 
 ## Quick Start
@@ -99,14 +99,14 @@ await sdk.connect();
 
 ```bash
 # Create a channel
-npm run sdk:cli -- channel:create \
+bun run sdk:cli -- channel:create \
   --id research-channel \
   --name "Research Channel" \
   --email your@email.com \
   --password your-password
 
 # Generate agent keys
-npm run sdk:cli -- key:generate \
+bun run sdk:cli -- key:generate \
   --channel research-channel \
   --agents agent-123,llm-agent-001 \
   --email your@email.com \

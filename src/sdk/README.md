@@ -36,7 +36,7 @@ The official TypeScript SDK for the Model Exchange Framework (MXF), enabling dev
 npm install
 
 # Build the framework
-npm run build
+bun run build
 ```
 
 **Note**: The SDK will be published as `@mxf/sdk` when separated from the monorepo.
@@ -306,7 +306,7 @@ The SDK includes CLI tools for channel and key management.
 The easiest way to set up a new project:
 
 ```bash
-npm run sdk:cli -- setup:interactive
+bun run sdk:cli -- setup:interactive
 ```
 
 This will prompt you for:
@@ -320,14 +320,14 @@ All credentials are automatically saved to `.env` file.
 
 ```bash
 # Create a channel
-npm run sdk:cli -- channel:create \
+bun run sdk:cli -- channel:create \
   --id my-channel \
   --name "My Channel" \
   --email user@example.com \
   --password your-password
 
 # Generate agent keys (saved to .env)
-npm run sdk:cli -- key:generate \
+bun run sdk:cli -- key:generate \
   --channel my-channel \
   --agents agent1,agent2,agent3 \
   --email user@example.com \

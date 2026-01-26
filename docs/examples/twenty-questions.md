@@ -130,7 +130,7 @@ interface OrparPhaseLog {
 
 1. MXF server running:
    ```bash
-   npm run dev
+   bun run dev
    ```
 
 2. Install dependencies:
@@ -143,10 +143,10 @@ interface OrparPhaseLog {
 
 ```bash
 # Terminal 1: Start game server
-npm run server
+bun run server
 
 # Terminal 2: Connect agents and play
-npm run agents
+bun run agents
 ```
 
 ### API Endpoints

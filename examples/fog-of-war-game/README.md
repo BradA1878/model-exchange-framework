@@ -55,7 +55,7 @@ This demo showcases:
 - **Running MXF server** (see main project README):
   ```bash
   cd /path/to/model-exchange-framework-private
-  npm run dev  # Starts on port 3001
+  bun run dev  # Starts on port 3001
   ```
 - OpenRouter API key (for LLM providers)
 
@@ -95,7 +95,7 @@ GAME_SERVER_PORT=3002
 **Option 1 - Full Game (Recommended):**
 ```bash
 cd examples/fog-of-war-game
-npm run game
+bun run game
 ```
 
 This starts:
@@ -107,7 +107,7 @@ This starts:
 **Option 2 - Agents Only (No Dashboard):**
 ```bash
 cd examples/fog-of-war-game
-npm run connect-agents
+bun run connect-agents
 ```
 
 **Option 3 - Separate Terminals:**
@@ -115,13 +115,13 @@ npm run connect-agents
 **Terminal 1 - Agent Connection:**
 ```bash
 cd examples/fog-of-war-game
-npm run connect-agents
+bun run connect-agents
 ```
 
 **Terminal 2 - Vue 3 Dashboard:**
 ```bash
 cd examples/fog-of-war-game/client
-npm run dev
+bun run dev
 ```
 
 ### 5. Watch the Battle!
@@ -347,14 +347,14 @@ fog-of-war-game/
 ### Build Commands
 
 ```bash
-npm run game         # Run both server and client (recommended)
-npm run dev          # Server only (development mode)
-npm run dev:client   # Client only (development mode)
-npm run build        # Compile server TypeScript
-npm run build:client # Build client for production
-npm run build:all    # Build both server and client
-npm run clean        # Remove build artifacts
-npm run rebuild      # Clean + build all
+bun run game         # Run both server and client (recommended)
+bun run dev          # Server only (development mode)
+bun run dev:client   # Client only (development mode)
+bun run build        # Compile server TypeScript
+bun run build:client # Build client for production
+bun run build:all    # Build both server and client
+bun run clean        # Remove build artifacts
+bun run rebuild      # Clean + build all
 ```
 
 ## 🎓 Learning Objectives

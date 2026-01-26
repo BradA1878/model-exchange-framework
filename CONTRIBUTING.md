@@ -18,7 +18,7 @@ Be excellent to each other.
 
 ```bash
 npm install
-npm run build
+bun run build
 npm test
 ```
 

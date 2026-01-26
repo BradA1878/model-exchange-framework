@@ -497,14 +497,14 @@ erDiagram
 ### 1. Development
 ```bash
 # Single instance, hot reload
-npm run dev
+bun run dev
 ```
 
 ### 2. Production Monolith
 ```bash
 # Compiled TypeScript, PM2 process manager
-npm run build
-npm run start
+bun run build
+bun run start
 ```
 
 ### 3. Containerized

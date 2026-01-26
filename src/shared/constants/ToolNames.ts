@@ -57,7 +57,6 @@ export const COORDINATION_TOOLS = {
  * Control Loop Tools - ORPAR cognitive cycle management
  */
 export const CONTROL_LOOP_TOOLS = {
-    INITIALIZE: 'controlLoop_initialize',
     START: 'controlLoop_start',
     STOP: 'controlLoop_stop',
     STATUS: 'controlLoop_status',
@@ -126,6 +125,20 @@ export const META_TOOLS = {
 export const ACTION_VALIDATION_TOOLS = {
     VALIDATE_NEXT_ACTION: 'validate_next_action',
     NO_FURTHER_ACTION: 'no_further_action'
+} as const;
+
+/**
+ * Inference Parameter Tools - Dynamic LLM parameter control (P1)
+ * Enables agents to request inference parameter modifications during task execution.
+ * This system is architecture-independent and works with any agent execution pattern.
+ */
+export const INFERENCE_PARAMETER_TOOLS = {
+    REQUEST_INFERENCE_PARAMS: 'request_inference_params',
+    RESET_INFERENCE_PARAMS: 'reset_inference_params',
+    GET_CURRENT_PARAMS: 'get_current_params',
+    GET_PARAMETER_STATUS: 'get_parameter_status',
+    GET_AVAILABLE_MODELS: 'get_available_models',
+    GET_PARAMETER_COST_ANALYTICS: 'get_parameter_cost_analytics'
 } as const;
 
 /**
@@ -266,6 +279,7 @@ export const ALL_INTERNAL_TOOLS = {
     ...CONTEXT_MEMORY_TOOLS,
     ...META_TOOLS,
     ...ACTION_VALIDATION_TOOLS,
+    ...INFERENCE_PARAMETER_TOOLS,
     ...WEB_TOOLS,
     ...PLANNING_TOOLS,
     ...TASK_PLANNING_TOOLS
@@ -341,6 +355,7 @@ export type InfrastructureToolName = typeof INFRASTRUCTURE_TOOLS[keyof typeof IN
 export type ContextMemoryToolName = typeof CONTEXT_MEMORY_TOOLS[keyof typeof CONTEXT_MEMORY_TOOLS];
 export type MetaToolName = typeof META_TOOLS[keyof typeof META_TOOLS];
 export type ActionValidationToolName = typeof ACTION_VALIDATION_TOOLS[keyof typeof ACTION_VALIDATION_TOOLS];
+export type InferenceParameterToolName = typeof INFERENCE_PARAMETER_TOOLS[keyof typeof INFERENCE_PARAMETER_TOOLS];
 export type WebToolName = typeof WEB_TOOLS[keyof typeof WEB_TOOLS];
 export type PlanningToolName = typeof PLANNING_TOOLS[keyof typeof PLANNING_TOOLS];
 export type TaskPlanningToolName = typeof TASK_PLANNING_TOOLS[keyof typeof TASK_PLANNING_TOOLS];

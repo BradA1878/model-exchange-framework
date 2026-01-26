@@ -29,7 +29,8 @@
 import { Subject, Subscription } from 'rxjs';
 import { filter, map } from 'rxjs/operators';
 import { Server as SocketIOServer, Socket } from 'socket.io';
-import { EventMap, Events, ChannelActionTypes, MessageEvents } from './EventNames';
+import { Events, ChannelActionTypes, MessageEvents } from './EventNames';
+import type { EventMap } from './EventNames';
 import { ControlLoopEvents } from './event-definitions/ControlLoopEvents';
 import { OrparEvents } from './event-definitions/OrparEvents';
 import { 

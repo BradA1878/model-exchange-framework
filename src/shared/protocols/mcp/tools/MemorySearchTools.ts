@@ -25,6 +25,7 @@
 import { McpToolDefinition, McpToolHandlerContext, McpToolHandlerResult, McpToolResultContent } from '../McpServerTypes';
 import { Logger } from '../../../utils/Logger';
 import { MxfMeilisearchService, SearchParams } from '../../../services/MxfMeilisearchService';
+import { paginationInputSchema, checkResultSize, PaginationMetadata } from '../../../utils/ToolPaginationUtils';
 
 const logger = new Logger('info', 'MemorySearchTools', 'server');
 
@@ -51,9 +52,15 @@ export const memory_search_conversations = {
             limit: {
                 type: 'number',
                 description: 'Number of results to return (1-50)',
-                default: 5,
+                default: 10,
                 minimum: 1,
                 maximum: 50
+            },
+            offset: {
+                type: 'number',
+                description: 'Number of results to skip for pagination (default: 0)',
+                default: 0,
+                minimum: 0
             },
             hybridRatio: {
                 type: 'number',
@@ -139,10 +146,14 @@ export const memory_search_conversations = {
                 }
             }
 
+            const limit = input.limit || 10;
+            const offset = input.offset || 0;
+
             const searchParams: SearchParams = {
                 query: input.query,
                 filter: filter || undefined,
-                limit: input.limit || 5,
+                limit: limit,
+                offset: offset,
                 hybridRatio: input.hybridRatio || 0.7 // Enable hybrid search when embeddings available
             };
 
@@ -158,15 +169,31 @@ export const memory_search_conversations = {
                 timeAgo: formatTimeAgo(hit.timestamp)
             }));
 
+            // Build pagination metadata
+            const totalCount = result.estimatedTotalHits || formattedResults.length;
+            const hasMore = offset + formattedResults.length < totalCount;
+            const pagination: PaginationMetadata = {
+                totalCount,
+                limit,
+                offset,
+                hasMore,
+                ...(hasMore ? { nextOffset: offset + limit } : {})
+            };
+
+            const responseData = {
+                success: true,
+                results: formattedResults,
+                pagination,
+                processingTimeMs: result.processingTimeMs,
+                message: `Found ${formattedResults.length} relevant conversations${input.channelId ? ` in ${input.channelId}` : ''}${hasMore ? ` (${totalCount - offset - formattedResults.length} more available)` : ''}`
+            };
+
+            // Check result size and add pagination hint if needed
+            const checkedData = checkResultSize(responseData, 'memory_search_conversations', logger);
+
             const content: McpToolResultContent = {
                 type: 'application/json',
-                data: {
-                    success: true,
-                    results: formattedResults,
-                    totalResults: result.estimatedTotalHits,
-                    processingTimeMs: result.processingTimeMs,
-                    message: `Found ${formattedResults.length} relevant conversations${input.channelId ? ` in ${input.channelId}` : ''}`
-                }
+                data: checkedData
             };
             return { content };
 
@@ -217,6 +244,12 @@ export const memory_search_actions = {
                 minimum: 1,
                 maximum: 100
             },
+            offset: {
+                type: 'number',
+                description: 'Number of results to skip for pagination (default: 0)',
+                default: 0,
+                minimum: 0
+            },
             hybridRatio: {
                 type: 'number',
                 description: 'Search mode (0.0-1.0)',
@@ -257,10 +290,14 @@ export const memory_search_actions = {
                 filter += ' AND success = true';
             }
 
+            const limit = input.limit || 10;
+            const offset = input.offset || 0;
+
             const result = await meilisearch.searchActions({
                 query: input.query,
                 filter,
-                limit: input.limit || 10,
+                limit: limit,
+                offset: offset,
                 hybridRatio: input.hybridRatio || 0.7 // Enable hybrid search when embeddings available
             });
 
@@ -273,14 +310,30 @@ export const memory_search_actions = {
                 relevance: hit._rankingScore
             }));
 
+            // Build pagination metadata
+            const totalCount = result.estimatedTotalHits || formattedResults.length;
+            const hasMore = offset + formattedResults.length < totalCount;
+            const pagination: PaginationMetadata = {
+                totalCount,
+                limit,
+                offset,
+                hasMore,
+                ...(hasMore ? { nextOffset: offset + limit } : {})
+            };
+
+            const responseData = {
+                success: true,
+                results: formattedResults,
+                pagination,
+                processingTimeMs: result.processingTimeMs
+            };
+
+            // Check result size and add pagination hint if needed
+            const checkedData = checkResultSize(responseData, 'memory_search_actions', logger);
+
             const content: McpToolResultContent = {
                 type: 'application/json',
-                data: {
-                    success: true,
-                    results: formattedResults,
-                    totalResults: result.estimatedTotalHits,
-                    processingTimeMs: result.processingTimeMs
-                }
+                data: checkedData
             };
             return { content };
 
@@ -333,6 +386,12 @@ export const memory_search_patterns = {
                 default: 5,
                 minimum: 1,
                 maximum: 20
+            },
+            offset: {
+                type: 'number',
+                description: 'Number of patterns to skip for pagination (default: 0)',
+                default: 0,
+                minimum: 0
             }
         },
         required: ['intent']
@@ -368,10 +427,14 @@ export const memory_search_patterns = {
                 filter += ` AND channelId = "${context.channelId}"`;
             }
 
+            const limit = input.limit || 5;
+            const offset = input.offset || 0;
+
             const result = await meilisearch.searchPatterns({
                 query: input.intent,
                 filter,
-                limit: input.limit || 5,
+                limit: limit,
+                offset: offset,
                 hybridRatio: 0.7 // Enable hybrid search when embeddings available
             });
 
@@ -385,15 +448,31 @@ export const memory_search_patterns = {
                 relevance: hit._rankingScore
             }));
 
+            // Build pagination metadata
+            const totalCount = result.estimatedTotalHits || formattedPatterns.length;
+            const hasMore = offset + formattedPatterns.length < totalCount;
+            const pagination: PaginationMetadata = {
+                totalCount,
+                limit,
+                offset,
+                hasMore,
+                ...(hasMore ? { nextOffset: offset + limit } : {})
+            };
+
+            const responseData = {
+                success: true,
+                patterns: formattedPatterns,
+                pagination,
+                processingTimeMs: result.processingTimeMs,
+                message: `Found ${formattedPatterns.length} proven patterns${input.crossChannel ? ' across all channels' : ''}${hasMore ? ` (${totalCount - offset - formattedPatterns.length} more available)` : ''}`
+            };
+
+            // Check result size and add pagination hint if needed
+            const checkedData = checkResultSize(responseData, 'memory_search_patterns', logger);
+
             const content: McpToolResultContent = {
                 type: 'application/json',
-                data: {
-                    success: true,
-                    patterns: formattedPatterns,
-                    totalPatterns: result.estimatedTotalHits,
-                    processingTimeMs: result.processingTimeMs,
-                    message: `Found ${formattedPatterns.length} proven patterns${input.crossChannel ? ' across all channels' : ''}`
-                }
+                data: checkedData
             };
             return { content };
 

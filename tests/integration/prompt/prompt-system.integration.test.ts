@@ -175,7 +175,7 @@ Follow supervisor instructions.`;
             const supervisor = await testSdk.createAndConnectAgent(channelId, {
                 name: 'Supervisor Agent',
                 agentConfigPrompt: supervisorPrompt,
-                allowedTools: ['tool_help', 'agent_discover', 'messaging_broadcast'],
+                allowedTools: ['tool_help', 'messaging_discover', 'messaging_broadcast'],
                 capabilities: ['supervision', 'coordination'],
                 metadata: { role: 'supervisor' }
             });

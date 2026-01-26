@@ -97,7 +97,7 @@ const turnTask = await sdk.createTask({
 
 1. MXF server running:
    ```bash
-   npm run dev
+   bun run dev
    ```
 
 2. Install dependencies:
@@ -111,19 +111,19 @@ const turnTask = await sdk.createTask({
 
 ```bash
 # Terminal 1: Start game server
-npm run server
+bun run server
 
 # Terminal 2: Start dashboard (optional)
-npm run dashboard
+bun run dashboard
 
 # Terminal 3: Connect agents
-npm run agents
+bun run agents
 ```
 
 Or use the npm script from root:
 
 ```bash
-npm run demo:fog-of-war
+bun run demo:fog-of-war
 ```
 
 ## Game Mechanics

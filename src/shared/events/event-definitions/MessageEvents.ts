@@ -23,7 +23,7 @@ import {
     AgentMessage 
 } from '../../schemas/MessageSchemas';
 
-import { 
+import type {
     MessageEventData,
     MessagePersistFailedPayload as MessagePersistFailedEventData,
     MessageSendFailedPayload as MessageSendFailedEventData,

@@ -33,7 +33,7 @@ The Model Exchange Framework (MXF) is a platform for building autonomous multi-a
 
 ### Option B: Local Development
 
-- **Node.js 18+** installed
+- **Node.js 20+** installed (or Bun 1.1+ for fast package management)
 - **MongoDB** running (local or cloud instance)
 - **LLM Provider API Key(s)** (optional, for LLM-powered agents) - Choose from (mix and match):
   - [OpenRouter](https://openrouter.ai/) - Access to 200+ models
@@ -97,13 +97,13 @@ MEILISEARCH_HYBRID_RATIO=0.7
 
 ```bash
 # Build and start all services
-npm run docker:up
+bun run docker:up
 
 # View logs
-npm run docker:logs
+bun run docker:logs
 
 # Check service health
-npm run docker:health
+bun run docker:health
 ```
 
 #### 4. Access Services
@@ -128,12 +128,21 @@ npm run docker:health
 git clone https://github.com/BradA1878/model-exchange-framework
 cd model-exchange-framework
 
+# Install Bun (fast package manager and runtime)
+curl -fsSL https://bun.sh/install | bash
+
+# Add Bun to your PATH (restart terminal or run this)
+echo 'export PATH="$HOME/.bun/bin:$PATH"' >> ~/.zshrc && source ~/.zshrc
+# For bash users: echo 'export PATH="$HOME/.bun/bin:$PATH"' >> ~/.bashrc && source ~/.bashrc
+
 # Install dependencies
-npm install
+bun install
 
 # Build the project
-npm run build
+bun run build
 ```
+
+> **Note:** MXF uses Bun for both package management and server execution. Both `bun install` and `npm install` work for dependencies.
 
 #### 2. Configure Environment
 
@@ -202,10 +211,10 @@ NODE_ENV=development
 
 ```bash
 # Generate domain key (REQUIRED for SDK authentication)
-npm run server:cli -- domain-key:generate
+bun run server:cli -- domain-key:generate
 
 # Generate MXP encryption key (Optional)
-npm run mxp:generate-key
+bun run mxp:generate-key
 
 # Keys are automatically saved to your .env file
 ```
@@ -215,14 +224,14 @@ npm run mxp:generate-key
 **Quick Demo Setup (Recommended):**
 ```bash
 # Automatically create demo user with standard credentials (demo-user/demo-password-1234)
-npm run server:cli -- demo:setup
+bun run server:cli -- demo:setup
 # This auto-adds MXF_DEMO_USERNAME and MXF_DEMO_PASSWORD to .env
 ```
 
 **Or Create Custom User:**
 ```bash
 # Create a user account with custom credentials
-npm run server:cli -- user:create \
+bun run server:cli -- user:create \
   --email your-email@example.com \
   --password your-password \
   --username your-username
@@ -232,10 +241,10 @@ npm run server:cli -- user:create \
 
 ```bash
 # Development mode with hot reload
-npm run start:dev
+bun run start:dev
 
 # Production mode
-npm run build
+bun run build
 npm start
 ```
 
@@ -330,14 +339,14 @@ Use the SDK CLI to set up your workspace:
 
 ```bash
 # Create a channel
-npm run sdk:cli -- channel:create \
+bun run sdk:cli -- channel:create \
   --id getting-started \
   --name "Getting Started Channel" \
   --email demo@example.com \
   --password demo-password-1234
 
 # Generate agent keys
-npm run sdk:cli -- key:generate \
+bun run sdk:cli -- key:generate \
   --channel getting-started \
   --agents hello-agent,ai-assistant \
   --email demo@example.com \
@@ -614,7 +623,7 @@ MXF includes a Vue 3 dashboard for management:
 # Start the dashboard (in a separate terminal)
 cd dashboard
 npm install
-npm run dev
+bun run dev
 ```
 
 Access the dashboard at `http://localhost:5173`
@@ -870,7 +879,7 @@ MXF includes example demos:
 
 ```bash
 # Start the server
-npm run start:dev
+bun run start:dev
 
 # Run the demo (in another terminal)
 npx run demo:first-contact
@@ -882,10 +891,10 @@ Agents coordinate to schedule interviews:
 
 ```bash
 # Start the server
-npm run start:dev
+bun run start:dev
 
 # Run the demo (in another terminal)
-npm run demo:interview
+bun run demo:interview
 ```
 
 ## Next Steps
@@ -1010,17 +1019,17 @@ echo $XAI_API_KEY
 
 ```bash
 # Server
-npm run start:dev        # Development server
-npm run build           # Build for production
+bun run start:dev        # Development server
+bun run build           # Build for production
 npm start               # Production server
 
 # Dashboard
-cd dashboard && npm run dev
+cd dashboard && bun run dev
 
 # Demos
-npm run demo:first-contact
-npm run demo:interview
-npm run demo:mxp
+bun run demo:first-contact
+bun run demo:interview
+bun run demo:mxp
 
 ```
 

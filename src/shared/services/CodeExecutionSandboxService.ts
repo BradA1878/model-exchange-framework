@@ -21,12 +21,19 @@
 /**
  * CodeExecutionSandboxService.ts
  *
- * Provides sandboxed code execution capabilities using vm2 for JavaScript/TypeScript.
+ * Provides sandboxed code execution capabilities using Docker containers with Bun runtime.
  * Enforces resource limits, validates code safety, and provides isolated execution environment.
+ *
+ * Security: Code runs in isolated Docker containers with:
+ * - No network access
+ * - Read-only filesystem
+ * - All capabilities dropped
+ * - Non-root user
+ * - Memory and CPU limits
  */
 
-import { VM, VMScript } from 'vm2';
 import { Logger } from '../utils/Logger';
+import { ContainerPoolManager } from './ContainerPoolManager';
 import crypto from 'crypto';
 
 /**
@@ -42,9 +49,9 @@ export enum ExecutionLanguage {
  */
 export interface SandboxConfig {
     timeout: number;              // Max execution time in milliseconds
-    memoryLimit?: number;         // Max memory in MB (not enforced by vm2 directly)
-    allowedModules?: string[];    // Whitelisted Node.js modules
-    allowBuiltinModules?: boolean; // Allow built-in Node.js modules
+    memoryLimit?: number;         // Max memory in MB
+    allowedModules?: string[];    // Whitelisted Node.js modules (not used with Docker)
+    allowBuiltinModules?: boolean; // Allow built-in Node.js modules (not used with Docker)
     captureConsole?: boolean;     // Capture console.log output
 }
 
@@ -99,28 +106,36 @@ const DEFAULT_CONFIG: SandboxConfig = {
 
 /**
  * Dangerous patterns to detect in code
+ * These are checked BEFORE sending to container for defense in depth
  */
 const DANGEROUS_PATTERNS = [
     { pattern: /eval\s*\(/g, message: 'eval() is not allowed' },
     { pattern: /Function\s*\(/g, message: 'Function constructor is not allowed' },
     { pattern: /require\s*\(/g, message: 'require() is not allowed - modules must be whitelisted' },
-    { pattern: /import\s+/g, message: 'import statements are not allowed' },
+    { pattern: /import\s+.*from/g, message: 'import statements are not allowed' },
     { pattern: /process\.exit/g, message: 'process.exit is not allowed' },
     { pattern: /process\.kill/g, message: 'process.kill is not allowed' },
     { pattern: /__proto__/g, message: 'Prototype pollution attempts are not allowed' },
     { pattern: /constructor\s*\[/g, message: 'Constructor access is not allowed' },
+    { pattern: /child_process/g, message: 'child_process module is not allowed' },
+    { pattern: /Bun\.spawn/g, message: 'Bun.spawn is not allowed' },
+    { pattern: /Bun\.spawnSync/g, message: 'Bun.spawnSync is not allowed' },
+    { pattern: /Bun\.file/g, message: 'Bun.file is not allowed' },
+    { pattern: /Bun\.write/g, message: 'Bun.write is not allowed' },
 ];
 
 /**
  * Code Execution Sandbox Service
  *
- * Provides isolated JavaScript/TypeScript execution using vm2.
+ * Provides isolated JavaScript/TypeScript execution using Docker containers with Bun runtime.
  * Enforces security policies, resource limits, and code validation.
  */
 export class CodeExecutionSandboxService {
     private static instance: CodeExecutionSandboxService;
     private logger: Logger;
     private defaultConfig: SandboxConfig;
+    private containerPool: ContainerPoolManager;
+    private initialized: boolean = false;
 
     private constructor(config?: Partial<SandboxConfig>) {
         this.logger = new Logger('info', 'CodeExecutionSandboxService', 'server');
@@ -128,7 +143,7 @@ export class CodeExecutionSandboxService {
             ...DEFAULT_CONFIG,
             ...config
         };
-
+        this.containerPool = ContainerPoolManager.getInstance();
     }
 
     /**
@@ -142,13 +157,51 @@ export class CodeExecutionSandboxService {
     }
 
     /**
+     * Initialize the sandbox service
+     * Must be called before execution to set up Docker container pool
+     */
+    public async initialize(): Promise<boolean> {
+        if (this.initialized) {
+            return this.containerPool.isDockerAvailable();
+        }
+
+        try {
+            const dockerAvailable = await this.containerPool.initialize();
+
+            if (dockerAvailable) {
+                this.logger.info('Code execution sandbox initialized with Docker');
+            } else {
+                this.logger.warn('Docker not available - code execution will be disabled');
+            }
+
+            this.initialized = true;
+            return dockerAvailable;
+
+        } catch (error: any) {
+            this.logger.error(`Failed to initialize sandbox: ${error.message}`);
+            this.initialized = true;
+            return false;
+        }
+    }
+
+    /**
+     * Check if the service is ready for execution
+     */
+    public isReady(): boolean {
+        return this.initialized && this.containerPool.isDockerAvailable();
+    }
+
+    /**
      * Validate code for dangerous patterns
+     * This runs BEFORE container execution for defense in depth
      */
     public validateCode(code: string): CodeValidationResult {
         const issues: Array<{ type: 'error' | 'warning'; message: string; pattern?: string }> = [];
 
         // Check for dangerous patterns
         for (const { pattern, message } of DANGEROUS_PATTERNS) {
+            // Reset regex lastIndex for global patterns
+            pattern.lastIndex = 0;
             if (pattern.test(code)) {
                 issues.push({
                     type: 'error',
@@ -183,22 +236,58 @@ export class CodeExecutionSandboxService {
     }
 
     /**
-     * Execute JavaScript code in sandboxed environment
+     * Execute JavaScript code in sandboxed Docker container
      */
     public async executeJavaScript(
         code: string,
         context: SandboxContext,
         config?: Partial<SandboxConfig>
     ): Promise<ExecutionResult> {
+        return this.executeCode(code, 'javascript', context, config);
+    }
+
+    /**
+     * Execute TypeScript code in sandboxed Docker container
+     * Bun handles TypeScript natively - no transpilation needed
+     */
+    public async executeTypeScript(
+        code: string,
+        context: SandboxContext,
+        config?: Partial<SandboxConfig>
+    ): Promise<ExecutionResult> {
+        return this.executeCode(code, 'typescript', context, config);
+    }
+
+    /**
+     * Execute code in Docker container
+     */
+    private async executeCode(
+        code: string,
+        language: 'javascript' | 'typescript',
+        context: SandboxContext,
+        config?: Partial<SandboxConfig>
+    ): Promise<ExecutionResult> {
         const execConfig = { ...this.defaultConfig, ...config };
         const startTime = Date.now();
-        const logs: string[] = [];
 
         // Generate code hash for tracking
         const codeHash = crypto.createHash('sha256').update(code).digest('hex').substring(0, 16);
 
+        // Check if Docker is available
+        if (!this.isReady()) {
+            return {
+                success: false,
+                output: null,
+                logs: [],
+                executionTime: Date.now() - startTime,
+                resourceUsage: { memory: 0, timeout: false },
+                error: 'Code execution is not available - Docker is not running or image not built',
+                codeHash
+            };
+        }
+
         try {
-            // Validate code
+            // Validate code before sending to container
             const validation = this.validateCode(code);
             if (!validation.safe) {
                 const errorMessage = validation.issues
@@ -224,93 +313,34 @@ export class CodeExecutionSandboxService {
                     this.logger.warn('Code validation warning', { message: issue.message, codeHash });
                 });
 
-            // Create sandbox environment
-            const sandbox = this.createSandbox(context, logs, execConfig);
-
-            // Create VM instance
-            // Note: vm2 doesn't allow require() at all by default - this is secure by design
-            const vm = new VM({
+            // Execute in Docker container
+            const result = await this.containerPool.execute({
+                code,
+                language,
                 timeout: execConfig.timeout,
-                sandbox
+                context
             });
 
-            // Wrap code in async function to allow return statements and async operations
-            const wrappedCode = `
-                (async function() {
-                    ${code}
-                })();
-            `;
-
-            // Execute code and await the promise from the async function
-            const resultPromise = vm.run(wrappedCode);
-            const result = await resultPromise;
-
-            const executionTime = Date.now() - startTime;
-
-
             return {
-                success: true,
-                output: result,
-                logs,
-                executionTime,
+                success: result.success,
+                output: result.output,
+                logs: result.logs,
+                executionTime: result.executionTime,
                 resourceUsage: {
-                    memory: process.memoryUsage().heapUsed / 1024 / 1024, // MB
-                    timeout: false
+                    memory: execConfig.memoryLimit || 128,
+                    timeout: result.timeout
                 },
+                error: result.error,
                 codeHash
             };
 
         } catch (error: any) {
             const executionTime = Date.now() - startTime;
-
-            // Check if it's a timeout error
-            const isTimeout = error.message?.includes('Script execution timed out');
 
             this.logger.error('Code execution failed', {
                 codeHash,
                 error: error.message,
                 executionTime,
-                agentId: context.agentId,
-                timeout: isTimeout
-            });
-
-            return {
-                success: false,
-                output: null,
-                logs,
-                executionTime,
-                resourceUsage: {
-                    memory: process.memoryUsage().heapUsed / 1024 / 1024,
-                    timeout: isTimeout
-                },
-                error: error.message || String(error),
-                codeHash
-            };
-        }
-    }
-
-    /**
-     * Execute TypeScript code (compiles to JavaScript first)
-     */
-    public async executeTypeScript(
-        code: string,
-        context: SandboxContext,
-        config?: Partial<SandboxConfig>
-    ): Promise<ExecutionResult> {
-        // For Phase 1, we'll transpile TypeScript to JavaScript using a simple approach
-        // In Phase 2/3, we can add proper TypeScript compilation with @typescript/vfs
-
-        try {
-            // Basic TypeScript stripping (removes type annotations)
-            // This is a simple approach - in production we'd use proper TS compiler
-            const jsCode = this.stripTypeScriptTypes(code);
-
-            // Execute as JavaScript
-            return await this.executeJavaScript(jsCode, context, config);
-
-        } catch (error: any) {
-            this.logger.error('TypeScript execution failed', {
-                error: error.message,
                 agentId: context.agentId
             });
 
@@ -318,97 +348,15 @@ export class CodeExecutionSandboxService {
                 success: false,
                 output: null,
                 logs: [],
-                executionTime: 0,
-                resourceUsage: { memory: 0, timeout: false },
-                error: `TypeScript compilation failed: ${error.message}`,
-                codeHash: crypto.createHash('sha256').update(code).digest('hex').substring(0, 16)
+                executionTime,
+                resourceUsage: {
+                    memory: 0,
+                    timeout: false
+                },
+                error: error.message || String(error),
+                codeHash
             };
         }
-    }
-
-    /**
-     * Create sandbox environment with context
-     */
-    private createSandbox(
-        context: SandboxContext,
-        logs: string[],
-        config: SandboxConfig
-    ): Record<string, any> {
-        const sandbox: Record<string, any> = {
-            // Provide context as-is (includes agentId, channelId, requestId, and any additional data)
-            context,
-
-            // Provide safe utilities
-            setTimeout,
-            setInterval,
-            clearTimeout,
-            clearInterval,
-
-            // JSON utilities
-            JSON,
-
-            // Math utilities
-            Math,
-
-            // Date utilities
-            Date,
-
-            // String/Array utilities
-            String,
-            Number,
-            Boolean,
-            Array,
-            Object
-        };
-
-        // Optionally capture console output
-        if (config.captureConsole) {
-            sandbox.console = {
-                log: (...args: any[]) => {
-                    logs.push(args.map(a => String(a)).join(' '));
-                },
-                error: (...args: any[]) => {
-                    logs.push('[ERROR] ' + args.map(a => String(a)).join(' '));
-                },
-                warn: (...args: any[]) => {
-                    logs.push('[WARN] ' + args.map(a => String(a)).join(' '));
-                },
-                info: (...args: any[]) => {
-                    logs.push('[INFO] ' + args.map(a => String(a)).join(' '));
-                }
-            };
-        }
-
-        return sandbox;
-    }
-
-    /**
-     * TypeScript type stripping implementation
-     *
-     * Uses regex-based type stripping for lightweight sandboxed execution.
-     * This approach handles common TypeScript patterns (interfaces, types, annotations, assertions)
-     * without requiring the full TypeScript compiler, keeping sandbox execution fast and lightweight.
-     * For production use with complex TypeScript, consider using ts.transpileModule from typescript package.
-     */
-    private stripTypeScriptTypes(code: string): string {
-        let jsCode = code;
-
-        // Remove interface declarations (multiline-safe)
-        jsCode = jsCode.replace(/interface\s+[A-Za-z_][A-Za-z0-9_]*\s*\{[\s\S]*?\}/g, '');
-
-        // Remove type declarations
-        jsCode = jsCode.replace(/type\s+[A-Za-z_][A-Za-z0-9_]*\s*=\s*[\s\S]*?;/g, '');
-
-        // Remove `: Type` annotations (more conservative)
-        jsCode = jsCode.replace(/:\s*[A-Za-z_][A-Za-z0-9_<>[\]|&,\s]*(?=[,\)\}=;])/g, '');
-
-        // Remove `as Type` assertions
-        jsCode = jsCode.replace(/\s+as\s+[A-Za-z_][A-Za-z0-9_<>[\]|&,\s]*(?=[,\)\}=;])/g, '');
-
-        // Remove type parameters from generic functions/classes
-        jsCode = jsCode.replace(/<[A-Za-z_][A-Za-z0-9_<>[\]|&,\s]*>/g, '');
-
-        return jsCode;
     }
 
     /**
@@ -426,6 +374,15 @@ export class CodeExecutionSandboxService {
             ...this.defaultConfig,
             ...config
         };
+    }
 
+    /**
+     * Shutdown the service
+     */
+    public async shutdown(): Promise<void> {
+        if (this.containerPool) {
+            await this.containerPool.shutdown();
+        }
+        this.initialized = false;
     }
 }

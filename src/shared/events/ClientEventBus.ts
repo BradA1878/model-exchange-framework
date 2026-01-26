@@ -26,7 +26,8 @@
  */
 
 import { Subject, Subscription, filter, map } from 'rxjs';
-import { EventMap, Events } from './EventNames';
+import { Events } from './EventNames';
+import type { EventMap } from './EventNames';
 import { ControlLoopEvents } from './event-definitions/ControlLoopEvents';
 import { OrparEvents } from './event-definitions/OrparEvents';
 import { 

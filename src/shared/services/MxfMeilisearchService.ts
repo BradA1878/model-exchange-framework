@@ -65,7 +65,7 @@ export interface ActionDocument {
     result?: any;
     success: boolean;
     metadata?: Record<string, any>;
-    _vectors?: number[];
+    _vectors?: { [embedderName: string]: number[] }; // Semantic embeddings by embedder name
 }
 
 export interface PatternDocument {
@@ -79,7 +79,7 @@ export interface PatternDocument {
     usageCount: number;
     discoveredBy: string;
     timestamp: number;
-    _vectors?: number[];
+    _vectors?: { [embedderName: string]: number[] }; // Semantic embeddings by embedder name
 }
 
 /**
@@ -295,7 +295,7 @@ export class MxfMeilisearchService {
     private async configureActionIndex(): Promise<void> {
         const index = this.client.index(MeilisearchIndex.ACTIONS);
 
-        await index.updateSettings({
+        const settings: any = {
             searchableAttributes: ['toolName', 'description', 'agentId'],
             filterableAttributes: ['agentId', 'channelId', 'toolName', 'timestamp', 'success'],
             sortableAttributes: ['timestamp', 'usageCount'],
@@ -307,7 +307,22 @@ export class MxfMeilisearchService {
                 'sort',
                 'exactness'
             ]
-        });
+        };
+
+        // Add vector embedder configuration if semantic search is enabled
+        if (this.config.enableEmbeddings && this.embeddingGenerator) {
+            settings.embedders = {
+                default: {
+                    source: 'userProvided',
+                    dimensions: this.config.embeddingDimensions || 1536
+                }
+            };
+        } else {
+            // Explicitly remove embedders when semantic search is disabled
+            settings.embedders = null;
+        }
+
+        await index.updateSettings(settings);
 
     }
 
@@ -317,7 +332,7 @@ export class MxfMeilisearchService {
     private async configurePatternIndex(): Promise<void> {
         const index = this.client.index(MeilisearchIndex.PATTERNS);
 
-        await index.updateSettings({
+        const settings: any = {
             searchableAttributes: ['description', 'type', 'toolsInvolved'],
             filterableAttributes: ['channelId', 'type', 'effectiveness', 'usageCount', 'discoveredBy'],
             sortableAttributes: ['effectiveness', 'usageCount', 'timestamp'],
@@ -329,7 +344,22 @@ export class MxfMeilisearchService {
                 'sort',
                 'exactness'
             ]
-        });
+        };
+
+        // Add vector embedder configuration if semantic search is enabled
+        if (this.config.enableEmbeddings && this.embeddingGenerator) {
+            settings.embedders = {
+                default: {
+                    source: 'userProvided',
+                    dimensions: this.config.embeddingDimensions || 1536
+                }
+            };
+        } else {
+            // Explicitly remove embedders when semantic search is disabled
+            settings.embedders = null;
+        }
+
+        await index.updateSettings(settings);
 
     }
 
@@ -404,9 +434,13 @@ export class MxfMeilisearchService {
         metadata?: Record<string, any>;
     }): Promise<void> {
         try {
+            const embedding = await this.generateEmbedding(`${action.toolName}: ${action.description}`);
+
+            // Build document with proper _vectors format for Meilisearch
             const document: ActionDocument = {
                 ...action,
-                _vectors: await this.generateEmbedding(`${action.toolName}: ${action.description}`)
+                // Meilisearch expects _vectors as { embedderName: array }, not just array
+                _vectors: embedding ? { default: embedding } : undefined
             };
 
             const index = this.client.index(MeilisearchIndex.ACTIONS);
@@ -427,7 +461,9 @@ export class MxfMeilisearchService {
         try {
             // Create a description from the pattern data
             const description = `${pattern.type} pattern: ${pattern.pattern.sequence.join(' -> ')}`;
+            const embedding = await this.generateEmbedding(description);
 
+            // Build document with proper _vectors format for Meilisearch
             const document: PatternDocument = {
                 id: pattern.patternId,
                 patternId: pattern.patternId,
@@ -439,7 +475,8 @@ export class MxfMeilisearchService {
                 usageCount: pattern.usageCount,
                 discoveredBy: pattern.agentParticipants[0] || 'unknown',
                 timestamp: pattern.firstDiscovered,
-                _vectors: await this.generateEmbedding(description)
+                // Meilisearch expects _vectors as { embedderName: array }, not just array
+                _vectors: embedding ? { default: embedding } : undefined
             };
 
             const index = this.client.index(MeilisearchIndex.PATTERNS);
@@ -498,12 +535,21 @@ export class MxfMeilisearchService {
                 searchParams.attributesToHighlight = params.attributesToHighlight;
             }
 
-            // Enable hybrid search if embeddings are available and ratio is set
-            if (this.config.enableEmbeddings && params.hybridRatio !== undefined) {
-                searchParams.hybrid = {
-                    semanticRatio: params.hybridRatio,
-                    embedder: 'default'
-                };
+            // Enable hybrid search if embeddings are available, generator is configured, and ratio is set
+            // For user-provided embeddings, we must generate and pass the query embedding
+            if (this.config.enableEmbeddings && this.embeddingGenerator && params.hybridRatio !== undefined) {
+                // Generate embedding for the search query
+                const queryEmbedding = await this.generateEmbedding(params.query);
+
+                if (queryEmbedding) {
+                    searchParams.hybrid = {
+                        semanticRatio: params.hybridRatio,
+                        embedder: 'default'
+                    };
+                    // Provide the query embedding for user-provided embedder configuration
+                    searchParams.vector = queryEmbedding;
+                }
+                // If embedding generation fails, fall back to keyword-only search
             }
 
             const result = await index.search<T>(params.query, searchParams);

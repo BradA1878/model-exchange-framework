@@ -198,10 +198,10 @@ cp .env.example .env
 # Edit .env with your API keys and secrets
 
 # Deploy full stack (MXF + MongoDB + Meilisearch + Redis + Dashboard)
-npm run docker:up
+bun run docker:up
 
 # Check service health
-npm run docker:health
+bun run docker:health
 ```
 
 📖 **[Complete Docker Deployment Guide →](./deployment.md)**
@@ -212,8 +212,8 @@ npm run docker:health
 git clone https://github.com/BradA1878/model-exchange-framework
 cd model-exchange-framework
 npm install
-npm run build
-npm run start
+bun run build
+bun run start
 ```
 
 ### Your First Agent
@@ -279,17 +279,17 @@ MXF includes comprehensive demos and examples:
 
 ```bash
 # First Contact Demo - 6 agents in first contact scenario
-npm run demo:first-contact
+bun run demo:first-contact
 
 # Interview Scheduling - Multi-agent coordination
-npm run demo:interview
+bun run demo:interview
 
 # Fog of War Strategy Game - 8 agents in competitive game
-npm run demo:fog-of-war
+bun run demo:fog-of-war
 
 # AI Game Demos - Tic-Tac-Toe and Go Fish
-npm run demo:tic-tac-toe
-npm run demo:go-fish
+bun run demo:tic-tac-toe
+bun run demo:go-fish
 ```
 
 📖 **[View All Example Documentation →](./examples/first-contact.md)**

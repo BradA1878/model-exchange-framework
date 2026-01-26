@@ -48,6 +48,7 @@ import { allMxfMcpTools } from '../shared/protocols/mcp/tools/index'; // Import 
 import { McpToolRegistry } from './api/services/McpToolRegistry'; // Import McpToolRegistry
 import { firstValueFrom } from 'rxjs';
 import { MxfMeilisearchService, EmbeddingGenerator } from '../shared/services/MxfMeilisearchService';
+import { CodeExecutionSandboxService } from '../shared/services/CodeExecutionSandboxService';
 
 /**
  * Initialize logger with appropriate context
@@ -250,6 +251,20 @@ const initializeServer = async () => {
         } else {
         }
 
+        // Step 1.6: Initialize Code Execution Sandbox (Docker-based)
+        try {
+            const codeExecService = CodeExecutionSandboxService.getInstance();
+            const dockerAvailable = await codeExecService.initialize();
+            if (dockerAvailable) {
+                logger.info('Code execution sandbox initialized with Docker');
+            } else {
+                logger.warn('Code execution sandbox: Docker not available - code execution disabled');
+            }
+        } catch (error) {
+            logger.error(`Failed to initialize code execution sandbox: ${error instanceof Error ? error.message : String(error)}`);
+            logger.warn('Continuing without code execution capability');
+        }
+
         // Step 2: Initialize core services in proper order
 
         // Initialize service instances
@@ -267,10 +282,41 @@ const initializeServer = async () => {
         
         // Initialize SystemLlmServiceManager to load env vars and show configuration at startup
         SystemLlmServiceManager.getInstance();
-        
+
         // Initialize EphemeralEventPatternService
         await ephemeralEventPatternService.initialize();
-        
+
+        // Step 2.5: Initialize MULS services if enabled
+        if (process.env.MEMORY_UTILITY_LEARNING_ENABLED === 'true') {
+            try {
+                const { QValueManager } = await import('../shared/services/QValueManager');
+                const { RewardSignalProcessor } = await import('../shared/services/RewardSignalProcessor');
+                const { UtilityScorerService } = await import('../shared/services/UtilityScorerService');
+
+                // Initialize all MULS services - this sets enabled=true based on env config
+                QValueManager.getInstance().initialize();
+                RewardSignalProcessor.getInstance().initialize();
+                UtilityScorerService.getInstance().initialize();
+
+                logger.info('MULS services initialized (Memory Utility Learning System)');
+            } catch (error) {
+                logger.error(`Failed to initialize MULS services: ${error instanceof Error ? error.message : String(error)}`);
+                logger.warn('Continuing without MULS - memory utility learning disabled');
+            }
+        }
+
+        // Step 2.6: Initialize ORPAR-Memory integration if enabled
+        if (process.env.ORPAR_MEMORY_INTEGRATION_ENABLED === 'true') {
+            try {
+                const { OrparMemoryCoordinator } = await import('../shared/services/orpar-memory/OrparMemoryCoordinator');
+                OrparMemoryCoordinator.getInstance().initialize();
+                logger.info('ORPAR-Memory integration initialized');
+            } catch (error) {
+                logger.error(`Failed to initialize ORPAR-Memory integration: ${error instanceof Error ? error.message : String(error)}`);
+                logger.warn('Continuing without ORPAR-Memory integration');
+            }
+        }
+
         // Step 3: Initialize Hybrid MCP Service
         try {
             await ServerHybridMcpService.getInstance().initialize();
@@ -279,28 +325,22 @@ const initializeServer = async () => {
             // Don't exit - let the server continue without hybrid MCP if it fails
         }
         
-        // Step 4: Initialize McpService for socket-based tool communication
+        // Step 4: Load existing MCP tools from database and register new ones
+        // NOTE: This must happen BEFORE McpService initializes so it can load the newly registered tools
         try {
-            await McpService.getInstance().initialize();
-        } catch (error) {
-            logger.error(`❌ Failed to initialize McpService: ${error}`);
-        }
 
-        // Step 5: Load existing MCP tools from database and register new ones
-        try {
-            
             // Force load tools from database before attempting registration
             // This ensures we don't try to re-register tools that already exist
             const existingTools = await firstValueFrom(mcpToolRegistry.listTools());
-            
+
             // Now register any new tools that aren't in the database yet
             const existingToolNames = new Set(existingTools.map(t => t.name));
             const newTools = allMxfMcpTools.filter(tool => !existingToolNames.has(tool.name));
-            
+
             if (newTools.length === 0) {
             } else {
                 let successCount = 0;
-                
+
                 for (const tool of newTools) {
                     try {
                         const success = await firstValueFrom(mcpToolRegistry.registerTool(
@@ -315,9 +355,9 @@ const initializeServer = async () => {
                         logger.warn(`Failed to register tool ${tool.name}: ${error}`);
                     }
                 }
-                
+
             }
-            
+
             // Final count
             const finalTools = await firstValueFrom(mcpToolRegistry.listTools());
             const toolCount = finalTools.length;
@@ -331,11 +371,19 @@ const initializeServer = async () => {
             (server as any)._mxfToolCount = 0;
         }
 
+        // Step 5: Initialize McpService for socket-based tool communication
+        // NOTE: Must happen AFTER tool registration so McpService loads the new tools
+        try {
+            await McpService.getInstance().initialize();
+        } catch (error) {
+            logger.error(`❌ Failed to initialize McpService: ${error}`);
+        }
+
         // Step 6: Verify all services are ready
         if (serverReflectionService) {
         }
 
-        // Step 7: Mount API routes AFTER all services are initialized
+        // Step 7: Mount API routes AFTER all services are initialized (including tool registration)
         setupApiRoutes();
 
         // Step 8: Start the server

@@ -1107,6 +1107,9 @@ export function registerAgentDisconnectCleanup(): void {
 
 // Auto-register the cleanup listener when module is loaded
 // Uses setTimeout to allow EventBus to be initialized first
-setTimeout(() => {
-    registerAgentDisconnectCleanup();
-}, 0);
+// Skip in test environment to avoid "Cannot log after tests are done" warnings
+if (process.env.NODE_ENV !== 'test') {
+    setTimeout(() => {
+        registerAgentDisconnectCleanup();
+    }, 0);
+}

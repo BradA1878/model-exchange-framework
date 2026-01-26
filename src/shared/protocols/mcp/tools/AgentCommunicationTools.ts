@@ -459,7 +459,7 @@ export const agentBroadcastTool = {
 };
 
 /**
- * MCP Tool: agent_discover
+ * MCP Tool: messaging_discover
  * Discover available agents and their capabilities in a channel or system
  */
 export const agentDiscoverTool = {

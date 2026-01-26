@@ -28,13 +28,19 @@
 import mongoose, { Schema, Document, Model } from 'mongoose';
 import { v4 as uuidv4 } from 'uuid';
 
-import { 
-    IAgentMemory, 
-    IChannelMemory, 
+import {
+    IAgentMemory,
+    IChannelMemory,
     IRelationshipMemory,
-    MemoryScope, 
+    MemoryScope,
     MemoryPersistenceLevel
 } from '../types/MemoryTypes';
+import {
+    MemoryUtilitySubdocument,
+    QValueHistoryEntry,
+    QValueInitSource,
+    DEFAULT_UTILITY_SUBDOCUMENT
+} from '../types/MemoryUtilityTypes';
 
 /**
  * Base Memory Schema with common fields for all memory types
@@ -77,6 +83,63 @@ const baseMemorySchema = new Schema({
     customData: {
         type: Schema.Types.Mixed,
         default: {}
+    },
+
+    // Memory Utility Learning System (MULS) subdocument
+    // Tracks Q-values for utility-based retrieval
+    utility: {
+        type: new Schema({
+            // Current Q-value (0-1 range, default 0.5)
+            qValue: {
+                type: Number,
+                default: 0.5,
+                min: 0,
+                max: 1
+            },
+            // History of Q-value updates for convergence analysis
+            qValueHistory: [{
+                value: { type: Number, required: true },
+                reward: { type: Number, required: true },
+                timestamp: { type: Date, default: Date.now },
+                taskId: { type: String },
+                phase: { type: String }
+            }],
+            // Total number of times this memory was retrieved
+            retrievalCount: {
+                type: Number,
+                default: 0
+            },
+            // Number of successful task completions where this memory was used
+            successCount: {
+                type: Number,
+                default: 0
+            },
+            // Number of failed task completions where this memory was used
+            failureCount: {
+                type: Number,
+                default: 0
+            },
+            // Timestamp of last reward update
+            lastRewardAt: {
+                type: Date,
+                default: Date.now
+            },
+            // How the Q-value was initially set
+            initializedFrom: {
+                type: String,
+                enum: ['default', 'surprise', 'transfer', 'manual'],
+                default: 'default'
+            }
+        }, { _id: false }),
+        default: () => ({
+            qValue: 0.5,
+            qValueHistory: [],
+            retrievalCount: 0,
+            successCount: 0,
+            failureCount: 0,
+            lastRewardAt: new Date(),
+            initializedFrom: 'default'
+        })
     }
 }, {
     timestamps: true,
@@ -179,10 +242,28 @@ const RelationshipMemorySchema = new Schema({
     ...relationshipMemorySchema.obj
 });
 
+// Create indexes for Q-value queries (MULS optimization)
+// Index for sorting by Q-value descending (top performers)
+AgentMemorySchema.index({ 'utility.qValue': -1 });
+// Compound index for agent-scoped Q-value queries
+AgentMemorySchema.index({ agentId: 1, 'utility.qValue': -1 });
+
+ChannelMemorySchema.index({ 'utility.qValue': -1 });
+ChannelMemorySchema.index({ channelId: 1, 'utility.qValue': -1 });
+
+RelationshipMemorySchema.index({ 'utility.qValue': -1 });
+
 // Define document interfaces that properly merge the mongoose Document and our interfaces
-export interface AgentMemoryDocument extends Omit<mongoose.Document, 'id'>, IAgentMemory {}
-export interface ChannelMemoryDocument extends Omit<mongoose.Document, 'id'>, IChannelMemory {}
-export interface RelationshipMemoryDocument extends Omit<mongoose.Document, 'id'>, IRelationshipMemory {}
+// Extended with optional MULS utility subdocument
+export interface AgentMemoryDocument extends Omit<mongoose.Document, 'id'>, IAgentMemory {
+    utility?: MemoryUtilitySubdocument;
+}
+export interface ChannelMemoryDocument extends Omit<mongoose.Document, 'id'>, IChannelMemory {
+    utility?: MemoryUtilitySubdocument;
+}
+export interface RelationshipMemoryDocument extends Omit<mongoose.Document, 'id'>, IRelationshipMemory {
+    utility?: MemoryUtilitySubdocument;
+}
 
 // Pre-save hooks
 AgentMemorySchema.pre('save', function(this: AgentMemoryDocument, next) {

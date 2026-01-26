@@ -74,9 +74,9 @@ Fixes #<!-- issue number -->
 <!-- Describe the testing you've done -->
 
 ### Test Environment
-- [ ] Local development (`npm run start:dev`)
-- [ ] Docker deployment (`npm run docker:up`)
-- [ ] Dashboard tested (`npm run dashboard:dev`)
+- [ ] Local development (`bun run start:dev`)
+- [ ] Docker deployment (`bun run docker:up`)
+- [ ] Dashboard tested (`bun run dashboard:dev`)
 - [ ] Examples/demos tested
 
 ### Testing Performed

@@ -18,7 +18,7 @@ The CLI is included with the MXF server and available via npm scripts:
 
 ```bash
 # Run Server CLI
-npm run server:cli -- <command> [options]
+bun run server:cli -- <command> [options]
 ```
 
 ## Commands
@@ -29,7 +29,7 @@ Generate a new domain key for SDK authentication. This is the most critical secu
 
 **Usage:**
 ```bash
-npm run server:cli -- domain-key:generate
+bun run server:cli -- domain-key:generate
 ```
 
 **No options required** - the command will:
@@ -73,7 +73,7 @@ Display the current domain key from the `.env` file.
 
 **Usage:**
 ```bash
-npm run server:cli -- domain-key:show
+bun run server:cli -- domain-key:show
 ```
 
 **Output:**
@@ -98,7 +98,7 @@ Create a new user account for SDK developers or administrators.
 
 **Usage:**
 ```bash
-npm run server:cli -- user:create \
+bun run server:cli -- user:create \
   --email <email> \
   --password <password> \
   [--username <username>] \
@@ -113,7 +113,7 @@ npm run server:cli -- user:create \
 
 **Example:**
 ```bash
-npm run server:cli -- user:create \
+bun run server:cli -- user:create \
   --email developer@company.com \
   --password secure-password-123 \
   --username dev-user
@@ -139,7 +139,7 @@ List all user accounts in the system.
 
 **Usage:**
 ```bash
-npm run server:cli -- user:list [--api-url <url>]
+bun run server:cli -- user:list [--api-url <url>]
 ```
 
 **Options:**
@@ -180,19 +180,19 @@ Set up a new MXF server from scratch:
 mongod --dbpath /path/to/data
 
 # 2. Generate domain key
-npm run server:cli -- domain-key:generate
+bun run server:cli -- domain-key:generate
 
 # 3. Create admin user
-npm run server:cli -- user:create \
+bun run server:cli -- user:create \
   --email admin@company.com \
   --password admin-secure-password \
   --username admin
 
 # 4. Start the MXF server
-npm run start:dev
+bun run start:dev
 
 # 5. Share domain key with SDK users (via secure channel)
-npm run server:cli -- domain-key:show
+bun run server:cli -- domain-key:show
 ```
 
 ### Onboarding New SDK Developer
@@ -201,13 +201,13 @@ Steps to onboard a new developer:
 
 ```bash
 # 1. Create user account for developer
-npm run server:cli -- user:create \
+bun run server:cli -- user:create \
   --email newdev@company.com \
   --password initial-password-123 \
   --username newdev
 
 # 2. Provide domain key securely
-npm run server:cli -- domain-key:show
+bun run server:cli -- domain-key:show
 # Send via encrypted email or password manager
 
 # 3. Provide user credentials securely
@@ -222,7 +222,7 @@ Rotate domain keys for security:
 
 ```bash
 # 1. Generate new domain key
-npm run server:cli -- domain-key:generate
+bun run server:cli -- domain-key:generate
 
 # 2. Notify all SDK users about the key change
 # (They will need to update their .env files)
@@ -243,7 +243,7 @@ Review user accounts periodically:
 
 ```bash
 # List all users
-npm run server:cli -- user:list
+bun run server:cli -- user:list
 
 # Review and remove inactive accounts
 # (Use MongoDB directly or REST API for deletion)
@@ -342,7 +342,7 @@ gpg --encrypt --recipient admin@company.com .env
 
 **Solution**:
 ```bash
-npm run server:cli -- domain-key:generate
+bun run server:cli -- domain-key:generate
 ```
 
 ### "Cannot connect to MongoDB"
@@ -368,7 +368,7 @@ MONGODB_URI=mongodb://localhost:27017/mxf
 **Solution**:
 ```bash
 # List existing users
-npm run server:cli -- user:list
+bun run server:cli -- user:list
 
 # Use different email or delete existing user
 ```
@@ -380,7 +380,7 @@ npm run server:cli -- user:list
 **Solution**:
 ```bash
 # Generate domain key
-npm run server:cli -- domain-key:generate
+bun run server:cli -- domain-key:generate
 
 # Verify .env file exists and contains MXF_DOMAIN_KEY
 cat .env | grep MXF_DOMAIN_KEY
@@ -399,7 +399,7 @@ cp .env.example .env.production
 chmod 600 .env.production
 
 # 2. Generate production domain key
-NODE_ENV=production npm run server:cli -- domain-key:generate
+NODE_ENV=production bun run server:cli -- domain-key:generate
 
 # 3. Set strong JWT secret
 openssl rand -base64 32
@@ -408,7 +408,7 @@ openssl rand -base64 32
 # Update MONGODB_URI in .env.production
 
 # 5. Create admin account
-NODE_ENV=production npm run server:cli -- user:create \
+NODE_ENV=production bun run server:cli -- user:create \
   --email admin@company.com \
   --password $(openssl rand -base64 32)
 

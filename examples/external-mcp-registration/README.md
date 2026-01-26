@@ -22,7 +22,7 @@ This directory contains a complete working example of registering custom MCP ser
 
 1. MXF server running:
    ```bash
-   npm run dev
+   bun run dev
    ```
 
 2. Environment variables set in `.env`:
@@ -36,7 +36,7 @@ This directory contains a complete working example of registering custom MCP ser
 ### Run
 
 ```bash
-npm run demo:external-mcp
+bun run demo:external-mcp
 ```
 
 ### Expected Output

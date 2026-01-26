@@ -182,7 +182,7 @@ export function parseToolCalls(content: string): ToolCallParseResult {
     // If no structured format found, try to detect and suggest corrections
     if (!foundAny) {
         // Look for potential tool names
-        const toolNamePattern = /\b(filesystem_read|filesystem_write|memory_store|shell_exec|messaging_send|agent_discover)\b/gi;
+        const toolNamePattern = /\b(filesystem_read|filesystem_write|memory_store|shell_exec|messaging_send|messaging_discover)\b/gi;
         const potentialTools = content.match(toolNamePattern);
         
         if (potentialTools && potentialTools.length > 0) {

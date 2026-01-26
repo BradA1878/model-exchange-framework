@@ -126,10 +126,10 @@ await recruiter.sendMessage(
 1. **One-Time Setup**:
    ```bash
    # Start MXF server
-   npm run start:dev
+   bun run start:dev
 
    # In another terminal, create demo user
-   npm run server:cli -- demo:setup
+   bun run server:cli -- demo:setup
    ```
 
 2. **Environment Variables**:
@@ -141,10 +141,10 @@ await recruiter.sendMessage(
 
 ```bash
 # Terminal 1: Ensure MXF server is running
-npm run start:dev
+bun run start:dev
 
 # Terminal 2: Run the demo
-npx tsx examples/interview-scheduling-demo/interview-scheduling-demo.ts
+bun run examples/interview-scheduling-demo/interview-scheduling-demo.ts
 ```
 
 ## Sample Conversation Flow

@@ -1,46 +1,46 @@
 # Multi-stage build for MXF Server
-FROM node:20-alpine AS builder
+# Build stage uses Bun for fast package installation
+FROM oven/bun:1.1-slim AS builder
 
 # Install build dependencies
-RUN apk add --no-cache python3 make g++
+RUN apt-get update && apt-get install -y python3 make g++ && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
 # Copy package files
-COPY package*.json ./
+COPY package.json bun.lock* bun.lockb* ./
 
-# Install dependencies
-RUN npm ci --production=false
+# Install dependencies using Bun (fast)
+RUN bun install --frozen-lockfile
 
 # Copy source code
 COPY . .
 
 # Build TypeScript
-RUN npm run build
+RUN bun run build
 
-# Production stage
-FROM node:20-alpine
+# Production stage uses Bun for consistent runtime
+FROM oven/bun:1.1-slim
 
 # Install runtime dependencies for Puppeteer
-RUN apk add --no-cache \
-    chromium \
-    nss \
-    freetype \
-    harfbuzz \
-    ca-certificates \
-    ttf-freefont
+RUN apt-get update && apt-get install -y \
+    chromium fonts-freefont-ttf libx11-6 libx11-xcb1 libxcb1 \
+    libxcomposite1 libxcursor1 libxdamage1 libxext6 libxfixes3 \
+    libxi6 libxrandr2 libxrender1 libxss1 libxtst6 libnss3 \
+    libatk1.0-0 libatk-bridge2.0-0 libdrm2 libgbm1 libasound2 \
+    && rm -rf /var/lib/apt/lists/*
 
 # Tell Puppeteer to use installed Chromium
-ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 
 WORKDIR /app
 
-# Copy package files
-COPY package*.json ./
+# Copy package files and lockfile from builder
+COPY package.json bun.lock* bun.lockb* ./
 
-# Install production dependencies only
-RUN npm ci --production
+# Install production dependencies with Bun
+RUN bun install --production --frozen-lockfile
 
 # Copy built application from builder
 COPY --from=builder /app/dist ./dist
@@ -50,17 +50,17 @@ COPY --from=builder /app/src/shared ./src/shared
 RUN mkdir -p /app/logs /app/uploads
 
 # Set proper permissions
-RUN chown -R node:node /app
+RUN groupadd -r mxf && useradd -r -g mxf mxf && chown -R mxf:mxf /app
 
 # Switch to non-root user
-USER node
+USER mxf
 
 # Expose application port
 EXPOSE 3001
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-  CMD node -e "require('http').get('http://localhost:3001/health', (r) => {r.statusCode === 200 ? process.exit(0) : process.exit(1)})"
+  CMD bun -e "fetch('http://localhost:3001/health').then(r => process.exit(r.ok ? 0 : 1))"
 
 # Start the application
-CMD ["node", "-r", "module-alias/register", "dist/server/index.js"]
+CMD ["bun", "run", "dist/server/index.js"]

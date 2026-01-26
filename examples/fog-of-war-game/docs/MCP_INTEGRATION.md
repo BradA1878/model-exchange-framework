@@ -207,7 +207,7 @@ All tools respect fog of war limitations:
 1. MXF server running:
    ```bash
    cd /path/to/model-exchange-framework-private
-   npm run dev
+   bun run dev
    ```
 
 2. Environment variables in `.env`:
@@ -222,23 +222,23 @@ All tools respect fog of war limitations:
 **Option 1: Full Game (Recommended)**
 ```bash
 cd examples/fog-of-war-game
-npm run game
+bun run game
 ```
 This starts both the agent connection and Vue client dashboard.
 
 **Option 2: Agents Only**
 ```bash
 cd examples/fog-of-war-game
-npm run connect-agents
+bun run connect-agents
 ```
 
 **Option 3: Separate Windows**
 ```bash
 # Terminal 1: Agent connection
-npm run connect-agents
+bun run connect-agents
 
 # Terminal 2: Vue dashboard
-cd client && npm run dev
+cd client && bun run dev
 ```
 
 ### What Happens

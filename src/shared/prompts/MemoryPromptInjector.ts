@@ -274,29 +274,37 @@ export class MemoryPromptInjector {
         const keywords = this.extractKeywords(taskContext);
         
         const scoredMemories = memories.map(memory => {
-            let score = 0;
-            
+            let keywordScore = 0;
+
             // Check content for keywords
             for (const keyword of keywords) {
                 if (memory.content.toLowerCase().includes(keyword.toLowerCase())) {
-                    score += 2;
+                    keywordScore += 2;
                 }
                 // Check tags
                 if (memory.tags?.some(tag => tag.toLowerCase().includes(keyword.toLowerCase()))) {
-                    score += 1;
+                    keywordScore += 1;
                 }
             }
-            
-            // Boost recent memories
+
+            // If no keyword match, memory is not relevant - return score of 0
+            if (keywordScore === 0) {
+                return { memory, score: 0 };
+            }
+
+            // Start with keyword score, then apply boosts
+            let score = keywordScore;
+
+            // Boost recent memories (only if keywords matched)
             const ageInHours = (Date.now() - new Date(memory.timestamp).getTime()) / (1000 * 60 * 60);
             if (ageInHours < 1) score += 3;
             else if (ageInHours < 24) score += 2;
             else if (ageInHours < 168) score += 1; // Last week
-            
-            // Boost by importance
+
+            // Boost by importance (only if keywords matched)
             if (memory.importance === 'high') score += 3;
             else if (memory.importance === 'medium') score += 1;
-            
+
             return { memory, score };
         });
         

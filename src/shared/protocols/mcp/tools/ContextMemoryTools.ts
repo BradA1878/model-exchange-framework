@@ -35,6 +35,7 @@ import { MemoryService } from '../../../services/MemoryService';
 import { IChannelMemory, IAgentMemory } from '../../../types/MemoryTypes';
 import { CONTEXT_MEMORY_TOOLS } from '../../../constants/ToolNames';
 import { McpToolHandlerContext, McpToolHandlerResult, McpToolResultContent } from '../McpServerTypes';
+import { QValueManager } from '../../../services/QValueManager';
 
 const logger = new Logger('info', 'ContextMemoryTools', 'server');
 const validator = createStrictValidator('ContextMemoryTools');
@@ -806,6 +807,13 @@ export const agentMemoryWriteTool = {
 
             // Update agent memory
             await firstValueFrom(memoryService.updateAgentMemory(context.agentId!, updates));
+
+            // Register with QValueManager for MULS tracking
+            // This ensures new memories start with default Q-value and appear in analytics
+            const qValueManager = QValueManager.getInstance();
+            if (qValueManager.isEnabled()) {
+                qValueManager.setQValueInCache(input.key, qValueManager.getConfig().defaultQValue);
+            }
 
             const content: McpToolResultContent = {
                 type: 'application/json',

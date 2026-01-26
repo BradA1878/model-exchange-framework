@@ -62,6 +62,8 @@ import { ControlLoopSpecificData } from '../../../shared/schemas/EventPayloadSch
 import { SystemLlmService } from '../services/SystemLlmService';
 import { SystemLlmServiceManager } from '../services/SystemLlmServiceManager';
 import { lastValueFrom } from 'rxjs';
+import { OrparMemoryCoordinator } from '../../../shared/services/orpar-memory/OrparMemoryCoordinator';
+import { isOrparMemoryIntegrationEnabled } from '../../../shared/config/orpar-memory.config';
 
 // Create validators and loggers
 const validator = createStrictValidator('ControlLoop');
@@ -122,6 +124,9 @@ export class ControlLoop implements IControlLoop {
     // Track previous plans for ORPAR planning phase
     private previousPlansHistory: Plan[] = [];
     private readonly maxPreviousPlans = 5; // Keep last 5 plans for context
+
+    // ORPAR-Memory integration cycle tracking
+    private orparMemoryCycleId: string | null = null;
 
     /**
      * Create a new control loop
@@ -306,6 +311,12 @@ export class ControlLoop implements IControlLoop {
                 this.subscriptions.unsubscribe();
                 this.subscriptions = new Subscription(); // Reinitialize for potential restart
 
+                // Fix #4: Clear ORPAR-Memory cycle ID on stop
+                if (this.orparMemoryCycleId) {
+                    this.logWithSuppression('cleanup-orpar', `Clearing ORPAR-Memory cycle ${this.orparMemoryCycleId}`);
+                    this.orparMemoryCycleId = null;
+                }
+
                 this.updateState(ControlLoopStateEnum.STOPPED);
                 this.logWithSuppression('stop-success', `Control loop ${this.loopId} stopped successfully.`);
 
@@ -374,6 +385,12 @@ export class ControlLoop implements IControlLoop {
             this.observations = []; // Observations are context for a specific run.
             this.lastError = undefined;  // Reset last error state.
             this.resetErrorTracking(); // Resets consecutiveErrors and errorHandlingState
+
+            // Fix #4: Clear ORPAR-Memory cycle ID on reset
+            if (this.orparMemoryCycleId) {
+                this.logWithSuppression('cleanup-orpar', `Clearing ORPAR-Memory cycle ${this.orparMemoryCycleId}`);
+                this.orparMemoryCycleId = null;
+            }
 
             // Re-initialize the loop.
             // If newConfig is provided, use it. Otherwise, re-use existing config.
@@ -707,25 +724,38 @@ export class ControlLoop implements IControlLoop {
         this.lastCycleTime = now;
         this.cycleInProgress = true;
 
-        
+
         // If not in running state, do nothing - add more debug info
         if (this.state.value !== ControlLoopStateEnum.RUNNING) {
             this.cycleInProgress = false;
             return;
         }
-        
+
         // If no observations, do nothing
         if (this.observations.length === 0) {
             this.cycleInProgress = false;
-            
+
             // Schedule next cycle if continuous processing is enabled
             if (this.config?.processingInterval && this.config.processingInterval > 0) {
                 setTimeout(() => this.runControlLoopCycle(), Math.max(this.config.processingInterval, this.minCycleInterval));
             }
-            
+
             return;
         }
-        
+
+        // Start ORPAR-Memory cycle if integration is enabled and channel is configured
+        if (isOrparMemoryIntegrationEnabled() && this.config?.channelId) {
+            try {
+                const coordinator = OrparMemoryCoordinator.getInstance();
+                this.orparMemoryCycleId = coordinator.startCycle(
+                    this.agentId,
+                    this.config.channelId
+                );
+            } catch (error) {
+                logger.warn(`Failed to start ORPAR-Memory cycle: ${error instanceof Error ? error.message : String(error)}`);
+            }
+        }
+
         const observationCount = this.observations.length;
         
         // Process next batch of observations
@@ -1450,6 +1480,26 @@ export class ControlLoop implements IControlLoop {
             );
             EventBus.server.emit(ControlLoopEvents.REFLECTION, reflectionPayload);
 
+            // Complete ORPAR-Memory cycle with outcome
+            if (isOrparMemoryIntegrationEnabled() && this.orparMemoryCycleId) {
+                try {
+                    const coordinator = OrparMemoryCoordinator.getInstance();
+                    await coordinator.completeCycle(this.orparMemoryCycleId, {
+                        success: reflection.success ?? true,
+                        errorCount: 0,
+                        toolCallCount: plan?.actions?.length ?? 0,
+                        taskCompleted: reflection.success ?? true,
+                        qualityScore: reflection.success ? 1.0 : 0.0,
+                        metadata: {
+                            feedback: reflection.insights?.join('; ')
+                        }
+                    });
+                } catch (error) {
+                    logger.warn(`Failed to complete ORPAR-Memory cycle: ${error instanceof Error ? error.message : String(error)}`);
+                } finally {
+                    this.orparMemoryCycleId = null;
+                }
+            }
 
             return reflection;
         } catch (error: any) {

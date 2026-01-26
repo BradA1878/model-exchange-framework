@@ -1,11 +1,13 @@
 /**
  * Jest Global Setup
  *
- * Checks that the MXF server is running before integration tests.
+ * Checks that the MXF server is running before integration tests
+ * and ensures the demo user exists for authentication.
  * The server must be started manually with: npm run dev
  */
 
 import waitOn from 'wait-on';
+import axios from 'axios';
 
 export default async function globalSetup(): Promise<void> {
     const serverUrl = process.env.TEST_SERVER_URL || 'http://localhost:3001';
@@ -43,6 +45,28 @@ export default async function globalSetup(): Promise<void> {
         console.error('');
         console.error('='.repeat(60));
         throw new Error(`Server not available at ${healthEndpoint}. Start server with 'npm run dev' first.`);
+    }
+
+    // Create demo user for test authentication
+    // Tests use demo-user/demo-password-1234 credentials
+    console.log('[Setup] Ensuring demo user exists...');
+    try {
+        await axios.post(`${serverUrl}/api/users/register`, {
+            username: 'demo-user',
+            email: 'demo@test.local',
+            password: 'demo-password-1234',
+            role: 'consumer'
+        });
+        console.log('[Setup] Created demo-user for testing');
+    } catch (error: any) {
+        if (error.response?.status === 409) {
+            console.log('[Setup] Demo user already exists');
+        } else if (error.response?.status === 400 && error.response?.data?.message?.includes('already')) {
+            console.log('[Setup] Demo user already exists');
+        } else {
+            // Log warning but don't fail - user might exist from previous run
+            console.warn(`[Setup] Demo user setup warning: ${error.response?.data?.message || error.message}`);
+        }
     }
 
     console.log('='.repeat(60));

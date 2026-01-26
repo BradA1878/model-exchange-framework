@@ -12,7 +12,7 @@ This guide covers deploying the complete MXF stack with Meilisearch semantic sea
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐      │
 │  │              │  │              │  │              │      │
 │  │  MXF Server  │  │   MongoDB    │  │ Meilisearch  │      │
-│  │  (Node.js)   │  │  (Database)  │  │   (Search)   │      │
+│  │    (Bun)     │  │  (Database)  │  │   (Search)   │      │
 │  │              │  │              │  │              │      │
 │  │  Port: 3001  │  │  Port: 27017 │  │  Port: 7700  │      │
 │  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘      │
@@ -40,9 +40,11 @@ This guide covers deploying the complete MXF stack with Meilisearch semantic sea
 ## 📋 Prerequisites
 
 - **Docker** 24.0+ and **Docker Compose** 2.0+
-- **Node.js** 20+ (for local development)
+- **Node.js** 20+ (for local development) or **Bun** 1.1+ (for fast package management)
 - **OpenAI API Key** (for embeddings)
 - **OpenRouter API Key** (optional, for SystemLLM)
+
+> **Note:** MXF uses Bun for both package management and server execution. The Docker image uses Bun in both build and production stages.
 
 ## 🚀 Quick Start
 

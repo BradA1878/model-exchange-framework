@@ -15,7 +15,7 @@ The CLI is included with the MXF SDK and available via npm scripts:
 
 ```bash
 # Run SDK CLI
-npm run sdk:cli -- <command> [options]
+bun run sdk:cli -- <command> [options]
 ```
 
 ## Quick Start
@@ -23,7 +23,7 @@ npm run sdk:cli -- <command> [options]
 The **recommended way** to set up a new project is using the interactive setup:
 
 ```bash
-npm run sdk:cli -- setup:interactive
+bun run sdk:cli -- setup:interactive
 ```
 
 This will prompt you for:
@@ -41,7 +41,7 @@ Create a user account.
 
 **Usage:**
 ```bash
-npm run sdk:cli -- user:create \
+bun run sdk:cli -- user:create \
   --email <email> \
   --password <password> \
   [--username <username>] \
@@ -56,7 +56,7 @@ npm run sdk:cli -- user:create \
 
 **Example:**
 ```bash
-npm run sdk:cli -- user:create \
+bun run sdk:cli -- user:create \
   --email developer@company.com \
   --password secure-password-123 \
   --username dev-user
@@ -75,7 +75,7 @@ Create a new channel.
 
 **Usage:**
 ```bash
-npm run sdk:cli -- channel:create \
+bun run sdk:cli -- channel:create \
   --id <channel-id> \
   --name <channel-name> \
   --email <user-email> \
@@ -96,7 +96,7 @@ npm run sdk:cli -- channel:create \
 
 **Example:**
 ```bash
-npm run sdk:cli -- channel:create \
+bun run sdk:cli -- channel:create \
   --id dev-channel \
   --name "Development Channel" \
   --description "Channel for development testing" \
@@ -118,7 +118,7 @@ Generate agent keys for a channel.
 
 **Usage:**
 ```bash
-npm run sdk:cli -- key:generate \
+bun run sdk:cli -- key:generate \
   --channel <channel-id> \
   --agents <agent-ids> \
   --email <user-email> \
@@ -137,7 +137,7 @@ npm run sdk:cli -- key:generate \
 
 **Example:**
 ```bash
-npm run sdk:cli -- key:generate \
+bun run sdk:cli -- key:generate \
   --channel dev-channel \
   --agents agent1,agent2,agent3 \
   --email developer@company.com \
@@ -176,12 +176,12 @@ Interactive setup that prompts for all configuration. This is the **easiest way*
 
 **Usage:**
 ```bash
-npm run sdk:cli -- setup:interactive [--output <file>] [--api-url <url>]
+bun run sdk:cli -- setup:interactive [--output <file>] [--api-url <url>]
 ```
 
 **Alias:**
 ```bash
-npm run sdk:cli -- init
+bun run sdk:cli -- init
 ```
 
 **Options:**
@@ -190,7 +190,7 @@ npm run sdk:cli -- init
 
 **Interactive Prompts:**
 ```bash
-$ npm run sdk:cli -- setup:interactive
+$ bun run sdk:cli -- setup:interactive
 
 🚀 MXF Interactive Setup
 This will create a user account, channel, and agent keys.
@@ -232,7 +232,7 @@ Complete automated setup from a configuration file (for scripting/automation).
 
 **Usage:**
 ```bash
-npm run sdk:cli -- setup \
+bun run sdk:cli -- setup \
   --config <config-file> \
   [--output <output-file>] \
   [--api-url <url>]
@@ -270,7 +270,7 @@ Create `setup-config.json`:
 
 **Example:**
 ```bash
-npm run sdk:cli -- setup \
+bun run sdk:cli -- setup \
   --config setup-config.json \
   --output .env
 ```
@@ -298,7 +298,7 @@ Quick setup using interactive mode:
 
 ```bash
 # Run interactive setup
-npm run sdk:cli -- setup:interactive
+bun run sdk:cli -- setup:interactive
 
 # Answer the prompts
 # All credentials are automatically saved to .env file
@@ -328,7 +328,7 @@ cat > setup-config.json << EOF
 EOF
 
 # 2. Run automated setup
-npm run sdk:cli -- setup \
+bun run sdk:cli -- setup \
   --config setup-config.json \
   --output .env
 
@@ -341,7 +341,7 @@ Generate keys for new agents in an existing channel:
 
 ```bash
 # Generate keys for new agents
-npm run sdk:cli -- key:generate \
+bun run sdk:cli -- key:generate \
   --channel project-alpha \
   --agents new-agent1,new-agent2 \
   --email developer@company.com \
@@ -355,21 +355,21 @@ Set up separate channels for different environments:
 
 ```bash
 # Development environment
-npm run sdk:cli -- channel:create \
+bun run sdk:cli -- channel:create \
   --id dev-channel \
   --name "Development" \
   --email dev@company.com \
   --password dev-password
 
 # Staging environment
-npm run sdk:cli -- channel:create \
+bun run sdk:cli -- channel:create \
   --id staging-channel \
   --name "Staging" \
   --email dev@company.com \
   --password dev-password
 
 # Production environment
-npm run sdk:cli -- channel:create \
+bun run sdk:cli -- channel:create \
   --id prod-channel \
   --name "Production" \
   --email ops@company.com \
@@ -388,7 +388,7 @@ MXF_USER_EMAIL=developer@company.com
 MXF_USER_PASSWORD=your-secure-password
 
 # Use in commands
-npm run sdk:cli -- channel:create \
+bun run sdk:cli -- channel:create \
   --id my-channel \
   --name "My Channel" \
   --email $MXF_USER_EMAIL \
@@ -427,7 +427,7 @@ Regularly rotate agent keys:
 
 ```bash
 # Generate new keys for agents
-npm run sdk:cli -- key:generate \
+bun run sdk:cli -- key:generate \
   --channel my-channel \
   --agents agent1,agent2 \
   --email developer@company.com \
@@ -476,7 +476,7 @@ npm run sdk:cli -- key:generate \
 curl http://localhost:3001/health
 
 # Specify correct API URL
-npm run sdk:cli -- channel:create \
+bun run sdk:cli -- channel:create \
   --id my-channel \
   --name "My Channel" \
   --email your@email.com \

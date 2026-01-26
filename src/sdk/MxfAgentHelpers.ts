@@ -507,8 +507,12 @@ export class ToolExecutionHelpers {
         }
         
         // Some tools return status-based success
+        // Note: 'approved' is returned by request_inference_params when parameters are approved
         if (toolResult.status) {
-            return toolResult.status === 'success' || toolResult.status === 'completed' || toolResult.status === 'task_completed';
+            return toolResult.status === 'success'
+                || toolResult.status === 'completed'
+                || toolResult.status === 'task_completed'
+                || toolResult.status === 'approved';
         }
         
         // If tool returned a result without error, assume success

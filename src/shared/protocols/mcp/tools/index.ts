@@ -57,6 +57,8 @@ import { dateTimeTools } from './DateTimeTools';
 import { MemorySearchTools } from './MemorySearchTools';
 import { JsonTools } from './JsonTools';
 import { orparTools } from './OrparTools';
+import { inferenceParameterTools } from './InferenceParameterTools';
+import { MemoryUtilityTools } from './MemoryUtilityTools';
 
 /**
  * All available MXF MCP tools organized by category
@@ -123,7 +125,13 @@ export const mxfMcpTools = {
     json: [JsonTools.jsonAppend, JsonTools.jsonRead],
 
     // ORPAR cognitive cycle tools for explicit agent cognition
-    orpar: orparTools
+    orpar: orparTools,
+
+    // Dynamic inference parameter control tools
+    inferenceParameter: inferenceParameterTools,
+
+    // Memory Utility Learning System (MULS) tools
+    memoryUtility: MemoryUtilityTools
 };
 
 /**
@@ -153,7 +161,9 @@ export const allMxfMcpTools = [
     ...dateTimeTools,
     JsonTools.jsonAppend,
     JsonTools.jsonRead,
-    ...orparTools
+    ...orparTools,
+    ...inferenceParameterTools,
+    ...MemoryUtilityTools
 ];
 
 /**
@@ -204,7 +214,7 @@ export const getMxfMcpToolNames = () => {
 export const mxfMcpToolMetadata = {
     version: '1.0.0',
     description: 'MXF-specific MCP tools for enhanced agent capabilities',
-    categories: ['communication', 'coordination', 'controlLoop', 'infrastructure', 'contextMemory', 'actionValidation', 'meta', 'web', 'git', 'typescript', 'taskBridge', 'test', 'codeAnalysis', 'safety', 'planning', 'effectiveness', 'analytics', 'dateTime'],
+    categories: ['communication', 'coordination', 'controlLoop', 'infrastructure', 'contextMemory', 'actionValidation', 'meta', 'web', 'git', 'typescript', 'taskBridge', 'test', 'codeAnalysis', 'safety', 'planning', 'effectiveness', 'analytics', 'dateTime', 'memoryUtility'],
     totalTools: allMxfMcpTools.length,
     capabilities: [
         'agent-to-agent messaging',
@@ -270,12 +280,15 @@ export const mxfMcpToolMetadata = {
         'timezone conversion and management',
         'date arithmetic and calculations',
         'date/time formatting and parsing',
-        'relative time comparisons'
+        'relative time comparisons',
+        'Q-value analytics and memory utility tracking',
+        'utility-based memory retrieval configuration',
+        'manual reward injection for memory feedback'
     ]
 };
 
 // Re-export individual tool arrays for selective imports
-export { agentCommunicationTools, coordinationTools, controlLoopTools, infrastructureTools, contextMemoryTools, MemorySearchTools, actionValidationTools, metaTools, webTools, gitTools, typescriptTools, taskBridgeTools, testTools, codeAnalysisTools, safetyTools, planningTools, effectivenessTools, taskPlanningTools, analyticsTools, dateTimeTools };
+export { agentCommunicationTools, coordinationTools, controlLoopTools, infrastructureTools, contextMemoryTools, MemorySearchTools, actionValidationTools, metaTools, webTools, gitTools, typescriptTools, taskBridgeTools, testTools, codeAnalysisTools, safetyTools, planningTools, effectivenessTools, taskPlanningTools, analyticsTools, dateTimeTools, inferenceParameterTools, MemoryUtilityTools };
 
 // Re-export individual tools for direct imports
 export {
@@ -403,3 +416,20 @@ export {
     dateTimeArithmeticTool,
     dateTimeFormatTool
 } from './DateTimeTools';
+
+export {
+    // Inference Parameter Tools (P1)
+    request_inference_params,
+    reset_inference_params,
+    get_current_params,
+    get_parameter_status,
+    get_available_models,
+    getParameterCostAnalyticsTool as get_parameter_cost_analytics
+} from './InferenceParameterTools';
+
+export {
+    // Memory Utility Learning System (MULS) Tools
+    memory_qvalue_analytics,
+    memory_utility_config,
+    memory_inject_reward
+} from './MemoryUtilityTools';

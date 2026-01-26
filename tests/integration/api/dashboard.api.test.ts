@@ -35,6 +35,10 @@ describe('Dashboard API Endpoints', () => {
         }
     }, TIMEOUTS.connection);
 
+    afterAll(() => {
+        api.cleanup();
+    });
+
     // =========================================================================
     // GET /api/dashboard/stats - Get dashboard stats
     // =========================================================================

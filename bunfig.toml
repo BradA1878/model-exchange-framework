@@ -1,0 +1,20 @@
+# Bun Configuration for Model Exchange Framework
+# See: https://bun.sh/docs/runtime/bunfig
+
+[install]
+# Use bun.lock for dependency locking (JSON format, Bun 1.2+)
+
+[run]
+# Generate external sourcemaps for debugging
+sourcemap = "external"
+
+[test]
+# Preload setup file for custom matchers and environment
+preload = ["./tests/setup/bun.setup.ts"]
+
+# 60 second timeout for integration tests (LLM operations)
+timeout = 60000
+
+# Enable test coverage
+coverage = true
+coverageDir = "coverage"

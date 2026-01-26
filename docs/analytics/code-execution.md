@@ -221,6 +221,12 @@ trends.forEach(trend => {
 
 ### Resource Usage Analysis
 
+Docker container limits to consider when analyzing resource usage:
+- **Memory limit**: 128MB per container (configurable via CODE_EXEC_MEMORY_LIMIT)
+- **CPU limit**: 0.5 cores per container (configurable via CODE_EXEC_CPU_LIMIT)
+- **PID limit**: 64 processes max
+- **Timeout limit**: 30s max (configurable via CODE_EXEC_TIMEOUT_MAX)
+
 ```typescript
 const resourceStats = await CodeExecution.aggregate([
     {
@@ -245,7 +251,7 @@ const resourceStats = await CodeExecution.aggregate([
 
 const stats = resourceStats[0];
 console.log('Resource usage (24 hours):');
-console.log(`  Avg memory: ${stats.avgMemory.toFixed(1)} MB`);
+console.log(`  Avg memory: ${stats.avgMemory.toFixed(1)} MB (limit: 128 MB)`);
 console.log(`  Peak memory: ${stats.maxMemory.toFixed(1)} MB`);
 console.log(`  Avg time: ${stats.avgExecutionTime.toFixed(0)} ms`);
 console.log(`  Max time: ${stats.maxExecutionTime} ms`);

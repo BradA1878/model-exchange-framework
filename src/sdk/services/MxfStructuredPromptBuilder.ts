@@ -282,7 +282,7 @@ export class MxfStructuredPromptBuilder {
                 role: 'user',
                 content: `## Current Task\n${structure.taskPrompt}`,
                 timestamp: Date.now(),
-                metadata: { layer: 'task' }
+                metadata: { contextLayer: 'task' }
             });
         }
         

@@ -26,12 +26,18 @@
  */
 
 import { v4 as uuidv4 } from 'uuid';
-import { ChannelActionType, EventName, Events } from '../events/EventNames'; 
+import type { ChannelActionType, EventName, Events, PlanStepCompletedEventData } from '../events/EventNames';
 import { createStrictValidator } from '../utils/validation';
 import { AgentId, ChannelId } from '../types/ChannelContext';
 import { MemoryScope } from '../types/MemoryTypes';
 import { ChannelMessage, AgentMessage } from './MessageSchemas';
-import { Logger } from '../utils/Logger'; 
+import { Logger } from '../utils/Logger';
+import {
+    OrparMemoryEvents,
+    CycleStartedEventData,
+    PhaseChangedEventData,
+    CycleCompletedEventData
+} from '../events/event-definitions/OrparMemoryEvents'; 
 
 // Create logger instance for event payload schema
 const logger = new Logger('warn', 'EventPayloadSchema', 'server');
@@ -2272,9 +2278,9 @@ export const createExternalMcpServerToolsDiscoveredEventPayload = (
 /**
  * Import system event types and interfaces
  */
-import { 
-    SystemEphemeralEventData, 
-    CoordinationAnalysis, 
+import type {
+    SystemEphemeralEventData,
+    CoordinationAnalysis,
     TemporalContext,
     SystemEventType
 } from '../events/event-definitions/SystemEvents';
@@ -2761,14 +2767,14 @@ export const createMxfToolListErrorPayload = (
 
 // --- MXP 2.0 Event Payload Creators ---
 
-import { 
+import type {
     MxpTokenOptimizationEventData,
     MxpBandwidthOptimizationEventData,
     MxpSecurityEventData,
     MxpAnalyticsEventData
 } from '../events/event-definitions/MxpEvents';
 
-export { 
+export type {
     MxpTokenOptimizationEventData,
     MxpBandwidthOptimizationEventData,
     MxpSecurityEventData,
@@ -2990,5 +2996,266 @@ export function createMeilisearchBackfillEventPayload(
 
     return createBaseEventPayload<MeilisearchBackfillEventData>(
         eventType, agentId, channelId, data, options
+    );
+}
+
+// --- Plan Event Payload Creator Helpers ---
+
+/**
+ * Creates a PlanStepCompletedEventPayload.
+ * Used when a plan step is marked as completed.
+ *
+ * @param eventType - The specific event type (e.g., Events.Plan.PLAN_STEP_COMPLETED).
+ * @param agentId - The Agent ID that completed the step.
+ * @param channelId - The Channel ID context for this plan event.
+ * @param planStepData - The specific data for the plan step completion.
+ * @param options - Optional base event payload options.
+ * @returns A BaseEventPayload with PlanStepCompletedEventData.
+ */
+export function createPlanStepCompletedEventPayload(
+    eventType: EventName | string,
+    agentId: AgentId,
+    channelId: ChannelId,
+    planStepData: PlanStepCompletedEventData,
+    options: { source?: string; isRecursionProtection?: boolean; eventId?: string; timestamp?: number; } = {}
+): BaseEventPayload<PlanStepCompletedEventData> {
+    const validator = createStrictValidator('createPlanStepCompletedEventPayload');
+    validator.assertIsObject(planStepData, 'planStepData');
+    validator.assertIsNonEmptyString(planStepData.planId, 'planStepData.planId');
+    validator.assertIsNonEmptyString(planStepData.stepId, 'planStepData.stepId');
+    validator.assertIsNonEmptyString(planStepData.completedBy, 'planStepData.completedBy');
+
+    return createBaseEventPayload<PlanStepCompletedEventData>(
+        eventType,
+        agentId,
+        channelId,
+        planStepData,
+        options
+    );
+}
+
+// --- Memory Utility Learning System (MULS) Event Payload Creator Helpers ---
+
+/**
+ * Data for Q-value updated events
+ */
+export interface MemoryQValueUpdatedEventData {
+    memoryId: string;
+    oldValue: number;
+    newValue: number;
+    reward: number;
+    delta: number;
+    taskId?: string;
+    phase?: string;
+}
+
+/**
+ * Data for Q-value batch updated events
+ */
+export interface MemoryQValueBatchUpdatedEventData {
+    totalUpdates: number;
+    updated: number;
+    failed: number;
+    taskId?: string;
+    errors?: Array<{ memoryId: string; error: string }>;
+}
+
+/**
+ * Data for reward attributed events
+ */
+export interface MemoryRewardAttributedEventData {
+    taskId?: string;
+    status?: string;
+    reward: number;
+    memoriesUpdated: number;
+    memoriesFailed: number;
+    memoryIds: string[];
+    isManual?: boolean;
+    reason?: string;
+    newQValue?: number;
+    memoryId?: string;
+}
+
+/**
+ * Creates a MemoryQValueUpdatedEventPayload.
+ * Used when a single Q-value is updated in the MULS system.
+ *
+ * @param agentId - The Agent ID context for this update (or 'system' if no agent context).
+ * @param channelId - The Channel ID context for this update (or 'global' if no channel context).
+ * @param data - The specific data for the Q-value update event.
+ * @param options - Optional base event payload options.
+ * @returns A BaseEventPayload with MemoryQValueUpdatedEventData.
+ */
+export function createMemoryQValueUpdatedPayload(
+    agentId: AgentId,
+    channelId: ChannelId,
+    data: MemoryQValueUpdatedEventData,
+    options: { source?: string; eventId?: string; timestamp?: number; } = {}
+): BaseEventPayload<MemoryQValueUpdatedEventData> {
+    const validator = createStrictValidator('createMemoryQValueUpdatedPayload');
+    validator.assertIsNonEmptyString(agentId, 'agentId is required');
+    validator.assertIsNonEmptyString(channelId, 'channelId is required');
+    validator.assertIsNonEmptyString(data.memoryId, 'data.memoryId is required');
+
+    return createBaseEventPayload<MemoryQValueUpdatedEventData>(
+        'memory:qvalue_updated',
+        agentId,
+        channelId,
+        data,
+        options
+    );
+}
+
+/**
+ * Creates a MemoryQValueBatchUpdatedEventPayload.
+ * Used when multiple Q-values are updated in a batch.
+ *
+ * @param agentId - The Agent ID context for this batch update (or 'system' if no agent context).
+ * @param channelId - The Channel ID context for this batch update (or 'global' if no channel context).
+ * @param data - The specific data for the batch Q-value update event.
+ * @param options - Optional base event payload options.
+ * @returns A BaseEventPayload with MemoryQValueBatchUpdatedEventData.
+ */
+export function createMemoryQValueBatchUpdatedPayload(
+    agentId: AgentId,
+    channelId: ChannelId,
+    data: MemoryQValueBatchUpdatedEventData,
+    options: { source?: string; eventId?: string; timestamp?: number; } = {}
+): BaseEventPayload<MemoryQValueBatchUpdatedEventData> {
+    const validator = createStrictValidator('createMemoryQValueBatchUpdatedPayload');
+    validator.assertIsNonEmptyString(agentId, 'agentId is required');
+    validator.assertIsNonEmptyString(channelId, 'channelId is required');
+
+    return createBaseEventPayload<MemoryQValueBatchUpdatedEventData>(
+        'memory:qvalue_batch_updated',
+        agentId,
+        channelId,
+        data,
+        options
+    );
+}
+
+/**
+ * Creates a MemoryRewardAttributedEventPayload.
+ * Used when rewards are attributed to memories after task completion.
+ *
+ * @param agentId - The Agent ID context for this reward attribution (or 'system' if no agent context).
+ * @param channelId - The Channel ID context for this reward attribution (or 'global' if no channel context).
+ * @param data - The specific data for the reward attribution event.
+ * @param options - Optional base event payload options.
+ * @returns A BaseEventPayload with MemoryRewardAttributedEventData.
+ */
+export function createMemoryRewardAttributedPayload(
+    agentId: AgentId,
+    channelId: ChannelId,
+    data: MemoryRewardAttributedEventData,
+    options: { source?: string; eventId?: string; timestamp?: number; } = {}
+): BaseEventPayload<MemoryRewardAttributedEventData> {
+    const validator = createStrictValidator('createMemoryRewardAttributedPayload');
+    validator.assertIsNonEmptyString(agentId, 'agentId is required');
+    validator.assertIsNonEmptyString(channelId, 'channelId is required');
+
+    return createBaseEventPayload<MemoryRewardAttributedEventData>(
+        'memory:reward_attributed',
+        agentId,
+        channelId,
+        data,
+        options
+    );
+}
+
+// ============================================================================
+// ORPAR-Memory Integration Event Payload Helpers
+// ============================================================================
+
+/**
+ * Creates an ORPAR-Memory Cycle Started event payload.
+ * Emitted when a new ORPAR cycle begins with memory integration enabled.
+ *
+ * @param agentId - The Agent ID starting the cycle.
+ * @param channelId - The Channel ID context for this cycle.
+ * @param data - The cycle started event data.
+ * @param options - Optional base event payload options.
+ * @returns A BaseEventPayload with CycleStartedEventData.
+ */
+export function createOrparMemoryCycleStartedPayload(
+    agentId: AgentId,
+    channelId: ChannelId,
+    data: CycleStartedEventData,
+    options: { source?: string; eventId?: string; timestamp?: number; } = {}
+): BaseEventPayload<CycleStartedEventData> {
+    const validator = createStrictValidator('createOrparMemoryCycleStartedPayload');
+    validator.assertIsNonEmptyString(agentId, 'agentId is required');
+    validator.assertIsNonEmptyString(channelId, 'channelId is required');
+    validator.assertIsNonEmptyString(data.cycleId, 'data.cycleId is required');
+    validator.assertIsNonEmptyString(data.initialPhase, 'data.initialPhase is required');
+
+    return createBaseEventPayload<CycleStartedEventData>(
+        OrparMemoryEvents.CYCLE_STARTED,
+        agentId,
+        channelId,
+        data,
+        options
+    );
+}
+
+/**
+ * Creates an ORPAR-Memory Phase Changed event payload.
+ * Emitted when an ORPAR cycle transitions to a new phase.
+ *
+ * @param agentId - The Agent ID in the cycle.
+ * @param channelId - The Channel ID context for this cycle.
+ * @param data - The phase changed event data.
+ * @param options - Optional base event payload options.
+ * @returns A BaseEventPayload with PhaseChangedEventData.
+ */
+export function createOrparMemoryPhaseChangedPayload(
+    agentId: AgentId,
+    channelId: ChannelId,
+    data: PhaseChangedEventData,
+    options: { source?: string; eventId?: string; timestamp?: number; } = {}
+): BaseEventPayload<PhaseChangedEventData> {
+    const validator = createStrictValidator('createOrparMemoryPhaseChangedPayload');
+    validator.assertIsNonEmptyString(agentId, 'agentId is required');
+    validator.assertIsNonEmptyString(channelId, 'channelId is required');
+    validator.assertIsNonEmptyString(data.cycleId, 'data.cycleId is required');
+    validator.assertIsNonEmptyString(data.newPhase, 'data.newPhase is required');
+
+    return createBaseEventPayload<PhaseChangedEventData>(
+        OrparMemoryEvents.PHASE_CHANGED,
+        agentId,
+        channelId,
+        data,
+        options
+    );
+}
+
+/**
+ * Creates an ORPAR-Memory Cycle Completed event payload.
+ * Emitted when an ORPAR cycle finishes and triggers reward attribution/consolidation.
+ *
+ * @param agentId - The Agent ID that completed the cycle.
+ * @param channelId - The Channel ID context for this cycle.
+ * @param data - The cycle completed event data.
+ * @param options - Optional base event payload options.
+ * @returns A BaseEventPayload with CycleCompletedEventData.
+ */
+export function createOrparMemoryCycleCompletedPayload(
+    agentId: AgentId,
+    channelId: ChannelId,
+    data: CycleCompletedEventData,
+    options: { source?: string; eventId?: string; timestamp?: number; } = {}
+): BaseEventPayload<CycleCompletedEventData> {
+    const validator = createStrictValidator('createOrparMemoryCycleCompletedPayload');
+    validator.assertIsNonEmptyString(agentId, 'agentId is required');
+    validator.assertIsNonEmptyString(channelId, 'channelId is required');
+    validator.assertIsNonEmptyString(data.cycleId, 'data.cycleId is required');
+
+    return createBaseEventPayload<CycleCompletedEventData>(
+        OrparMemoryEvents.CYCLE_COMPLETED,
+        agentId,
+        channelId,
+        data,
+        options
     );
 }

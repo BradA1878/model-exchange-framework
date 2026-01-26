@@ -20,155 +20,184 @@
 
 /**
  * MxfChannelMonitor
- * 
- * Lightweight event monitor for a specific channel.
- * Returned by sdk.createChannel() to enable channel-level event monitoring
- * without requiring an agent instance.
- * 
- * This provides a clean developer experience where channel creation
- * immediately returns a monitoring interface.
+ *
+ * Provides channel event monitoring capabilities for SDK users.
+ * This class allows subscribing to events that occur in a specific channel
+ * without needing to create a full agent.
+ *
+ * This is a lightweight wrapper that receives forwarded events from SdkEventBus
+ * and filters them to only events for this channel.
  */
 
-import { EventBus } from '../shared/events/EventBus';
-import { PublicEventName, isPublicEvent } from '../shared/events/PublicEvents';
+import { Subject, Subscription, filter, map } from 'rxjs';
+import { AnyEventName, EventHandler, EventMessage } from '../shared/events/EventBusBase';
+import { Logger } from '../shared/utils/Logger';
+
+const logger = new Logger('warn', 'MxfChannelMonitor', 'client');
 
 /**
- * Lightweight channel event monitor
- * 
- * Monitors all public events in a specific channel by automatically
- * filtering events based on channelId.
- * 
+ * MxfChannelMonitor - Channel event monitoring for SDK users
+ *
+ * Returned by MxfSDK.createChannel() to allow monitoring channel events
+ * without creating a full agent.
+ *
  * @example
  * ```typescript
- * const channel = await sdk.createChannel('my-channel', 'My Channel');
- * 
- * // Monitor messages in this channel
- * channel.on(Events.Message.AGENT_MESSAGE, (payload) => {
+ * const channelMonitor = await sdk.createChannel('my-channel', { name: 'My Channel' });
+ *
+ * // Listen to messages in the channel
+ * channelMonitor.on(Events.Message.AGENT_MESSAGE, (payload) => {
  *     console.log('Message:', payload.data.content);
  * });
- * 
- * // Monitor task completions
- * channel.on(Events.Task.COMPLETED, (payload) => {
- *     console.log('Task done:', payload.data.taskId);
- * });
+ *
+ * // Clean up when done
+ * channelMonitor.destroy();
  * ```
  */
 export class MxfChannelMonitor {
     private channelId: string;
-    private eventListeners: Map<string, any[]> = new Map();
+    private eventSubject: Subject<EventMessage>;
+    private subscriptions: Map<string, Subscription[]> = new Map();
+    private isDestroyed: boolean = false;
 
     /**
-     * Create a channel monitor
-     * 
-     * @param channelId - Channel ID to monitor
+     * Create a new channel monitor
+     *
+     * @param channelId The ID of the channel to monitor
+     * @param eventSubject Optional event subject (for testing or custom event sources)
      */
-    constructor(channelId: string) {
+    constructor(channelId: string, eventSubject?: Subject<EventMessage>) {
+        if (!channelId) {
+            throw new Error('channelId is required for MxfChannelMonitor');
+        }
+
         this.channelId = channelId;
-    }
-
-    /**
-     * Listen to channel events
-     * 
-     * Automatically filters events to only those for this channel.
-     * Only public events from the whitelist can be monitored.
-     * 
-     * @param eventName - Public event name from Events namespace
-     * @param handler - Event handler function
-     * @returns This monitor instance for method chaining
-     * @throws Error if event is not in public whitelist
-     * 
-     * @example
-     * ```typescript
-     * channel.on(Events.Message.AGENT_MESSAGE, (payload) => {
-     *     console.log('Message from:', payload.data.senderId);
-     * });
-     * 
-     * channel.on(Events.Task.COMPLETED, (payload) => {
-     *     console.log('Task completed:', payload.data.taskId);
-     * });
-     * ```
-     */
-    public on(eventName: PublicEventName, handler: (data: any) => void): this {
-        // Validate event is in public whitelist
-        if (!isPublicEvent(eventName)) {
-            console.warn(
-                `[MxfChannelMonitor] Event '${eventName}' is not in the public whitelist. ` +
-                `Only events from PUBLIC_EVENTS can be monitored. Ignoring listener.`
-            );
-            return this;
-        }
-
-        // Wrap handler to filter by channelId
-        const channelFilteredHandler = (data: any): void => {
-            // Only process events for this channel
-            if (data.channelId === this.channelId) {
-                handler(data);
-            }
-        };
-
-        // Subscribe to event through EventBus
-        const subscription = EventBus.client.on(eventName, channelFilteredHandler);
-
-        // Track subscription for cleanup
-        if (!this.eventListeners.has(eventName)) {
-            this.eventListeners.set(eventName, []);
-        }
-        this.eventListeners.get(eventName)!.push(subscription);
-
-        return this; // Allow chaining
-    }
-
-    /**
-     * Remove a channel event listener
-     * 
-     * Removes all handlers for the specified event on this channel.
-     * 
-     * @param eventName - Public event name
-     * @returns This monitor instance for method chaining
-     * 
-     * @example
-     * ```typescript
-     * // Remove all message handlers
-     * channel.off(Events.Message.AGENT_MESSAGE);
-     * ```
-     */
-    public off(eventName: PublicEventName): this {
-        const subscriptions = this.eventListeners.get(eventName);
-        
-        if (subscriptions) {
-            // Unsubscribe all handlers for this event
-            subscriptions.forEach(sub => sub.unsubscribe());
-            this.eventListeners.delete(eventName);
-        }
-
-        return this;
-    }
-
-    /**
-     * Remove all event listeners
-     * 
-     * Cleans up all event listeners for this channel monitor.
-     * Call this when you're done monitoring the channel.
-     * 
-     * @example
-     * ```typescript
-     * // Clean up all listeners when done
-     * channel.removeAllListeners();
-     * ```
-     */
-    public removeAllListeners(): void {
-        this.eventListeners.forEach(subscriptions => {
-            subscriptions.forEach(sub => sub.unsubscribe());
-        });
-        this.eventListeners.clear();
+        this.eventSubject = eventSubject || new Subject<EventMessage>();
+        logger.info(`[MxfChannelMonitor] Created monitor for channel: ${channelId}`);
     }
 
     /**
      * Get the channel ID being monitored
-     * 
-     * @returns Channel ID
      */
     public getChannelId(): string {
         return this.channelId;
+    }
+
+    /**
+     * Subscribe to an event in this channel
+     * Events are filtered to only include those for this channel
+     *
+     * @param event Event name to subscribe to
+     * @param handler Event handler function
+     * @returns Subscription that can be unsubscribed
+     */
+    public on<T extends AnyEventName>(event: T, handler: EventHandler<any>): Subscription {
+        if (this.isDestroyed) {
+            throw new Error(`Cannot subscribe to event '${event}' on destroyed monitor for channel: ${this.channelId}`);
+        }
+
+        // Create a filtered observable for this specific event in this channel
+        const observable = this.eventSubject.pipe(
+            filter((e: EventMessage) => {
+                // Match event type
+                if (e.type !== event) return false;
+
+                // Filter to only events for this channel
+                const payload = e.payload;
+                if (payload && typeof payload === 'object') {
+                    return payload.channelId === this.channelId;
+                }
+                return true; // If no channelId in payload, let it through
+            }),
+            map((e: EventMessage) => e.payload)
+        );
+
+        const subscription = observable.subscribe(handler);
+
+        // Track subscriptions by event
+        if (!this.subscriptions.has(event)) {
+            this.subscriptions.set(event, []);
+        }
+        this.subscriptions.get(event)!.push(subscription);
+
+        return subscription;
+    }
+
+    /**
+     * Unsubscribe from an event
+     *
+     * @param event Event name to unsubscribe from
+     */
+    public off(event: AnyEventName): void {
+        const subs = this.subscriptions.get(event);
+        if (subs) {
+            subs.forEach(sub => sub.unsubscribe());
+            this.subscriptions.delete(event);
+        }
+    }
+
+    /**
+     * Remove all event listeners (alias for compatibility)
+     */
+    public removeAllListeners(): void {
+        this.subscriptions.forEach((subs) => {
+            subs.forEach(sub => sub.unsubscribe());
+        });
+        this.subscriptions.clear();
+    }
+
+    /**
+     * Emit an event to this monitor's subscribers
+     * This is used internally to forward events from the SDK's EventBus
+     *
+     * @param eventType Event type
+     * @param payload Event payload
+     */
+    public emit(eventType: string, payload: any): void {
+        if (this.isDestroyed) {
+            return;
+        }
+
+        this.eventSubject.next({
+            type: eventType,
+            payload
+        });
+    }
+
+    /**
+     * Clean up all subscriptions and destroy the monitor
+     */
+    public destroy(): void {
+        if (this.isDestroyed) {
+            return;
+        }
+
+        logger.info(`[MxfChannelMonitor] Destroying monitor for channel: ${this.channelId}`);
+
+        // Unsubscribe from all events
+        this.removeAllListeners();
+
+        // Complete the subject
+        this.eventSubject.complete();
+
+        this.isDestroyed = true;
+    }
+
+    /**
+     * Check if the monitor has been destroyed
+     */
+    public isActive(): boolean {
+        return !this.isDestroyed;
+    }
+
+    /**
+     * Get the number of active subscriptions
+     */
+    public getSubscriptionCount(): number {
+        let count = 0;
+        this.subscriptions.forEach((subs) => {
+            count += subs.length;
+        });
+        return count;
     }
 }

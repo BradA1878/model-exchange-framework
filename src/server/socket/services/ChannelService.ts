@@ -35,7 +35,8 @@ import { IChannel } from '../../../shared/interfaces/Channel';
 import { lastValueFrom } from 'rxjs';
 import { Channel } from '../../../shared/models/channel';
 import { McpService } from './McpService';
-import { ConfigManager, ConfigEvents, ChannelSystemLlmChangeEvent } from '../../../sdk/config/ConfigManager';
+// Import shared config events (NOT from SDK - that's client-side only)
+import { ConfigEvents, ChannelSystemLlmChangeEvent } from '../../../shared/events/event-definitions/ConfigEvents';
 
 /**
  * ChannelService manages channel lifecycle and interactions.
@@ -368,23 +369,23 @@ export class ChannelService extends EventEmitter {
             }
         });
 
-        // Listen for systemLlmEnabled changes to persist to database (write-back sync)
+        // Listen for systemLlmEnabled changes to persist to database
         this.eventBus.on(ConfigEvents.CHANNEL_SYSTEM_LLM_CHANGED, async (payload: BaseEventPayload<ChannelSystemLlmChangeEvent>) => {
             try {
                 const data = payload.data;
                 const channelId = data?.channelId;
-                
+
                 // Only persist channel-specific changes (not global)
                 if (!channelId) {
                     return;
                 }
-                
+
                 // Update database
                 const result = await Channel.updateOne(
                     { channelId },
                     { $set: { systemLlmEnabled: data.enabled } }
                 );
-                
+
                 if (result.modifiedCount > 0) {
                     this.logger.info(`Channel ${channelId} systemLlmEnabled updated to ${data.enabled} in database`);
                 }
@@ -435,11 +436,10 @@ export class ChannelService extends EventEmitter {
                     this.channelParticipants.set(channelId, new Set(existingChannel.participants));
                 }
                 
-                // Sync systemLlmEnabled from database to ConfigManager (explicitly set for both true and false)
                 // Type assertion needed because Mongoose model type doesn't include schema extensions
                 const channelDoc = existingChannel as any;
                 const systemLlmEnabled = channelDoc.systemLlmEnabled !== false; // Default to true
-                ConfigManager.getInstance().setChannelSystemLlmEnabled(systemLlmEnabled, channelId, 'Loaded from database');
+                this.logger.debug(`[LOAD_CHANNEL] Channel ${channelId} systemLlmEnabled=${systemLlmEnabled}`);
                 
                 // Cache channel allowedTools in McpService for synchronous tool filtering
                 // Note: setChannelAllowedTools is async but we don't await since DB already has the value
@@ -536,10 +536,9 @@ export class ChannelService extends EventEmitter {
             );
         }
         
-        // Sync systemLlmEnabled to ConfigManager (explicitly set for both true and false)
+        // Log systemLlmEnabled setting (stored in MongoDB channel document)
         const systemLlmEnabled = metadata?.systemLlmEnabled !== false; // Default to true
         this.logger.info(`[CREATE_CHANNEL] Channel ${channelId} systemLlmEnabled=${systemLlmEnabled}`);
-        ConfigManager.getInstance().setChannelSystemLlmEnabled(systemLlmEnabled, channelId, 'Set at channel creation');
 
         this.notifyChannelEvent(Events.Channel.CREATED as EventName, {
             action: 'created', 

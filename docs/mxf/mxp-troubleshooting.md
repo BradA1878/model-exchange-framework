@@ -439,7 +439,7 @@ export class MXP2PerformanceDiagnostics {
 2. **Generate New Keys**:
    ```bash
    # Generate secure encryption keys
-   npm run mxp:generate-key
+   bun run mxp:generate-key
    
    # Or manually generate
    node -e "

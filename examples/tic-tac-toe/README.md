@@ -13,7 +13,7 @@ Watch two AI personalities battle it out:
 ### Prerequisites
 
 - Node.js 18+
-- Running MXF server (`npm run dev` in main project)
+- Running MXF server (`bun run dev` in main project)
 - OpenRouter API key
 
 ### Installation
@@ -38,7 +38,7 @@ cp .env.example .env
 ### Run the Game
 
 ```bash
-npm run game
+bun run game
 ```
 
 This starts both the game server and the Vue dashboard.

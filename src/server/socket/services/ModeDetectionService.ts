@@ -221,7 +221,7 @@ export class ModeDetectionService {
                 fallbackToToolCall: false,
                 logIntermediateSteps: true,
                 injectGuidance: true,
-                guidanceMessage: 'Use agent_discover and context_read tools for information gathering.'
+                guidanceMessage: 'Use messaging_discover and context_read tools for information gathering.'
             },
             
             [OperatingMode.PLANNING]: {

@@ -35,6 +35,10 @@ describe('MCP API Endpoints', () => {
         }
     }, TIMEOUTS.connection);
 
+    afterAll(() => {
+        api.cleanup();
+    });
+
     // =========================================================================
     // GET /api/mcp/capabilities - Get MCP capabilities (Public)
     // =========================================================================

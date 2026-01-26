@@ -14,7 +14,8 @@
       "*": ["node_modules/*"]
     },
     "rootDir": "src",
-    "noEmitOnError": true
+    "noEmitOnError": true,
+    "skipLibCheck": true
   },
   "include": [
     "src/**/*"

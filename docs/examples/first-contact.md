@@ -18,7 +18,7 @@ The demo simulates a first contact scenario where a starship crew must coordinat
 
 1. MXF server running:
    ```bash
-   npm run dev
+   bun run dev
    ```
 
 2. Environment variables (OpenRouter API key required):
@@ -29,13 +29,13 @@ The demo simulates a first contact scenario where a starship crew must coordinat
 ### Start the Demo
 
 ```bash
-npx tsx examples/first-contact-demo/first-contact-demo.ts
+bun run examples/first-contact-demo/first-contact-demo.ts
 ```
 
-Or use the npm script:
+Or use the bun script:
 
 ```bash
-npm run demo:first-contact
+bun run demo:first-contact
 ```
 
 ## Key MXF Features Demonstrated

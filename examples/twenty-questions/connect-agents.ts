@@ -55,8 +55,27 @@ import { join } from 'path';
 import { io as SocketIOClient, Socket as ClientSocket } from 'socket.io-client';
 import { EventBus } from '../../src/shared/events/EventBus';
 import { OrparEvents } from '../../src/shared/events/event-definitions/OrparEvents';
+import { OrparMemoryEvents } from '../../src/shared/events/event-definitions/OrparMemoryEvents';
 import { createBaseEventPayload } from '../../src/shared/schemas/EventPayloadSchema';
 import { clearAgentOrparState } from '../../src/shared/protocols/mcp/tools/OrparTools';
+
+/**
+ * ORPAR-MEMORY INTEGRATION
+ * ------------------------
+ * When ORPAR_MEMORY_INTEGRATION_ENABLED=true, this demo demonstrates phase-aware
+ * memory retrieval using the PhaseStrataRouter:
+ *
+ *   OBSERVE  → Query Working + Short-term strata (lambda=0.2)
+ *   REASON   → Query Episodic + Semantic strata (lambda=0.5)
+ *   PLAN     → Query Semantic + Long-term strata (lambda=0.7)
+ *   ACT      → Query Working + Short-term strata (lambda=0.3)
+ *   REFLECT  → Store to Long-term strata, query all strata (lambda=0.6)
+ *
+ * The integration also provides:
+ * - Surprise detection that can trigger additional observation cycles
+ * - Phase-weighted reward attribution for Q-value updates
+ * - Automatic memory consolidation based on cycle outcomes
+ */
 
 // Load environment variables from root .env
 dotenv.config({ path: join(__dirname, '../../.env') });
@@ -138,8 +157,17 @@ const PHASE_TOOLS = {
     // Common to all phases
     common: ['orpar_status'],
 
-    // Phase-specific tools
+    /**
+     * Phase-specific tools with ORPAR-Memory integration comments
+     *
+     * When ORPAR_MEMORY_INTEGRATION_ENABLED=true, the PhaseStrataRouter
+     * automatically routes memory queries to the appropriate strata based
+     * on the current ORPAR phase.
+     */
+
     // OBSERVE: Gather information - game state, memory, past patterns
+    // PhaseStrataRouter: Queries Working + Short-term strata (lambda=0.2)
+    // Rationale: Recent context for gathering - prioritize semantic accuracy
     observe: [
         'orpar_observe',
         'game_getState',
@@ -149,16 +177,28 @@ const PHASE_TOOLS = {
         'memory_search_patterns',
         'planning_view'
     ],
+
     // REASON: Analyze observations (pure analysis, no actions)
+    // PhaseStrataRouter: Queries Episodic + Semantic strata (lambda=0.5)
+    // Rationale: Patterns for analysis - balance explore/exploit
     reason: ['orpar_reason'],
+
     // PLAN: Create strategy (read-only tools, no game actions)
+    // PhaseStrataRouter: Queries Semantic + Long-term strata (lambda=0.7)
+    // Rationale: Proven strategies - exploit historical success
     plan: ['orpar_plan', 'planning_create', 'planning_view'],
+
     // ACT: Execute game actions (role-specific)
+    // PhaseStrataRouter: Queries Working + Short-term strata (lambda=0.3)
+    // Rationale: Stay grounded for tool execution
     act: {
         thinker: ['orpar_act', 'game_setSecret', 'game_answerQuestion'],
         guesser: ['orpar_act', 'game_askQuestion', 'game_makeGuess']
     },
+
     // REFLECT: Record results, update plans, write learnings to memory
+    // PhaseStrataRouter: Queries all strata (lambda=0.6), stores to Long-term
+    // Rationale: Holistic review - favor memories that led to good assessments
     reflect: [
         'orpar_reflect',
         'task_complete',

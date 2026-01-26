@@ -51,7 +51,7 @@ client/
 npm install
 
 # Start dev server (requires game server running on :3002)
-npm run dev
+bun run dev
 ```
 
 Frontend will be available at http://localhost:3003
@@ -60,10 +60,10 @@ Frontend will be available at http://localhost:3003
 
 ```bash
 # Build for production
-npm run build
+bun run build
 
 # Preview production build
-npm run preview
+bun run preview
 ```
 
 ## 🎮 Features

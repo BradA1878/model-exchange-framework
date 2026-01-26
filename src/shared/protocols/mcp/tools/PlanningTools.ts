@@ -31,8 +31,8 @@ import { Logger } from '../../../utils/Logger';
 import { v4 as uuidv4 } from 'uuid';
 import { EventBus } from '../../../events/EventBus';
 import { Events } from '../../../events/EventNames';
-import { createChannelMessageEventPayload } from '../../../schemas/EventPayloadSchema';
-import { createChannelMessage } from '../../../schemas/MessageSchemas';
+import { createChannelMessageEventPayload, createAgentMessageEventPayload, createPlanStepCompletedEventPayload } from '../../../schemas/EventPayloadSchema';
+import { createChannelMessage, createAgentMessage } from '../../../schemas/MessageSchemas';
 import PlanModel from '../../../models/plan';
 
 const logger = new Logger('debug', 'PlanningTools', 'server');
@@ -57,8 +57,92 @@ export interface Plan {
     metadata?: Record<string, any>;
 }
 
+/**
+ * TTL-based lock for plan updates.
+ * Includes timestamp for automatic expiration and cleanup.
+ *
+ * NOTE: This is a single-server in-memory lock. For distributed deployments,
+ * consider using Redis-based locks (e.g., redlock) for production resilience.
+ */
+interface PlanLock {
+    acquiredAt: number;
+    agentId?: string;
+}
+
+// Lock timeout in milliseconds (30 seconds)
+const LOCK_TIMEOUT_MS = 30000;
+
+// Cleanup interval in milliseconds (60 seconds)
+const LOCK_CLEANUP_INTERVAL_MS = 60000;
+
 // Serialization locks to prevent parallel plan updates (like Cascade)
-const planUpdateLocks = new Map<string, boolean>();
+const planUpdateLocks = new Map<string, PlanLock>();
+
+/**
+ * Acquire a lock for a plan with TTL-based expiration.
+ * Returns true if lock acquired, false if plan is already locked.
+ */
+function acquirePlanLock(planId: string, agentId?: string): boolean {
+    const now = Date.now();
+    const existingLock = planUpdateLocks.get(planId);
+
+    // Check if existing lock has expired
+    if (existingLock && (now - existingLock.acquiredAt) < LOCK_TIMEOUT_MS) {
+        // Lock is still valid
+        return false;
+    }
+
+    // Acquire or renew lock
+    planUpdateLocks.set(planId, { acquiredAt: now, agentId });
+    return true;
+}
+
+/**
+ * Release a lock for a plan.
+ */
+function releasePlanLock(planId: string): void {
+    planUpdateLocks.delete(planId);
+}
+
+/**
+ * Check if a plan is currently locked.
+ * Returns lock info if locked, undefined if not locked.
+ */
+function getPlanLockInfo(planId: string): PlanLock | undefined {
+    const lock = planUpdateLocks.get(planId);
+    if (!lock) return undefined;
+
+    const now = Date.now();
+    if ((now - lock.acquiredAt) >= LOCK_TIMEOUT_MS) {
+        // Lock has expired, clean it up
+        planUpdateLocks.delete(planId);
+        return undefined;
+    }
+
+    return lock;
+}
+
+/**
+ * Cleanup expired locks periodically.
+ * This prevents memory leaks from abandoned locks.
+ */
+function cleanupExpiredLocks(): void {
+    const now = Date.now();
+    for (const [planId, lock] of planUpdateLocks.entries()) {
+        if ((now - lock.acquiredAt) >= LOCK_TIMEOUT_MS) {
+            logger.debug(`Cleaning up expired lock for plan ${planId}`);
+            planUpdateLocks.delete(planId);
+        }
+    }
+}
+
+// Start periodic cleanup (runs every 60 seconds)
+const lockCleanupInterval = setInterval(cleanupExpiredLocks, LOCK_CLEANUP_INTERVAL_MS);
+
+// Allow the cleanup interval to not block process exit
+if (lockCleanupInterval.unref) {
+    lockCleanupInterval.unref();
+}
 
 /**
  * Create a new plan with structured items
@@ -232,19 +316,29 @@ export const planning_update_item: McpToolDefinition = {
     enabled: true,
     handler: async (input: McpToolInput, context: McpToolHandlerContext): Promise<McpToolHandlerResult> => {
         try {
-            // Check for serialization lock
-            if (planUpdateLocks.get(input.planId)) {
+            // Check for serialization lock with TTL
+            const existingLock = getPlanLockInfo(input.planId);
+            if (existingLock) {
+                const lockAgeMs = Date.now() - existingLock.acquiredAt;
                 const content: McpToolResultContent = {
                     type: 'application/json',
                     data: {
-                        error: `Plan ${input.planId} is currently being updated by another operation. Please try again.`
+                        error: `Plan ${input.planId} is currently being updated by another operation (locked ${Math.round(lockAgeMs / 1000)}s ago${existingLock.agentId ? ` by ${existingLock.agentId}` : ''}). Please try again.`
                     }
                 };
                 return { content };
             }
-            
-            // Acquire lock
-            planUpdateLocks.set(input.planId, true);
+
+            // Acquire lock with TTL
+            if (!acquirePlanLock(input.planId, context.agentId)) {
+                const content: McpToolResultContent = {
+                    type: 'application/json',
+                    data: {
+                        error: `Failed to acquire lock for plan ${input.planId}. Please try again.`
+                    }
+                };
+                return { content };
+            }
             
             try {
                 // Fetch plan from MongoDB
@@ -278,22 +372,34 @@ export const planning_update_item: McpToolDefinition = {
             await planDoc.save();
 
             // Emit update event
-            EventBus.server.emit(Events.Message.CHANNEL_MESSAGE, {
-                channelId: context.channelId,
-                agentId: context.agentId,
-                content: `✅ Updated plan item: ${item.title} → ${input.status || 'updated'}${input.notes ? ` (${input.notes})` : ''}`,
-                metadata: { planId: input.planId, itemId: input.itemId, status: input.status }
-            });
+            if (context.channelId && context.agentId) {
+                const updateMessage = createChannelMessage(
+                    context.channelId,
+                    context.agentId,
+                    `✅ Updated plan item: ${item.title} → ${input.status || 'updated'}${input.notes ? ` (${input.notes})` : ''}`,
+                    { context: { planId: input.planId, itemId: input.itemId, status: input.status, toolName: 'planning_update_item' } }
+                );
+                EventBus.server.emit(
+                    Events.Message.CHANNEL_MESSAGE,
+                    createChannelMessageEventPayload(Events.Message.CHANNEL_MESSAGE, context.agentId, updateMessage)
+                );
+            }
             
             // Emit plan step completion event for monitoring service
-            if (input.status === 'completed') {
-                EventBus.server.emit('plan:step_completed', {
-                    data: {
-                        planId: input.planId,
-                        stepId: input.itemId,
-                        completedBy: context.agentId
-                    }
-                });
+            if (input.status === 'completed' && context.agentId && context.channelId) {
+                EventBus.server.emit(
+                    Events.Plan.PLAN_STEP_COMPLETED,
+                    createPlanStepCompletedEventPayload(
+                        Events.Plan.PLAN_STEP_COMPLETED,
+                        context.agentId,
+                        context.channelId,
+                        {
+                            planId: input.planId,
+                            stepId: input.itemId,
+                            completedBy: context.agentId
+                        }
+                    )
+                );
             }
 
 
@@ -309,7 +415,7 @@ export const planning_update_item: McpToolDefinition = {
             return { content };
             } finally {
                 // Always release lock
-                planUpdateLocks.delete(input.planId);
+                releasePlanLock(input.planId);
             }
         } catch (error) {
             logger.error(`Error updating plan item: ${error}`);
@@ -481,16 +587,21 @@ export const planning_share: McpToolDefinition = {
 
             if (input.agentIds && input.agentIds.length > 0) {
                 // Send to specific agents
-                for (const agentId of input.agentIds) {
-                    EventBus.server.emit(Events.Message.AGENT_MESSAGE, {
-                        channelId: context.channelId,
-                        senderId: context.agentId,
-                        receiverId: agentId,
-                        content: fullMessage,
-                        metadata: { planId: input.planId, planShared: true }
-                    });
+                if (context.agentId && context.channelId) {
+                    for (const targetAgentId of input.agentIds) {
+                        const agentMessage = createAgentMessage(
+                            context.agentId,
+                            targetAgentId,
+                            fullMessage,
+                            { context: { planId: input.planId, planShared: true, toolName: 'planning_share' } }
+                        );
+                        EventBus.server.emit(
+                            Events.Message.AGENT_MESSAGE,
+                            createAgentMessageEventPayload(Events.Message.AGENT_MESSAGE, context.agentId, context.channelId, agentMessage)
+                        );
+                    }
                 }
-                
+
                 const content: McpToolResultContent = {
                     type: 'application/json',
                     data: {
@@ -502,12 +613,18 @@ export const planning_share: McpToolDefinition = {
                 return { content };
             } else {
                 // Broadcast to channel
-                EventBus.server.emit(Events.Message.CHANNEL_MESSAGE, {
-                    channelId: context.channelId,
-                    agentId: context.agentId,
-                    content: fullMessage,
-                    metadata: { planId: input.planId, planShared: true }
-                });
+                if (context.channelId && context.agentId) {
+                    const channelMessage = createChannelMessage(
+                        context.channelId,
+                        context.agentId,
+                        fullMessage,
+                        { context: { planId: input.planId, planShared: true, toolName: 'planning_share' } }
+                    );
+                    EventBus.server.emit(
+                        Events.Message.CHANNEL_MESSAGE,
+                        createChannelMessageEventPayload(Events.Message.CHANNEL_MESSAGE, context.agentId, channelMessage)
+                    );
+                }
 
                 const content: McpToolResultContent = {
                     type: 'application/json',

@@ -31,7 +31,7 @@ This directory contains a complete working example of registering **channel-scop
 
 1. MXF server running:
    ```bash
-   npm run dev
+   bun run dev
    ```
 
 2. Environment variables set in `.env`:
@@ -45,7 +45,7 @@ This directory contains a complete working example of registering **channel-scop
 ### Run
 
 ```bash
-npm run demo:channel-mcp
+bun run demo:channel-mcp
 ```
 
 ### Expected Output

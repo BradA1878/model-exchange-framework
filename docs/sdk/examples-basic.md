@@ -24,13 +24,13 @@ Before running examples, ensure you have:
 
 ```bash
 # Generate credentials using SDK CLI
-npm run sdk:cli -- channel:create \
+bun run sdk:cli -- channel:create \
   --id example-channel \
   --name "Example Channel" \
   --email your@email.com \
   --password your-password
 
-npm run sdk:cli -- key:generate \
+bun run sdk:cli -- key:generate \
   --channel example-channel \
   --agents agent1,agent2,agent3 \
   --email your@email.com \

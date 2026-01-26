@@ -79,7 +79,7 @@ Paste logs here
 
 **Server Logs:**
 ```
-<!-- If server-side issue, include logs from: npm run docker:logs or console output -->
+<!-- If server-side issue, include logs from: bun run docker:logs or console output -->
 ```
 
 **SDK/Agent Logs:**

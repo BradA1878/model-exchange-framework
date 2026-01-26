@@ -29,6 +29,7 @@ import { Observable, from, of, throwError, firstValueFrom } from 'rxjs';
 import { map, mergeMap, catchError, tap } from 'rxjs/operators';
 import { createStrictValidator } from '../../../shared/utils/validation';
 import { Logger } from '../../../shared/utils/Logger';
+import { checkResultSize } from '../../../shared/utils/ToolPaginationUtils';
 import { McpToolHandlerContext, McpToolHandlerResult } from '../../../shared/protocols/mcp/McpServerTypes';
 import { Events } from '../../../shared/events/EventNames';
 import { EventBus } from '../../../shared/events/EventBus';
@@ -248,7 +249,7 @@ export class McpSocketExecutor {
                             payload.channelId,
                             {
                                 toolName: payload.data.toolName,
-                                callId: payload.requestId,
+                                callId: payload.data.callId,
                                 result: result.content
                             }
                         ));
@@ -262,8 +263,8 @@ export class McpSocketExecutor {
                             payload.agentId,
                             payload.channelId,
                             {
-                                toolName: payload.name,
-                                callId: payload.requestId,
+                                toolName: payload.data.toolName,
+                                callId: payload.data.callId,
                                 error: errorMessage
                             }
                         ));
@@ -508,6 +509,15 @@ export class McpSocketExecutor {
 
                     // Execute the tool handler with the potentially corrected input
                     return from(tool.handler(correctedInput, context)).pipe(
+                        map(result => {
+                            // Apply size checking to the result content for LLM feedback
+                            // This adds pagination hints for large results
+                            if (result.content && typeof result.content === 'object') {
+                                const checkedContent = checkResultSize(result.content, toolName, this.logger);
+                                return { ...result, content: checkedContent };
+                            }
+                            return result;
+                        }),
                         tap(result => {
                             // Log successful result
                             // Remove from tracking on success

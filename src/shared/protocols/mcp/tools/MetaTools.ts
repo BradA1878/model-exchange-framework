@@ -46,6 +46,7 @@ import { AutoCorrectionIntegrationService } from '../../../services/AutoCorrecti
 import { EnhancedParameterPattern, PatternRecommendation } from '../../../types/PatternLearningTypes';
 import { AgentId } from '../../../types/Agent';
 import { ChannelId } from '../../../types/ChannelContext';
+import { paginationInputSchema, paginateArray, checkResultSize, PaginationMetadata } from '../../../utils/ToolPaginationUtils';
 
 const logger = new Logger('info', 'MetaTools', 'server');
 const validator = createStrictValidator('MetaTools');
@@ -870,6 +871,12 @@ export const tools_discover = {
                 minimum: 1,
                 maximum: 100,
                 default: 20
+            },
+            offset: {
+                type: 'number',
+                description: 'Number of tools to skip for pagination (default: 0)',
+                default: 0,
+                minimum: 0
             }
         }
     },
@@ -879,6 +886,7 @@ export const tools_discover = {
         namePattern?: string;
         includeSchema?: boolean;
         limit?: number;
+        offset?: number;
     }, context: {
         agentId: string;
         channelId: string;
@@ -940,30 +948,33 @@ export const tools_discover = {
                 // Continue without filtering if there's an error
             }
             
-            // Apply limit
+            // Apply pagination using utility
             const limit = input.limit || 20;
-            filteredTools = filteredTools.slice(0, limit);
-            
+            const offset = input.offset || 0;
+            const { items: paginatedTools, pagination } = paginateArray(filteredTools, limit, offset);
+
             // Format results
-            const results = filteredTools.map(tool => ({
+            const results = paginatedTools.map(tool => ({
                 name: tool.name,
                 description: tool.description,
                 category: getToolCategory(tool.name),
                 source: tool.source || 'internal',
                 ...(input.includeSchema && { inputSchema: tool.inputSchema })
             }));
-            
-            // Group by category for summary
+
+            // Group by category for summary (only for current page)
             const categoryGroups = results.reduce((groups: any, tool) => {
                 const category = tool.category;
                 if (!groups[category]) groups[category] = [];
                 groups[category].push(tool.name);
                 return groups;
             }, {});
-            
-            return {
+
+            const responseData = {
                 totalAvailable: allTools.length,
-                filteredCount: results.length,
+                filteredCount: pagination.totalCount,
+                returnedCount: results.length,
+                pagination,
                 filters: {
                     category: input.category,
                     source: input.source,
@@ -973,6 +984,9 @@ export const tools_discover = {
                 tools: results,
                 processingTime: Date.now() - startTime
             };
+
+            // Check result size and add pagination hint if needed
+            return checkResultSize(responseData, 'tools_discover', logger);
         } catch (error) {
             logger.error(`Tool discovery failed: ${error}`);
             throw error;
@@ -1003,6 +1017,19 @@ export const tools_compare = {
                 type: 'boolean',
                 description: 'Whether to suggest alternative tools with similar functionality',
                 default: true
+            },
+            maxAlternatives: {
+                type: 'number',
+                description: 'Maximum number of alternative tools to suggest (default: 5)',
+                default: 5,
+                minimum: 1,
+                maximum: 20
+            },
+            alternativesOffset: {
+                type: 'number',
+                description: 'Number of alternatives to skip for pagination (default: 0)',
+                default: 0,
+                minimum: 0
             }
         },
         required: ['toolNames']
@@ -1011,6 +1038,8 @@ export const tools_compare = {
         toolNames: string[];
         comparisonCriteria?: string[];
         suggestAlternatives?: boolean;
+        maxAlternatives?: number;
+        alternativesOffset?: number;
     }, context: {
         agentId: string;
         channelId: string;
@@ -1048,26 +1077,42 @@ export const tools_compare = {
                 };
             });
             
-            // Find similar tools for alternatives
-            const alternatives = input.suggestAlternatives ? allTools.filter(tool => 
-                !input.toolNames.includes(tool.name) &&
-                requestedTools.some(req => req.found && getToolCategory(req.name) === getToolCategory(tool.name))
-            ).slice(0, 5) : [];
-            
-            return {
+            // Find similar tools for alternatives with pagination
+            let alternativesPagination: PaginationMetadata | undefined;
+            let formattedAlternatives: any[] = [];
+
+            if (input.suggestAlternatives !== false) {
+                const allAlternatives = allTools.filter(tool =>
+                    !input.toolNames.includes(tool.name) &&
+                    requestedTools.some(req => req.found && getToolCategory(req.name) === getToolCategory(tool.name))
+                );
+
+                const maxAlts = input.maxAlternatives || 5;
+                const altsOffset = input.alternativesOffset || 0;
+                const { items: paginatedAlts, pagination } = paginateArray(allAlternatives, maxAlts, altsOffset);
+                alternativesPagination = pagination;
+
+                formattedAlternatives = paginatedAlts.map(tool => ({
+                    name: tool.name,
+                    description: tool.description,
+                    category: getToolCategory(tool.name),
+                    source: tool.source || 'internal'
+                }));
+            }
+
+            const responseData = {
                 comparison: {
                     requestedTools,
                     foundCount: requestedTools.filter(t => t.found).length,
                     notFoundCount: requestedTools.filter(t => !t.found).length
                 },
-                alternatives: alternatives.map(tool => ({
-                    name: tool.name,
-                    description: tool.description,
-                    category: getToolCategory(tool.name),
-                    source: tool.source || 'internal'
-                })),
+                alternatives: formattedAlternatives,
+                alternativesPagination,
                 processingTime: Date.now() - startTime
             };
+
+            // Check result size and add pagination hint if needed
+            return checkResultSize(responseData, 'tools_compare', logger);
         } catch (error) {
             logger.error(`Tool comparison failed: ${error}`);
             throw error;

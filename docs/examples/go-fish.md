@@ -60,7 +60,7 @@ const turnTask = await sdk.createTask({
 
 1. MXF server running:
    ```bash
-   npm run dev
+   bun run dev
    ```
 
 2. Install dependencies:
@@ -74,10 +74,10 @@ const turnTask = await sdk.createTask({
 
 ```bash
 # Terminal 1: Start game server
-npm run server
+bun run server
 
 # Terminal 2: Connect agents and play
-npm run agents
+bun run agents
 ```
 
 ## Game Flow

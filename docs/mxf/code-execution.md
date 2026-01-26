@@ -2,13 +2,13 @@
 
 ## Overview
 
-The **CodeExecutionSandboxService** enables agents to execute JavaScript and TypeScript code in secure, isolated sandboxes. This feature reduces multi-step workflow latency by eliminating model round-trips for data transformations, calculations, and complex control flow operations.
+The **CodeExecutionSandboxService** enables agents to execute JavaScript and TypeScript code in secure, isolated Docker containers with the Bun runtime. This feature reduces multi-step workflow latency by eliminating model round-trips for data transformations, calculations, and complex control flow operations.
 
 ## Architecture
 
 ### Sandbox Isolation
 
-Code execution uses **VM2** for sandboxing with complete isolation:
+Code execution uses **Docker containers** with **Bun runtime** for complete isolation:
 
 <div class="mermaid-fallback">
 
@@ -28,11 +28,12 @@ flowchart TB
         C3[Resource Monitoring]
     end
 
-    subgraph Sandbox["🔐 VM2 Isolated Sandbox"]
-        D1["❌ No file system access"]
-        D2["❌ No network access"]
-        D3["❌ No process manipulation"]
-        D4["✅ Safe built-ins only"]
+    subgraph Sandbox["🔐 Docker Container (Bun)"]
+        D1["❌ No network (NetworkMode: none)"]
+        D2["❌ Read-only root filesystem"]
+        D3["❌ All capabilities dropped"]
+        D4["❌ Non-root user (UID 1000)"]
+        D5["✅ Safe built-ins only"]
     end
 
     subgraph Persistence["💾 Result + Persistence"]
@@ -65,20 +66,24 @@ flowchart TB
 - Risk-based validation with parameter checking
 
 **2. Pattern Detection**
-- AST-based analysis for dangerous code
 - Regex patterns for known threats
 - Heuristic loop detection
+- Blocks dangerous patterns before container execution
 
-**3. Sandbox Isolation**
-- VM2 execution environment
-- No access to Node.js APIs
-- No module loading (require/import)
-- Limited safe built-ins only
+**3. Docker Container Isolation**
+- Bun runtime in isolated container
+- No network access (NetworkMode: none)
+- Read-only root filesystem
+- All Linux capabilities dropped
+- Non-root user (UID 1000)
+- tmpfs /tmp with noexec, nosuid
 
 **4. Resource Limits**
+- Memory: 128MB (no swap)
+- CPU: 0.5 cores
+- PIDs: 64 processes max
+- File handles: 64 max
 - Configurable timeout (default 5s, max 30s)
-- Memory usage monitoring
-- Automatic timeout enforcement
 
 **5. Audit Trail**
 - Complete execution history in MongoDB
@@ -101,15 +106,20 @@ import module from "module"
 // ❌ Process manipulation
 process.exit()
 process.kill()
+child_process
+
+// ❌ Bun-specific APIs (blocked in container)
+Bun.spawn()
+Bun.spawnSync()
+Bun.file()
+Bun.write()
 
 // ❌ Prototype pollution
 obj.__proto__ = {}
 constructor[...]
-
-// ❌ File system access
-fs.readFile(...)
-fs.writeFile(...)
 ```
+
+**Note:** File system and network access are blocked at the Docker container level even if not caught by pattern detection.
 
 ## Safe Operations
 
@@ -171,7 +181,7 @@ console.log(result.resourceUsage);
 
 ## TypeScript Support
 
-Basic TypeScript execution via type stripping:
+TypeScript execution via Bun's native transpiler (no separate transpilation step):
 
 ```typescript
 const result = await sandbox.executeTypeScript(`
@@ -185,11 +195,16 @@ const result = await sandbox.executeTypeScript(`
 `, context);
 ```
 
+**Bun TypeScript Support:**
+- Bun natively handles TypeScript without transpilation overhead
+- Interfaces, type annotations, and enums work out of the box
+- Faster execution compared to traditional transpile-then-run
+
 **Limitations:**
-- Complex TypeScript features may not work
-- Decorators not supported
-- Advanced generics may fail
-- Use JavaScript for complex code
+- Some advanced TypeScript features may not work
+- Decorators not fully supported
+- Complex generics may fail
+- Use JavaScript for maximum compatibility
 
 ## MongoDB Persistence
 
@@ -304,8 +319,16 @@ sandbox.updateConfig({
 ## Security Checklist
 
 - [x] BLOCKING validation enabled
-- [x] Pattern detection active
-- [x] VM2 sandboxing enforced
+- [x] Pattern detection active (eval, require, Bun.spawn, etc.)
+- [x] Docker container isolation with Bun runtime
+- [x] No network access (NetworkMode: none)
+- [x] Read-only root filesystem
+- [x] All capabilities dropped (CapDrop: ALL)
+- [x] Non-root user (UID 1000)
+- [x] Memory limit: 128MB (no swap)
+- [x] CPU limit: 0.5 cores
+- [x] PID limit: 64 processes
+- [x] tmpfs /tmp with noexec, nosuid
 - [x] Timeout limits configured
 - [x] Resource monitoring enabled
 - [x] Audit trail in MongoDB
@@ -313,8 +336,7 @@ sandbox.updateConfig({
 - [x] TTL cleanup configured
 - [x] High security impact rating
 - [x] No file system access
-- [x] No network access
-- [x] No process manipulation
+- [x] No process manipulation (Bun.spawn blocked)
 
 ## See Also
 

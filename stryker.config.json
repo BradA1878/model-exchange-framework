@@ -13,6 +13,7 @@
     "src/shared/protocols/mcp/McpToolSchema.ts",
     "src/shared/utils/validation.ts",
     "src/shared/types/TaskTypes.ts",
+    "src/shared/services/CodeExecutionSandboxService.ts",
     "!src/**/*.test.ts",
     "!src/**/*.spec.ts",
     "!src/**/index.ts"

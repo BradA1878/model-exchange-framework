@@ -333,6 +333,21 @@ export class MxfAgent extends MxfClient {
                 // Update currentTask immediately so hasActiveTask() returns true
                 this.currentTask = data.taskRequest;
 
+                // CRITICAL FIX: Add task message to conversation history ONCE
+                // so subsequent iterations find it in history and don't re-inject.
+                // Without this, the task is transient - created fresh each iteration,
+                // causing the LLM to repeat the same tool calls.
+                const taskDescription = data.taskRequest?.description ||
+                                       data.taskRequest?.content ||
+                                       data.task?.description || '';
+                if (taskDescription && this.memoryManager) {
+                    this.memoryManager.addConversationMessage({
+                        role: 'user',
+                        content: `## Current Task\n${taskDescription}`,
+                        metadata: { contextLayer: 'task' }
+                    });
+                }
+
                 // Update system prompt with task context
                 try {
                     await this.systemPromptManager.updatePromptForTask(data.task);

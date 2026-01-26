@@ -61,15 +61,27 @@ export class TestAPI {
     private axiosClient: AxiosInstance;
     private auth: AuthCredentials = {};
     private app?: Express;
+    private abortController: AbortController;
 
     constructor(options: TestAPIOptions = {}) {
         this.serverUrl = options.serverUrl || process.env.TEST_SERVER_URL || 'http://localhost:3001';
+        this.abortController = new AbortController();
 
         this.axiosClient = axios.create({
             baseURL: this.serverUrl,
             timeout: 30000,
             validateStatus: () => true // Don't throw on any status code
         });
+    }
+
+    /**
+     * Cleanup resources to prevent Jest open handle warnings.
+     * Call this in afterAll or afterEach.
+     */
+    cleanup(): void {
+        this.abortController.abort();
+        this.abortController = new AbortController();
+        this.auth = {};
     }
 
     /**
@@ -190,7 +202,8 @@ export class TestAPI {
             url: path,
             data: body,
             params: query,
-            headers
+            headers,
+            signal: this.abortController.signal
         });
 
         return {

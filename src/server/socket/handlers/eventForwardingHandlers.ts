@@ -748,7 +748,10 @@ export const setupEventBusToSocketForwarding = (socketService: ISocketService): 
             });
         });
         
-        // Handle MCP events - Forward back to requesting agents
+        // Handle MCP events - Forward back to requesting agents ONLY (not to channels)
+        // Use deduplication to prevent duplicate event forwarding
+        const mcpEventProcessingKeys = new Set<string>();
+
         [
             Events.Mcp.TOOL_RESULT,
             Events.Mcp.TOOL_ERROR,
@@ -771,20 +774,36 @@ export const setupEventBusToSocketForwarding = (socketService: ISocketService): 
                     if (eventName.includes('channel:server')) {
                         moduleLogger.info(`[MCP-RESPONSE] Forwarding ${eventName} to socket for agent ${payload.agentId}`);
                     }
-                    
+
                     const validator = createStrictValidator(`EventForwarding:${eventName}`);
-                    
+
                     // Validate payload structure with fail-fast
                     validator.assertIsObject(payload, 'MCP event payload must be an object');
                     validator.assertIsNonEmptyString(payload.agentId, 'MCP event payload.agentId is required');
                     validator.assertIsNonEmptyString(payload.channelId, 'MCP event payload.channelId is required');
-                    
+
                     const targetAgentId = payload.agentId;
-                    
-                    // Forward MCP result events directly to the requesting agent
+
+                    // Create a unique key for deduplication using callId or eventId
+                    const eventKey = `${eventName}-${targetAgentId}-${payload.data?.callId || payload.eventId || ''}`;
+
+                    // Check if we've already processed this exact event
+                    if (mcpEventProcessingKeys.has(eventKey)) {
+                        moduleLogger.debug(`[MCP] Skipping duplicate event: ${eventKey}`);
+                        return;
+                    }
+
+                    // Mark as processing
+                    mcpEventProcessingKeys.add(eventKey);
+
+                    // Forward MCP result events directly to the requesting agent ONLY
+                    // IMPORTANT: Do NOT broadcast to channel - MCP results are agent-specific
                     forwardEventToAgent(socketService, targetAgentId, eventName, payload);
-                    
-                    // Log successful forwarding for debugging
+
+                    // Clean up processing key after a short delay to allow for late duplicates
+                    setTimeout(() => {
+                        mcpEventProcessingKeys.delete(eventKey);
+                    }, 1000);
                 } catch (error) {
                     moduleLogger.error(`Error forwarding MCP event from EventBus: ${eventName}, error: ${error}`);
                     throw error; // Fail fast - re-throw validation errors

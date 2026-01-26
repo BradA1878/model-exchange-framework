@@ -30,20 +30,23 @@ export const ConfigEvents = {
     TEMPLATE_UPDATED: 'config:template:updated',
     TEMPLATE_DELETED: 'config:template:deleted',
     TEMPLATE_DEPLOYED: 'config:template:deployed',
-    
+
     // Deployment configuration events
     DEPLOYMENT_CONFIG_UPDATED: 'config:deployment:updated',
     DEPLOYMENT_CONFIG_VALIDATED: 'config:deployment:validated',
     DEPLOYMENT_CONFIG_FAILED: 'config:deployment:failed',
-    
+
     // Environment configuration events
     ENVIRONMENT_UPDATED: 'config:environment:updated',
     ENVIRONMENT_VALIDATED: 'config:environment:validated',
-    
+
     // Configuration synchronization events
     CONFIG_SYNC_REQUESTED: 'config:sync:requested',
     CONFIG_SYNC_COMPLETED: 'config:sync:completed',
     CONFIG_SYNC_FAILED: 'config:sync:failed',
+
+    // Channel SystemLLM configuration events
+    CHANNEL_SYSTEM_LLM_CHANGED: 'config:channel_system_llm_changed',
 } as const;
 
 export type ConfigEventName = typeof ConfigEvents[keyof typeof ConfigEvents];
@@ -204,6 +207,37 @@ export interface EnvironmentConfiguration {
 }
 
 /**
+ * Channel SystemLLM Change Event Interface
+ */
+export interface ChannelSystemLlmChangeEvent {
+    /**
+     * Whether SystemLLM is enabled
+     */
+    enabled: boolean;
+
+    /**
+     * Optional reason for the change
+     */
+    reason?: string;
+
+    /**
+     * Operation-specific overrides
+     */
+    operationOverrides?: Record<string, boolean>;
+
+    /**
+     * Optional channel ID for channel-specific changes
+     * If not provided, applies globally
+     */
+    channelId?: string;
+
+    /**
+     * Timestamp of the change
+     */
+    timestamp: number;
+}
+
+/**
  * Configuration Sync Request Interface
  */
 export interface ConfigSyncRequest {
@@ -305,4 +339,5 @@ export interface ConfigPayloads {
         error: string;
         timestamp: Date;
     };
+    'config:channel_system_llm_changed': ChannelSystemLlmChangeEvent;
 }

@@ -1,21 +1,31 @@
 /**
  * Code Execution Demo
  *
- * Demonstrates the code_execute tool with various use cases.
- * Run with: NODE_ENV=test npx tsx tests/code-execution-demo.ts
+ * Demonstrates the code_execute tool with various use cases including:
+ * - Simple calculations
+ * - Array operations
+ * - Context data processing
+ * - Console output capture
+ * - TypeScript execution
+ * - Conditional logic
+ * - Iterative operations
+ * - Security validation
+ * - Timeout protection
+ *
+ * Run with: npm run demo:code-execution
  */
 
-import { MxfSDK } from '../src/sdk/MxfSDK';
+import { MxfSDK } from '../../src/sdk/MxfSDK';
 import dotenv from 'dotenv';
 
 dotenv.config();
 
 async function demo() {
-  console.log('🚀 Code Execution Demo\n');
-  console.log('═'.repeat(60));
+  console.log('Code Execution Demo\n');
+  console.log('='.repeat(60));
 
   // Initialize SDK
-  console.log('\n📡 Connecting to MXF server...');
+  console.log('\nConnecting to MXF server...');
   const sdk = new MxfSDK({
     serverUrl: 'http://localhost:3001',
     domainKey: process.env.MXF_DOMAIN_KEY!,
@@ -27,30 +37,30 @@ async function demo() {
 
   try {
     await sdk.connect();
-    console.log('✅ SDK connected successfully');
+    console.log('SDK connected successfully');
 
-    // Create test channel
-    const channelId = `code-test-${Date.now()}`;
-    console.log(`\n📢 Creating test channel: ${channelId}`);
+    // Create demo channel
+    const channelId = `code-demo-${Date.now()}`;
+    console.log(`\nCreating demo channel: ${channelId}`);
 
     await sdk.createChannel(channelId, {
-      name: 'Code Execution Test Channel',
-      description: 'Testing code execution capabilities'
+      name: 'Code Execution Demo Channel',
+      description: 'Demonstrating code execution capabilities'
     });
 
     // Generate keys for agent
-    console.log('🔑 Generating authentication keys...');
-    const keys = await sdk.generateKey(channelId, undefined, 'Test Agent Key');
+    console.log('Generating authentication keys...');
+    const keys = await sdk.generateKey(channelId, undefined, 'Demo Agent Key');
 
     // Create agent that can execute code
-    console.log('🤖 Creating test agent...');
+    console.log('Creating demo agent...');
     agent = await sdk.createAgent({
-      agentId: 'CodeTestAgent',
-      name: 'Code Test Agent',
+      agentId: 'CodeDemoAgent',
+      name: 'Code Demo Agent',
       channelId,
       keyId: keys.keyId,
       secretKey: keys.secretKey,
-      agentConfigPrompt: 'You are a test agent for code execution',
+      agentConfigPrompt: 'You are a demo agent for code execution',
       allowedTools: ['code_execute'],
       llmProvider: 'openrouter' as any,
       apiKey: process.env.OPENROUTER_API_KEY || '',
@@ -58,27 +68,27 @@ async function demo() {
     });
 
     await agent.connect();
-    console.log('✅ Agent connected successfully\n');
+    console.log('Agent connected successfully\n');
 
     // Test 1: Simple calculation
-    console.log('═'.repeat(60));
-    console.log('📝 Test 1: Simple Calculation');
-    console.log('─'.repeat(60));
+    console.log('='.repeat(60));
+    console.log('Demo 1: Simple Calculation');
+    console.log('-'.repeat(60));
     console.log('Code: return 1 + 1;');
 
     const result1 = await agent.executeTool('code_execute', {
       code: 'return 1 + 1;'
     });
 
-    console.log('✅ Success:', result1.success);
-    console.log('📤 Output:', result1.output);
-    console.log('⏱️  Time:', result1.executionTime, 'ms');
-    console.log('🔖 Hash:', result1.codeHash);
+    console.log('Success:', result1.success);
+    console.log('Output:', result1.output);
+    console.log('Time:', result1.executionTime, 'ms');
+    console.log('Hash:', result1.codeHash);
 
     // Test 2: Array operations
-    console.log('\n' + '═'.repeat(60));
-    console.log('📝 Test 2: Array Operations');
-    console.log('─'.repeat(60));
+    console.log('\n' + '='.repeat(60));
+    console.log('Demo 2: Array Operations');
+    console.log('-'.repeat(60));
 
     const code2 = `
       const numbers = [1, 2, 3, 4, 5];
@@ -95,14 +105,14 @@ async function demo() {
       code: code2
     });
 
-    console.log('✅ Success:', result2.success);
-    console.log('📤 Output:', JSON.stringify(result2.output, null, 2));
-    console.log('⏱️  Time:', result2.executionTime, 'ms');
+    console.log('Success:', result2.success);
+    console.log('Output:', JSON.stringify(result2.output, null, 2));
+    console.log('Time:', result2.executionTime, 'ms');
 
     // Test 3: Using context
-    console.log('\n' + '═'.repeat(60));
-    console.log('📝 Test 3: Context Data Processing');
-    console.log('─'.repeat(60));
+    console.log('\n' + '='.repeat(60));
+    console.log('Demo 3: Context Data Processing');
+    console.log('-'.repeat(60));
 
     const code3 = `
       const filtered = context.data.filter(item => item.score > 0.8);
@@ -129,23 +139,23 @@ async function demo() {
       }
     });
 
-    console.log('✅ Success:', result3.success);
-    console.log('📤 Output:', JSON.stringify(result3.output, null, 2));
-    console.log('⏱️  Time:', result3.executionTime, 'ms');
+    console.log('Success:', result3.success);
+    console.log('Output:', JSON.stringify(result3.output, null, 2));
+    console.log('Time:', result3.executionTime, 'ms');
 
     // Test 4: Console output
-    console.log('\n' + '═'.repeat(60));
-    console.log('📝 Test 4: Console Output Capture');
-    console.log('─'.repeat(60));
+    console.log('\n' + '='.repeat(60));
+    console.log('Demo 4: Console Output Capture');
+    console.log('-'.repeat(60));
 
     const code4 = `
-      console.log('🔍 Starting analysis...');
+      console.log('Starting analysis...');
 
       const data = [10, 20, 30, 40, 50];
-      console.log('📊 Data points:', data.length);
+      console.log('Data points:', data.length);
 
       const result = Math.sqrt(data.reduce((a, b) => a + b, 0));
-      console.log('✨ Computed result:', result);
+      console.log('Computed result:', result);
 
       return result;
     `;
@@ -155,16 +165,16 @@ async function demo() {
       code: code4
     });
 
-    console.log('✅ Success:', result4.success);
-    console.log('📤 Output:', result4.output);
-    console.log('📝 Console logs:');
+    console.log('Success:', result4.success);
+    console.log('Output:', result4.output);
+    console.log('Console logs:');
     result4.logs?.forEach((log: string) => console.log('   ', log));
-    console.log('⏱️  Time:', result4.executionTime, 'ms');
+    console.log('Time:', result4.executionTime, 'ms');
 
     // Test 5: TypeScript
-    console.log('\n' + '═'.repeat(60));
-    console.log('📝 Test 5: TypeScript Execution');
-    console.log('─'.repeat(60));
+    console.log('\n' + '='.repeat(60));
+    console.log('Demo 5: TypeScript Execution');
+    console.log('-'.repeat(60));
 
     const code5 = `
       interface Person {
@@ -196,14 +206,14 @@ async function demo() {
       code: code5
     });
 
-    console.log('✅ Success:', result5.success);
-    console.log('📤 Output:', JSON.stringify(result5.output, null, 2));
-    console.log('⏱️  Time:', result5.executionTime, 'ms');
+    console.log('Success:', result5.success);
+    console.log('Output:', JSON.stringify(result5.output, null, 2));
+    console.log('Time:', result5.executionTime, 'ms');
 
     // Test 6: Conditional logic
-    console.log('\n' + '═'.repeat(60));
-    console.log('📝 Test 6: Conditional Logic');
-    console.log('─'.repeat(60));
+    console.log('\n' + '='.repeat(60));
+    console.log('Demo 6: Conditional Logic');
+    console.log('-'.repeat(60));
 
     const code6 = `
       const temperature = context.temp;
@@ -213,17 +223,17 @@ async function demo() {
         status = 'CRITICAL';
         action = 'immediate_alert';
         color = 'red';
-        console.error('🚨 Critical temperature!');
+        console.error('Critical temperature!');
       } else if (temperature > 80) {
         status = 'WARNING';
         action = 'monitor';
         color = 'yellow';
-        console.warn('⚠️  Elevated temperature');
+        console.warn('Elevated temperature');
       } else {
         status = 'NORMAL';
         action = 'none';
         color = 'green';
-        console.log('✅ Temperature normal');
+        console.log('Temperature normal');
       }
 
       return { temperature, status, action, color };
@@ -235,16 +245,16 @@ async function demo() {
       context: { temp: 95 }
     });
 
-    console.log('✅ Success:', result6.success);
-    console.log('📤 Output:', JSON.stringify(result6.output, null, 2));
-    console.log('📝 Console logs:');
+    console.log('Success:', result6.success);
+    console.log('Output:', JSON.stringify(result6.output, null, 2));
+    console.log('Console logs:');
     result6.logs?.forEach((log: string) => console.log('   ', log));
-    console.log('⏱️  Time:', result6.executionTime, 'ms');
+    console.log('Time:', result6.executionTime, 'ms');
 
     // Test 7: Iterative operations
-    console.log('\n' + '═'.repeat(60));
-    console.log('📝 Test 7: Iterative Operations (Loops)');
-    console.log('─'.repeat(60));
+    console.log('\n' + '='.repeat(60));
+    console.log('Demo 7: Iterative Operations (Loops)');
+    console.log('-'.repeat(60));
 
     const code7 = `
       const results = [];
@@ -262,10 +272,10 @@ async function demo() {
         if (processed.valid) {
           results.push(processed);
           processedCount++;
-          console.log(\`✓ Processed item \${item.id}: \${item.value} → \${processed.doubledValue}\`);
+          console.log(\`Processed item \${item.id}: \${item.value} -> \${processed.doubledValue}\`);
         } else {
           skippedCount++;
-          console.log(\`✗ Skipped item \${item.id}: value too low (\${item.value})\`);
+          console.log(\`Skipped item \${item.id}: value too low (\${item.value})\`);
         }
       }
 
@@ -291,32 +301,40 @@ async function demo() {
       }
     });
 
-    console.log('✅ Success:', result7.success);
-    console.log('📤 Output:', JSON.stringify(result7.output, null, 2));
-    console.log('📝 Console logs:');
+    console.log('Success:', result7.success);
+    console.log('Output:', JSON.stringify(result7.output, null, 2));
+    console.log('Console logs:');
     result7.logs?.forEach((log: string) => console.log('   ', log));
-    console.log('⏱️  Time:', result7.executionTime, 'ms');
+    console.log('Time:', result7.executionTime, 'ms');
 
     // Test 8: Error handling (demonstrate security)
-    console.log('\n' + '═'.repeat(60));
-    console.log('📝 Test 8: Security Validation (Expected to Fail)');
-    console.log('─'.repeat(60));
+    console.log('\n' + '='.repeat(60));
+    console.log('Demo 8: Security Validation (Expected to Fail)');
+    console.log('-'.repeat(60));
 
     console.log('Code: eval("malicious code") - BLOCKED');
-    try {
-      await agent.executeTool('code_execute', {
-        code: 'eval("malicious code");'
-      });
-      console.log('❌ Should have been blocked!');
-    } catch (error) {
-      console.log('✅ Correctly blocked dangerous code');
-      console.log('🛡️  Error:', (error as Error).message);
+    const result8 = await agent.executeTool('code_execute', {
+      code: 'eval("malicious code");'
+    });
+
+    // Result may be an error string or object with success=false
+    const isBlocked =
+      (typeof result8 === 'string' && result8.toLowerCase().includes('error')) ||
+      (typeof result8 === 'string' && result8.toLowerCase().includes('failed')) ||
+      (typeof result8 === 'object' && result8?.success === false);
+
+    if (isBlocked) {
+      console.log('Correctly blocked dangerous code');
+      console.log('Response:', typeof result8 === 'string' ? result8 : result8.error);
+    } else {
+      console.log('ERROR: Should have been blocked!');
+      console.log('Result:', JSON.stringify(result8, null, 2));
     }
 
     // Test 9: Timeout (demonstrate resource limits)
-    console.log('\n' + '═'.repeat(60));
-    console.log('📝 Test 9: Timeout Protection');
-    console.log('─'.repeat(60));
+    console.log('\n' + '='.repeat(60));
+    console.log('Demo 9: Timeout Protection');
+    console.log('-'.repeat(60));
 
     console.log('Code: while(true) {} with 1s timeout');
     const result9 = await agent.executeTool('code_execute', {
@@ -324,52 +342,52 @@ async function demo() {
       timeout: 1000
     });
 
-    console.log('✅ Timeout triggered (as expected)');
-    console.log('❌ Success:', result9.success);
-    console.log('⏱️  Time:', result9.executionTime, 'ms');
-    console.log('🚫 Error:', result9.error);
+    console.log('Timeout triggered (as expected)');
+    console.log('Success:', result9.success);
+    console.log('Time:', result9.executionTime, 'ms');
+    console.log('Error:', result9.error);
 
     // Summary
-    console.log('\n' + '═'.repeat(60));
-    console.log('📊 Demo Summary');
-    console.log('═'.repeat(60));
-    console.log('✅ Completed 9 test scenarios');
-    console.log('✅ Demonstrated:');
-    console.log('   • Simple calculations');
-    console.log('   • Array operations');
-    console.log('   • Context data usage');
-    console.log('   • Console output capture');
-    console.log('   • TypeScript support');
-    console.log('   • Conditional logic');
-    console.log('   • Iterative operations');
-    console.log('   • Security validation');
-    console.log('   • Timeout protection');
+    console.log('\n' + '='.repeat(60));
+    console.log('Demo Summary');
+    console.log('='.repeat(60));
+    console.log('Completed 9 demo scenarios');
+    console.log('Demonstrated:');
+    console.log('   - Simple calculations');
+    console.log('   - Array operations');
+    console.log('   - Context data usage');
+    console.log('   - Console output capture');
+    console.log('   - TypeScript support');
+    console.log('   - Conditional logic');
+    console.log('   - Iterative operations');
+    console.log('   - Security validation');
+    console.log('   - Timeout protection');
     console.log('');
-    console.log('🎉 Code execution feature working correctly!');
-    console.log('═'.repeat(60));
+    console.log('Code execution feature working correctly!');
+    console.log('='.repeat(60));
 
   } catch (error) {
-    console.error('\n❌ Demo failed:', error);
+    console.error('\nDemo failed:', error);
     throw error;
   } finally {
     // Cleanup
-    console.log('\n🧹 Cleaning up...');
+    console.log('\nCleaning up...');
     if (agent) {
       await agent.disconnect();
     }
     await sdk.disconnect();
-    console.log('👋 Disconnected from server');
+    console.log('Disconnected from server');
   }
 }
 
 // Run demo
 demo()
   .then(() => {
-    console.log('\n✅ Demo completed successfully');
+    console.log('\nDemo completed successfully');
     process.exit(0);
   })
   .catch((error) => {
-    console.error('\n❌ Demo failed:', error);
+    console.error('\nDemo failed:', error);
     process.exit(1);
   });
 

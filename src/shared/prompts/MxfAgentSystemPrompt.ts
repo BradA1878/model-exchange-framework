@@ -324,7 +324,7 @@ Use tools to take actions - the system will automatically execute your tool requ
             const commCapabilities: string[] = [];
             if (toolSet.includes('messaging_send')) commCapabilities.push(`- **${COMMUNICATION_TOOLS.SEND_MESSAGE}**: Send direct messages to specific agents`);
             if (toolSet.includes('messaging_broadcast')) commCapabilities.push(`- **${COMMUNICATION_TOOLS.BROADCAST}**: Send messages to multiple agents or channels`);
-            if (toolSet.includes('agent_discover')) commCapabilities.push(`- **${COMMUNICATION_TOOLS.DISCOVER_AGENTS}**: Discover other agents in your channel and their capabilities`);
+            if (toolSet.includes('messaging_discover')) commCapabilities.push(`- **${COMMUNICATION_TOOLS.DISCOVER_AGENTS}**: Discover other agents in your channel and their capabilities`);
             if (toolSet.includes('agent_coordinate')) commCapabilities.push(`- **${COMMUNICATION_TOOLS.COORDINATE}**: Request coordination with other agents for collaborative tasks`);
             
             if (commCapabilities.length > 0) {
@@ -863,7 +863,7 @@ When you need capabilities beyond your core tools:
 - Have a specific agent target? → Use tool with agentId directly
 - Have a specific action to perform? → Use appropriate tool call
 - Need to respond to a message? → Use messaging tools with clear target
-- Uncertain about next steps? → Use context_read or agent_discover first
+- Uncertain about next steps? → Use context_read or messaging_discover first
 - Complex reasoning needed? → Be explicit with tools rather than ambiguous language
 
 **Execution Best Practices:**

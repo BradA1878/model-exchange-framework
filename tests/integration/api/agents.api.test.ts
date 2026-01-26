@@ -62,6 +62,7 @@ describe('Agent API Endpoints', () => {
                 // Ignore cleanup errors
             }
         }
+        api.cleanup();
     });
 
     // =========================================================================

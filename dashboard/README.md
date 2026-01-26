@@ -98,23 +98,23 @@ dashboard/
 
 3. **Development Server**
    ```bash
-   npm run dev
+   bun run dev
    ```
    The dashboard will be available at `http://localhost:5173`
 
 4. **Build for Production**
    ```bash
-   npm run build
+   bun run build
    ```
 
 5. **Type Checking**
    ```bash
-   npm run type-check
+   bun run type-check
    ```
 
 6. **Linting**
    ```bash
-   npm run lint
+   bun run lint
    ```
 
 ## 🔌 API Integration
@@ -254,7 +254,7 @@ The dashboard integrates with the MXF backend API running on port 3001. All stor
 
 ### Production Build
 ```bash
-npm run build
+bun run build
 ```
 
 ### Environment Variables
@@ -272,13 +272,13 @@ The built application in `dist/` can be deployed to:
 ## 🧪 Testing
 
 ### Development Testing
-- Use the development server with `npm run dev`
+- Use the development server with `bun run dev`
 - Test against local backend API on port 3001
 - Browser developer tools for debugging
 - Vue DevTools browser extension recommended
 
 ### Production Testing
-- Build and serve with `npm run build && npm run preview`
+- Build and serve with `bun run build && bun run preview`
 - Test all API integrations with production backend
 - Verify responsive design across devices
 - Test authentication flows end-to-end
@@ -328,9 +328,9 @@ Vue components should follow this order:
    - Verify magic link authentication setup
 
 3. **Build Errors**
-   - Run `npm run type-check` for TypeScript errors
+   - Run `bun run type-check` for TypeScript errors
    - Ensure all dependencies are installed
-   - Check for ESLint errors with `npm run lint`
+   - Check for ESLint errors with `bun run lint`
 
 4. **Performance Issues**
    - Check browser developer tools Network tab

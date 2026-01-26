@@ -619,8 +619,9 @@ export class GeminiMcpClient extends BaseMcpClient {
             // and should be bundled with that prompt to provide coordination insights
             // (Previously these were skipped, breaking the SystemLLM flow)
 
-            // INCLUDE: Messages with conversation or tool-result layer
-            if (layer === 'conversation' || layer === 'tool-result') {
+            // INCLUDE: Messages with conversation, tool-result, or task layer
+            // Task messages must be included to prevent re-injection on every turn
+            if (layer === 'conversation' || layer === 'tool-result' || layer === 'task') {
                 return true;
             }
 
@@ -629,8 +630,8 @@ export class GeminiMcpClient extends BaseMcpClient {
                 return true;
             }
 
-            // SKIP: Messages with system/identity/task/action layers
-            if (layer === 'system' || layer === 'identity' || layer === 'task' || layer === 'action') {
+            // SKIP: Messages with system/identity/action layers (already in system context)
+            if (layer === 'system' || layer === 'identity' || layer === 'action') {
                 return false;
             }
 
@@ -651,8 +652,14 @@ export class GeminiMcpClient extends BaseMcpClient {
             });
         }
 
-        // 2. Task message (if present) - Added AFTER conversation history for chronological ordering
-        if (context.currentTask) {
+        // 2. Task message (if present) - Only inject if NOT already in conversation history
+        // Task messages are now included in dialogueMessages, so they appear in their chronological position.
+        // This prevents the task from appearing AFTER tool results, which the LLM interprets as a new request.
+        const taskAlreadyInHistory = dialogueMessages.some(m =>
+            m.content?.includes('## Current Task') ||
+            m.metadata?.contextLayer === 'task'
+        );
+        if (context.currentTask && !taskAlreadyInHistory) {
             contents.push({
                 role: 'user',
                 parts: [{ text: `## Current Task\n${context.currentTask.description}` }]

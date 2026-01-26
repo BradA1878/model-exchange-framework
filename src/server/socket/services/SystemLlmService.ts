@@ -3608,10 +3608,10 @@ ${JSON.stringify(TOOL_RECOMMENDATION_SCHEMA, null, 2)}`;
                             items: { type: 'string' }
                         }
                     }
-                }, { 
-                    model, 
+                }, {
+                    model,
                     temperature: 0.7,
-                    maxTokens: 1000 
+                    maxTokens: 2000  // Increased to prevent JSON truncation
                 });
 
                 // Parse the LLM response safely using the new extraction utility
@@ -4015,10 +4015,10 @@ Create a helpful, contextual hint that provides value without being intrusive. K
                         insights: { type: 'array', items: { type: 'string' } },
                         recommendations: { type: 'array', items: { type: 'string' } }
                     }
-                }, { 
-                    model, 
+                }, {
+                    model,
                     temperature: 0.7,
-                    maxTokens: 1000 
+                    maxTokens: 2000  // Increased to prevent JSON truncation
                 });
 
                 // Parse the LLM response safely using the new extraction utility

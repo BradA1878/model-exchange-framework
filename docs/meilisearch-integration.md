@@ -98,11 +98,11 @@ Discover cross-channel patterns:
 ```
 ✅ meilisearch npm package installed
 ✅ New Docker scripts in package.json:
-   - npm run docker:up
-   - npm run docker:down
-   - npm run docker:logs
-   - npm run docker:rebuild
-   - npm run docker:health
+   - bun run docker:up
+   - bun run docker:down
+   - bun run docker:logs
+   - bun run docker:rebuild
+   - bun run docker:health
 ```
 
 ---
@@ -136,17 +136,17 @@ openssl rand -base64 32  # Use for AGENT_API_KEY
 ./scripts/quick-start.sh
 
 # Option B: Manual deployment
-npm run docker:up
+bun run docker:up
 
 # View logs
-npm run docker:logs
+bun run docker:logs
 ```
 
 ### Step 3: Verify Installation
 
 ```bash
 # Check all services are healthy
-npm run docker:health
+bun run docker:health
 
 # Test MXF Server
 curl http://localhost:3001/health
@@ -155,7 +155,7 @@ curl http://localhost:3001/health
 curl http://localhost:7700/health
 
 # View Meilisearch stats
-npm run docker:meilisearch:stats
+bun run docker:meilisearch:stats
 ```
 
 ### Step 4: Test Semantic Search
@@ -359,13 +359,13 @@ npm test tests/meilisearch-integration.test.ts
 
 ```bash
 # 1. Start stack
-npm run docker:up
+bun run docker:up
 
 # 2. Run demo with semantic search
-NODE_ENV=test ENABLE_MEILISEARCH=true npm run demo:first-contact
+NODE_ENV=test ENABLE_MEILISEARCH=true bun run demo:first-contact
 
 # 3. Check logs for indexing activity
-npm run docker:logs | grep Meilisearch
+bun run docker:logs | grep Meilisearch
 
 # Expected output:
 # "Indexed conversation message: msg-123"
@@ -436,7 +436,7 @@ MEILI_MAX_INDEXING_MEMORY=1GB
 MEILI_MAX_INDEXING_THREADS=2
 
 # Restart
-npm run docker:restart
+bun run docker:restart
 ```
 
 ---
@@ -503,7 +503,7 @@ ENABLE_MEILISEARCH=true
 ENABLE_SEMANTIC_SEARCH=true
 
 # Restart MXF server
-npm run docker:restart mxf-server
+bun run docker:restart mxf-server
 ```
 
 ---
@@ -562,7 +562,7 @@ for (const msg of messages) {
 - **GitHub Issues**: Report bugs and feature requests
 - **Documentation**: See [deployment.md](./deployment.md) for deployment details
 - **Examples**: Check `examples/` for usage patterns
-- **Logs**: Always check logs first: `npm run docker:logs`
+- **Logs**: Always check logs first: `bun run docker:logs`
 
 ---
 

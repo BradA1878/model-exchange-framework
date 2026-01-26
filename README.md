@@ -5,7 +5,7 @@ Copyright 2024-2026 Brad Anderson
 
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](http://www.apache.org/licenses/LICENSE-2.0)
 [![Version](https://img.shields.io/badge/version-1.1.0-blue.svg)](https://github.com/BradA1878/model-exchange-framework)
-[![Node.js](https://img.shields.io/badge/node.js-18+-green.svg)](https://nodejs.org/)
+[![Node.js](https://img.shields.io/badge/node.js-20+-green.svg)](https://nodejs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.0+-blue.svg)](https://www.typescriptlang.org/)
 
 
@@ -163,7 +163,7 @@ MXP is a groundbreaking protocol that dramatically improves agent-to-agent commu
 #### **Quick MXP Setup**
 ```bash
 # Generate encryption keys
-npm run mxp:generate-key
+bun run mxp:generate-key
 
 # Add to .env
 MXP_ENCRYPTION_KEY=your-generated-key
@@ -348,7 +348,7 @@ MXF provides comprehensive REST APIs for complete framework management:
 - **LLM Provider API Key** (optional, for LLM-powered agents)
 
 **Option B: Local Development**
-- **Node.js 18+**
+- **Node.js 20+** (or Bun 1.1+ for fast package management)
 - **MongoDB** (local or cloud instance)
 - **LLM Provider API Key** (optional, for LLM-powered agents) - Choose from:
   - [OpenRouter](https://openrouter.ai/) - Access to 200+ models
@@ -385,13 +385,13 @@ openssl rand -base64 32  # AGENT_API_KEY
 nano .env
 
 # Deploy full stack (MXF + MongoDB + Meilisearch + Redis + Dashboard)
-npm run docker:up
+bun run docker:up
 
 # View logs
-npm run docker:logs
+bun run docker:logs
 
 # Check service health
-npm run docker:health
+bun run docker:health
 ```
 
 **Services deployed:**
@@ -410,8 +410,14 @@ npm run docker:health
 git clone https://github.com/BradA1878/model-exchange-framework
 cd model-exchange-framework
 
+# Install Bun (fast package manager and runtime)
+curl -fsSL https://bun.sh/install | bash
+
+# Add Bun to your PATH (restart terminal or run this)
+echo 'export PATH="$HOME/.bun/bin:$PATH"' >> ~/.zshrc && source ~/.zshrc
+
 # Install dependencies
-npm install
+bun install
 
 # Set up environment variables
 cp .env.example .env
@@ -419,11 +425,13 @@ cp .env.example .env
 # See .env.example for all supported providers
 
 # Build the project
-npm run build
+bun run build
 
 # Start development server
-npm run start:dev
+bun run start:dev
 ```
+
+> **Note:** MXF uses Bun for both package management and server execution.
 
 ### 🖥️ **Dashboard Interface**
 
@@ -433,12 +441,12 @@ MXF includes a modern Vue 3 dashboard for managing channels, agents, analytics, 
 
 ```bash
 # Start the MXF server (port 3001)
-npm run start:dev
+bun run start:dev
 
 # In another terminal, start the dashboard (port 5173)
 cd dashboard
 npm install
-npm run dev
+bun run dev
 ```
 
 **Dashboard Features:**
@@ -462,10 +470,10 @@ npm run dev
 
 ```bash
 # Start the MXF server (in one terminal)
-npm run start:dev
+bun run start:dev
 
 # Run the first contact demo (in another terminal)
-npm run demo:first-contact
+bun run demo:first-contact
 ```
 
 #### Fog of War Strategy Game
@@ -473,10 +481,10 @@ npm run demo:first-contact
 
 ```bash
 # Start the MXF server (in one terminal)
-npm run start:dev
+bun run start:dev
 
 # Run the fog of war demo (in another terminal)
-npm run demo:fog-of-war
+bun run demo:fog-of-war
 ```
 
 **What you'll see in First Contact:**
@@ -522,23 +530,23 @@ Explore our collection of multi-agent demos in the `/examples` directory:
 
 ```bash
 # Run demos with npm scripts
-npm run demo:first-contact    # First contact scenario (6 agents)
-npm run demo:fog-of-war       # Strategy game with 8 agents
-npm run demo:interview        # Interview scheduling demo
-npm run demo:external-mcp     # External MCP server registration
-npm run demo:channel-mcp      # Channel-scoped MCP registration
+bun run demo:first-contact    # First contact scenario (6 agents)
+bun run demo:fog-of-war       # Strategy game with 8 agents
+bun run demo:interview        # Interview scheduling demo
+bun run demo:external-mcp     # External MCP server registration
+bun run demo:channel-mcp      # Channel-scoped MCP registration
 
 # Game demos (run directly with ts-node)
-npx ts-node examples/tic-tac-toe/connect-agents.ts
-npx ts-node examples/go-fish/connect-agents.ts
-npx ts-node examples/twenty-questions/connect-agents.ts
+bun run examples/tic-tac-toe/connect-agents.ts
+bun run examples/go-fish/connect-agents.ts
+bun run examples/twenty-questions/connect-agents.ts
 ```
 
 ### 🧪 **Other Ways to Explore MXF**
 
 ```bash
 # Explore the codebase
-npm run start:dev                 # Start development server
+bun run start:dev                 # Start development server
 # Then connect your own agents using the MXF SDK
 
 # View interactive architecture diagram
@@ -721,13 +729,13 @@ src/
 
 ```bash
 # Start development server with hot reload
-npm run start:dev
+bun run start:dev
 
 # Build for production
-npm run build
+bun run build
 
 # Clean build artifacts
-npm run clean
+bun run clean
 ```
 
 ### Creating Custom Tools

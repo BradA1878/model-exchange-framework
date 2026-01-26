@@ -114,7 +114,7 @@ Twenty Questions is the perfect game to demonstrate ORPAR because:
 cd examples/twenty-questions
 npm install
 cd client && npm install && cd ..
-npm run game
+bun run game
 ```
 
 This starts both the game agents and the Vue.js dashboard at http://localhost:3007
@@ -124,7 +124,7 @@ This starts both the game agents and the Vue.js dashboard at http://localhost:30
 ```bash
 cd examples/twenty-questions
 npm install
-npm run connect-agents
+bun run connect-agents
 ```
 
 ### Dashboard Features

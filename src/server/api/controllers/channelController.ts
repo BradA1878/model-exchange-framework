@@ -1033,13 +1033,19 @@ export const updateChannel = async (req: Request, res: Response): Promise<void> 
             { new: true, runValidators: true }
         );
         
-        // Emit channel updated event
-        EventBus.server.emit('CHANNEL_UPDATED', {
+        // Emit channel updated event with proper payload structure
+        const agentId = (req as any).agent?.agentId || 'system';
+        const updatedPayload = createChannelEventPayload(
+            Events.Channel.UPDATED,
+            agentId,
             channelId,
-            updates,
-            updatedBy: (req as any).agent?.agentId || 'system',
-            timestamp: new Date()
-        });
+            {
+                action: 'updated' as ChannelActionType,
+                channelId,
+                updates
+            }
+        );
+        EventBus.server.emit(Events.Channel.UPDATED, updatedPayload);
         
         
         res.status(200).json({

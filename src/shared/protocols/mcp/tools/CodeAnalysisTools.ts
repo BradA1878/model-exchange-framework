@@ -20,6 +20,7 @@
 
 import { Logger } from '../../../utils/Logger';
 import { executeShellCommand } from './InfrastructureTools';
+import { paginationInputSchema, paginateArray, paginateMultipleArrays, checkResultSize } from '../../../utils/ToolPaginationUtils';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 
@@ -327,7 +328,7 @@ export const analyzeCodebaseTool = {
 
 export const findFunctionsTool = {
     name: 'find_functions',
-    description: 'Find function definitions and their signatures across the codebase',
+    description: 'Find function definitions and their signatures across the codebase. Supports pagination for large result sets.',
     inputSchema: {
         type: 'object',
         properties: {
@@ -345,15 +346,22 @@ export const findFunctionsTool = {
                 type: 'boolean',
                 default: true,
                 description: 'Include function signatures in results'
-            }
+            },
+            workingDirectory: {
+                type: 'string',
+                description: 'Working directory path (defaults to current directory)'
+            },
+            ...paginationInputSchema
         },
         required: ['functionName']
     },
     handler: async (args: any, context: any) => {
-        
+
         try {
-            const workingDir = process.cwd();
-            const functions: any[] = [];
+            const workingDir = args.workingDirectory || process.cwd();
+            const limit = args.limit ?? 50;
+            const offset = args.offset ?? 0;
+            const allFunctions: any[] = [];
 
             // Use ripgrep for fast searching
             const result = await executeShellCommand('rg', [
@@ -369,11 +377,11 @@ export const findFunctionsTool = {
 
             if (result.exitCode === 0 && result.stdout) {
                 const lines = result.stdout.split('\n').filter(l => l.trim());
-                
+
                 for (const line of lines) {
                     const [filePath, lineNumber, content] = line.split(':', 3);
                     if (filePath && lineNumber && content) {
-                        functions.push({
+                        allFunctions.push({
                             file: filePath,
                             line: parseInt(lineNumber),
                             content: content.trim(),
@@ -383,18 +391,24 @@ export const findFunctionsTool = {
                 }
             }
 
-            return {
+            // Apply pagination
+            const { items: functions, pagination } = paginateArray(allFunctions, limit, offset);
+
+            return checkResultSize({
                 success: true,
                 functions,
-                totalFound: functions.length,
+                ...pagination,  // totalCount, limit, offset, hasMore, nextOffset
                 error: null
-            };
+            }, 'find_functions', logger);
         } catch (error) {
             logger.error('Find functions failed', { error });
             return {
                 success: false,
                 functions: [],
-                totalFound: 0,
+                totalCount: 0,
+                limit: args.limit ?? 50,
+                offset: args.offset ?? 0,
+                hasMore: false,
                 error: error instanceof Error ? error.message : String(error)
             };
         }
@@ -403,7 +417,7 @@ export const findFunctionsTool = {
 
 export const traceDependenciesTool = {
     name: 'trace_dependencies',
-    description: 'Trace dependencies and imports for impact analysis',
+    description: 'Trace dependencies and imports for impact analysis. Supports pagination for large result sets.',
     inputSchema: {
         type: 'object',
         properties: {
@@ -421,23 +435,24 @@ export const traceDependenciesTool = {
                 type: 'number',
                 default: 3,
                 description: 'Maximum depth to trace dependencies'
-            }
+            },
+            workingDirectory: {
+                type: 'string',
+                description: 'Working directory path (defaults to current directory)'
+            },
+            ...paginationInputSchema
         },
         required: ['filePath']
     },
     handler: async (args: any, context: any) => {
-        
+
         try {
-            const workingDir = process.cwd();
-            const dependencies: {
-                imports: any[];
-                exports: any[];
-                dependents: any[];
-            } = {
-                imports: [],
-                exports: [],
-                dependents: []
-            };
+            const workingDir = args.workingDirectory || process.cwd();
+            const limit = args.limit ?? 50;
+            const offset = args.offset ?? 0;
+            const allImports: any[] = [];
+            const allExports: any[] = [];
+            const allDependents: any[] = [];
 
             // Read the target file
             const fullPath = path.resolve(workingDir, args.filePath);
@@ -448,7 +463,7 @@ export const traceDependenciesTool = {
                 const importRegex = /import\s+.*?\s+from\s+['"]([^'"]+)['"]/g;
                 let match;
                 while ((match = importRegex.exec(content)) !== null) {
-                    dependencies.imports.push({
+                    allImports.push({
                         module: match[1],
                         isRelative: match[1].startsWith('.'),
                         line: content.substring(0, match.index).split('\n').length
@@ -461,7 +476,7 @@ export const traceDependenciesTool = {
                 const exportRegex = /export\s+(?:default\s+)?(?:class|function|const|let|var|interface|type)\s+(\w+)/g;
                 let match;
                 while ((match = exportRegex.exec(content)) !== null) {
-                    dependencies.exports.push({
+                    allExports.push({
                         name: match[1],
                         line: content.substring(0, match.index).split('\n').length
                     });
@@ -471,7 +486,7 @@ export const traceDependenciesTool = {
             // Find files that import this file
             const relativePath = path.relative(workingDir, args.filePath);
             const importPattern = relativePath.replace(/\\/g, '/').replace(/\.(ts|tsx|js|jsx)$/, '');
-            
+
             const dependentsResult = await executeShellCommand('rg', [
                 '--type-add', 'code:*.{ts,tsx,js,jsx}',
                 '--type', 'code',
@@ -485,29 +500,38 @@ export const traceDependenciesTool = {
 
             if (dependentsResult.exitCode === 0 && dependentsResult.stdout) {
                 const lines = dependentsResult.stdout.split('\n').filter(l => l.trim());
-                
+
                 for (const line of lines) {
-                    const [filePath, lineNumber, content] = line.split(':', 3);
+                    const [filePath, lineNumber, lineContent] = line.split(':', 3);
                     if (filePath && lineNumber) {
-                        dependencies.dependents.push({
+                        allDependents.push({
                             file: filePath,
                             line: parseInt(lineNumber),
-                            content: content.trim()
+                            content: lineContent?.trim() ?? ''
                         });
                     }
                 }
             }
 
-            return {
+            // Apply pagination to each array
+            const { paginatedArrays, metadata } = paginateMultipleArrays(
+                { imports: allImports, exports: allExports, dependents: allDependents },
+                limit,
+                offset
+            );
+
+            return checkResultSize({
                 success: true,
-                dependencies,
+                dependencies: paginatedArrays,
+                pagination: metadata,  // Contains per-array metadata plus combinedTotalCount and anyHasMore
                 error: null
-            };
+            }, 'trace_dependencies', logger);
         } catch (error) {
             logger.error('Trace dependencies failed', { error });
             return {
                 success: false,
                 dependencies: null,
+                pagination: null,
                 error: error instanceof Error ? error.message : String(error)
             };
         }
@@ -516,7 +540,7 @@ export const traceDependenciesTool = {
 
 export const suggestRefactoringTool = {
     name: 'suggest_refactoring',
-    description: 'Analyze code and suggest refactoring opportunities',
+    description: 'Analyze code and suggest refactoring opportunities. Supports pagination for large result sets.',
     inputSchema: {
         type: 'object',
         properties: {
@@ -529,15 +553,22 @@ export const suggestRefactoringTool = {
                 enum: ['complexity', 'duplication', 'patterns', 'performance', 'all'],
                 default: 'all',
                 description: 'Type of analysis to perform'
-            }
+            },
+            workingDirectory: {
+                type: 'string',
+                description: 'Working directory path (defaults to current directory)'
+            },
+            ...paginationInputSchema
         },
         required: ['filePath']
     },
     handler: async (args: any, context: any) => {
-        
+
         try {
-            const workingDir = process.cwd();
-            const suggestions = [];
+            const workingDir = args.workingDirectory || process.cwd();
+            const limit = args.limit ?? 50;
+            const offset = args.offset ?? 0;
+            const allSuggestions: any[] = [];
 
             // Read the file
             const fullPath = path.resolve(workingDir, args.filePath);
@@ -547,7 +578,7 @@ export const suggestRefactoringTool = {
             // Analyze complexity
             if (args.analysisType === 'complexity' || args.analysisType === 'all') {
                 const complexFunctions = analyzeComplexity(content);
-                suggestions.push(...complexFunctions.map((f: any) => ({
+                allSuggestions.push(...complexFunctions.map((f: any) => ({
                     type: 'complexity',
                     severity: 'medium',
                     message: `Function '${f.name}' has high complexity (${f.complexity} lines)`,
@@ -559,7 +590,7 @@ export const suggestRefactoringTool = {
             // Analyze code duplication
             if (args.analysisType === 'duplication' || args.analysisType === 'all') {
                 const duplicates = findDuplication(lines);
-                suggestions.push(...duplicates.map((d: any) => ({
+                allSuggestions.push(...duplicates.map((d: any) => ({
                     type: 'duplication',
                     severity: 'low',
                     message: `Similar code block found at lines ${d.lines.join(', ')}`,
@@ -571,21 +602,27 @@ export const suggestRefactoringTool = {
             // Analyze patterns
             if (args.analysisType === 'patterns' || args.analysisType === 'all') {
                 const patterns = analyzePatterns(content);
-                suggestions.push(...patterns);
+                allSuggestions.push(...patterns);
             }
 
-            return {
+            // Apply pagination
+            const { items: suggestions, pagination } = paginateArray(allSuggestions, limit, offset);
+
+            return checkResultSize({
                 success: true,
                 suggestions,
-                totalSuggestions: suggestions.length,
+                ...pagination,  // totalCount, limit, offset, hasMore, nextOffset
                 error: null
-            };
+            }, 'suggest_refactoring', logger);
         } catch (error) {
             logger.error('Suggest refactoring failed', { error });
             return {
                 success: false,
                 suggestions: [],
-                totalSuggestions: 0,
+                totalCount: 0,
+                limit: args.limit ?? 50,
+                offset: args.offset ?? 0,
+                hasMore: false,
                 error: error instanceof Error ? error.message : String(error)
             };
         }
@@ -594,7 +631,7 @@ export const suggestRefactoringTool = {
 
 export const validateArchitectureTool = {
     name: 'validate_architecture',
-    description: 'Validate code changes against architectural principles and patterns',
+    description: 'Validate code changes against architectural principles and patterns. Supports pagination for large result sets.',
     inputSchema: {
         type: 'object',
         properties: {
@@ -608,50 +645,59 @@ export const validateArchitectureTool = {
                 items: { type: 'string' },
                 default: ['layering', 'dependencies', 'naming', 'patterns'],
                 description: 'Validation rules to apply'
-            }
+            },
+            ...paginationInputSchema
         },
         required: ['filePaths']
     },
     handler: async (args: any, context: any) => {
-        
+
         try {
-            const violations = [];
-            
+            const limit = args.limit ?? 50;
+            const offset = args.offset ?? 0;
+            const allViolations: any[] = [];
+
             for (const filePath of args.filePaths) {
                 const content = await fs.readFile(filePath, 'utf-8');
-                
+
                 // Validate layering
                 if (args.rules.includes('layering')) {
                     const layerViolations = validateLayering(filePath, content);
-                    violations.push(...layerViolations);
+                    allViolations.push(...layerViolations);
                 }
-                
+
                 // Validate dependencies
                 if (args.rules.includes('dependencies')) {
                     const depViolations = validateDependencies(filePath, content);
-                    violations.push(...depViolations);
+                    allViolations.push(...depViolations);
                 }
-                
+
                 // Validate naming
                 if (args.rules.includes('naming')) {
                     const namingViolations = validateNaming(filePath, content);
-                    violations.push(...namingViolations);
+                    allViolations.push(...namingViolations);
                 }
             }
-            
-            return {
+
+            // Apply pagination
+            const { items: violations, pagination } = paginateArray(allViolations, limit, offset);
+
+            return checkResultSize({
                 success: true,
                 violations,
-                totalViolations: violations.length,
-                isValid: violations.length === 0,
+                ...pagination,  // totalCount, limit, offset, hasMore, nextOffset
+                isValid: pagination.totalCount === 0,
                 error: null
-            };
+            }, 'validate_architecture', logger);
         } catch (error) {
             logger.error('Architecture validation failed', { error });
             return {
                 success: false,
                 violations: [],
-                totalViolations: 0,
+                totalCount: 0,
+                limit: args.limit ?? 50,
+                offset: args.offset ?? 0,
+                hasMore: false,
                 isValid: false,
                 error: error instanceof Error ? error.message : String(error)
             };

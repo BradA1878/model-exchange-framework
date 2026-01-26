@@ -72,62 +72,118 @@ export interface CoreSocketPayloads {
     'pong': any;
 }
 
-import { AgentEvents, AgentPayloads, AgentRegistrationEvent, AgentConnectionEvent } from './event-definitions/AgentEvents';
-export { AgentEvents, AgentPayloads, AgentRegistrationEvent, AgentConnectionEvent };
+import { AgentEvents } from './event-definitions/AgentEvents';
+import type { AgentPayloads, AgentRegistrationEvent, AgentConnectionEvent } from './event-definitions/AgentEvents';
+export { AgentEvents };
+export type { AgentPayloads, AgentRegistrationEvent, AgentConnectionEvent };
 
-import { MessageEvents, MessagePayloads, AgentMessageEvent } from './event-definitions/MessageEvents';
-export { MessageEvents, MessagePayloads, AgentMessageEvent };
+import { MessageEvents } from './event-definitions/MessageEvents';
+import type { MessagePayloads, AgentMessageEvent } from './event-definitions/MessageEvents';
+export { MessageEvents };
+export type { MessagePayloads, AgentMessageEvent };
 
-import { ChannelPayloads, Events as ChannelEventsInternal, ChannelActionType, ChannelActionTypes, ChannelCreationEvent } from './event-definitions/ChannelEvents';
-export { ChannelPayloads, ChannelEventsInternal as ChannelEvents, ChannelActionType, ChannelActionTypes, ChannelCreationEvent };
+import { Events as ChannelEventsInternal, ChannelActionTypes } from './event-definitions/ChannelEvents';
+import type { ChannelPayloads, ChannelActionType, ChannelCreationEvent } from './event-definitions/ChannelEvents';
+export { ChannelEventsInternal as ChannelEvents, ChannelActionTypes };
+export type { ChannelPayloads, ChannelActionType, ChannelCreationEvent };
 
-import { MemoryEvents as MemoryEventsInternal, MemoryPayloads, MemoryUpdateEvent, MemoryCreateEvent, MemoryScope, MemoryEvents,
-    MemoryGetEvent,
-    MemoryDeleteEvent,
-    MemorySyncEvent, } from './event-definitions/MemoryEvents';
-export { MemoryUpdateEvent, MemoryCreateEvent, MemoryScope, MemoryEvents, MemoryPayloads, MemoryGetEvent, MemoryDeleteEvent, MemorySyncEvent };
+import { MemoryEvents as MemoryEventsInternal, MemoryEvents } from './event-definitions/MemoryEvents';
+import type { MemoryPayloads, MemoryUpdateEvent, MemoryCreateEvent, MemoryScope, MemoryGetEvent, MemoryDeleteEvent, MemorySyncEvent } from './event-definitions/MemoryEvents';
+export { MemoryEvents };
+export type { MemoryPayloads, MemoryUpdateEvent, MemoryCreateEvent, MemoryScope, MemoryGetEvent, MemoryDeleteEvent, MemorySyncEvent };
 
-import { TaskEvents, TaskPayloads, TaskRequestEvent, TaskResponseEvent } from './event-definitions/TaskEvents';
-export { TaskEvents, TaskPayloads, TaskRequestEvent, TaskResponseEvent };
+import { TaskEvents } from './event-definitions/TaskEvents';
+import type { TaskPayloads, TaskRequestEvent, TaskResponseEvent } from './event-definitions/TaskEvents';
+export { TaskEvents };
+export type { TaskPayloads, TaskRequestEvent, TaskResponseEvent };
 
-import { LlmServiceEvents, LlmServicePayloads } from './event-definitions/LlmEvents';
-export { LlmServiceEvents, LlmServicePayloads };
+import { LlmServiceEvents } from './event-definitions/LlmEvents';
+import type { LlmServicePayloads } from './event-definitions/LlmEvents';
+export { LlmServiceEvents };
+export type { LlmServicePayloads };
 
-import { HeartbeatEvents, HeartbeatPayloads } from './event-definitions/HeartbeatEvents';
-export { HeartbeatEvents, HeartbeatPayloads };
+import { HeartbeatEvents } from './event-definitions/HeartbeatEvents';
+import type { HeartbeatPayloads } from './event-definitions/HeartbeatEvents';
+export { HeartbeatEvents };
+export type { HeartbeatPayloads };
 
-import { McpEvents, McpPayloads } from './event-definitions/McpEvents';
-export { McpEvents, McpPayloads };
+import { McpEvents } from './event-definitions/McpEvents';
+import type { McpPayloads } from './event-definitions/McpEvents';
+export { McpEvents };
+export type { McpPayloads };
 
-import { ControlLoopEvents, ControlLoopPayloads } from './event-definitions/ControlLoopEvents';
+import { ControlLoopEvents } from './event-definitions/ControlLoopEvents';
+import type { ControlLoopPayloads } from './event-definitions/ControlLoopEvents';
 export { ControlLoopEvents };
+export type { ControlLoopPayloads };
 
-import { OrparEvents, OrparPayloads } from './event-definitions/OrparEvents';
-export { OrparEvents, OrparPayloads };
+import { OrparEvents } from './event-definitions/OrparEvents';
+import type { OrparPayloads } from './event-definitions/OrparEvents';
+export { OrparEvents };
+export type { OrparPayloads };
 
 import { SystemEvents } from './event-definitions/SystemEvents';
 export { SystemEvents };
 
-import { AnalyticsEvents, AnalyticsPayloads } from './event-definitions/AnalyticsEvents';
-export { AnalyticsEvents, AnalyticsPayloads };
+import { AnalyticsEvents } from './event-definitions/AnalyticsEvents';
+import type { AnalyticsPayloads } from './event-definitions/AnalyticsEvents';
+export { AnalyticsEvents };
+export type { AnalyticsPayloads };
 
-import { ConfigEvents, ConfigPayloads } from './event-definitions/ConfigEvents';
-export { ConfigEvents, ConfigPayloads };
+import { ConfigEvents } from './event-definitions/ConfigEvents';
+import type { ConfigPayloads } from './event-definitions/ConfigEvents';
+export { ConfigEvents };
+export type { ConfigPayloads };
 
-import { BulkEvents, BulkPayloads } from './event-definitions/BulkEvents';
-export { BulkEvents, BulkPayloads };
+import { BulkEvents } from './event-definitions/BulkEvents';
+import type { BulkPayloads } from './event-definitions/BulkEvents';
+export { BulkEvents };
+export type { BulkPayloads };
 
-import { MxpEvents, MxpPayloads } from './event-definitions/MxpEvents';
-export { MxpEvents, MxpPayloads };
+import { MxpEvents } from './event-definitions/MxpEvents';
+import type { MxpPayloads } from './event-definitions/MxpEvents';
+export { MxpEvents };
+export type { MxpPayloads };
 
-import { KeyEvents, KeyPayloads } from './event-definitions/KeyEvents';
-export { KeyEvents, KeyPayloads };
+import { KeyEvents } from './event-definitions/KeyEvents';
+import type { KeyPayloads } from './event-definitions/KeyEvents';
+export { KeyEvents };
+export type { KeyPayloads };
 
-import { MeilisearchEvents, MeilisearchPayloads } from './event-definitions/MeilisearchEvents';
-export { MeilisearchEvents, MeilisearchPayloads };
+import { MeilisearchEvents } from './event-definitions/MeilisearchEvents';
+import type { MeilisearchPayloads } from './event-definitions/MeilisearchEvents';
+export { MeilisearchEvents };
+export type { MeilisearchPayloads };
 
-import { CodeExecutionEvents, CodeExecutionPayloads } from './event-definitions/CodeExecutionEvents';
-export { CodeExecutionEvents, CodeExecutionPayloads };
+import { CodeExecutionEvents } from './event-definitions/CodeExecutionEvents';
+import type { CodeExecutionPayloads } from './event-definitions/CodeExecutionEvents';
+export { CodeExecutionEvents };
+export type { CodeExecutionPayloads };
+
+import { WorkflowEvents } from './event-definitions/WorkflowEvents';
+import type { WorkflowPayloads } from './event-definitions/WorkflowEvents';
+export { WorkflowEvents };
+export type { WorkflowPayloads };
+
+import { InferenceParameterEvents } from './event-definitions/InferenceParameterEvents';
+import type { InferenceParameterPayloads } from './event-definitions/InferenceParameterEvents';
+export { InferenceParameterEvents };
+export type { InferenceParameterPayloads };
+
+import { PlanEvents } from './event-definitions/PlanEvents';
+import type { PlanPayloads, PlanStepCompletedEventData } from './event-definitions/PlanEvents';
+export { PlanEvents };
+export type { PlanPayloads, PlanStepCompletedEventData };
+
+import { MemoryUtilityEvents } from './event-definitions/MemoryUtilityEvents';
+import type { MemoryUtilityPayloads } from './event-definitions/MemoryUtilityEvents';
+export { MemoryUtilityEvents };
+export type { MemoryUtilityPayloads };
+
+import { OrparMemoryEvents } from './event-definitions/OrparMemoryEvents';
+import type { OrparMemoryPayloads } from './event-definitions/OrparMemoryEvents';
+export { OrparMemoryEvents };
+export type { OrparMemoryPayloads };
 
 /**
  * Socket Authentication Events
@@ -162,6 +218,11 @@ export namespace Events {
     export const Mxp = MxpEvents;
     export const Meilisearch = MeilisearchEvents;
     export const CodeExecution = CodeExecutionEvents;
+    export const Workflow = WorkflowEvents;
+    export const InferenceParameter = InferenceParameterEvents;
+    export const Plan = PlanEvents;
+    export const MemoryUtility = MemoryUtilityEvents;
+    export const OrparMemory = OrparMemoryEvents;
 }
 
 /**
@@ -185,7 +246,12 @@ export type EventMap =
     BulkPayloads &
     MxpPayloads &
     MeilisearchPayloads &
-    CodeExecutionPayloads;
+    CodeExecutionPayloads &
+    WorkflowPayloads &
+    InferenceParameterPayloads &
+    PlanPayloads &
+    MemoryUtilityPayloads &
+    OrparMemoryPayloads;
 
 /**
  * Event name type - any valid event name
