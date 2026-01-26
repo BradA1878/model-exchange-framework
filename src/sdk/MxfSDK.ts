@@ -55,12 +55,11 @@
  */
 
 import { v4 as uuidv4 } from 'uuid';
-import { Subscription } from 'rxjs';
 import { Events } from '../shared/events/EventNames';
+import { EventBus } from '../shared/events/EventBus';
 import { McpEvents } from '../shared/events/event-definitions/McpEvents';
 import { MxfAgent } from './MxfAgent';
 import { MxfChannelMonitor } from './MxfChannelMonitor';
-import { SdkEventBus } from './events/SdkEventBus';
 import { Logger } from '../shared/utils/Logger';
 import { createBaseEventPayload } from '../shared/schemas/EventPayloadSchema';
 import { LlmProviderType } from '../shared/protocols/mcp/LlmProviders';
@@ -144,9 +143,7 @@ export class MxfSDK {
     private userToken: string | null = null;
     private agents: Map<string, MxfAgent> = new Map();
     private userId: string = 'sdk-user';  // Default user ID for socket events
-    private sdkEventBus: SdkEventBus = new SdkEventBus();  // EventBus for SDK operations
     private channelMonitors: Map<string, MxfChannelMonitor> = new Map();  // Track channel monitors for cleanup
-    private monitorEventSubscription: Subscription | null = null;  // Event forwarding subscription
 
     constructor(config: MxfSDKConfig) {
         // Validate required config
@@ -236,16 +233,9 @@ export class MxfSDK {
                     this.userId = data.userId;
                 }
 
-                // Initialize SdkEventBus with the authenticated socket
-                this.sdkEventBus.setSocket(this.socket!);
-
-                // Set up event forwarding to channel monitors
-                this.monitorEventSubscription = this.sdkEventBus.onAll((eventType, payload) => {
-                    // Forward events to all channel monitors
-                    for (const monitor of this.channelMonitors.values()) {
-                        monitor.emit(eventType, payload);
-                    }
-                });
+                // Initialize EventBus.client with the authenticated socket
+                // This sets up socket.onAny() forwarding via a closure over this socket
+                EventBus.client.setClientSocket(this.socket!);
 
                 resolve();
             });
@@ -373,8 +363,8 @@ export class MxfSDK {
                 reject(new Error('Channel creation timeout'));
             }, 10000);
 
-            // Listen for success via SdkEventBus
-            const createdSub = this.sdkEventBus.on(Events.Channel.CREATED, async (payload: any) => {
+            // Listen for success via EventBus.client
+            const createdSub = EventBus.client.on(Events.Channel.CREATED, async (payload: any) => {
                 if (payload.channelId === channelId) {
                     clearTimeout(timeout);
                     createdSub.unsubscribe();
@@ -398,8 +388,8 @@ export class MxfSDK {
                 }
             });
 
-            // Listen for failure via SdkEventBus
-            const failedSub = this.sdkEventBus.on(Events.Channel.CREATION_FAILED, (payload: any) => {
+            // Listen for failure via EventBus.client
+            const failedSub = EventBus.client.on(Events.Channel.CREATION_FAILED, (payload: any) => {
                 if (payload.channelId === channelId) {
                     clearTimeout(timeout);
                     createdSub.unsubscribe();
@@ -428,8 +418,8 @@ export class MxfSDK {
                 payloadData
             );
 
-            // Emit via SdkEventBus
-            this.sdkEventBus.emit(Events.Channel.CREATE, payload);
+            // Emit via EventBus.client
+            EventBus.client.emit(Events.Channel.CREATE, payload);
         });
     }
 
@@ -463,8 +453,8 @@ export class MxfSDK {
             let registeredSub: any;
             let failedSub: any;
 
-            // Handler for successful registration via SdkEventBus
-            registeredSub = this.sdkEventBus.on(McpEvents.CHANNEL_SERVER_REGISTERED, (payload: any) => {
+            // Handler for successful registration via EventBus.client
+            registeredSub = EventBus.client.on(McpEvents.CHANNEL_SERVER_REGISTERED, (payload: any) => {
                 if (payload.data?.serverId === serverConfig.id &&
                     payload.data?.scopeId === channelId &&
                     !registrationCompleted) {
@@ -477,8 +467,8 @@ export class MxfSDK {
                 }
             });
 
-            // Handler for registration failure via SdkEventBus
-            failedSub = this.sdkEventBus.on(McpEvents.CHANNEL_SERVER_REGISTRATION_FAILED, (payload: any) => {
+            // Handler for registration failure via EventBus.client
+            failedSub = EventBus.client.on(McpEvents.CHANNEL_SERVER_REGISTRATION_FAILED, (payload: any) => {
                 if (payload.data?.serverId === serverConfig.id && !registrationCompleted) {
                     registrationCompleted = true;
                     registeredSub.unsubscribe();
@@ -488,7 +478,7 @@ export class MxfSDK {
                 }
             });
 
-            // Emit registration request via SdkEventBus
+            // Emit registration request via EventBus.client
             const registrationPayload = {
                 eventId: uuidv4(),
                 eventType: McpEvents.CHANNEL_SERVER_REGISTER,
@@ -501,7 +491,7 @@ export class MxfSDK {
                 }
             };
 
-            this.sdkEventBus.emit(McpEvents.CHANNEL_SERVER_REGISTER, registrationPayload);
+            EventBus.client.emit(McpEvents.CHANNEL_SERVER_REGISTER, registrationPayload);
 
             // Timeout after 30 seconds
             setTimeout(() => {
@@ -530,8 +520,8 @@ export class MxfSDK {
         return new Promise((resolve, reject) => {
             let completed = false;
 
-            // Handler for unregistration response via SdkEventBus
-            const responseSub = this.sdkEventBus.on(McpEvents.CHANNEL_SERVER_UNREGISTERED, (payload: any) => {
+            // Handler for unregistration response via EventBus.client
+            const responseSub = EventBus.client.on(McpEvents.CHANNEL_SERVER_UNREGISTERED, (payload: any) => {
                 if (payload.data?.serverId === serverId && !completed) {
                     completed = true;
                     responseSub.unsubscribe();
@@ -539,8 +529,8 @@ export class MxfSDK {
                 }
             });
 
-            // Emit unregistration request via SdkEventBus
-            this.sdkEventBus.emit(McpEvents.CHANNEL_SERVER_UNREGISTER, {
+            // Emit unregistration request via EventBus.client
+            EventBus.client.emit(McpEvents.CHANNEL_SERVER_UNREGISTER, {
                 eventId: uuidv4(),
                 eventType: McpEvents.CHANNEL_SERVER_UNREGISTER,
                 timestamp: Date.now(),
@@ -581,8 +571,8 @@ export class MxfSDK {
                 reject(new Error('Key generation timeout'));
             }, 10000);
 
-            // Listen for success via SdkEventBus
-            const generatedSub = this.sdkEventBus.on(Events.Key.GENERATED, (payload: any) => {
+            // Listen for success via EventBus.client
+            const generatedSub = EventBus.client.on(Events.Key.GENERATED, (payload: any) => {
                 if (payload.data.channelId === channelId) {
                     clearTimeout(timeout);
                     generatedSub.unsubscribe();
@@ -595,8 +585,8 @@ export class MxfSDK {
                 }
             });
 
-            // Listen for failure via SdkEventBus
-            const failedSub = this.sdkEventBus.on(Events.Key.GENERATION_FAILED, (payload: any) => {
+            // Listen for failure via EventBus.client
+            const failedSub = EventBus.client.on(Events.Key.GENERATION_FAILED, (payload: any) => {
                 if (payload.data?.channelId === channelId) {
                     clearTimeout(timeout);
                     generatedSub.unsubscribe();
@@ -605,7 +595,7 @@ export class MxfSDK {
                 }
             });
 
-            // Emit key generation event via SdkEventBus
+            // Emit key generation event via EventBus.client
             const payload = createBaseEventPayload(
                 Events.Key.GENERATE,
                 this.userId,
@@ -618,7 +608,7 @@ export class MxfSDK {
                 }
             );
 
-            this.sdkEventBus.emit(Events.Key.GENERATE, payload);
+            EventBus.client.emit(Events.Key.GENERATE, payload);
         });
     }
 
@@ -678,8 +668,8 @@ export class MxfSDK {
                 let errorSub: any;
                 let toolsSub: any;
 
-                // Set up handler for registration response via SdkEventBus
-                registeredSub = this.sdkEventBus.on(McpEvents.EXTERNAL_SERVER_REGISTERED, (payload: any) => {
+                // Set up handler for registration response via EventBus.client
+                registeredSub = EventBus.client.on(McpEvents.EXTERNAL_SERVER_REGISTERED, (payload: any) => {
                     if (payload.data?.serverId === serverConfig.id && !registrationCompleted) {
                         if (!payload.data?.success) {
                             registrationCompleted = true;
@@ -694,7 +684,7 @@ export class MxfSDK {
                 });
 
                 // Set up handler for tool discovery (this is when tools are actually available)
-                toolsSub = this.sdkEventBus.on(McpEvents.EXTERNAL_SERVER_TOOLS_DISCOVERED, (payload: any) => {
+                toolsSub = EventBus.client.on(McpEvents.EXTERNAL_SERVER_TOOLS_DISCOVERED, (payload: any) => {
                     if (!registrationCompleted) {
                         const discoveredTools = payload.data?.tools?.map((t: any) => t.name) || [];
 
@@ -707,8 +697,8 @@ export class MxfSDK {
                     }
                 });
 
-                // Set up handler for registration failure via SdkEventBus
-                errorSub = this.sdkEventBus.on(McpEvents.EXTERNAL_SERVER_REGISTRATION_FAILED, (payload: any) => {
+                // Set up handler for registration failure via EventBus.client
+                errorSub = EventBus.client.on(McpEvents.EXTERNAL_SERVER_REGISTRATION_FAILED, (payload: any) => {
                     if (payload.data?.serverId === serverConfig.id && !registrationCompleted) {
                         registrationCompleted = true;
                         registeredSub.unsubscribe();
@@ -719,8 +709,8 @@ export class MxfSDK {
                     }
                 });
 
-                // Emit registration request via SdkEventBus
-                this.sdkEventBus.emit(McpEvents.EXTERNAL_SERVER_REGISTER, {
+                // Emit registration request via EventBus.client
+                EventBus.client.emit(McpEvents.EXTERNAL_SERVER_REGISTER, {
                     eventId: uuidv4(),
                     eventType: McpEvents.EXTERNAL_SERVER_REGISTER,
                     timestamp: Date.now(),
@@ -764,8 +754,8 @@ export class MxfSDK {
             try {
                 let completed = false;
 
-                // Set up handler for response via SdkEventBus
-                const responseSub = this.sdkEventBus.on(McpEvents.EXTERNAL_SERVER_UNREGISTERED, (payload: any) => {
+                // Set up handler for response via EventBus.client
+                const responseSub = EventBus.client.on(McpEvents.EXTERNAL_SERVER_UNREGISTERED, (payload: any) => {
                     if (payload.data?.serverId === serverId && !completed) {
                         completed = true;
                         responseSub.unsubscribe();
@@ -779,8 +769,8 @@ export class MxfSDK {
                     }
                 });
 
-                // Emit unregistration request via SdkEventBus
-                this.sdkEventBus.emit(McpEvents.EXTERNAL_SERVER_UNREGISTER, {
+                // Emit unregistration request via EventBus.client
+                EventBus.client.emit(McpEvents.EXTERNAL_SERVER_UNREGISTER, {
                     eventId: uuidv4(),
                     eventType: McpEvents.EXTERNAL_SERVER_UNREGISTER,
                     timestamp: Date.now(),
@@ -819,12 +809,6 @@ export class MxfSDK {
             }
         }
 
-        // Unsubscribe from event forwarding
-        if (this.monitorEventSubscription) {
-            this.monitorEventSubscription.unsubscribe();
-            this.monitorEventSubscription = null;
-        }
-
         // Destroy all channel monitors
         for (const monitor of this.channelMonitors.values()) {
             try {
@@ -834,9 +818,6 @@ export class MxfSDK {
             }
         }
         this.channelMonitors.clear();
-
-        // Cleanup SdkEventBus before disconnecting socket
-        this.sdkEventBus.cleanup();
 
         // Disconnect SDK socket
         if (this.socket) {

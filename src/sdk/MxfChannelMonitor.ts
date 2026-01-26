@@ -25,12 +25,12 @@
  * This class allows subscribing to events that occur in a specific channel
  * without needing to create a full agent.
  *
- * This is a lightweight wrapper that receives forwarded events from SdkEventBus
- * and filters them to only events for this channel.
+ * Subscribes directly to EventBus.client and filters events by channelId.
  */
 
-import { Subject, Subscription, filter, map } from 'rxjs';
-import { AnyEventName, EventHandler, EventMessage } from '../shared/events/EventBusBase';
+import { Subscription } from 'rxjs';
+import { EventBus } from '../shared/events/EventBus';
+import { AnyEventName, EventHandler } from '../shared/events/EventBusBase';
 import { Logger } from '../shared/utils/Logger';
 
 const logger = new Logger('warn', 'MxfChannelMonitor', 'client');
@@ -56,7 +56,6 @@ const logger = new Logger('warn', 'MxfChannelMonitor', 'client');
  */
 export class MxfChannelMonitor {
     private channelId: string;
-    private eventSubject: Subject<EventMessage>;
     private subscriptions: Map<string, Subscription[]> = new Map();
     private isDestroyed: boolean = false;
 
@@ -64,15 +63,13 @@ export class MxfChannelMonitor {
      * Create a new channel monitor
      *
      * @param channelId The ID of the channel to monitor
-     * @param eventSubject Optional event subject (for testing or custom event sources)
      */
-    constructor(channelId: string, eventSubject?: Subject<EventMessage>) {
+    constructor(channelId: string) {
         if (!channelId) {
             throw new Error('channelId is required for MxfChannelMonitor');
         }
 
         this.channelId = channelId;
-        this.eventSubject = eventSubject || new Subject<EventMessage>();
         logger.info(`[MxfChannelMonitor] Created monitor for channel: ${channelId}`);
     }
 
@@ -96,25 +93,18 @@ export class MxfChannelMonitor {
             throw new Error(`Cannot subscribe to event '${event}' on destroyed monitor for channel: ${this.channelId}`);
         }
 
-        // Create a filtered observable for this specific event in this channel
-        const observable = this.eventSubject.pipe(
-            filter((e: EventMessage) => {
-                // Match event type
-                if (e.type !== event) return false;
+        // Subscribe to EventBus.client and filter by channelId
+        // Strict filtering: only allow events that explicitly belong to this channel
+        const subscription = EventBus.client.on(event, (payload: any) => {
+            // Only process events that have a matching channelId
+            // Events without channelId are filtered out to prevent cross-channel noise
+            if (payload && typeof payload === 'object' && payload.channelId === this.channelId) {
+                handler(payload);
+            }
+            // Non-object payloads and events without channelId are ignored
+        });
 
-                // Filter to only events for this channel
-                const payload = e.payload;
-                if (payload && typeof payload === 'object') {
-                    return payload.channelId === this.channelId;
-                }
-                return true; // If no channelId in payload, let it through
-            }),
-            map((e: EventMessage) => e.payload)
-        );
-
-        const subscription = observable.subscribe(handler);
-
-        // Track subscriptions by event
+        // Track subscription by event
         if (!this.subscriptions.has(event)) {
             this.subscriptions.set(event, []);
         }
@@ -147,24 +137,6 @@ export class MxfChannelMonitor {
     }
 
     /**
-     * Emit an event to this monitor's subscribers
-     * This is used internally to forward events from the SDK's EventBus
-     *
-     * @param eventType Event type
-     * @param payload Event payload
-     */
-    public emit(eventType: string, payload: any): void {
-        if (this.isDestroyed) {
-            return;
-        }
-
-        this.eventSubject.next({
-            type: eventType,
-            payload
-        });
-    }
-
-    /**
      * Clean up all subscriptions and destroy the monitor
      */
     public destroy(): void {
@@ -176,9 +148,6 @@ export class MxfChannelMonitor {
 
         // Unsubscribe from all events
         this.removeAllListeners();
-
-        // Complete the subject
-        this.eventSubject.complete();
 
         this.isDestroyed = true;
     }
