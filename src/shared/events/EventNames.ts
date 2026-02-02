@@ -185,6 +185,21 @@ import type { OrparMemoryPayloads } from './event-definitions/OrparMemoryEvents'
 export { OrparMemoryEvents };
 export type { OrparMemoryPayloads };
 
+import { DagEvents } from './event-definitions/DagEvents';
+import type { DagPayloads } from './event-definitions/DagEvents';
+export { DagEvents };
+export type { DagPayloads };
+
+import { KnowledgeGraphEvents } from './event-definitions/KnowledgeGraphEvents';
+import type { KnowledgeGraphPayloads } from './event-definitions/KnowledgeGraphEvents';
+export { KnowledgeGraphEvents };
+export type { KnowledgeGraphPayloads };
+
+import { TensorFlowEvents } from './event-definitions/TensorFlowEvents';
+import type { TensorFlowPayloads } from './event-definitions/TensorFlowEvents';
+export { TensorFlowEvents };
+export type { TensorFlowPayloads };
+
 /**
  * Socket Authentication Events
  * Used for socket authentication success/failure communication
@@ -223,6 +238,9 @@ export namespace Events {
     export const Plan = PlanEvents;
     export const MemoryUtility = MemoryUtilityEvents;
     export const OrparMemory = OrparMemoryEvents;
+    export const Dag = DagEvents;
+    export const KnowledgeGraph = KnowledgeGraphEvents;
+    export const TensorFlow = TensorFlowEvents;
 }
 
 /**
@@ -251,7 +269,10 @@ export type EventMap =
     InferenceParameterPayloads &
     PlanPayloads &
     MemoryUtilityPayloads &
-    OrparMemoryPayloads;
+    OrparMemoryPayloads &
+    DagPayloads &
+    KnowledgeGraphPayloads &
+    TensorFlowPayloads;
 
 /**
  * Event name type - any valid event name

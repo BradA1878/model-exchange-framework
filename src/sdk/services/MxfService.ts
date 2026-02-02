@@ -267,8 +267,8 @@ export class MxfService implements IInternalChannelService {
                         // Don't clear timeout yet - we still need to wait for CONNECTED event
                         // The timeout protects against both socket connection AND server response delays
                         
-                        // Set the socket for event forwarding
-                        EventBus.client.setClientSocket(this.socket);
+                        // Register this agent's socket in the registry (does not overwrite the primary admin socket)
+                        EventBus.client.registerSocket(this.agentId!, this.socket);
 
                         // Set up control loop socket listeners now that socket is available
                         this.setupControlLoopSocketListeners();
@@ -310,7 +310,7 @@ export class MxfService implements IInternalChannelService {
                             }
                         );
                         
-                        EventBus.client.emit(AgentEvents.CONNECT, payload);
+                        EventBus.client.emitOn(this.agentId!, AgentEvents.CONNECT, payload);
                     });
                     
                     // Handle socket connection errors
@@ -343,7 +343,7 @@ export class MxfService implements IInternalChannelService {
                         }
                     );
                     
-                    EventBus.client.emit(AgentEvents.CONNECT, payload);
+                    EventBus.client.emitOn(this.agentId!, AgentEvents.CONNECT, payload);
                 }
             });
         } catch (error) {
@@ -386,8 +386,9 @@ export class MxfService implements IInternalChannelService {
                     socketId: this.socket.id
                 };
                 
-                EventBus.client.emit(
-                    AgentEvents.CONNECT, 
+                EventBus.client.emitOn(
+                    this.agentId!,
+                    AgentEvents.CONNECT,
                     createAgentEventPayload(
                         AgentEvents.CONNECT,
                         agentId,
@@ -415,8 +416,9 @@ export class MxfService implements IInternalChannelService {
                     reason: reason
                 };
                 
-                EventBus.client.emit(
-                    AgentEvents.DISCONNECT, 
+                EventBus.client.emitOn(
+                    this.agentId!,
+                    AgentEvents.DISCONNECT,
                     createAgentEventPayload(
                         AgentEvents.DISCONNECT,
                         agentId,
@@ -487,8 +489,8 @@ export class MxfService implements IInternalChannelService {
             }
         );
         
-        // Emit LEAVE event via EventBus
-        EventBus.client.emit(Events.Agent.LEAVE_CHANNEL, payload);
+        // Emit LEAVE event via EventBus through agent socket
+        EventBus.client.emitOn(this.agentId!, Events.Agent.LEAVE_CHANNEL, payload);
     }
 
     /**
@@ -557,8 +559,8 @@ export class MxfService implements IInternalChannelService {
                 {}                              // Options (empty object if none specific)
             );
             
-            // Send the properly structured EventPayload via socket
-            EventBus.client.emit(Events.Message.CHANNEL_MESSAGE, eventPayload);
+            // Send the properly structured EventPayload via agent socket
+            EventBus.client.emitOn(this.agentId!, Events.Message.CHANNEL_MESSAGE, eventPayload);
             
             return messageId;
         } catch (error: unknown) {
@@ -601,8 +603,9 @@ export class MxfService implements IInternalChannelService {
         // Listen for task events relevant to this agent/channel
         this.setupTaskEventListeners();
 
-        // Set up socket listeners for server-sent control loop events (REASONING, PLAN, etc.)
-        this.setupControlLoopSocketListeners();
+        // Note: setupControlLoopSocketListeners() is called inside the socket 'connect' handler
+        // where the socket actually exists. Calling it here would always fail because this.socket
+        // is null until connect() runs.
     }
 
     /**
@@ -688,7 +691,7 @@ export class MxfService implements IInternalChannelService {
             OrparEvents.ERROR
         ];
 
-        // Forward all control loop events
+        // Forward all control loop events through agent socket
         controlLoopEventsToForward.forEach(eventName => {
             this.socket!.on(eventName, (payload: any) => {
                 // Only forward events for this channel
@@ -697,11 +700,11 @@ export class MxfService implements IInternalChannelService {
                 }
 
                 // Forward the event to EventBus.client so SDK components can receive it
-                EventBus.client.emit(eventName, payload);
+                EventBus.client.emitOn(this.agentId!, eventName, payload);
             });
         });
 
-        // Forward all ORPAR events (agent-driven cognitive documentation)
+        // Forward all ORPAR events (agent-driven cognitive documentation) through agent socket
         orparEventsToForward.forEach(eventName => {
             this.socket!.on(eventName, (payload: any) => {
                 // Only forward events for this channel
@@ -710,7 +713,7 @@ export class MxfService implements IInternalChannelService {
                 }
 
                 // Forward the event to EventBus.client so SDK components can receive it
-                EventBus.client.emit(eventName, payload);
+                EventBus.client.emitOn(this.agentId!, eventName, payload);
             });
         });
 
@@ -833,10 +836,10 @@ export class MxfService implements IInternalChannelService {
         const eventsToProcess = [...this.pendingEvents];
         this.pendingEvents = [];
         
-        // Emit all pending events through EventBus
-        // Assumption: pendingEvent.data is the fully-formed, correct payload that was originally passed to EventBus.client.emit
+        // Emit all pending events through agent socket
+        // Assumption: pendingEvent.data is the fully-formed, correct payload that was originally passed to emitOn
         for (const pendingEvent of eventsToProcess) {
-            EventBus.client.emit(pendingEvent.event, pendingEvent.data);
+            EventBus.client.emitOn(this.agentId!, pendingEvent.event, pendingEvent.data);
         }
     }
 
@@ -845,14 +848,26 @@ export class MxfService implements IInternalChannelService {
      */
     public async disconnect(): Promise<void> {
         try {
-            
+
+            // Clean up all channel event listener subscriptions to prevent
+            // lingering RxJS handlers from keeping the event loop alive
+            for (const [, subscriptions] of this.channelEventListeners.entries()) {
+                subscriptions.forEach(sub => sub.unsubscribe());
+            }
+            this.channelEventListeners.clear();
+
+            // Unregister this agent's socket from the EventBus registry
+            if (this.agentId) {
+                EventBus.client.unregisterSocket(this.agentId);
+            }
+
             if (this.socket) {
                 this.socket.disconnect();
                 this.socket = null;
             }
-            
+
             this.connected = false;
-            
+
         } catch (error) {
             this.logger.error(`[Channel:${this.channelId}] Error during disconnect:`, error);
             throw error;
@@ -991,7 +1006,7 @@ export class MxfService implements IInternalChannelService {
                         // metadata can be omitted if not needed
                     };
 
-                    EventBus.client.emit(MemoryEvents.UPDATE, memoryUpdatePayload);
+                    EventBus.client.emitOn(this.agentId!, MemoryEvents.UPDATE, memoryUpdatePayload);
                 } catch (eventError) {
                     const eventErrorMessage = eventError instanceof Error ? eventError.message : String(eventError);
                     this.logger.error(`[Channel:${this.channelId}] Error emitting ${MemoryEvents.UPDATE} event: ${eventErrorMessage}`);
@@ -1163,7 +1178,7 @@ export class MxfService implements IInternalChannelService {
                         agentId: targetAgentId // The agent that joined
                     }
                 );
-                EventBus.client.emit(ChannelEvents.AGENT_JOINED, eventPayload);
+                EventBus.client.emitOn(this.agentId!, ChannelEvents.AGENT_JOINED, eventPayload);
             }
             
             return success;
@@ -1200,7 +1215,7 @@ export class MxfService implements IInternalChannelService {
                         agentId: targetAgentId // The agent that left
                     }
                 );
-                EventBus.client.emit(ChannelEvents.AGENT_LEFT, eventPayload);
+                EventBus.client.emitOn(this.agentId!, ChannelEvents.AGENT_LEFT, eventPayload);
             }
             
             return success;
@@ -1389,7 +1404,7 @@ export class MxfService implements IInternalChannelService {
                             context: updatedContext // The full updated context
                         }
                     );
-                    EventBus.client.emit(ChannelEvents.CONTEXT.UPDATED, eventPayload); // Corrected event name
+                    EventBus.client.emitOn(this.agentId!, ChannelEvents.CONTEXT.UPDATED, eventPayload); // Route through agent socket
                 } catch (eventError) {
                     const eventErrorMessage = eventError instanceof Error ? eventError.message : String(eventError);
                     this.logger.error(`[Channel:${this.channelId}] Error emitting ${ChannelEvents.CONTEXT.UPDATED} for context update: ${eventErrorMessage}`); // Corrected event name

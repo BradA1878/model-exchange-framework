@@ -105,6 +105,15 @@ export class OrparMemoryCoordinator {
     // Active cycle tracking
     private activeCycles: Map<string, OrparCycleState> = new Map();
 
+    // Recently completed cycles for retroactive reward recalculation when
+    // task_complete fires after ORPAR cycle ends. Auto-expires after TTL.
+    private recentlyCompletedCycles: Map<string, {
+        cycleMemoryUsage: CycleMemoryUsage;
+        outcome: CycleOutcome;
+        completedAt: number;
+    }> = new Map();
+    private static readonly RECENTLY_COMPLETED_TTL_MS = 60_000;
+
     // Fix #2: Per-cycle locking to prevent race conditions
     private cycleProcessingLocks: Set<string> = new Set();
 
@@ -314,7 +323,15 @@ export class OrparMemoryCoordinator {
             this.onOrparToolEvent('reflection', payload);
         });
 
-        this.logger.debug('[OrparMemoryCoordinator] Event listeners registered for ControlLoop and OrparTools');
+        // Listen for task completion to retroactively update rewards when
+        // the ORPAR cycle completed before task_complete was called
+        EventBus.server.on(Events.Task.COMPLETED, (payload: any) => {
+            if (this.enabled) {
+                this.onTaskCompleted(payload);
+            }
+        });
+
+        this.logger.debug('[OrparMemoryCoordinator] Event listeners registered for ControlLoop, OrparTools, and TaskEvents');
     }
 
     /**
@@ -619,6 +636,21 @@ export class OrparMemoryCoordinator {
         // Clean up surprise momentum
         this.surpriseAdapter.clearMomentum(cycleId);
 
+        // Retain cycle data for retroactive reward recalculation if task_complete
+        // fires after ORPAR cycle ends
+        const taskId = cycleState.memoryUsage.taskId;
+        if (taskId) {
+            const cacheKey = `${cycleState.agentId}:${taskId}`;
+            this.recentlyCompletedCycles.set(cacheKey, {
+                cycleMemoryUsage: cycleState.memoryUsage,
+                outcome,
+                completedAt: Date.now(),
+            });
+            setTimeout(() => {
+                this.recentlyCompletedCycles.delete(cacheKey);
+            }, OrparMemoryCoordinator.RECENTLY_COMPLETED_TTL_MS);
+        }
+
         // Remove from active cycles
         this.activeCycles.delete(cycleId);
 
@@ -626,6 +658,56 @@ export class OrparMemoryCoordinator {
             `[OrparMemoryCoordinator] Completed cycle ${cycleId} ` +
             `(duration: ${totalDurationMs}ms, memories: ${memoriesUsedCount}, rewards: ${updated})`
         );
+    }
+
+    /**
+     * Handle task completion for retroactive reward recalculation.
+     * When task_complete fires after an ORPAR cycle already finalized with
+     * a non-success outcome, recalculate rewards with success=true.
+     */
+    private async onTaskCompleted(payload: any): Promise<void> {
+        const agentId = payload.agentId;
+        const taskId = payload.data?.taskId;
+        if (!agentId || !taskId) return;
+
+        const cacheKey = `${agentId}:${taskId}`;
+        const cached = this.recentlyCompletedCycles.get(cacheKey);
+        if (!cached) return;
+
+        // Already successful — no recalculation needed
+        if (cached.outcome.success) {
+            this.recentlyCompletedCycles.delete(cacheKey);
+            return;
+        }
+
+        this.logger.info(
+            `[OrparMemoryCoordinator] Task ${taskId} completed after ORPAR cycle reported failure. ` +
+            `Retroactively recalculating rewards with success=true for agent ${agentId}`
+        );
+
+        const correctedOutcome: CycleOutcome = {
+            ...cached.outcome,
+            success: true,
+            qualityScore: Math.max(cached.outcome.qualityScore ?? 0.8, 0.8),
+            taskCompleted: true,
+        };
+
+        try {
+            const { updated } = await this.phaseRewarder.processOutcome(
+                cached.cycleMemoryUsage,
+                correctedOutcome
+            );
+            this.logger.info(
+                `[OrparMemoryCoordinator] Retroactive reward recalculation: ${updated} memories updated`
+            );
+        } catch (error) {
+            this.logger.error(
+                `[OrparMemoryCoordinator] Retroactive reward failed for task ${taskId}: ` +
+                `${error instanceof Error ? error.message : String(error)}`
+            );
+        }
+
+        this.recentlyCompletedCycles.delete(cacheKey);
     }
 
     // =========================================================================
@@ -898,6 +980,7 @@ export class OrparMemoryCoordinator {
     public reset(): void {
         this.enabled = false;
         this.activeCycles.clear();
+        this.recentlyCompletedCycles.clear();
 
         // Fix #3: Stop stale cycle cleanup
         this.stopStaleCycleCleanup();

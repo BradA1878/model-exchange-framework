@@ -65,7 +65,7 @@ Because ORPAR is intentionally deliberate, it adds latency. Each phase involves 
 
 The ORPAR tools (`orpar_observe`, `orpar_reason`, `orpar_plan`, `orpar_act`, `orpar_reflect`) are **documentation and feedback tools**, not orchestration tools. They record what the agent did at each phase and update the system on progress. It's up to the developer to design how agents use these tools in combination with domain-specific tools to leverage the cognitive cycle effectively.
 
-For a working example that demonstrates this pattern, see the [Twenty Questions demo](/examples/twenty-questions/), which shows two agents using ORPAR phases alongside game-specific tools to play a complete game with observable cognitive cycles.
+For a working example that demonstrates this pattern, see the [Twenty Questions demo](../examples/twenty-questions.md), which shows two agents using ORPAR phases alongside game-specific tools, Knowledge Graph entity tracking, MULS memory rewards, and TensorFlow ML risk assessment to play a complete game with observable cognitive cycles and phase-gated tool access.
 
 ## The Five Phases
 

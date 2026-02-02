@@ -77,6 +77,11 @@ import {
 import { QValueManager } from './QValueManager';
 import { UtilityScorerService } from './UtilityScorerService';
 import { RewardSignalProcessor } from './RewardSignalProcessor';
+import {
+    isKnowledgeGraphEnabled,
+    isExtractionEnabled,
+} from '../config/knowledge-graph.config';
+import { EntityExtractionService } from './kg/EntityExtractionService';
 
 /**
  * Types of cognitive memory content
@@ -748,6 +753,26 @@ export class MemoryService {
                             next: () => null,
                             error: (err: any) => this.logger.warn(`Failed to persist agent memory to MongoDB for ${pAgentId}: ${err.message}`)
                         });
+                }
+
+                // Trigger entity extraction from conversation history if Knowledge Graph is enabled
+                // This extracts entities and relationships for the Knowledge Graph
+                if (updates.conversationHistory && updates.conversationHistory.length > 0) {
+                    const lastMessages = updates.conversationHistory.slice(-3);
+                    const contentToExtract = lastMessages
+                        .filter((msg): msg is typeof msg & { content: string } =>
+                            typeof msg.content === 'string' && msg.content.length > 0)
+                        .map(msg => msg.content)
+                        .join('\n\n');
+
+                    if (contentToExtract.length > 0) {
+                        // Use agent ID as channel context for agent-level memories
+                        // Entities extracted from agent memory are scoped to a pseudo-channel
+                        const channelContext = `agent-memory-${pAgentId}`;
+                        const memoryId = `agent-${pAgentId}-${Date.now()}`;
+                        this.triggerEntityExtraction(channelContext, memoryId, contentToExtract)
+                            .catch(err => this.logger.warn(`Entity extraction failed: ${err.message}`));
+                    }
                 }
 
                 // Emit update event through EventBus
@@ -1732,6 +1757,49 @@ export class MemoryService {
             } catch (error) {
                 this.logger.warn(`[MemoryService] Failed to update utility for memory ${memoryId}: ${error}`);
             }
+        }
+    }
+
+    /**
+     * Trigger entity extraction from memory content
+     *
+     * Called when memory is stored or promoted to extract entities and relationships
+     * for the Knowledge Graph. Only processes if Knowledge Graph is enabled and
+     * entity extraction is enabled.
+     *
+     * @param channelId - The channel context for the extracted entities
+     * @param memoryId - The memory ID being processed
+     * @param content - The text content to extract entities from
+     */
+    public async triggerEntityExtraction(
+        channelId: ChannelId,
+        memoryId: string,
+        content: string
+    ): Promise<void> {
+        // Check if Knowledge Graph and extraction are enabled
+        if (!isKnowledgeGraphEnabled() || !isExtractionEnabled()) {
+            return;
+        }
+
+        // Skip if content is too short or empty
+        if (!content || content.trim().length < 20) {
+            return;
+        }
+
+        try {
+            const extractionService = EntityExtractionService.getInstance();
+            const result = await extractionService.processMemory(channelId, memoryId, content);
+
+            if (result.entitiesExtracted > 0 || result.relationshipsExtracted > 0) {
+                this.logger.debug(
+                    `[MemoryService] Extracted ${result.entitiesExtracted} entities and ` +
+                    `${result.relationshipsExtracted} relationships from memory ${memoryId}`
+                );
+            }
+        } catch (error: any) {
+            this.logger.warn(
+                `[MemoryService] Entity extraction failed for memory ${memoryId}: ${error.message}`
+            );
         }
     }
 

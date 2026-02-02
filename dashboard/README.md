@@ -79,8 +79,8 @@ dashboard/
 ## 🔧 Development
 
 ### Prerequisites
-- Node.js >= 18.0.0
-- npm or yarn
+- **Bun 1.1+** (recommended) or Node.js >= 18.0.0
+- npm, yarn, or bun for package management
 
 ### Getting Started
 

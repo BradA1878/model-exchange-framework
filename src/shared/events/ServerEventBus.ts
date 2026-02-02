@@ -33,6 +33,8 @@ import { Events, ChannelActionTypes, MessageEvents } from './EventNames';
 import type { EventMap } from './EventNames';
 import { ControlLoopEvents } from './event-definitions/ControlLoopEvents';
 import { OrparEvents } from './event-definitions/OrparEvents';
+import { McpEvents } from './event-definitions/McpEvents';
+import { TaskEvents } from './event-definitions/TaskEvents';
 import { 
     AnyEventName, 
     BaseEventBusImplementation, 
@@ -222,12 +224,40 @@ export class ServerEventBus extends BaseEventBusImplementation implements IServe
             });
             
             // Also emit to the Socket.IO server if available
-            // IMPORTANT: Do NOT broadcast agent-specific events (ORPAR, ControlLoop) via io.emit()
-            // These events are forwarded to specific agents via eventForwardingHandlers.forwardEventToAgent()
-            // Broadcasting them would cause duplicates (agent receives via forward + via broadcast)
+            // IMPORTANT: Do NOT broadcast agent-specific events via io.emit().
+            // These events are forwarded to specific agents/channels via
+            // eventForwardingHandlers.forwardEventToAgent()/forwardEventToChannel().
+            // Broadcasting them causes duplicates: the SDK's ClientEventBus.setupClientSocketForwarding()
+            // has socket.onAny() that re-injects received socket events back into the RxJS Subject,
+            // so MxfChannelMonitor sees each broadcast event twice (once from Subject push, once from
+            // socket re-injection).
             const agentSpecificEvents = new Set([
                 ...Object.values(ControlLoopEvents),
-                ...Object.values(OrparEvents)
+                ...Object.values(OrparEvents),
+                // MCP response events — already forwarded to specific agents via eventForwardingHandlers
+                McpEvents.TOOL_RESULT,
+                McpEvents.TOOL_ERROR,
+                McpEvents.TOOL_REGISTERED,
+                McpEvents.TOOL_UNREGISTERED,
+                McpEvents.MXF_TOOL_LIST_RESULT,
+                McpEvents.MXF_TOOL_LIST_ERROR,
+                McpEvents.RESOURCE_RESULT,
+                McpEvents.RESOURCE_ERROR,
+                McpEvents.EXTERNAL_SERVER_REGISTERED,
+                McpEvents.EXTERNAL_SERVER_UNREGISTERED,
+                McpEvents.EXTERNAL_SERVER_REGISTRATION_FAILED,
+                McpEvents.CHANNEL_SERVER_REGISTERED,
+                McpEvents.CHANNEL_SERVER_UNREGISTERED,
+                McpEvents.CHANNEL_SERVER_REGISTRATION_FAILED,
+                // Task lifecycle events — already forwarded to specific agents/channels
+                TaskEvents.CREATED,
+                TaskEvents.ASSIGNED,
+                TaskEvents.STARTED,
+                TaskEvents.PROGRESS_UPDATED,
+                TaskEvents.COMPLETED,
+                TaskEvents.FAILED,
+                TaskEvents.ERROR,
+                TaskEvents.CANCELLED,
             ]);
 
             if (this.ioInstance && !isReservedEvent(event) && !agentSpecificEvents.has(event)) {

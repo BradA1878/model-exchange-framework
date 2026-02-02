@@ -16,11 +16,11 @@ MXF uses a comprehensive three-tier testing strategy to ensure code quality and 
 
 | Category | Files |
 |----------|-------|
-| Unit Tests | 21 |
-| Property Tests | 7 |
+| Unit Tests | 27 |
+| Property Tests | 9 |
 | Integration Tests (Socket.IO) | 20 |
 | Integration Tests (API) | 6 |
-| **Total Files** | **54** |
+| **Total Files** | **63** |
 
 ### Test Coverage Categories
 
@@ -42,6 +42,11 @@ MXF uses a comprehensive three-tier testing strategy to ensure code quality and 
 | **P2P** | Task negotiation, federation |
 | **TOON** | Token optimization encoding |
 | **Workflow** | Sequential, parallel, loop patterns |
+| **DAG** | Task DAG creation, dependency resolution, topological ordering |
+| **Knowledge Graph** | Entity CRUD, relationship traversal, graph queries |
+| **MULS** | Q-value retrieval, retroactive rewards, phase lambdas |
+| **ORPAR-Memory** | Phase-to-strata routing, surprise detection, cycle consolidation |
+| **TensorFlow** | Model lifecycle, inference, error prediction, anomaly detection |
 
 ## Quick Start
 
@@ -540,7 +545,7 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       - uses: actions/setup-node@v3
-      - run: npm ci
+      - run: bun install
       - run: bun run test:unit          # Fast tests first
       - run: bun run test:ci             # Integration with auto-start
 ```

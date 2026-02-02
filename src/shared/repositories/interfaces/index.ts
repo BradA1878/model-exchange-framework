@@ -23,3 +23,5 @@ export * from './IAgentRepository';
 export * from './IChannelRepository';
 export * from './ITaskRepository';
 export * from './IMemoryRepository';
+export * from './IDagRepository';
+export * from './IKnowledgeGraphRepository';

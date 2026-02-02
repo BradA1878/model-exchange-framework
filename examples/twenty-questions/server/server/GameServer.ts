@@ -2,10 +2,12 @@
  * Twenty Questions Game Server
  * Express + Socket.IO server for real-time game updates
  *
- * This server showcases ORPAR cognitive cycles by:
- * - Tracking phase events from agents
- * - Broadcasting cycle progress to observers
- * - Recording phase timings for analysis
+ * This server tracks advanced MXF features:
+ * - ORPAR phase events from agents
+ * - Knowledge Graph updates (entity/relationship creation)
+ * - MULS reward injections (memory utility tracking)
+ * - TensorFlow risk assessments (ML-based guess timing)
+ * - Broadcasting all events to the Vue dashboard
  */
 
 import express, { Application, Request, Response } from 'express';
@@ -14,6 +16,11 @@ import { Server as SocketServer, Socket } from 'socket.io';
 import cors from 'cors';
 import { GameStateManager } from '../engine/GameStateManager';
 import { PlayerRole, PlayerInfo, GamePhase } from '../types/game';
+
+/** Generate a unique message ID using timestamp + random suffix */
+function generateMessageId(): string {
+    return `msg-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`;
+}
 
 interface ChatMessage {
     id: string;
@@ -109,6 +116,8 @@ export class GameServer {
             this.gameStarted = false;
             this.addSystemMessage('Game reset! Waiting to start...');
             this.io.emit('gameReset', this.gameState.getState());
+            // Reset advanced feature state on dashboard
+            this.io.emit('knowledgeGraph', { nodes: [], edges: [] });
             res.json({ success: true });
         });
 
@@ -211,6 +220,100 @@ export class GameServer {
             res.json({ success: true });
         });
 
+        // Knowledge Graph events (from connect-agents.ts KG event listeners)
+        this.app.post('/api/events/knowledge', (req: Request, res: Response) => {
+            const { type, data, agentId, questionNumber } = req.body;
+
+            if (type === 'node') {
+                // Validate node type — fail fast on invalid types
+                const validNodeTypes = ['category', 'property', 'candidate', 'eliminated'];
+                if (data.type && !validNodeTypes.includes(data.type)) {
+                    res.status(400).json({
+                        success: false,
+                        error: `Invalid node type: "${data.type}". Must be one of: ${validNodeTypes.join(', ')}`
+                    });
+                    return;
+                }
+                this.gameState.addKnowledgeNode({
+                    entity: data.entity || data.name || 'unknown',
+                    type: data.type || 'property',
+                    confidence: data.confidence || 0.5,
+                    questionNumber: questionNumber || this.gameState.getState().questionsAsked
+                });
+            } else if (type === 'edge') {
+                this.gameState.addKnowledgeEdge({
+                    from: data.from || data.fromEntity || 'unknown',
+                    to: data.to || data.toEntity || 'unknown',
+                    relationship: data.relationship || data.type || 'related_to',
+                    questionNumber: questionNumber || this.gameState.getState().questionsAsked
+                });
+            }
+
+            // Broadcast to dashboard
+            this.io.emit('knowledgeUpdate', {
+                type,
+                data,
+                agentId,
+                questionNumber,
+                knowledgeGraph: this.gameState.getKnowledgeGraph(),
+                timestamp: Date.now()
+            });
+
+            res.json({ success: true });
+        });
+
+        // Get current knowledge graph state (for dashboard initial load)
+        this.app.get('/api/game/knowledge', (_req: Request, res: Response) => {
+            res.json(this.gameState.getKnowledgeGraph());
+        });
+
+        // TensorFlow risk assessment events (from connect-agents.ts)
+        this.app.post('/api/events/risk', (req: Request, res: Response) => {
+            const { riskScore, confidence, recommendation, agentId } = req.body;
+            const questionNumber = this.gameState.getState().questionsAsked;
+
+            const assessment = {
+                questionNumber,
+                riskScore: riskScore || 0.5,
+                confidence: confidence || 0.5,
+                recommendation: recommendation || 'ask_more',
+                timestamp: Date.now()
+            };
+
+            this.gameState.addRiskAssessment(assessment);
+
+            // Broadcast to dashboard
+            this.io.emit('riskAssessment', {
+                ...assessment,
+                agentId
+            });
+
+            res.json({ success: true });
+        });
+
+        // MULS reward injection events (from connect-agents.ts)
+        this.app.post('/api/events/muls', (req: Request, res: Response) => {
+            const { reward, reason, agentId } = req.body;
+            const questionNumber = this.gameState.getState().questionsAsked;
+
+            const mulsReward = {
+                questionNumber,
+                reward: reward || 0,
+                reason: reason || 'Strategy reward',
+                timestamp: Date.now()
+            };
+
+            this.gameState.addMulsReward(mulsReward);
+
+            // Broadcast to dashboard
+            this.io.emit('mulsReward', {
+                ...mulsReward,
+                agentId
+            });
+
+            res.json({ success: true });
+        });
+
         // Thinking state events
         this.app.post('/api/events/thinking', (req: Request, res: Response) => {
             const { agentId, reasoning } = req.body;
@@ -256,6 +359,8 @@ export class GameServer {
             socket.emit('chatHistory', this.chatHistory);
             socket.emit('orparHistory', this.orparEvents);
             socket.emit('thinkingStates', Object.fromEntries(this.thinkingStates));
+            // Send advanced feature state
+            socket.emit('knowledgeGraph', this.gameState.getKnowledgeGraph());
 
             socket.on('disconnect', () => {
                 console.log(`[GameServer] Client disconnected: ${socket.id}`);
@@ -266,7 +371,7 @@ export class GameServer {
     private setupGameCallbacks(): void {
         // Track previous state for detecting specific changes
         let previousTurn: string | null = null;
-        let previousPhase: string | null = null;
+        let previousPhase: GamePhase | null = null;
 
         this.gameState.onStateChangeCallback((state) => {
             // Emit general state update
@@ -317,7 +422,7 @@ export class GameServer {
 
     private addQuestionMessage(from: string, fromName: string, question: string, questionNumber: number): void {
         const chatMsg: ChatMessage = {
-            id: `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+            id: generateMessageId(),
             from,
             fromName,
             message: `Q${questionNumber}: ${question}`,
@@ -330,7 +435,7 @@ export class GameServer {
 
     private addAnswerMessage(from: string, fromName: string, answer: string, questionNumber: number): void {
         const chatMsg: ChatMessage = {
-            id: `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+            id: generateMessageId(),
             from,
             fromName,
             message: `A${questionNumber}: ${answer.toUpperCase()}`,
@@ -345,7 +450,7 @@ export class GameServer {
         const emoji = correct ? '🎉' : '❌';
         const result = correct ? 'CORRECT!' : `WRONG! It was "${secret}"`;
         const chatMsg: ChatMessage = {
-            id: `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+            id: generateMessageId(),
             from,
             fromName,
             message: `${emoji} Final Guess: "${guess}" - ${result}`,
@@ -358,7 +463,7 @@ export class GameServer {
 
     private addSystemMessage(message: string): void {
         const chatMsg: ChatMessage = {
-            id: `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+            id: generateMessageId(),
             from: 'system',
             fromName: 'Game',
             message,
@@ -371,7 +476,7 @@ export class GameServer {
 
     private addOrparMessage(agentId: string, role: PlayerRole, phase: string, summary: string): void {
         const chatMsg: ChatMessage = {
-            id: `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+            id: generateMessageId(),
             from: agentId,
             fromName: `${role.toUpperCase()} [${phase}]`,
             message: summary,

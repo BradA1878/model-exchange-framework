@@ -56,25 +56,52 @@ const validator = createStrictValidator('ClientEventBus');
  */
 export interface IClientEventBus extends BaseEventBusImplementation {
     /**
-     * Set the socket to use for event forwarding
+     * Set the primary socket to use for event forwarding (used by admin/SDK socket)
      * @param socket Socket to use
      * @returns this (for chaining)
      */
     setClientSocket(socket: SocketLike): this;
-    
+
     /**
      * Set up socket event forwarding
      * @param socket Socket to use
      * @returns this (for chaining)
      */
     setupClientSocketForwarding(socket: SocketLike): this;
-    
+
     /**
-     * Disconnect the socket
+     * Register a named socket in the registry (used by agent sockets)
+     * Does not overwrite the primary socket set by setClientSocket().
+     * Sets up onAny forwarding into the shared eventSubject.
+     * @param socketId Unique identifier for this socket (typically agentId)
+     * @param socket Socket to register
+     * @returns this (for chaining)
+     */
+    registerSocket(socketId: string, socket: SocketLike): this;
+
+    /**
+     * Unregister a named socket from the registry
+     * Removes onAny listener and cleans up tracked listeners.
+     * @param socketId Identifier of the socket to unregister
+     * @returns this (for chaining)
+     */
+    unregisterSocket(socketId: string): this;
+
+    /**
+     * Emit an event through a specific registered socket
+     * Falls back to the primary socket with a warning if socketId not found.
+     * @param socketId Identifier of the socket to emit through
+     * @param event Event name
+     * @param payload Event payload
+     */
+    emitOn(socketId: string, event: AnyEventName, payload: any): void;
+
+    /**
+     * Disconnect the primary socket and unregister all sockets
      * @returns this (for chaining)
      */
     disconnect(): this;
-    
+
     /**
      * Remove all socket listeners
      * @returns this (for chaining)
@@ -82,7 +109,7 @@ export interface IClientEventBus extends BaseEventBusImplementation {
     removeAllListeners(event?: AnyEventName): this;
 
     /**
-     * Emit an event
+     * Emit an event through the primary socket
      * @param event Event name
      * @param payload Event payload
      */
@@ -93,15 +120,23 @@ export interface IClientEventBus extends BaseEventBusImplementation {
  * Client-side event bus implementation
  */
 export class ClientEventBus extends BaseEventBusImplementation implements IClientEventBus {
+    // Primary socket (set by setClientSocket, used by admin/SDK emit())
     private socket: SocketLike | null = null;
+    // Listeners tracked for the primary socket's onAny handler
     private socketListeners: Map<string, (...args: any[]) => void> = new Map();
     private subscriptions: Subscription[] = [];
     private categorySubscriptions: Map<string, Subscription[]> = new Map();
-    
+
     // Track subscriptions by event and handler
     private handlerSubscriptions: Map<string, Map<EventHandler<any>, Subscription>> = new Map();
     private debugMode: boolean = false;
     private debugSubscription: Subscription | null = null;
+
+    // Socket registry: maps socketId (typically agentId) → socket instance
+    // Agent sockets register here so they don't overwrite the primary admin socket
+    private socketRegistry: Map<string, SocketLike> = new Map();
+    // Listeners tracked for each registered socket's onAny handler
+    private socketListenersRegistry: Map<string, Map<string, (...args: any[]) => void>> = new Map();
     
     /**
      * Create a new ClientEventBus
@@ -251,27 +286,189 @@ export class ClientEventBus extends BaseEventBusImplementation implements IClien
     }
     
     /**
-     * Disconnect the socket
+     * Register a named socket in the registry (used by agent sockets).
+     * Does not overwrite the primary socket set by setClientSocket().
+     * Sets up onAny forwarding into the shared eventSubject so all
+     * on()/once() subscribers receive events from this socket.
+     *
+     * @param socketId Unique identifier for this socket (typically agentId)
+     * @param socket Socket to register
+     * @returns this (for chaining)
+     */
+    public registerSocket(socketId: string, socket: SocketLike): this {
+        try {
+            validator.assertIsNonEmptyString(socketId);
+            validator.assertIsObject(socket);
+            validator.assertHasFunction(socket, 'on');
+            validator.assertHasFunction(socket, 'emit');
+
+            // Clean up any previous registration under this id
+            if (this.socketRegistry.has(socketId)) {
+                this.unregisterSocket(socketId);
+            }
+
+            // Store socket in registry
+            this.socketRegistry.set(socketId, socket);
+
+            // Set up onAny forwarding into the shared eventSubject
+            if (socket.onAny) {
+                const specificlyHandledEvents = new Set([
+                    ...Object.values(ControlLoopEvents),
+                    ...Object.values(OrparEvents)
+                ]);
+
+                const handleAnyEvent = (event: string, ...args: any[]) => {
+                    // Skip internal socket.io events
+                    if (event.startsWith('$') || event === 'ping' || event === 'pong') {
+                        return;
+                    }
+                    // Skip events handled by specific socket.on() listeners in MxfService
+                    if (specificlyHandledEvents.has(event)) {
+                        return;
+                    }
+                    const payload = args.length > 0 ? args[0] : {};
+                    this.eventSubject.next({ type: event, payload });
+                };
+
+                socket.onAny(handleAnyEvent);
+
+                // Track the listener for cleanup
+                if (!this.socketListenersRegistry.has(socketId)) {
+                    this.socketListenersRegistry.set(socketId, new Map());
+                }
+                this.socketListenersRegistry.get(socketId)!.set('any', handleAnyEvent);
+            }
+
+        } catch (error) {
+            logger.error('[ClientEventBus] Error registering socket:', error instanceof Error ? error.message : String(error));
+            throw new Error(`Error registering socket: ${error instanceof Error ? error.message : 'Invalid socket'}`);
+        }
+
+        return this;
+    }
+
+    /**
+     * Unregister a named socket from the registry.
+     * Removes onAny listener and cleans up tracked listeners.
+     *
+     * @param socketId Identifier of the socket to unregister
+     * @returns this (for chaining)
+     */
+    public unregisterSocket(socketId: string): this {
+        const socket = this.socketRegistry.get(socketId);
+        if (!socket) {
+            return this;
+        }
+
+        try {
+            // Remove onAny listener
+            if (socket.offAny) {
+                socket.offAny();
+            }
+
+            // Remove individually tracked listeners
+            const listeners = this.socketListenersRegistry.get(socketId);
+            if (listeners) {
+                for (const [event, listener] of listeners.entries()) {
+                    if (event !== 'any') {
+                        socket.off(event, listener);
+                    }
+                }
+                listeners.clear();
+            }
+
+            // Remove from registries
+            this.socketListenersRegistry.delete(socketId);
+            this.socketRegistry.delete(socketId);
+
+        } catch (error) {
+            logger.error('[ClientEventBus] Error unregistering socket:', error instanceof Error ? error.message : String(error));
+        }
+
+        return this;
+    }
+
+    /**
+     * Emit an event through a specific registered socket.
+     * Also pushes the event into the local eventSubject for on()/once() subscribers.
+     * Falls back to the primary socket with a warning if socketId not found.
+     *
+     * @param socketId Identifier of the socket to emit through
+     * @param event Event name
+     * @param payload Event payload
+     */
+    public emitOn(socketId: string, event: AnyEventName, payload: any): void {
+        try {
+            // Validate event name and payload (same checks as emit())
+            validateEventName(event);
+            this.validateEventPayload(String(event), payload);
+
+            // Push to local event bus so on()/once() subscribers receive it
+            this.eventSubject.next({ type: event, payload });
+
+            // Look up the registered socket
+            const registeredSocket = this.socketRegistry.get(socketId);
+            if (registeredSocket && registeredSocket.connected) {
+                registeredSocket.emit(event, payload);
+                return;
+            }
+
+            // Fallback: try the primary socket with a warning
+            if (registeredSocket && !registeredSocket.connected) {
+                logger.warn(`[ClientEventBus] Registered socket '${socketId}' not connected, falling back to primary for event: ${event}`);
+            } else {
+                // Debug level: this is expected during early agent startup before the socket is registered
+                logger.debug(`[ClientEventBus] Socket '${socketId}' not found in registry, falling back to primary for event: ${event}`);
+            }
+
+            if (this.socket && this.socket.connected) {
+                this.socket.emit(event, payload);
+            } else {
+                logger.warn(`[ClientEventBus] No socket available to emit event: ${event}`);
+            }
+
+        } catch (error) {
+            logger.error(`[ClientEventBus] Error in emitOn('${socketId}', '${event}'):`, error instanceof Error ? error.message : String(error));
+
+            // Emit error event
+            this.eventSubject.next({
+                type: Events.Agent.ERROR,
+                payload: {
+                    error: error instanceof Error ? error.message : String(error),
+                    event,
+                    timestamp: Date.now()
+                }
+            });
+        }
+    }
+
+    /**
+     * Disconnect the primary socket and unregister all sockets in the registry
      * @returns this (for chaining)
      */
     public disconnect(): this {
+        // Unregister all sockets in the registry
+        for (const socketId of Array.from(this.socketRegistry.keys())) {
+            this.unregisterSocket(socketId);
+        }
+
         if (this.socket) {
             try {
-                // Clean up listeners
+                // Clean up primary socket listeners
                 this.removeAllSocketListeners();
-                
+
                 // Disconnect if connected and has disconnect method
                 if (this.socket.connected && typeof this.socket['disconnect'] === 'function') {
                     (this.socket as any).disconnect();
                 }
-                
+
                 // Clear socket reference
                 this.socket = null;
             } catch (error) {
                 logger.error('[ClientEventBus] Error disconnecting socket:', error instanceof Error ? error.message : String(error));
             }
         }
-        
+
         return this;
     }
     
@@ -335,10 +532,11 @@ export class ClientEventBus extends BaseEventBusImplementation implements IClien
     }
     
     /**
-     * Remove all socket listeners
+     * Remove all socket listeners (primary socket and all registered sockets)
      * @returns this (for chaining)
      */
     public removeAllSocketListeners(): this {
+        // Clean up primary socket listeners
         if (this.socket) {
             try {
                 // Remove "any" listener if registered
@@ -346,28 +544,47 @@ export class ClientEventBus extends BaseEventBusImplementation implements IClien
                     this.socket.offAny();
                     this.socketListeners.delete('any');
                 }
-                
+
                 // Remove individual event listeners
                 for (const [event, listener] of this.socketListeners.entries()) {
                     if (event !== 'any') {
                         this.socket.off(event, listener);
                     }
                 }
-                
+
                 // Clear listener map
                 this.socketListeners.clear();
-                
+
                 // Use Socket.IO's removeAllListeners if available
                 if (this.socket.removeAllListeners) {
                     this.socket.removeAllListeners();
                 }
-                
-                // ;
             } catch (error) {
-                logger.error('[ClientEventBus] Error removing socket listeners:', error instanceof Error ? error.message : String(error));
+                logger.error('[ClientEventBus] Error removing primary socket listeners:', error instanceof Error ? error.message : String(error));
             }
         }
-        
+
+        // Clean up registered sockets' listeners
+        for (const [socketId, socket] of this.socketRegistry.entries()) {
+            try {
+                if (socket.offAny) {
+                    socket.offAny();
+                }
+                const listeners = this.socketListenersRegistry.get(socketId);
+                if (listeners) {
+                    for (const [event, listener] of listeners.entries()) {
+                        if (event !== 'any') {
+                            socket.off(event, listener);
+                        }
+                    }
+                    listeners.clear();
+                }
+            } catch (error) {
+                logger.error(`[ClientEventBus] Error removing listeners for socket '${socketId}':`, error instanceof Error ? error.message : String(error));
+            }
+        }
+        this.socketListenersRegistry.clear();
+
         return this;
     }
     

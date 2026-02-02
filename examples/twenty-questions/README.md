@@ -1,94 +1,109 @@
-# Twenty Questions: ORPAR Cognitive Cycle Demo
+# Twenty Questions: Advanced MXF Features Demo
 
-This example demonstrates the **ORPAR cognitive cycle** using the classic 20 Questions game. Two AI agents play against each other, with each question/answer cycle showcasing the full Observe-Reason-Plan-Act-Reflect loop.
+This example demonstrates **advanced MXF features** using the classic 20 Questions game. Two AI agents play against each other, with each question/answer cycle showcasing ORPAR, Knowledge Graphs, MULS memory learning, and TensorFlow ML risk assessment.
+
+## Features Demonstrated
+
+| Feature | Description | Where |
+|---------|-------------|-------|
+| **ORPAR Cognitive Cycle** | Observe-Reason-Plan-Act-Reflect loop | Both agents, every turn |
+| **Knowledge Graph** | Guesser builds explicit model of possibility space | OBSERVE (read), ACT (write) |
+| **MULS** | Q-value weighted memory utility tracking | REFLECT phase rewards |
+| **TensorFlow ML** | Risk assessment for guess timing | REASON phase scoring |
+| **ORPAR-Memory Integration** | Phase-aware memory strata routing | When enabled via env flag |
+| **Phase-Gated Tools** | Dynamic tool access based on ORPAR phase | All phases |
+| **Custom MCP Tools** | Game-specific tool server | All game actions |
 
 ## Why Twenty Questions?
 
-Twenty Questions is the perfect game to demonstrate ORPAR because:
+Twenty Questions is the perfect game to demonstrate these features because:
 
 1. **Clear Cognitive Phases**: Each turn requires distinct mental operations
 2. **Observable Reasoning**: You can see the agent's deductive logic in action
-3. **Strategic Depth**: Requires planning and adapting based on new information
-4. **Simple Rules**: Easy to understand, making the cognitive patterns clear
+3. **Knowledge Building**: The Guesser naturally builds a model of what's known
+4. **Strategic Depth**: Risk assessment maps naturally to "should I guess now?"
+5. **Simple Rules**: Easy to understand, making the feature patterns clear
 
 ## ORPAR in Action
 
 ### Guesser's Cognitive Cycle (per question)
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                    GUESSER'S ORPAR CYCLE                        │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│   OBSERVE ───────────► Review question history & answers        │
-│      │                 "I've learned it's alive, not a mammal"  │
-│      ▼                                                          │
-│   REASON ────────────► Analyze patterns & narrow possibilities  │
-│      │                 "Living, not mammal... could be bird,    │
-│      │                  reptile, fish, insect..."               │
-│      ▼                                                          │
-│   PLAN ──────────────► Decide strategy for this turn           │
-│      │                 "Ask about size to eliminate categories" │
-│      ▼                                                          │
-│   ACT ───────────────► Execute: ask question or make guess      │
-│      │                 "Is it smaller than a house cat?"        │
-│      ▼                                                          │
-│   REFLECT ───────────► Update mental model based on answer      │
-│                        "Answer was YES - it's a small creature" │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
++---------------------------------------------------------------------+
+|                    GUESSER'S ORPAR CYCLE                            |
++---------------------------------------------------------------------+
+|                                                                     |
+|   OBSERVE ---------> Review history, query KG, detect anomalies    |
+|      |               "I've learned it's alive, not a mammal"       |
+|      v                                                              |
+|   REASON ----------> Analyze patterns, calculate risk score         |
+|      |               "Risk 35% - keep asking. Could be bird..."    |
+|      v                                                              |
+|   PLAN ------------> Decide strategy for this turn                  |
+|      |               "Ask about size to eliminate categories"       |
+|      v                                                              |
+|   ACT -------------> Execute: ask question, update knowledge graph  |
+|      |               "Is it smaller than a house cat?" + KG update |
+|      v                                                              |
+|   REFLECT ---------> Inject MULS reward, review Q-value analytics   |
+|                      "Answer YES - rewarding the size strategy"     |
+|                                                                     |
++---------------------------------------------------------------------+
 ```
 
 ### Thinker's Cognitive Cycle (per answer)
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                    THINKER'S ORPAR CYCLE                        │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│   OBSERVE ───────────► Read the incoming question               │
-│      │                 "Is it found in water?"                  │
-│      ▼                                                          │
-│   REASON ────────────► Consider how question applies to secret  │
-│      │                 "My secret is 'goldfish' - yes, fish     │
-│      │                  are found in water"                     │
-│      ▼                                                          │
-│   ACT ───────────────► Answer honestly                          │
-│      │                 Answer: "YES"                            │
-│      ▼                                                          │
-│   REFLECT ───────────► Consider what guesser might deduce       │
-│                        "They now know it's aquatic..."          │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
++---------------------------------------------------------------------+
+|                    THINKER'S ORPAR CYCLE                            |
++---------------------------------------------------------------------+
+|                                                                     |
+|   OBSERVE ---------> Read question, detect answer consistency       |
+|      |               "Is it found in water?"                        |
+|      v                                                              |
+|   REASON ----------> Consider how question applies to secret        |
+|      |               "My secret is 'goldfish' - yes, found in      |
+|      |                water"                                        |
+|      v                                                              |
+|   ACT -------------> Answer honestly                                |
+|      |               Answer: "YES"                                  |
+|      v                                                              |
+|   REFLECT ---------> Consider what guesser might deduce, reward     |
+|                      "They now know it's aquatic..."                |
+|                                                                     |
++---------------------------------------------------------------------+
 ```
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                    connect-agents.ts                            │
-│                  (Orchestration Script)                         │
-│  - Creates agents with ORPAR-aware prompts                      │
-│  - Tracks ORPAR phase events                                    │
-│  - Manages game loop                                            │
-└──────────────────────────┬──────────────────────────────────────┘
-                           │
-         ┌─────────────────┼─────────────────┐
-         │                 │                 │
-         ▼                 ▼                 ▼
-┌─────────────┐   ┌─────────────┐   ┌─────────────────┐
-│  MXF Server │   │ Game Server │   │ MCP Tool Server │
-│  (Port 3001)│   │ (Port 3006) │   │ (stdio → HTTP)  │
-│             │   │             │   │                 │
-│ • ORPAR     │   │ • Game State│   │ • game_getState │
-│   Events    │   │ • ORPAR Log │   │ • game_setSecret│
-│ • SystemLLM │   │ • WebSocket │   │ • game_askQ...  │
-│ • Tasks     │   │ • REST API  │   │ • game_answerQ..│
-└─────────────┘   └─────────────┘   │ • game_makeGuess│
-                                    └─────────────────┘
++---------------------------------------------------------------------+
+|                    connect-agents.ts                                 |
+|                  (Orchestration Script)                              |
+|  - Creates agents with ORPAR-aware prompts                          |
+|  - Tracks ORPAR + KG + MULS + TF events                            |
+|  - Manages game loop and event forwarding                           |
++-------------------------------+-------------------------------------+
+                                |
+          +---------------------+---------------------+
+          |                     |                     |
+          v                     v                     v
+  +---------------+   +------------------+   +-------------------+
+  |  MXF Server   |   |  Game Server     |   | MCP Tool Server   |
+  |  (Port 3001)  |   |  (Port 3006)     |   | (stdio -> HTTP)   |
+  |               |   |                  |   |                   |
+  | * ORPAR       |   | * Game State     |   | * game_getState   |
+  |   Events      |   | * KG tracking    |   | * game_setSecret  |
+  | * KG Events   |   | * Risk tracking  |   | * game_askQ...    |
+  | * MULS Events |   | * MULS tracking  |   | * game_answerQ... |
+  | * TF Events   |   | * WebSocket      |   | * game_makeGuess  |
+  | * SystemLLM   |   | * REST API       |   |                   |
+  +---------------+   +------------------+   +-------------------+
 ```
 
-## Game Tools
+## Tools
+
+### Game Tools
 
 | Tool | Role | Description |
 |------|------|-------------|
@@ -98,11 +113,36 @@ Twenty Questions is the perfect game to demonstrate ORPAR because:
 | `game_answerQuestion` | Thinker | Answer the most recent question honestly |
 | `game_makeGuess` | Guesser | Make a final guess about the secret thing |
 
+### Knowledge Graph Tools (Guesser primary)
+
+| Tool | Phase | Description |
+|------|-------|-------------|
+| `kg_get_entity` | OBSERVE | Query a known entity |
+| `kg_get_neighbors` | OBSERVE | Get connected entities |
+| `kg_get_phase_context` | OBSERVE | Get phase-appropriate KG context |
+| `kg_create_entity` | ACT | Create entity (property, candidate, eliminated) |
+| `kg_create_relationship` | ACT | Create relationship between entities |
+| `kg_extract_from_text` | ACT | Auto-extract entities from text |
+
+### MULS Tools
+
+| Tool | Phase | Description |
+|------|-------|-------------|
+| `memory_inject_reward` | REFLECT | Reward effective strategies/memories |
+| `memory_qvalue_analytics` | REFLECT | Review Q-value statistics |
+
+### ML/TensorFlow Tools
+
+| Tool | Phase | Description |
+|------|-------|-------------|
+| `calculate_risk` | REASON | Risk score for "guess now vs ask more" |
+| `detect_anomalies` | OBSERVE | Check for answer pattern inconsistencies |
+
 ## Running the Demo
 
 ### Prerequisites
 
-1. MXF Server running on port 3001 (`npm start` in root)
+1. MXF Server running on port 3001 (`bun run start:dev` in root)
 2. MongoDB running locally
 3. Environment variables in `.env`:
    - `MXF_DOMAIN_KEY`
@@ -131,26 +171,28 @@ bun run connect-agents
 
 The Vue.js dashboard (port 3007) visualizes:
 
-- **ORPAR Cycle Diagram**: See which phase each agent is in (Observe → Reason → Plan → Act → Reflect)
-- **Phase Timeline**: Real-time log of all ORPAR phase events
+- **ORPAR Cycle Diagram**: Per-agent ORPAR phase indicators with summaries
+- **Phase Timeline**: Real-time log of all ORPAR phase events with MULS reward indicators
+- **Knowledge Model Panel**: Guesser's mental model (confirmed properties, candidates, eliminated)
+- **Risk Gauge**: ML-based risk score in the Guesser card (green/yellow/red)
 - **Question/Answer History**: Complete log of all questions and answers
 - **Player Cards**: Thinker and Guesser status with thinking indicators
 - **Game State**: Questions remaining, category hint, winner announcement
 
-### Watch ORPAR in Action
+### Watch Features in Action
 
-The console will show ORPAR phases as they occur:
+The console shows all feature events as they occur:
 
 ```
 [ORPAR] GUESSER -> OBSERVE
-[THINKING] agent-guesser: Looking at the question history...
+  [KG] Entity: "alive" (property, confidence: 0.9)
 [ORPAR] GUESSER -> REASON
-[THINKING] agent-guesser: Based on the "yes" to "Is it alive?"...
+  [TF/Risk] Risk score: 25% | Confidence: 60% | ask_more
 [ORPAR] GUESSER -> PLAN
-[THINKING] agent-guesser: I'll ask about whether it's a mammal...
 [ORPAR] GUESSER -> ACT
-[RESPONSE] agent-guesser: Is it a mammal?
+  [KG] Relationship: "secret" -[has_property]-> "not_mammal"
 [ORPAR] GUESSER -> REFLECT
+  [MULS] Reward attributed: 0.8 to 2 memories - effective elimination strategy
 ```
 
 ## Key Differences from Other Examples
@@ -159,8 +201,10 @@ The console will show ORPAR phases as they occur:
 |---------|-------------|---------|------------------|
 | SystemLLM | Disabled | Disabled | **Enabled** |
 | ORPAR Events | Not used | Not used | **Tracked** |
-| Phase Prompts | No | No | **Yes** |
-| Reasoning | Optional | Optional | **Enabled** |
+| Knowledge Graph | Not used | Not used | **Guesser model** |
+| MULS | Not used | Not used | **Strategy rewards** |
+| TensorFlow ML | Not used | Not used | **Risk scoring** |
+| Phase-Gated Tools | Not used | Not used | **Dynamic gating** |
 
 ## Understanding the Code
 
@@ -183,82 +227,64 @@ for (const [role, agent] of Object.entries(agents)) {
         memoryManager.clearConversationHistory();
     }
 
-    // Clear ORPAR state via EventBus
-    EventBus.client.emit(OrparEvents.CLEAR_STATE, createBaseEventPayload(
-        OrparEvents.CLEAR_STATE,
-        agentId,
-        channelId,
-        { reason: 'New turn starting' },
-        { source: 'TwentyQuestions' }
-    ));
+    // Clear ORPAR state directly for synchronous guarantee
+    clearAgentOrparState(agentId, channelId);
 }
 ```
 
-Additionally, the `orpar_status` tool has automatic stale state detection - if the phase-gated tools show `orpar_observe` is available but the tracked state shows a different phase, the state is automatically cleared.
+### Phase-Gated Tool Configuration
 
-### Game State in Task Descriptions
-
-Each turn's task description includes a complete game state summary since conversation history is cleared:
+Tools are dynamically restricted based on ORPAR phase:
 
 ```typescript
-taskDescription = `## Your Turn (Question ${state.questionsAsked + 1}/20)
-
-Your conversation history has been cleared for fresh context.
-
-### Current Game State:
-- Category: ${state.category}
-- Questions asked: ${state.questionsAsked}/${state.maxQuestions}
-- Previous Q&A:
-  Q1: "Is it alive?" → YES
-  Q2: "Is it a mammal?" → NO
-
-### Required ORPAR Sequence:
-1. orpar_observe - Document current state
-2. orpar_reason - Analyze patterns
-3. orpar_plan - Decide strategy
-4. orpar_act - Execute game action
-5. orpar_reflect - Record learnings
-6. task_complete - Signal completion`;
+const PHASE_TOOLS = {
+    observe: ['orpar_observe', 'game_getState', 'kg_get_entity', 'kg_get_neighbors',
+              'kg_get_phase_context', 'detect_anomalies', ...memoryReadTools],
+    reason:  ['orpar_reason', 'calculate_risk'],
+    plan:    ['orpar_plan', 'planning_create', 'planning_view'],
+    act:     { // Role-specific
+        thinker: ['orpar_act', 'game_setSecret', 'game_answerQuestion'],
+        guesser: ['orpar_act', 'game_askQuestion', 'game_makeGuess',
+                  'kg_create_entity', 'kg_create_relationship', 'kg_extract_from_text']
+    },
+    reflect: ['orpar_reflect', 'task_complete', 'memory_inject_reward',
+              'memory_qvalue_analytics', ...memoryWriteTools]
+};
 ```
 
-### ORPAR Event Tracking
+### Event Tracking
+
+The orchestration script listens for events from multiple MXF subsystems:
 
 ```typescript
-// In connect-agents.ts
-channel.on(Events.ControlLoop.OBSERVATION, (payload) => {
-    console.log(`[ORPAR] ${role} -> OBSERVE`);
-    // Send to game server for logging
-});
+// ORPAR events
+channel.on(Events.Orpar.OBSERVE, ...)
+channel.on(Events.Orpar.REASON, ...)
 
-channel.on(Events.ControlLoop.REASONING, (payload) => {
-    console.log(`[ORPAR] ${role} -> REASON`);
-});
-// ... etc for PLAN, ACTION, REFLECTION
+// Knowledge Graph events
+channel.on(Events.KnowledgeGraph.ENTITY_CREATED, ...)
+channel.on(Events.KnowledgeGraph.RELATIONSHIP_CREATED, ...)
+
+// MULS events
+channel.on(Events.MemoryUtility.REWARD_ATTRIBUTED, ...)
+channel.on(Events.MemoryUtility.QVALUE_UPDATED, ...)
+
+// TensorFlow events
+channel.on(Events.TensorFlow.INFERENCE_COMPLETED, ...)
+channel.on(Events.TensorFlow.INFERENCE_FALLBACK, ...)
 ```
 
-### Phase-Aware Prompting
+### ORPAR-Memory Integration
 
-The agents receive phase-specific guidance via the system prompt:
+When `ORPAR_MEMORY_INTEGRATION_ENABLED=true`, the PhaseStrataRouter automatically routes memory queries to appropriate strata:
 
-```
-Current ORPAR Phase: Reason
-Focus on analyzing observations and considering options.
-```
-
-This is powered by the `PromptTemplateReplacer` which replaces `{{CURRENT_ORPAR_PHASE}}` and `{{CURRENT_ORPAR_PHASE_GUIDANCE}}` at runtime.
-
-### SystemLLM Integration
-
-Unlike the other game examples, Twenty Questions enables `systemLlmEnabled: true`:
-
-```typescript
-const channel = await sdk.createChannel(channelId, {
-    systemLlmEnabled: true,  // Enable ORPAR orchestration
-    // ...
-});
-```
-
-This allows the server-side control loop to orchestrate the cognitive cycle.
+| Phase | Strata | Lambda | Rationale |
+|-------|--------|--------|-----------|
+| OBSERVE | Working + Short-term | 0.2 | Recent context, semantic accuracy |
+| REASON | Episodic + Semantic | 0.5 | Balanced explore/exploit |
+| PLAN | Semantic + Long-term | 0.7 | Proven strategies |
+| ACT | Working + Short-term | 0.3 | Grounded execution |
+| REFLECT | All strata | 0.6 | Holistic review |
 
 ## Files
 
@@ -277,13 +303,13 @@ twenty-questions/
 │   └── vite.config.ts
 └── server/
     ├── types/
-    │   └── game.ts             # TypeScript interfaces
+    │   └── game.ts             # TypeScript interfaces (incl. KG, risk, MULS types)
     ├── engine/
-    │   └── GameStateManager.ts # Game logic & state
+    │   └── GameStateManager.ts # Game logic & state (incl. KG/risk/MULS tracking)
     ├── mcp/
     │   └── TwentyQuestionsMcpServer.ts  # MCP tool server
     └── server/
-        └── GameServer.ts       # Express + Socket.IO server
+        └── GameServer.ts       # Express + Socket.IO server (incl. KG/risk/MULS endpoints)
 ```
 
 ## Learning Objectives
@@ -291,17 +317,10 @@ twenty-questions/
 After studying this example, you should understand:
 
 1. **How ORPAR orchestrates agent cognition** - The 5-phase cycle and how it applies to problem-solving
-2. **Event-based phase tracking** - How to observe and log ORPAR phases
-3. **Phase-aware prompting** - How agents receive contextual guidance based on current phase
-4. **SystemLLM integration** - How server-side LLM enhances agent coordination
-5. **Custom MCP tools** - Building game-specific tools that work with ORPAR
-6. **Real-time visualization** - Building dashboards that show AI cognition in action
-
-## Extending This Example
-
-Ideas for enhancement:
-
-1. **Multiple Guessers**: Team of agents collaborating to guess
-2. **Learning Mode**: Agent improves strategy across games
-3. **Difficulty Levels**: Adjust secret complexity or question limit
-4. **Phase Analytics**: Track and display ORPAR phase timing statistics
+2. **Knowledge Graph integration** - How agents build and query explicit knowledge models
+3. **MULS memory learning** - How Q-value rewards improve memory retrieval over time
+4. **ML risk assessment** - How TensorFlow tools provide decision support
+5. **Phase-gated tool access** - How to dynamically restrict tools based on cognitive phase
+6. **Event-based tracking** - How to observe and log events from multiple MXF subsystems
+7. **Real-time visualization** - Building dashboards that show AI cognition and knowledge building
+8. **ORPAR-Memory integration** - Phase-aware memory strata routing

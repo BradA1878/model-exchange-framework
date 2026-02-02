@@ -8,12 +8,13 @@ The Model Exchange Framework (MXF) is a platform for building autonomous multi-a
 
 - **Multi-Agent Collaboration**: Agents work together naturally through goal-oriented messaging
 - **Real-Time Communication**: WebSocket-based instant messaging with Socket.IO
-- **Hybrid Tool System**: 95+ built-in tools plus external MCP server integration
+- **Hybrid Tool System**: 100+ built-in tools plus external MCP server integration
 - **Semantic Search & Memory**: Meilisearch integration for efficient memory retrieval
 - **Docker Deployment**: Docker Compose stack with full service orchestration
 - **Intelligent Optimization**: MXP 2.0 provides token and bandwidth optimization
 - **Enterprise Infrastructure**: MongoDB persistence, Meilisearch search, domain key authentication, comprehensive analytics
 - **ORPAR Control Loop**: Structured cognitive cycle for intelligent decision-making
+- **TensorFlow.js Integration**: On-device ML models for error prediction, anomaly detection, and more (opt-in)
 
 > **Note on SDK Imports**: This documentation uses `@mxf/sdk` as the import path for code examples. Since MXF is currently a monorepo (not published to npm), use relative paths when working within the repository:
 > ```typescript
@@ -33,7 +34,7 @@ The Model Exchange Framework (MXF) is a platform for building autonomous multi-a
 
 ### Option B: Local Development
 
-- **Node.js 20+** installed (or Bun 1.1+ for fast package management)
+- **Bun 1.1+** installed (primary runtime and package manager)
 - **MongoDB** running (local or cloud instance)
 - **LLM Provider API Key(s)** (optional, for LLM-powered agents) - Choose from (mix and match):
   - [OpenRouter](https://openrouter.ai/) - Access to 200+ models
@@ -245,7 +246,7 @@ bun run start:dev
 
 # Production mode
 bun run build
-npm start
+bun run start
 ```
 
 The server will start on `http://localhost:3001`.
@@ -299,6 +300,22 @@ Structured cognitive cycle:
 3. **Planning**: Create comprehensive plans
 4. **Action**: Execute planned actions
 5. **Reflection**: Learn from outcomes
+
+### Task DAG
+
+Directed Acyclic Graph for defining complex task dependencies with automatic topological ordering and parallel execution of independent tasks. See [Task DAG & Knowledge Graph](./features/dag-knowledge-graph.md).
+
+### Knowledge Graph
+
+Entity-relationship modeling for structured knowledge with typed relationships, traversal queries, and optional TransE embeddings. See [Knowledge Graph Guide](./features/dag-knowledge-graph.md).
+
+### Memory Strata
+
+Three-layer memory architecture: episodic (event sequences), semantic (factual knowledge), and procedural (how-to patterns). Each ORPAR phase routes to specific strata.
+
+### MULS (Memory Utility Learning System)
+
+Q-value weighted memory retrieval where memories are ranked by learned utility scores. ORPAR phase-specific lambdas control retrieval weights, and task outcomes propagate retroactive rewards. See [MULS Guide](./mxf/memory-utility-learning.md).
 
 ## SDK Setup for Developers
 
@@ -871,18 +888,14 @@ agent.on(Events.Mcp.TOOL_ERROR, (payload) => {
 
 ## Running Example Demos
 
-MXF includes example demos:
+MXF includes 20 example demos. Start the server first (`bun run start:dev`), then run demos in another terminal:
 
 ### First Contact Demo
 
 6 AI agents in a first contact scenario:
 
 ```bash
-# Start the server
-bun run start:dev
-
-# Run the demo (in another terminal)
-npx run demo:first-contact
+bun run demo:first-contact
 ```
 
 ### Interview Scheduling Demo
@@ -890,11 +903,39 @@ npx run demo:first-contact
 Agents coordinate to schedule interviews:
 
 ```bash
-# Start the server
-bun run start:dev
-
-# Run the demo (in another terminal)
 bun run demo:interview
+```
+
+### More Demos
+
+```bash
+# Strategy & Collaboration
+bun run demo:fog-of-war          # Strategy game with 8 agents
+
+# Memory & Learning
+bun run demo:orpar-memory        # ORPAR-Memory integration
+bun run demo:muls                # Memory Utility Learning System
+bun run demo:nested-learning     # Nested learning
+bun run demo:memory-strata       # Memory strata
+
+# Advanced Features
+bun run demo:dag                 # Task DAG workflows
+bun run demo:kg                  # Knowledge Graph operations
+bun run demo:tensorflow          # TensorFlow.js (requires TENSORFLOW_ENABLED=true)
+bun run demo:code-execution      # Sandboxed code execution
+bun run demo:workflow-patterns   # Workflow patterns
+bun run demo:lsp-code-intelligence  # LSP integration
+bun run demo:p2p-task-negotiation   # P2P task negotiation
+
+# Optimization
+bun run demo:toon-optimization   # TOON encoding
+bun run demo:prompt-compaction   # Prompt auto-compaction
+bun run demo:inference-params    # Dynamic inference parameters
+bun run demo:mcp-prompts         # MCP prompts
+
+# SDK Patterns
+bun run demo:external-mcp        # External MCP server registration
+bun run demo:channel-mcp         # Channel-scoped MCP registration
 ```
 
 ## Next Steps
@@ -1027,16 +1068,18 @@ echo $XAI_API_KEY
 # Server
 bun run start:dev        # Development server
 bun run build           # Build for production
-npm start               # Production server
+bun run start           # Production server
 
 # Dashboard
 cd dashboard && bun run dev
 
-# Demos
+# Demos (20 available — see Running Example Demos section above)
 bun run demo:first-contact
+bun run demo:fog-of-war
 bun run demo:interview
-bun run demo:mxp
-
+bun run demo:dag
+bun run demo:kg
+bun run demo:tensorflow
 ```
 
 ### Environment Variables

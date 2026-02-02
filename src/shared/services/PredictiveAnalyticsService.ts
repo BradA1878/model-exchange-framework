@@ -33,9 +33,16 @@ import { EventEmitter } from 'events';
 import { Logger } from '../utils/Logger';
 import { EventBus } from '../events/EventBus';
 import { Events } from '../events/EventNames';
-import { ValidationPerformanceService } from './ValidationPerformanceService';
+import { TensorFlowEvents } from '../events/event-definitions/TensorFlowEvents';
+import {
+    SYSTEM_AGENT_ID,
+    SYSTEM_CHANNEL_ID,
+    createTfInferenceFallbackPayload,
+} from '../schemas/EventPayloadSchema';
 import { PatternLearningService } from './PatternLearningService';
-import { ProactiveValidationService } from './ProactiveValidationService';
+import { MxfMLService } from './MxfMLService';
+import { MxfModelType } from '../types/TensorFlowTypes';
+import { isTensorFlowEnabled, getTensorFlowConfig } from '../config/tensorflow.config';
 import { AgentId, ChannelId } from '../types/ChannelContext';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -189,17 +196,42 @@ export interface ModelMetadata {
     validationMetrics: Record<string, number>;
 }
 
+/** TF.js model ID for the error prediction Dense classifier */
+const TF_ERROR_PREDICTION_MODEL_ID = 'error_prediction';
+
+/** TF.js model ID for the anomaly detection autoencoder */
+const TF_ANOMALY_AUTOENCODER_MODEL_ID = 'anomaly_autoencoder';
+
+/** Number of features in the vectorized feature vector */
+const ERROR_PREDICTION_FEATURE_COUNT = 12;
+
+/**
+ * Scale factor for normalizing autoencoder reconstruction error to 0-1 range.
+ * Raw MSE is multiplied by this value and clamped to [0, 1].
+ * Calibrated so that MSE ≈ 0.08 maps to the existing anomaly threshold of 0.8.
+ */
+const AUTOENCODER_ANOMALY_SCALE_FACTOR = 10;
+
 /**
  * Predictive Analytics Service
  */
 export class PredictiveAnalyticsService extends EventEmitter {
     private readonly logger: Logger;
-    
+
     // Service dependencies
-    private readonly validationPerformanceService: ValidationPerformanceService;
     private readonly patternLearningService: PatternLearningService;
-    private readonly proactiveValidationService: ProactiveValidationService;
-    
+
+    // TF.js error prediction model state
+    // When TF.js is enabled and the model is trained, predict() uses MxfMLService.
+    // Otherwise falls back to the heuristic runModel().
+    private tfErrorPredictionReady: boolean = false;
+
+    // TF.js anomaly detection autoencoder state
+    // When TF.js is enabled and the autoencoder is trained, anomaly detection
+    // uses reconstruction error from MxfMLService.predictWithReconstruction().
+    // Otherwise falls back to the heuristic distance-based isolation score.
+    private tfAnomalyAutoencoderReady: boolean = false;
+
     // Models (simplified in-memory implementation)
     private readonly models = new Map<string, any>();
     private readonly modelMetadata = new Map<string, ModelMetadata>();
@@ -250,16 +282,31 @@ export class PredictiveAnalyticsService extends EventEmitter {
     private constructor() {
         super();
         this.logger = new Logger('info', 'PredictiveAnalyticsService', 'server');
-        
+
         // Initialize service dependencies
-        this.validationPerformanceService = ValidationPerformanceService.getInstance();
         this.patternLearningService = PatternLearningService.getInstance();
-        this.proactiveValidationService = ProactiveValidationService.getInstance();
-        
+
         this.initializeModels();
         this.setupEventListeners();
         this.startRetrainSchedule();
-        
+
+        // Initialize TF.js models if TensorFlow.js is enabled.
+        // These are async but we fire-and-forget since the heuristic fallbacks
+        // handle predictions while the models are being set up.
+        if (isTensorFlowEnabled()) {
+            this.initializeTfErrorPrediction().catch((error) => {
+                this.logger.warn(
+                    `[PredictiveAnalyticsService] TF.js error prediction init failed, ` +
+                    `using heuristic fallback: ${error instanceof Error ? error.message : String(error)}`
+                );
+            });
+            this.initializeTfAnomalyAutoencoder().catch((error) => {
+                this.logger.warn(
+                    `[PredictiveAnalyticsService] TF.js anomaly autoencoder init failed, ` +
+                    `using heuristic fallback: ${error instanceof Error ? error.message : String(error)}`
+                );
+            });
+        }
     }
     
     /**
@@ -272,6 +319,203 @@ export class PredictiveAnalyticsService extends EventEmitter {
         return PredictiveAnalyticsService.instance;
     }
     
+    // =============================================================================
+    // TF.JS ERROR PREDICTION MODEL SETUP
+    // =============================================================================
+
+    /**
+     * Initialize TF.js error prediction model.
+     *
+     * Registers, builds, and optionally loads a Dense(12→32→16→1) binary
+     * classifier with MxfMLService. The model uses binary cross-entropy loss
+     * and sigmoid output for error probability prediction.
+     *
+     * Architecture: input(12) → Dense(32, relu) → Dense(16, relu) → Dense(1, sigmoid)
+     *
+     * If a previously trained model exists in storage (GridFS), it is loaded
+     * automatically. Otherwise the model starts untrained and waits for enough
+     * training data (100 samples) before the first training run.
+     */
+    private async initializeTfErrorPrediction(): Promise<void> {
+        const mlService = MxfMLService.getInstance();
+
+        if (!mlService.isEnabled()) {
+            this.logger.debug(
+                '[PredictiveAnalyticsService] MxfMLService not enabled, skipping TF.js model setup'
+            );
+            return;
+        }
+
+        // Register the error prediction model configuration
+        mlService.registerModel({
+            modelId: TF_ERROR_PREDICTION_MODEL_ID,
+            type: MxfModelType.DENSE_CLASSIFIER,
+            inputShape: [ERROR_PREDICTION_FEATURE_COUNT],
+            outputShape: [1],
+            minTrainingSamples: 100,
+            batchSize: 32,
+            epochs: 10,
+            validationSplit: 0.2,
+            learningRate: 0.001,
+            autoTrain: true,
+            retrainIntervalMs: this.config.retrainInterval,
+            hyperparameters: {
+                architecture: 'dense(12)->dense(32,relu)->dense(16,relu)->dense(1,sigmoid)',
+                loss: 'binaryCrossentropy',
+                optimizer: 'adam',
+            },
+        });
+
+        // Build the Dense(12→32→16→1) model
+        await mlService.buildSequentialModel(TF_ERROR_PREDICTION_MODEL_ID, (tf) => {
+            const model = tf.sequential();
+            model.add(tf.layers.dense({
+                units: 32,
+                activation: 'relu',
+                inputShape: [ERROR_PREDICTION_FEATURE_COUNT],
+            }));
+            model.add(tf.layers.dense({
+                units: 16,
+                activation: 'relu',
+            }));
+            model.add(tf.layers.dense({
+                units: 1,
+                activation: 'sigmoid',
+            }));
+            model.compile({
+                optimizer: tf.train.adam(0.001),
+                loss: 'binaryCrossentropy',
+                metrics: ['accuracy'],
+            });
+            return model;
+        });
+
+        // Try to load a previously saved model from storage
+        const loaded = await mlService.loadModel(TF_ERROR_PREDICTION_MODEL_ID);
+        if (loaded) {
+            this.tfErrorPredictionReady = true;
+            this.logger.info(
+                '[PredictiveAnalyticsService] Loaded pre-trained TF.js error prediction model'
+            );
+        } else {
+            this.logger.info(
+                '[PredictiveAnalyticsService] TF.js error prediction model built (untrained, ' +
+                'will train when 100+ samples collected)'
+            );
+        }
+
+        // Schedule automatic retraining with MxfMLService
+        const config = getTensorFlowConfig();
+        if (config.autoTrainEnabled) {
+            mlService.scheduleRetrain(TF_ERROR_PREDICTION_MODEL_ID, async () => {
+                await this.trainErrorPredictionModel();
+            });
+        }
+    }
+
+    // =============================================================================
+    // TF.JS ANOMALY DETECTION AUTOENCODER SETUP
+    // =============================================================================
+
+    /**
+     * Initialize TF.js anomaly detection autoencoder.
+     *
+     * Registers, builds, and optionally loads an autoencoder with MxfMLService.
+     * The autoencoder learns to reconstruct the 12-element feature vector;
+     * anomalies are inputs that reconstruct poorly (high MSE).
+     *
+     * Architecture: input(12) → Dense(8, relu) → Dense(4, relu) → Dense(8, relu) → Dense(12, linear)
+     * - Encoder: 12 → 8 → 4 (bottleneck)
+     * - Decoder: 4 → 8 → 12 (reconstruction)
+     * - Loss: MSE (mean squared error)
+     * - Optimizer: Adam(lr=0.001)
+     *
+     * Unsupervised training: trains on ALL feature vectors (input = output).
+     * Normal patterns are learned; anomalies produce high reconstruction error.
+     */
+    private async initializeTfAnomalyAutoencoder(): Promise<void> {
+        const mlService = MxfMLService.getInstance();
+
+        if (!mlService.isEnabled()) {
+            this.logger.debug(
+                '[PredictiveAnalyticsService] MxfMLService not enabled, skipping anomaly autoencoder setup'
+            );
+            return;
+        }
+
+        // Register the anomaly autoencoder model configuration
+        mlService.registerModel({
+            modelId: TF_ANOMALY_AUTOENCODER_MODEL_ID,
+            type: MxfModelType.AUTOENCODER,
+            inputShape: [ERROR_PREDICTION_FEATURE_COUNT],
+            outputShape: [ERROR_PREDICTION_FEATURE_COUNT],
+            minTrainingSamples: 100,
+            batchSize: 32,
+            epochs: 20,
+            validationSplit: 0.1,
+            learningRate: 0.001,
+            autoTrain: true,
+            retrainIntervalMs: this.config.retrainInterval,
+            hyperparameters: {
+                architecture: 'dense(12)->dense(8,relu)->dense(4,relu)->dense(8,relu)->dense(12,linear)',
+                loss: 'meanSquaredError',
+                optimizer: 'adam',
+                bottleneckSize: 4,
+            },
+        });
+
+        // Build the autoencoder: encoder(12→8→4) + decoder(4→8→12)
+        await mlService.buildSequentialModel(TF_ANOMALY_AUTOENCODER_MODEL_ID, (tf) => {
+            const model = tf.sequential();
+            // Encoder
+            model.add(tf.layers.dense({
+                units: 8,
+                activation: 'relu',
+                inputShape: [ERROR_PREDICTION_FEATURE_COUNT],
+            }));
+            model.add(tf.layers.dense({
+                units: 4,
+                activation: 'relu',
+            }));
+            // Decoder
+            model.add(tf.layers.dense({
+                units: 8,
+                activation: 'relu',
+            }));
+            model.add(tf.layers.dense({
+                units: ERROR_PREDICTION_FEATURE_COUNT,
+                activation: 'linear',
+            }));
+            model.compile({
+                optimizer: tf.train.adam(0.001),
+                loss: 'meanSquaredError',
+            });
+            return model;
+        });
+
+        // Try to load a previously saved model from storage
+        const loaded = await mlService.loadModel(TF_ANOMALY_AUTOENCODER_MODEL_ID);
+        if (loaded) {
+            this.tfAnomalyAutoencoderReady = true;
+            this.logger.info(
+                '[PredictiveAnalyticsService] Loaded pre-trained TF.js anomaly autoencoder model'
+            );
+        } else {
+            this.logger.info(
+                '[PredictiveAnalyticsService] TF.js anomaly autoencoder model built (untrained, ' +
+                'will train when 100+ samples collected)'
+            );
+        }
+
+        // Schedule automatic retraining with MxfMLService
+        const config = getTensorFlowConfig();
+        if (config.autoTrainEnabled) {
+            mlService.scheduleRetrain(TF_ANOMALY_AUTOENCODER_MODEL_ID, async () => {
+                await this.trainAnomalyDetectionModel();
+            });
+        }
+    }
+
     // =============================================================================
     // ERROR PREDICTION
     // =============================================================================
@@ -297,10 +541,13 @@ export class PredictiveAnalyticsService extends EventEmitter {
         // Extract features
         const features = await this.extractFeatures(agentId, channelId, toolName, parameters);
         
-        // Get prediction from model
-        const model = this.models.get('error_prediction');
-        const prediction = model ? this.runModel(model, features) : this.fallbackPrediction();
-        
+        // Get prediction — use TF.js model if available, otherwise heuristic
+        const prediction = this.runErrorPrediction(agentId, channelId, features);
+
+        // Report model type based on which prediction path was used
+        const usedTfModel = prediction.source === 'model';
+        const modelMeta = this.modelMetadata.get('error_prediction');
+
         const result: PredictionResult = {
             predictionId: uuidv4(),
             type: PredictionType.ERROR_PROBABILITY,
@@ -308,13 +555,13 @@ export class PredictiveAnalyticsService extends EventEmitter {
             prediction: {
                 value: prediction.probability,
                 confidence: prediction.confidence,
-                explanation: this.generateExplanation(features, prediction)
+                explanation: this.generateExplanation(features)
             },
             features,
             model: {
-                type: ModelType.GRADIENT_BOOSTING,
-                version: this.modelMetadata.get('error_prediction')?.version || '1.0',
-                accuracy: this.modelMetadata.get('error_prediction')?.accuracy || 0.7
+                type: usedTfModel ? ModelType.NEURAL_NETWORK : ModelType.GRADIENT_BOOSTING,
+                version: modelMeta?.version || '1.0',
+                accuracy: modelMeta?.accuracy || 0.7
             }
         };
         
@@ -393,64 +640,149 @@ export class PredictiveAnalyticsService extends EventEmitter {
     }
     
     /**
-     * Run model prediction
+     * Run error prediction, dispatching to TF.js model or heuristic fallback.
+     *
+     * When TF.js is enabled and the model is trained, runs inference via MxfMLService.predict().
+     * The model outputs a single sigmoid value [0, 1] representing error probability.
+     * Confidence is derived from model training metrics (validation accuracy).
+     *
+     * When TF.js is unavailable or the model is untrained, falls back to the
+     * rule-based heuristic that uses feature thresholds.
+     *
+     * @returns Prediction with probability, confidence, source, and important features
      */
-    private runModel(model: any, features: FeatureVector): any {
-        // Simplified model execution
-        // In production, would use actual ML libraries
-        
-        // Feature engineering
-        const featureArray = this.vectorizeFeatures(features);
-        
-        // Simple decision tree logic for demonstration
-        let probability = 0.1; // Base error rate
-        
+    private runErrorPrediction(
+        agentId: AgentId,
+        channelId: ChannelId,
+        features: FeatureVector
+    ): {
+        probability: number;
+        confidence: number;
+        source: 'model' | 'heuristic';
+        importantFeatures: string[];
+    } {
+        // Try TF.js model first
+        if (this.tfErrorPredictionReady) {
+            try {
+                const mlService = MxfMLService.getInstance();
+                const featureArray = this.vectorizeFeatures(features);
+                const result = mlService.predict(TF_ERROR_PREDICTION_MODEL_ID, featureArray);
+
+                // The model outputs a single sigmoid value (error probability)
+                const probability = Math.max(0, Math.min(1, result.values[0]));
+
+                // Confidence from model training metrics (validation accuracy, or default 0.8)
+                const modelEntry = mlService.getModel(TF_ERROR_PREDICTION_MODEL_ID);
+                const confidence = modelEntry?.lastTrainingMetrics?.valAccuracy
+                    ?? modelEntry?.lastTrainingMetrics?.accuracy
+                    ?? 0.8;
+
+                return {
+                    probability,
+                    confidence,
+                    source: 'model',
+                    importantFeatures: ['toolComplexity', 'agentExperience', 'parameterPatternMatch'],
+                };
+            } catch (error) {
+                // TF.js prediction failed — emit fallback event and use heuristic
+                this.logger.warn(
+                    `[PredictiveAnalyticsService] TF.js prediction failed, using heuristic: ` +
+                    `${error instanceof Error ? error.message : String(error)}`
+                );
+                try {
+                    EventBus.server.emit(
+                        TensorFlowEvents.INFERENCE_FALLBACK,
+                        createTfInferenceFallbackPayload(
+                            channelId,
+                            agentId,
+                            TF_ERROR_PREDICTION_MODEL_ID,
+                            'error',
+                            error instanceof Error ? error.message : 'prediction_error'
+                        )
+                    );
+                } catch {
+                    // Swallow event emission errors
+                }
+            }
+        }
+
+        // Fall back to heuristic prediction
+        return this.runHeuristicPrediction(agentId, channelId, features);
+    }
+
+    /**
+     * Heuristic error prediction using rule-based feature thresholds.
+     *
+     * This is the original prediction logic that serves as the graceful
+     * degradation fallback when TF.js is disabled, the model is untrained,
+     * or inference fails. Uses hand-tuned thresholds on the 12-feature vector.
+     */
+    private runHeuristicPrediction(
+        agentId: AgentId,
+        channelId: ChannelId,
+        features: FeatureVector
+    ): {
+        probability: number;
+        confidence: number;
+        source: 'model' | 'heuristic';
+        importantFeatures: string[];
+    } {
+        // Base error rate: 10%
+        let probability = 0.1;
+
         // High complexity tools have higher error rates
         if (features.toolComplexity > 0.7) probability += 0.2;
-        
+
         // New agents have higher error rates
         if (features.agentExperience < 10) probability += 0.15;
-        
+
         // High system load increases errors
         if (features.systemLoad > 0.8) probability += 0.1;
-        
+
         // Many parameters increase complexity
         if (features.parameterCount > 5) probability += 0.1;
-        
+
         // Pattern mismatch increases errors
         if (features.parameterPatternMatch < 0.5) probability += 0.2;
-        
+
         // Recent errors indicate ongoing issues
         if (features.recentErrors > 5) probability += 0.15;
-        
+
         // Cap probability
         probability = Math.min(0.95, probability);
-        
+
         // Calculate confidence based on data availability
         const confidence = features.agentExperience > 50 ? 0.85 : 0.6;
-        
+
+        // Emit fallback event when TF.js is enabled but model isn't ready
+        if (isTensorFlowEnabled() && !this.tfErrorPredictionReady) {
+            try {
+                EventBus.server.emit(
+                    TensorFlowEvents.INFERENCE_FALLBACK,
+                    createTfInferenceFallbackPayload(
+                        channelId,
+                        agentId,
+                        TF_ERROR_PREDICTION_MODEL_ID,
+                        'untrained'
+                    )
+                );
+            } catch {
+                // Swallow event emission errors
+            }
+        }
+
         return {
             probability,
             confidence,
-            importantFeatures: ['toolComplexity', 'agentExperience', 'parameterPatternMatch']
+            source: 'heuristic',
+            importantFeatures: ['toolComplexity', 'agentExperience', 'parameterPatternMatch'],
         };
     }
-    
-    /**
-     * Fallback prediction when model not available
-     */
-    private fallbackPrediction(): any {
-        return {
-            probability: 0.3,
-            confidence: 0.5,
-            importantFeatures: []
-        };
-    }
-    
+
     /**
      * Generate explanation for prediction
      */
-    private generateExplanation(features: FeatureVector, prediction: any): string {
+    private generateExplanation(features: FeatureVector): string {
         const factors: string[] = [];
         
         if (features.toolComplexity > 0.7) {
@@ -500,6 +832,8 @@ export class PredictiveAnalyticsService extends EventEmitter {
         
         // Parameter anomalies
         const parameterAnomaly = await this.detectParameterAnomaly(
+            agentId,
+            channelId,
             toolName,
             parameters
         );
@@ -550,17 +884,25 @@ export class PredictiveAnalyticsService extends EventEmitter {
     }
     
     /**
-     * Detect parameter anomalies
+     * Detect parameter anomalies.
+     *
+     * When TF.js autoencoder is trained, uses reconstruction error as the
+     * anomaly score. Otherwise falls back to heuristic distance-based
+     * isolation scoring against historical parameter patterns.
      */
     private async detectParameterAnomaly(
+        agentId: AgentId,
+        channelId: ChannelId,
         toolName: string,
         parameters: Record<string, any>
     ): Promise<AnomalyResult | null> {
-        // Get historical parameter patterns
+        // Get historical parameter patterns (used by heuristic fallback)
         const patterns = await this.getParameterPatterns(toolName);
-        
-        // Calculate anomaly score using isolation forest concept
-        const score = this.calculateIsolationScore(parameters, patterns);
+
+        // Calculate anomaly score — dispatches to TF.js autoencoder or heuristic
+        const score = await this.runParameterAnomalyDetection(
+            agentId, channelId, toolName, parameters, patterns
+        );
         
         if (score > this.anomalyThresholds.parameter) {
             return {
@@ -678,23 +1020,104 @@ export class PredictiveAnalyticsService extends EventEmitter {
     }
     
     /**
-     * Calculate isolation score
+     * Run parameter anomaly detection, dispatching to TF.js autoencoder or heuristic.
+     *
+     * When TF.js autoencoder is trained:
+     * - Extracts the 12-element normalized feature vector
+     * - Runs predictWithReconstruction() to get reconstruction error
+     * - Normalizes error to 0-1 range using AUTOENCODER_ANOMALY_SCALE_FACTOR
+     *
+     * When TF.js is unavailable or untrained:
+     * - Falls back to heuristic distance-based isolation scoring
+     * - Emits INFERENCE_FALLBACK event for observability
      */
-    private calculateIsolationScore(
+    private async runParameterAnomalyDetection(
+        agentId: AgentId,
+        channelId: ChannelId,
+        toolName: string,
+        parameters: Record<string, any>,
+        historicalPatterns: any[]
+    ): Promise<number> {
+        // Try TF.js autoencoder first
+        if (this.tfAnomalyAutoencoderReady) {
+            try {
+                const mlService = MxfMLService.getInstance();
+                const features = await this.extractFeatures(agentId, channelId, toolName, parameters);
+                const featureArray = this.vectorizeFeatures(features);
+                const result = mlService.predictWithReconstruction(
+                    TF_ANOMALY_AUTOENCODER_MODEL_ID,
+                    featureArray
+                );
+
+                // Normalize reconstruction error to 0-1 range
+                // Higher reconstruction error = more anomalous
+                return Math.min(1, result.reconstructionError * AUTOENCODER_ANOMALY_SCALE_FACTOR);
+            } catch (error) {
+                // TF.js inference failed — emit fallback event and use heuristic
+                this.logger.warn(
+                    `[PredictiveAnalyticsService] TF.js anomaly autoencoder inference failed, ` +
+                    `using heuristic: ${error instanceof Error ? error.message : String(error)}`
+                );
+                try {
+                    EventBus.server.emit(
+                        TensorFlowEvents.INFERENCE_FALLBACK,
+                        createTfInferenceFallbackPayload(
+                            channelId,
+                            agentId,
+                            TF_ANOMALY_AUTOENCODER_MODEL_ID,
+                            'error',
+                            error instanceof Error ? error.message : 'prediction_error'
+                        )
+                    );
+                } catch {
+                    // Swallow event emission errors
+                }
+            }
+        }
+
+        // Emit fallback event when TF.js is enabled but autoencoder isn't ready
+        if (isTensorFlowEnabled() && !this.tfAnomalyAutoencoderReady) {
+            try {
+                EventBus.server.emit(
+                    TensorFlowEvents.INFERENCE_FALLBACK,
+                    createTfInferenceFallbackPayload(
+                        channelId,
+                        agentId,
+                        TF_ANOMALY_AUTOENCODER_MODEL_ID,
+                        'untrained'
+                    )
+                );
+            } catch {
+                // Swallow event emission errors
+            }
+        }
+
+        // Fall back to heuristic isolation scoring
+        return this.calculateHeuristicIsolationScore(parameters, historicalPatterns);
+    }
+
+    /**
+     * Heuristic isolation score using distance-based parameter comparison.
+     *
+     * This is the original isolation forest scoring logic that serves as the
+     * graceful degradation fallback when TF.js is disabled, the autoencoder
+     * is untrained, or inference fails.
+     */
+    private calculateHeuristicIsolationScore(
         parameters: Record<string, any>,
         historicalPatterns: any[]
     ): number {
         // Simplified isolation forest scoring
         if (historicalPatterns.length === 0) return 0.5;
-        
+
         // Calculate distance to nearest patterns
         let minDistance = Infinity;
-        
+
         for (const pattern of historicalPatterns) {
             const distance = this.calculateParameterDistance(parameters, pattern);
             minDistance = Math.min(minDistance, distance);
         }
-        
+
         // Convert distance to anomaly score
         return Math.min(1, minDistance / 10);
     }
@@ -1223,55 +1646,267 @@ export class PredictiveAnalyticsService extends EventEmitter {
         if (this.trainingData.length < this.config.minTrainingDataSize) {
             return;
         }
-        
-        
+
         try {
             // Train error prediction model
             await this.trainErrorPredictionModel();
-            
+
             // Train anomaly detection model
             await this.trainAnomalyDetectionModel();
-            
+
             // Update metrics
             this.metrics.modelRetrains++;
-            
-            
         } catch (error) {
             this.logger.error('Model training failed:', error);
         }
     }
     
     /**
-     * Train error prediction model
+     * Train error prediction model.
+     *
+     * When TF.js is enabled and sufficient training samples exist:
+     * - Vectorizes features and binary labels from collected training data
+     * - Calls MxfMLService.train() to run supervised training on the Dense classifier
+     * - Updates internal model metadata with real training metrics
+     * - Saves the trained model to persistent storage (GridFS)
+     * - Marks the TF.js model as ready for inference
+     *
+     * When TF.js is disabled, updates metadata with simulated accuracy
+     * (preserving the original behavior for non-TF.js deployments).
      */
     private async trainErrorPredictionModel(): Promise<void> {
-        // Extract features and labels
+        // Extract features and labels from collected training data
         const features: number[][] = [];
         const labels: number[] = [];
-        
+
         for (const sample of this.trainingData) {
             if (sample.label.type === 'error_occurred') {
                 features.push(this.vectorizeFeatures(sample.features));
                 labels.push(sample.label.value ? 1 : 0);
             }
         }
-        
+
         if (features.length < 50) return;
-        
-        // Update model (simplified - just update accuracy metric)
+
+        // Try TF.js training if enabled
+        if (isTensorFlowEnabled()) {
+            try {
+                const mlService = MxfMLService.getInstance();
+
+                if (!mlService.isEnabled()) {
+                    this.logger.debug(
+                        '[PredictiveAnalyticsService] MxfMLService not enabled, using simulated training'
+                    );
+                    this.updateHeuristicMetadata(features.length);
+                    return;
+                }
+
+                // Ensure model is registered (idempotent check — may already be registered)
+                const existingModel = mlService.getModel(TF_ERROR_PREDICTION_MODEL_ID);
+                if (!existingModel) {
+                    this.logger.warn(
+                        '[PredictiveAnalyticsService] TF.js error prediction model not registered, ' +
+                        'falling back to simulated training'
+                    );
+                    this.updateHeuristicMetadata(features.length);
+                    return;
+                }
+
+                // Check minimum training samples for TF.js model
+                if (features.length < existingModel.config.minTrainingSamples) {
+                    this.logger.debug(
+                        `[PredictiveAnalyticsService] Not enough training samples for TF.js: ` +
+                        `${features.length}/${existingModel.config.minTrainingSamples}`
+                    );
+                    return;
+                }
+
+                // Format labels as 2D array for MxfMLService.train()
+                const yData = labels.map(l => [l]);
+
+                // Train the TF.js model
+                const metrics = await mlService.train(
+                    TF_ERROR_PREDICTION_MODEL_ID,
+                    features,
+                    yData
+                );
+
+                // Update internal metadata with real training metrics
+                const modelMeta = this.modelMetadata.get('error_prediction');
+                if (modelMeta) {
+                    modelMeta.trainedAt = Date.now();
+                    modelMeta.trainingDataSize = features.length;
+                    modelMeta.accuracy = metrics.accuracy ?? metrics.valAccuracy ?? 0.75;
+                    modelMeta.validationMetrics = {
+                        accuracy: metrics.accuracy ?? 0,
+                        val_accuracy: metrics.valAccuracy ?? 0,
+                        loss: metrics.loss,
+                        val_loss: metrics.valLoss ?? 0,
+                    };
+                }
+
+                // Mark TF.js model as ready for inference
+                this.tfErrorPredictionReady = true;
+
+                // Save trained model to persistent storage
+                try {
+                    await mlService.saveModel(TF_ERROR_PREDICTION_MODEL_ID);
+                } catch (saveError) {
+                    this.logger.warn(
+                        `[PredictiveAnalyticsService] Failed to save trained model: ` +
+                        `${saveError instanceof Error ? saveError.message : String(saveError)}`
+                    );
+                }
+
+                this.logger.info(
+                    `[PredictiveAnalyticsService] TF.js error prediction model trained ` +
+                    `(samples=${features.length}, loss=${metrics.loss.toFixed(4)}, ` +
+                    `accuracy=${(metrics.accuracy ?? 0).toFixed(4)})`
+                );
+
+                return;
+            } catch (error) {
+                this.logger.error(
+                    `[PredictiveAnalyticsService] TF.js training failed, updating heuristic metadata: ` +
+                    `${error instanceof Error ? error.message : String(error)}`
+                );
+                // Fall through to heuristic metadata update
+            }
+        }
+
+        // Non-TF.js path: update metadata with simulated accuracy
+        this.updateHeuristicMetadata(features.length);
+    }
+
+    /**
+     * Update model metadata with simulated accuracy for heuristic-only mode.
+     *
+     * Preserves the original behavior when TF.js is disabled.
+     */
+    private updateHeuristicMetadata(sampleCount: number): void {
         const modelMeta = this.modelMetadata.get('error_prediction');
         if (modelMeta) {
             modelMeta.trainedAt = Date.now();
-            modelMeta.trainingDataSize = features.length;
-            modelMeta.accuracy = 0.75 + Math.random() * 0.1; // Simulated improvement
+            modelMeta.trainingDataSize = sampleCount;
+            modelMeta.accuracy = 0.75 + Math.random() * 0.1;
         }
     }
     
     /**
-     * Train anomaly detection model
+     * Train anomaly detection model.
+     *
+     * When TF.js is enabled and sufficient training samples exist:
+     * - Vectorizes ALL feature vectors from collected training data (unsupervised —
+     *   the autoencoder trains to reconstruct its input, so xData = yData)
+     * - Calls MxfMLService.train() to run training on the autoencoder
+     * - Updates internal model metadata with real training metrics
+     * - Saves the trained model to persistent storage (GridFS)
+     * - Marks the TF.js autoencoder as ready for inference
+     *
+     * When TF.js is disabled, updates metadata with simulated accuracy
+     * (preserving the original behavior for non-TF.js deployments).
      */
     private async trainAnomalyDetectionModel(): Promise<void> {
-        // Similar to error prediction training
+        // Extract ALL feature vectors — autoencoder is unsupervised,
+        // it learns "normal" patterns regardless of error labels
+        const features: number[][] = [];
+
+        for (const sample of this.trainingData) {
+            features.push(this.vectorizeFeatures(sample.features));
+        }
+
+        // Try TF.js training if enabled
+        if (isTensorFlowEnabled() && features.length > 0) {
+            try {
+                const mlService = MxfMLService.getInstance();
+
+                if (!mlService.isEnabled()) {
+                    this.logger.debug(
+                        '[PredictiveAnalyticsService] MxfMLService not enabled, using simulated anomaly training'
+                    );
+                    this.updateAnomalyHeuristicMetadata();
+                    return;
+                }
+
+                // Ensure model is registered
+                const existingModel = mlService.getModel(TF_ANOMALY_AUTOENCODER_MODEL_ID);
+                if (!existingModel) {
+                    this.logger.warn(
+                        '[PredictiveAnalyticsService] TF.js anomaly autoencoder model not registered, ' +
+                        'falling back to simulated training'
+                    );
+                    this.updateAnomalyHeuristicMetadata();
+                    return;
+                }
+
+                // Check minimum training samples
+                if (features.length < existingModel.config.minTrainingSamples) {
+                    this.logger.debug(
+                        `[PredictiveAnalyticsService] Not enough training samples for anomaly autoencoder: ` +
+                        `${features.length}/${existingModel.config.minTrainingSamples}`
+                    );
+                    return;
+                }
+
+                // Autoencoder: input = output (learns to reconstruct normal patterns)
+                const metrics = await mlService.train(
+                    TF_ANOMALY_AUTOENCODER_MODEL_ID,
+                    features,
+                    features
+                );
+
+                // Update internal metadata with real training metrics
+                const modelMeta = this.modelMetadata.get('anomaly_detection');
+                if (modelMeta) {
+                    modelMeta.trainedAt = Date.now();
+                    modelMeta.trainingDataSize = features.length;
+                    // For autoencoders, accuracy is not directly applicable —
+                    // use inverse of loss as a quality indicator (lower loss = better reconstruction)
+                    modelMeta.accuracy = Math.max(0, Math.min(1, 1 - metrics.loss));
+                    modelMeta.validationMetrics = {
+                        loss: metrics.loss,
+                        val_loss: metrics.valLoss ?? 0,
+                    };
+                }
+
+                // Mark TF.js autoencoder as ready for inference
+                this.tfAnomalyAutoencoderReady = true;
+
+                // Save trained model to persistent storage
+                try {
+                    await mlService.saveModel(TF_ANOMALY_AUTOENCODER_MODEL_ID);
+                } catch (saveError) {
+                    this.logger.warn(
+                        `[PredictiveAnalyticsService] Failed to save anomaly autoencoder model: ` +
+                        `${saveError instanceof Error ? saveError.message : String(saveError)}`
+                    );
+                }
+
+                this.logger.info(
+                    `[PredictiveAnalyticsService] TF.js anomaly autoencoder trained ` +
+                    `(samples=${features.length}, loss=${metrics.loss.toFixed(4)})`
+                );
+
+                return;
+            } catch (error) {
+                this.logger.error(
+                    `[PredictiveAnalyticsService] TF.js anomaly autoencoder training failed, ` +
+                    `updating heuristic metadata: ${error instanceof Error ? error.message : String(error)}`
+                );
+                // Fall through to heuristic metadata update
+            }
+        }
+
+        // Non-TF.js path: update metadata with simulated accuracy
+        this.updateAnomalyHeuristicMetadata();
+    }
+
+    /**
+     * Update anomaly detection model metadata with simulated accuracy for heuristic-only mode.
+     *
+     * Preserves the original behavior when TF.js is disabled.
+     */
+    private updateAnomalyHeuristicMetadata(): void {
         const modelMeta = this.modelMetadata.get('anomaly_detection');
         if (modelMeta) {
             modelMeta.trainedAt = Date.now();
@@ -1539,7 +2174,13 @@ export class PredictiveAnalyticsService extends EventEmitter {
     }
     
     /**
-     * Start retrain schedule
+     * Start retrain schedule.
+     *
+     * When TF.js is enabled, both error prediction and anomaly detection
+     * retraining are managed by MxfMLService.scheduleRetrain() (configured
+     * in initializeTfErrorPrediction() and initializeTfAnomalyAutoencoder()).
+     * This interval serves as the retraining path when TF.js is disabled
+     * and as a fallback when MxfMLService scheduling is not active.
      */
     private startRetrainSchedule(): void {
         this.retrainInterval = setInterval(() => {
@@ -1588,11 +2229,16 @@ export class PredictiveAnalyticsService extends EventEmitter {
     }
     
     /**
-     * Cleanup
+     * Cleanup.
+     *
+     * Stops the retrain schedule. TF.js model disposal is handled by
+     * MxfMLService.dispose() during server shutdown.
      */
     public cleanup(): void {
         if (this.retrainInterval) {
             clearInterval(this.retrainInterval);
         }
+        this.tfErrorPredictionReady = false;
+        this.tfAnomalyAutoencoderReady = false;
     }
 }

@@ -293,14 +293,14 @@ export class OpenRouterMessageAdapter implements IMessageAdapter {
         const droppedCount = toolResultsMap.size;
         if (droppedCount > 0) {
             const droppedIds = Array.from(toolResultsMap.keys()).join(', ');
-            this.logger.warn(`⚠️ Dropping ${droppedCount} orphaned tool result(s) with no matching tool call: ${droppedIds}`);
-            this.logger.warn(`   This is expected after clearing conversation history between turns.`);
+            this.logger.debug(`Dropping ${droppedCount} orphaned tool result(s) with no matching tool call: ${droppedIds}`);
+            this.logger.debug(`   This is expected after clearing conversation history between turns.`);
         }
 
         // Pass 4: DROP orphaned tool results (no tool_call_id at all)
         // Same reasoning - these cause API errors
         if (orphanedToolResults.length > 0) {
-            this.logger.warn(`⚠️ Dropping ${orphanedToolResults.length} orphaned tool results (no tool_call_id)`);
+            this.logger.debug(`Dropping ${orphanedToolResults.length} orphaned tool results (no tool_call_id)`);
         }
 
         // Note: Message count will differ if we dropped orphaned results - this is intentional

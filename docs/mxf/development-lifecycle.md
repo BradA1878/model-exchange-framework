@@ -7,38 +7,54 @@ This section outlines the typical development workflow and code structure for MX
 ```
 model-exchange-framework/
 ├── src/server/         # Backend API server (TypeScript, Express)
+├── src/sdk/            # MXF TypeScript SDK client
+├── src/shared/         # Shared utilities, tools, events, models
 ├── dashboard/          # Vue 3 Dashboard application
-├── sdk/                # MXF TypeScript SDK client
+├── examples/           # 20 demo applications
+├── tests/              # Unit, property, integration, mutation tests
 └── docs/               # Documentation (API, Dashboard, SDK, MXF)
 ```
 
 ## Backend
 
-- **Install:** `pnpm install` in project root
-- **Run:** `pnpm start` or `node dist/index.js` (default port 3001)
-- **Build:** `pnpm build` compiles TypeScript to `dist/`
-- **Lint:** `pnpm lint` ensures code style and TS rules
+- **Install:** `bun install` in project root
+- **Run:** `bun run start:dev` for development (hot-reload) or `bun run start` for production
+- **Build:** `bun run build` compiles TypeScript to `dist/`
+- **Clean:** `bun run clean` removes build artifacts
+- **Rebuild:** `bun run rebuild` runs clean + build
 - **Validate:** Shared request/response schemas in `src/shared/schemas`
 
 ## Dashboard
 
 - **Navigate:** `cd dashboard`
-- **Install:** `pnpm install`
-- **Dev Server:** `pnpm dev` (http://localhost:3002)
-- **Build:** `pnpm build` outputs to `dashboard/dist/`
+- **Install:** `npm install`
+- **Dev Server:** `bun run dev` (http://localhost:5173)
+- **Build:** `bun run build` outputs to `dashboard/dist/`
+- **Type Check:** `bun run type-check`
+- **Lint:** `bun run lint`
 
 ## SDK
 
-- **Navigate:** `cd sdk`
-- **Install:** `pnpm install`
-- **Build:** `pnpm build` generates ESM/CJS in `dist/`
-- **Test:** Manual smoke tests via example scripts (no unit tests)
-- **Publish:** `npm publish` or `pnpm publish`
+The SDK is part of the monorepo at `src/sdk/`. It is not published separately.
+
+- **Build:** `bun run build` (builds the entire project including SDK)
+- **Test:** Integration tests via `bun run test:integration`
+- **CLI:** `bun run sdk:cli -- <command>` for channel/key management
+
+## Testing
+
+```bash
+bun run test:unit              # Unit + property tests (no server needed)
+bun run test:integration       # All integration tests (server must be running)
+bun run test:mutation          # Mutation testing (no server needed)
+```
+
+**Important:** Start the server manually (`bun run start:dev`) before running integration tests.
 
 ## Documentation
 
 - **Location:** `docs/` folder contains all markdown files
-- **Render:** Use any markdown viewer or publish to static site (e.g., Docusaurus)
+- **Browser:** Open `docs/index.html` for interactive documentation browser
 - **Update:** After code changes, synchronize docs with API and config updates
 
 ---

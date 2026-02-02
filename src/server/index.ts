@@ -317,6 +317,18 @@ const initializeServer = async () => {
             }
         }
 
+        // Step 2.8: Initialize TensorFlow.js integration if enabled
+        if (process.env.TENSORFLOW_ENABLED === 'true') {
+            try {
+                const { MxfMLService } = await import('../shared/services/MxfMLService');
+                await MxfMLService.getInstance().initialize();
+                logger.info('TensorFlow.js integration initialized');
+            } catch (error) {
+                logger.error(`Failed to initialize TensorFlow.js: ${error instanceof Error ? error.message : String(error)}`);
+                logger.warn('Continuing without TensorFlow.js - ML models disabled');
+            }
+        }
+
         // Step 3: Initialize Hybrid MCP Service
         try {
             await ServerHybridMcpService.getInstance().initialize();
@@ -324,7 +336,7 @@ const initializeServer = async () => {
             logger.error(`❌ Failed to initialize Hybrid MCP Service: ${error instanceof Error ? error.message : String(error)}`);
             // Don't exit - let the server continue without hybrid MCP if it fails
         }
-        
+
         // Step 4: Load existing MCP tools from database and register new ones
         // NOTE: This must happen BEFORE McpService initializes so it can load the newly registered tools
         try {
@@ -364,6 +376,14 @@ const initializeServer = async () => {
 
             // Store tool count for server startup message
             (server as any)._mxfToolCount = toolCount;
+
+            // Refresh the hybrid registry so it sees newly registered tools
+            // (Step 3 took an initial snapshot before these tools were registered)
+            try {
+                ServerHybridMcpService.getInstance().getHybridRegistry().refreshInternalTools();
+            } catch (error) {
+                // Non-fatal: hybrid registry will still work with its initial snapshot
+            }
 
         } catch (error) {
             logger.error(`❌ Failed to initialize MXF MCP tools: ${error}`);

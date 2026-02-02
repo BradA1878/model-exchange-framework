@@ -11,13 +11,31 @@ Welcome to the comprehensive technical documentation for the Model Exchange Fram
 ### 📚 **Core Documentation**
 - **[SDK Reference](./sdk/index.md)** - TypeScript SDK for building agents
 - **[API Reference](./api/index.md)** - REST and WebSocket APIs
-- **[Tool Reference](./mxf/tool-reference.md)** - Complete guide to 95+ built-in tools
+- **[Tool Reference](./mxf/tool-reference.md)** - Complete guide to 100+ built-in tools
 - **[Core Architecture](./mxf/index.md)** - System design and patterns
 - **[Dashboard Guide](./dashboard/index.md)** - Web interface documentation (⚠️ in development)
 
 ### 🔍 **Semantic Search & Memory**
 - **[Meilisearch Integration Guide](./meilisearch-integration.md)** - Semantic search setup and usage
 - **[Docker Deployment](./deployment.md)** - Complete stack deployment
+
+### 🔀 **DAG, Knowledge Graph & ML**
+- **[Task DAG & Knowledge Graph](./features/dag-knowledge-graph.md)** - DAG workflows and KG operations
+- **[DAG API Tools](./api/dag-tools.md)** - DAG tool reference
+- **[Knowledge Graph API Tools](./api/knowledge-graph-tools.md)** - KG tool reference
+- **[Memory Utility Learning (MULS)](./mxf/memory-utility-learning.md)** - Q-value weighted memory retrieval
+- **[ORPAR-Memory Integration](./mxf/orpar-memory-integration.md)** - Phase-aware memory coupling
+
+### 🤖 **Advanced Systems**
+- **[TensorFlow.js Integration](./mxf/index.md#tensorflow)** - On-device ML models
+- **[Code Execution](./mxf/code-execution.md)** - Secure sandboxed execution
+- **[Workflow System](./mxf/workflow-system.md)** - Sequential, parallel, loop patterns
+- **[LSP Integration](./mxf/lsp-integration.md)** - Language Server Protocol bridge
+- **[P2P Foundation](./mxf/p2p-foundation.md)** - Decentralized coordination
+- **[Nested Learning](./mxf/nested-learning.md)** - Multi-timescale memory
+- **[Dynamic Inference Parameters](./mxf/dynamic-inference-parameters.md)** - Complexity-based model selection
+- **[TOON Optimization](./mxf/toon-optimization.md)** - Token-optimized encoding
+- **[Prompt Auto-Compaction](./mxf/prompt-auto-compaction.md)** - Automatic prompt compression
 
 ### ⚡ **Optimization & Performance**
 - **[MXP 2.0 Protocol](./mxf/mxp-protocol.md)** - Token & bandwidth optimization protocol
@@ -43,7 +61,7 @@ The **Model Exchange Framework (MXF)** is a framework for building autonomous mu
 
 - **🤖 Multi-Agent Collaboration**: Agents work together naturally through goal-oriented task prompting
 - **⚡ Real-Time Communication**: WebSocket-based messaging with Socket.IO
-- **Hybrid Tool System**: 95+ built-in tools plus external MCP server integration (including 3 memory search tools)
+- **Hybrid Tool System**: 100+ built-in tools plus external MCP server integration (including 3 memory search tools)
 - **🔍 Semantic Search**: Meilisearch integration for intelligent memory retrieval
 - **🧠 ORPAR Control Loop**: Structured cognitive cycle (Observation, Reasoning, Planning, Action, Reflection)
 - **💾 Multi-Scope Memory**: Agent-private, channel-shared, and relationship memory with semantic search
@@ -57,8 +75,10 @@ The **Model Exchange Framework (MXF)** is a framework for building autonomous mu
 - **Pattern Learning**: Cross-agent knowledge sharing with ML-based predictions
 - **Proactive Validation**: Pre-execution validation with low latency, risk assessment, and multi-level caching
 - **Auto-Correction System**: Intelligent parameter correction with safety guards
-- **Error Prediction**: ML-based error prediction using ensemble models
+- **Error Prediction**: ML-based error prediction using a TF.js Dense classifier when `TENSORFLOW_ENABLED=true`, with heuristic fallback when disabled
+- **Anomaly Detection**: TF.js autoencoder (12->8->4->8->12) detects parameter anomalies via reconstruction error when `TENSORFLOW_ENABLED=true`, with heuristic distance-based isolation score fallback when disabled
 - **Configurable Security**: Four security levels (standard → enhanced → regulated → classified)
+- **TensorFlow.js Integration**: On-device ML models for error prediction (Phase 2 Dense classifier), anomaly detection (Phase 3 autoencoder), and knowledge graph embeddings (opt-in via `TENSORFLOW_ENABLED=true`)
 
 ## Documentation Structure
 
@@ -100,9 +120,76 @@ The **Model Exchange Framework (MXF)** is a framework for building autonomous mu
 - [Extensibility](./mxf/extensibility.md) - Custom integrations
 - [Dashboard](./dashboard/index.md) - Management interface (⚠️ in development)
 
-## What's New in MXF
+## What's New in MXF (Q1 2026)
 
-### 🔍 Semantic Search & Memory (Latest)
+### Task DAG & Knowledge Graph
+
+MXF now includes a **Task DAG** system for defining complex task dependencies with automatic topological ordering and parallel execution, plus a **Knowledge Graph** for entity-relationship modeling with traversal queries and TransE embeddings.
+
+📖 **[Task DAG & Knowledge Graph Guide →](./features/dag-knowledge-graph.md)**
+
+### Memory Utility Learning System (MULS)
+
+The **MULS** system adds Q-value weighted memory retrieval with ORPAR phase-specific lambdas, retroactive reward propagation, and memory strata (episodic, semantic, procedural).
+
+📖 **[MULS Guide →](./mxf/memory-utility-learning.md)** | **[ORPAR-Memory Integration →](./mxf/orpar-memory-integration.md)**
+
+### Advanced Feature Systems
+
+- **[Workflow System](./mxf/workflow-system.md)** - Sequential, parallel, and loop workflow patterns
+- **[LSP Integration](./mxf/lsp-integration.md)** - Language Server Protocol bridge for code intelligence
+- **[Nested Learning](./mxf/nested-learning.md)** - Multi-timescale memory consolidation
+- **[P2P Foundation](./mxf/p2p-foundation.md)** - Decentralized agent coordination
+- **[Code Execution](./mxf/code-execution.md)** - Secure Docker sandboxed execution
+- **[Dynamic Inference Parameters](./mxf/dynamic-inference-parameters.md)** - Complexity-based model selection
+- **[TOON Optimization](./mxf/toon-optimization.md)** - Token-optimized encoding
+- **[Prompt Auto-Compaction](./mxf/prompt-auto-compaction.md)** - Automatic prompt compression
+- **[Database Abstraction](./mxf/database-abstraction.md)** - Swappable database backends
+
+### TensorFlow.js Integration
+
+MXF now includes an opt-in **TensorFlow.js integration** for on-device machine learning:
+
+**Phase 1 -- Foundation Layer (MxfMLService):**
+- **MxfMLService Singleton**: Manages TF.js model lifecycle (register, build, train, predict, save/load)
+- **7 Model Architectures**: Dense classifiers, autoencoders, LSTMs, DQNs, regression, embeddings, TransE knowledge graph embeddings
+- **Safe Inference API**: `predict()` and `predictBatch()` encapsulate `tf.tidy()` -- consumers receive plain `number[]` values, never touching tensors
+- **Custom Training Loops**: `trainCustom()` supports contrastive loss, experience replay, and margin-based ranking
+- **Anomaly Detection**: `predictWithReconstruction()` for autoencoder-based anomaly scoring via reconstruction error
+- **GridFS Model Persistence**: Models saved/loaded to MongoDB GridFS (production) or filesystem (development)
+- **Tensor Memory Monitoring**: Periodic `tf.memory()` logging with `MEMORY_WARNING` events when usage exceeds threshold
+- **Graceful Degradation**: Heuristic fallback when TF.js is disabled or models are untrained -- zero overhead when feature flag is off
+- **10 Typed Events**: Full observability via model lifecycle, inference, and memory events
+
+**Phase 2 -- Error Prediction (PredictiveAnalyticsService):**
+- **Real TF.js Error Prediction Model**: Dense(12->32->16->1) binary classifier with binary cross-entropy loss replaces the heuristic-only prediction when `TENSORFLOW_ENABLED=true`
+- **12-Feature Input Vector**: Tool complexity, parameter count, pattern match, agent experience, error rate, time-of-day, day-of-week, system load, concurrent requests, recent errors, recent successes, average latency
+- **Automatic Training**: Collects labeled training data from tool execution results; trains via `MxfMLService.train()` when 100+ samples are available (batch size 32, 10 epochs, 0.2 validation split)
+- **Auto-Retrain Scheduling**: Retraining managed by `MxfMLService.scheduleRetrain()` with configurable intervals
+- **Three-Tier Fallback**: TF.js model inference -> heuristic rule-based prediction -> conservative default (30% error probability, 50% confidence)
+- **INFERENCE_FALLBACK Events**: Emitted when falling back to heuristic, enabling monitoring of model readiness
+- **Model Persistence**: Trained model saved to/loaded from GridFS automatically
+
+**Phase 3 -- Anomaly Detection Autoencoder (PredictiveAnalyticsService):**
+- **TF.js Autoencoder Model**: Architecture `input(12) -> Dense(8, relu) -> Dense(4, relu) -> Dense(8, relu) -> Dense(12, linear)` with MSE loss and Adam optimizer (lr=0.001)
+- **Encoder-Decoder Design**: Encoder compresses the 12-feature vector to a 4-dimensional bottleneck; decoder reconstructs the original input. Normal patterns reconstruct well; anomalies produce high reconstruction error
+- **Same 12-Feature Input Vector**: Reuses the error prediction feature vector for consistency across models
+- **Unsupervised Training**: Trains on ALL collected feature vectors (input = output) -- no labels needed. Learns "normal" parameter patterns regardless of error outcomes (minimum 100 samples, batch size 32, 20 epochs, 0.1 validation split)
+- **Anomaly Scoring**: MSE between input and reconstruction, normalized to 0-1 via scale factor of 10 (calibrated so MSE ~0.08 maps to the 0.8 anomaly threshold)
+- **Graceful Degradation**: TF.js autoencoder -> heuristic distance-based isolation score when TF.js is disabled or autoencoder is untrained
+- **INFERENCE_FALLBACK Events**: Emitted when falling back to heuristic, enabling monitoring of autoencoder readiness
+- **Model Persistence**: Trained autoencoder saved to/loaded from GridFS automatically
+
+**Quick Start:**
+```bash
+# Start server with TensorFlow.js enabled
+TENSORFLOW_ENABLED=true bun run dev
+
+# Run the TensorFlow.js demo
+bun run demo:tensorflow
+```
+
+### 🔍 Semantic Search & Memory
 
 MXF now includes **Meilisearch integration** for semantic search capabilities:
 
@@ -121,7 +208,7 @@ MXF now includes **Meilisearch integration** for semantic search capabilities:
 Complete containerization with orchestrated services:
 
 **Services Deployed:**
-- **MXF Server**: Node.js application server (Port 3001)
+- **MXF Server**: Bun application server (Port 3001)
 - **MongoDB**: Primary database for persistence (Port 27017)
 - **Meilisearch**: Semantic search engine (Port 7700)
 - **Redis**: High-performance caching layer (Port 6379)
@@ -137,7 +224,8 @@ Comprehensive error prevention and correction system:
 **Capabilities:**
 - **Proactive Validation**: Pre-execution checks with risk assessment
 - **Auto-Correction**: Intelligent parameter correction with pattern learning
-- **ML Error Prediction**: Machine learning models predict and prevent failures
+- **ML Error Prediction**: TF.js Dense(12->32->16->1) classifier predicts and prevents failures (heuristic fallback when TF.js is disabled)
+- **ML Anomaly Detection**: TF.js autoencoder (12->8->4->8->12) detects unusual parameter patterns via reconstruction error (heuristic fallback when TF.js is disabled)
 - **Pattern Learning**: Cross-agent knowledge sharing
 - **Multi-Level Caching**: Memory → Redis → MongoDB
 - **Performance Optimization**: Low-latency validation
@@ -211,7 +299,7 @@ bun run docker:health
 ```bash
 git clone https://github.com/BradA1878/model-exchange-framework
 cd model-exchange-framework
-npm install
+bun install
 bun run build
 bun run start
 ```
@@ -275,21 +363,38 @@ await agent.connect();
 
 ## Example Projects
 
-MXF includes comprehensive demos and examples:
+MXF includes 20 comprehensive demos and examples:
 
 ```bash
-# First Contact Demo - 6 agents in first contact scenario
-bun run demo:first-contact
+# Strategy & Collaboration
+bun run demo:first-contact       # First contact scenario (6 agents)
+bun run demo:fog-of-war          # Strategy game with 8 agents
+bun run demo:interview           # Interview scheduling
 
-# Interview Scheduling - Multi-agent coordination
-bun run demo:interview
+# Memory & Learning
+bun run demo:orpar-memory        # ORPAR-Memory integration
+bun run demo:muls                # Memory Utility Learning System
+bun run demo:nested-learning     # Nested learning / continuum memory
+bun run demo:memory-strata       # Memory strata demo
 
-# Fog of War Strategy Game - 8 agents in competitive game
-bun run demo:fog-of-war
+# Advanced Features
+bun run demo:dag                 # Task DAG workflows
+bun run demo:kg                  # Knowledge Graph operations
+bun run demo:tensorflow          # TensorFlow.js ML models (requires TENSORFLOW_ENABLED=true)
+bun run demo:code-execution      # Sandboxed code execution
+bun run demo:workflow-patterns   # Workflow system patterns
+bun run demo:lsp-code-intelligence  # LSP integration
+bun run demo:p2p-task-negotiation   # P2P task negotiation
 
-# AI Game Demos - Tic-Tac-Toe and Go Fish
-bun run demo:tic-tac-toe
-bun run demo:go-fish
+# Optimization
+bun run demo:toon-optimization   # TOON encoding
+bun run demo:prompt-compaction   # Prompt auto-compaction
+bun run demo:inference-params    # Dynamic inference parameters
+bun run demo:mcp-prompts         # MCP prompt templates
+
+# SDK Patterns
+bun run demo:external-mcp        # External MCP server registration
+bun run demo:channel-mcp         # Channel-scoped MCP registration
 ```
 
 📖 **[View All Example Documentation →](./examples/first-contact.md)**
@@ -332,7 +437,7 @@ handler: async (input, context): Promise<McpToolHandlerResult> => {
 
 ## Technology Stack
 
-- **Runtime**: Node.js with TypeScript
+- **Runtime**: Bun with TypeScript
 - **API Framework**: Express.js
 - **Real-Time**: Socket.IO
 - **Database**: MongoDB with Mongoose
@@ -342,6 +447,7 @@ handler: async (input, context): Promise<McpToolHandlerResult> => {
 - **Authentication**: JWT + API Keys
 - **Frontend**: Vue 3 + Vuetify 3
 - **AI Integration**: OpenAI, Anthropic, Google AI
+- **Machine Learning**: TensorFlow.js (opt-in) for on-device ML models
 - **Protocol**: MXP 2.0 for optimization
 - **Encryption**: AES-256-GCM
 

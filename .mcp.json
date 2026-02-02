@@ -2,20 +2,13 @@
   "mcpServers": {
     "memory": {
       "command": "npx",
-      "args": ["-y", "@anthropic-ai/mcp-server-memory"]
-    },
-    "github": {
-      "command": "npx",
-      "args": ["-y", "@anthropic-ai/mcp-server-github"],
-      "env": {
-        "GITHUB_TOKEN": "${GITHUB_TOKEN}"
-      }
+      "args": ["-y", "@modelcontextprotocol/server-memory"]
     },
     "filesystem": {
       "command": "npx",
       "args": [
         "-y",
-        "@anthropic-ai/mcp-server-filesystem",
+        "@modelcontextprotocol/server-filesystem",
         "/Users/bradanderson/Development",
         "/Users/bradanderson/.claude"
       ]

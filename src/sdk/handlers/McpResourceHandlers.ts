@@ -117,7 +117,7 @@ export class McpResourceHandlers extends McpHandler {
                     channelId, // Use the method parameter channelId
                     mcpDataForGet
                 );
-                EventBus.client.emit(Events.Mcp.RESOURCE_GET, getPayload);
+                EventBus.client.emitOn(this.agentId,Events.Mcp.RESOURCE_GET, getPayload);
             } catch (error) {
                 this.logger.error(`Error getting resource: ${error instanceof Error ? error.message : String(error)}`);
                 reject(error);
@@ -181,7 +181,7 @@ export class McpResourceHandlers extends McpHandler {
                     channelId, // Use the method parameter channelId
                     mcpDataForList
                 );
-                EventBus.client.emit(Events.Mcp.RESOURCE_LIST, listPayload);
+                EventBus.client.emitOn(this.agentId,Events.Mcp.RESOURCE_LIST, listPayload);
             } catch (error) {
                 this.logger.error(`Error listing resources: ${error instanceof Error ? error.message : String(error)}`);
                 reject(error);

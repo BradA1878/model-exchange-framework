@@ -51,7 +51,7 @@ Vue 3-based web interface for:
 
 ## Key Technologies
 
-- **Runtime**: Node.js with TypeScript
+- **Runtime**: Bun with TypeScript
 - **API Framework**: Express.js
 - **Real-time**: Socket.IO
 - **Database**: MongoDB with Mongoose
@@ -62,6 +62,7 @@ Vue 3-based web interface for:
 - **Authentication**: JWT + API Keys
 - **Frontend**: Vue 3 + Vuetify 3
 - **AI Integration**: OpenAI, Anthropic, Google AI, OpenRouter
+- **Machine Learning**: TensorFlow.js (opt-in, pure JS backend for Bun compatibility) for on-device ML models including error prediction (Dense classifier), anomaly detection (autoencoder with reconstruction error scoring), and knowledge graph embeddings
 - **Embeddings**: OpenAI text-embedding-3-small for semantic understanding
 - **Protocol**: MXP (Model Exchange Protocol) for efficient agent communication
 - **Encryption**: AES-256-GCM for secure messaging
@@ -121,6 +122,19 @@ Vue 3-based web interface for:
 - **[Nested Learning](nested-learning.md)** - Multi-timescale memory architecture
 - **[Memory Utility Learning (MULS)](memory-utility-learning.md)** - Q-value based retrieval
 - **[ORPAR-Memory Integration](orpar-memory-integration.md)** - Phase-aware memory coupling
+
+### Advanced Systems
+- **[Task DAG & Knowledge Graph](../features/dag-knowledge-graph.md)** - DAG workflows and KG operations
+- **[DAG API Tools](../api/dag-tools.md)** - DAG tool reference
+- **[Knowledge Graph API Tools](../api/knowledge-graph-tools.md)** - KG tool reference
+- **[Code Execution](code-execution.md)** - Secure sandboxed execution
+- **[Workflow System](workflow-system.md)** - Sequential, parallel, loop patterns
+- **[LSP Integration](lsp-integration.md)** - Language Server Protocol bridge
+- **[P2P Foundation](p2p-foundation.md)** - Decentralized coordination
+- **[Dynamic Inference Parameters](dynamic-inference-parameters.md)** - Complexity-based model selection
+- **[TOON Optimization](toon-optimization.md)** - Token-optimized encoding
+- **[Prompt Auto-Compaction](prompt-auto-compaction.md)** - Automatic prompt compression
+- **[Database Abstraction](database-abstraction.md)** - Swappable database backends
 
 ### Implementation Guides
 - **[Event System](../api/websocket.md)** - WebSocket and event architecture
@@ -281,7 +295,7 @@ The MXF architecture is designed to evolve:
 - **GraphQL API**: Alternative to REST for complex queries
 - **gRPC Support**: High-performance inter-service communication
 - **Multi-Region**: Geographic distribution for global scale
-- **Blockchain Integration**: Decentralized agent coordination
+- **Extended P2P**: Full decentralized agent coordination (foundation layer implemented — see [P2P Foundation](p2p-foundation.md))
 - **Quantum-Ready**: Preparation for quantum computing integration
 
 ---

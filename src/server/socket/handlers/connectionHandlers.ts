@@ -86,10 +86,20 @@ const initializeEventBusHandlers = (): void => {
 
 /**
  * Setup admin event forwarding for password/JWT authenticated users
- * Forwards admin socket events (channel:create, key:generate, MCP server registration) to EventBus
+ *
+ * Handles bidirectional forwarding between admin socket and EventBus:
+ * - Outbound: admin socket → EventBus.server (requests: channel:create, key:generate, MCP register)
+ * - Inbound: EventBus.server → admin socket (responses: key:generated, MCP registered, etc.)
+ *
+ * The inbound path is required because the SDK listens via EventBus.client, which receives
+ * events through the socket's onAny handler. Without this forwarding, response events emitted
+ * to EventBus.server are only routed through forwardEventToAgent(), which fails for admin
+ * sockets since they are not registered in the agent socket map.
  */
 const setupAdminSocketForwarding = (socket: Socket, userId: string): void => {
-    
+
+    // ── Outbound: admin socket → EventBus.server (requests) ──
+
     // Forward channel:create events to EventBus
     socket.on(Events.Channel.CREATE, (payload: any) => {
         try {
@@ -98,7 +108,7 @@ const setupAdminSocketForwarding = (socket: Socket, userId: string): void => {
             moduleLogger.error(`Error forwarding channel:create event: ${error}`);
         }
     });
-    
+
     // Forward key:generate events to EventBus
     socket.on(Events.Key.GENERATE, (payload: any) => {
         try {
@@ -107,13 +117,13 @@ const setupAdminSocketForwarding = (socket: Socket, userId: string): void => {
             moduleLogger.error(`Error forwarding key:generate event: ${error}`);
         }
     });
-    
+
     // Forward MCP channel server events to EventBus (for SDK-level MCP server registration)
     const mcpChannelServerEvents = [
         Events.Mcp.CHANNEL_SERVER_REGISTER,
         Events.Mcp.CHANNEL_SERVER_UNREGISTER
     ];
-    
+
     mcpChannelServerEvents.forEach(eventName => {
         socket.on(eventName, (payload: any) => {
             try {
@@ -123,6 +133,37 @@ const setupAdminSocketForwarding = (socket: Socket, userId: string): void => {
                 moduleLogger.error(`Error forwarding ${eventName} event: ${error}`);
             }
         });
+    });
+
+    // ── Inbound: EventBus.server → admin socket (responses) ──
+    // The SDK's onAny handler picks these up and routes them to EventBus.client,
+    // where registerChannelMcpServer() and generateKey() are listening.
+
+    const adminResponseEvents = [
+        // Key responses
+        Events.Key.GENERATED,
+        Events.Key.GENERATION_FAILED,
+        // MCP channel server responses
+        Events.Mcp.CHANNEL_SERVER_REGISTERED,
+        Events.Mcp.CHANNEL_SERVER_REGISTRATION_FAILED,
+        Events.Mcp.CHANNEL_SERVER_UNREGISTERED,
+    ];
+
+    const responseSubscriptions: any[] = [];
+
+    adminResponseEvents.forEach(eventName => {
+        const sub = EventBus.server.on(eventName, (payload: any) => {
+            // Only forward events that originated from this admin user
+            if (payload.agentId === userId) {
+                socket.emit(eventName, payload);
+            }
+        });
+        responseSubscriptions.push(sub);
+    });
+
+    // Clean up subscriptions when admin socket disconnects
+    socket.on('disconnect', () => {
+        responseSubscriptions.forEach(sub => sub.unsubscribe());
     });
 };
 
@@ -233,8 +274,14 @@ export const handleConnection = (socket: Socket, socketService: ISocketService):
             // channelId is required for proper disconnect handling
             if (!channelId) {
                 moduleLogger.warn(`Socket ${socket.id} disconnected without channelId - socket was never properly connected (Agent: ${agentId})`);
-                // Only unregister the socket without full disconnect processing
+                // Unregister the socket without full disconnect processing
                 socketService.unregisterSocket(socket.id, agentId);
+                // Still update agent status even without channelId (e.g., admin socket reconnects as agent socket)
+                const agentSvc = getAgentService();
+                agentSvc.removeSocketFromAgent(agentId, socket.id);
+                if (!agentSvc.hasActiveSockets(agentId)) {
+                    agentSvc.updateAgentStatus(agentId, AgentConnectionStatus.DISCONNECTED);
+                }
                 return;
             }
             
@@ -600,17 +647,15 @@ export const handleSocketDisconnect = async (
         // Unregister the socket - this will also clear associated data
         socketService.unregisterSocket(socketId, agentId);
         
-        // Remove socket from agent in AgentService for proper tracking
-        // Access AgentService through the socketService parameter
-        const socketAgentService = (socketService as any).agentService;
-        if (socketAgentService) {
-            socketAgentService.removeSocketFromAgent(agentId, socketId);
-            
-            // Check if the agent has any remaining sockets before updating status
-            if (!socketAgentService.hasActiveSockets(agentId)) {
-                // Update agent status in AgentService if this was the last socket
-                getAgentService().updateAgentStatus(agentId, AgentConnectionStatus.DISCONNECTED);
-            }
+        // Update agent status in AgentService for proper tracking
+        // Use AgentService.getInstance() directly — the old (socketService as any).agentService
+        // pattern was always null because SocketService's lazy getter was never called
+        const agentSvc = getAgentService();
+        agentSvc.removeSocketFromAgent(agentId, socketId);
+
+        // Check if the agent has any remaining sockets before updating status
+        if (!agentSvc.hasActiveSockets(agentId)) {
+            agentSvc.updateAgentStatus(agentId, AgentConnectionStatus.DISCONNECTED);
         }
         
         // Remove agent from channel to trigger SystemLLM cleanup

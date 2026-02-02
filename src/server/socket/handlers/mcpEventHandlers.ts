@@ -35,13 +35,9 @@ import { McpSocketExecutor } from '../services/McpSocketExecutor';
 import { v4 as uuidv4 } from 'uuid';
 import {
     createMcpToolCallPayload,
-    createMcpToolRegisterPayload,
     createMcpToolResultPayload,
     createMcpToolErrorPayload,
-    createMcpResourceGetPayload,
-    createMcpResourceListPayload,
     createMcpResourceResultPayload,
-    createMcpResourceErrorPayload,
     createMcpToolRegisteredPayload
 } from '../../../shared/schemas/EventPayloadSchema';
 
@@ -61,27 +57,25 @@ const validate = createStrictValidator('McpEventHandlers');
  * @param channelId Channel ID for the connection context
  */
 export const setupMcpEventHandlers = (socket: Socket, agentId: string, channelId: string): void => {
-    
+
     // Handle tool call events from EventBus
+    // This per-agent handler is the primary executor for built-in tools (~95 tools).
+    // The global handler in McpSocketExecutor.setupEventHandlers() only handles
+    // dynamically registered tools (its this.tools guard drops built-in tool events).
     const toolCallHandler = (payload: any) => {
         try {
-            
+
             // Validate this event is for this agent/channel
             if (payload.agentId !== agentId || payload.channelId !== channelId) {
-                // ;
                 return; // Ignore events for other agents/channels
             }
-            
-
-            // // Validate payload structure with detailed logging
-            // ;
 
             validate.assertIsObject(payload);
             validate.assertIsObject(payload.data);
             validate.assertIsNonEmptyString(payload.data.toolName);
             validate.assertIsNonEmptyString(payload.data.callId);
-            
-            
+
+
             // Get the tool executor and execute the tool
             const executor = McpSocketExecutor.getInstance();
             executor.executeTool(
@@ -120,7 +114,7 @@ export const setupMcpEventHandlers = (socket: Socket, agentId: string, channelId
                     ));
                 }
             });
-            
+
         } catch (error) {
             logger.error(`MCP tool call handler error: ${error instanceof Error ? error.message : String(error)}`);
         }

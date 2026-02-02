@@ -513,7 +513,7 @@ export abstract class WorkflowAgent extends MxfAgent {
      * Emit workflow event
      */
     protected emitWorkflowEvent(eventName: string, data: any): void {
-        EventBus.client.emit(eventName, {
+        EventBus.client.emitOn(this.agentId, eventName, {
             ...data,
             timestamp: new Date().toISOString()
         });

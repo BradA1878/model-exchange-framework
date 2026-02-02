@@ -1,6 +1,6 @@
 /**
  * Twenty Questions Game State Manager
- * Handles all game logic and state with ORPAR cycle tracking
+ * Handles all game logic and state with advanced MXF feature tracking
  *
  * Game Flow:
  * 1. Thinker sets secret (setup phase)
@@ -8,10 +8,11 @@
  * 3. Thinker answers question (answering phase)
  * 4. Repeat until correct guess or 20 questions exhausted
  *
- * ORPAR Demonstration:
- * - Each question cycle shows the cognitive loop
- * - Guesser: Observe answers → Reason about patterns → Plan strategy → Act (ask) → Reflect
- * - Thinker: Observe question → Reason about answer → Act (answer) → Reflect
+ * Advanced Features Tracked:
+ * - ORPAR Cognitive Cycle: Each question cycle shows the cognitive loop
+ * - Knowledge Graph: Guesser's evolving model of the possibility space
+ * - MULS Rewards: Which memories/strategies proved most useful
+ * - Risk Assessment: ML-based "should I guess now?" scoring
  */
 
 import {
@@ -26,7 +27,11 @@ import {
     QuestionResult,
     AnswerResult,
     GuessResult,
-    OrparPhaseLog
+    OrparPhaseLog,
+    KnowledgeNode,
+    KnowledgeEdge,
+    RiskAssessment,
+    MulsReward
 } from '../types/game';
 
 export class GameStateManager {
@@ -68,7 +73,10 @@ export class GameStateManager {
             startTime: Date.now(),
             lastActionTime: null,
             currentTurn: 'thinker',
-            orparCycleCount: 0
+            orparCycleCount: 0,
+            knowledgeGraph: { nodes: [], edges: [] },
+            riskAssessments: [],
+            mulsRewards: []
         };
     }
 
@@ -82,6 +90,7 @@ export class GameStateManager {
             thinker: { ...players.thinker, orparPhases: [] },
             guesser: { ...players.guesser, orparPhases: [] }
         };
+        // createInitialState() already initializes KG/risk/MULS to empty state
         this.notifyStateChange();
     }
 
@@ -154,6 +163,33 @@ export class GameStateManager {
             });
         }
 
+        // Knowledge Graph summary (Guesser's mental model)
+        const kg = this.state.knowledgeGraph;
+        if (kg.nodes.length > 0) {
+            summary += `\n--- Knowledge Model ---\n`;
+            summary += `Entities: ${kg.nodes.length}, Relationships: ${kg.edges.length}\n`;
+            const properties = kg.nodes.filter(n => n.type === 'property');
+            const eliminated = kg.nodes.filter(n => n.type === 'eliminated');
+            const candidates = kg.nodes.filter(n => n.type === 'candidate');
+            if (properties.length > 0) {
+                summary += `Known properties: ${properties.map(n => n.entity).join(', ')}\n`;
+            }
+            if (candidates.length > 0) {
+                summary += `Candidates: ${candidates.map(n => n.entity).join(', ')}\n`;
+            }
+            if (eliminated.length > 0) {
+                summary += `Eliminated: ${eliminated.map(n => n.entity).join(', ')}\n`;
+            }
+        }
+
+        // Latest risk assessment
+        const latestRisk = this.getLatestRiskAssessment();
+        if (latestRisk) {
+            summary += `\n--- Risk Assessment ---\n`;
+            summary += `Risk Score: ${(latestRisk.riskScore * 100).toFixed(0)}% | Confidence: ${(latestRisk.confidence * 100).toFixed(0)}%\n`;
+            summary += `Recommendation: ${latestRisk.recommendation}\n`;
+        }
+
         if (view.gameOver) {
             summary += `\n*** GAME OVER ***\n`;
             summary += `Winner: ${view.winner}\n`;
@@ -173,6 +209,53 @@ export class GameStateManager {
             summary
         });
         this.notifyStateChange();
+    }
+
+    /**
+     * Add a knowledge graph node (entity discovered by the Guesser)
+     */
+    addKnowledgeNode(node: KnowledgeNode): void {
+        this.state.knowledgeGraph.nodes.push(node);
+        this.notifyStateChange();
+    }
+
+    /**
+     * Add a knowledge graph edge (relationship between entities)
+     */
+    addKnowledgeEdge(edge: KnowledgeEdge): void {
+        this.state.knowledgeGraph.edges.push(edge);
+        this.notifyStateChange();
+    }
+
+    /**
+     * Record a risk assessment from the TF/ML predictive service
+     */
+    addRiskAssessment(assessment: RiskAssessment): void {
+        this.state.riskAssessments.push(assessment);
+        this.notifyStateChange();
+    }
+
+    /**
+     * Record a MULS reward injection
+     */
+    addMulsReward(reward: MulsReward): void {
+        this.state.mulsRewards.push(reward);
+        this.notifyStateChange();
+    }
+
+    /**
+     * Get the current knowledge graph state for dashboard visualization
+     */
+    getKnowledgeGraph(): { nodes: KnowledgeNode[], edges: KnowledgeEdge[] } {
+        return { ...this.state.knowledgeGraph };
+    }
+
+    /**
+     * Get the latest risk assessment (if any)
+     */
+    getLatestRiskAssessment(): RiskAssessment | null {
+        if (this.state.riskAssessments.length === 0) return null;
+        return this.state.riskAssessments[this.state.riskAssessments.length - 1];
     }
 
     /**

@@ -114,7 +114,7 @@ export class MxfMemoryService {
             EventBus.client.on(Events.Memory.GET_RESULT, handler);
             
             // Send the get request using standardized payload creator
-            EventBus.client.emit(
+            EventBus.client.emitOn(callerAgentId,
                 Events.Memory.GET,
                 createMemoryGetEventPayload(Events.Memory.GET, callerAgentId, callerChannelId, { operationId, scope: MemoryScope.AGENT, id: targetAgentId })
             );
@@ -164,7 +164,7 @@ export class MxfMemoryService {
             EventBus.client.on(Events.Memory.GET_RESULT, handler);
             
             // Send the get request using standardized payload creator
-            EventBus.client.emit(
+            EventBus.client.emitOn(callerAgentId,
                 Events.Memory.GET,
                 createMemoryGetEventPayload(Events.Memory.GET, callerAgentId, callerChannelId, { operationId, scope: MemoryScope.CHANNEL, id: targetChannelId })
             );
@@ -220,7 +220,7 @@ export class MxfMemoryService {
             const relationshipPayloadId = channelId ? [agentId1, agentId2, channelId] : [agentId1, agentId2];
             
             // Send the get request using standardized payload creator
-            EventBus.client.emit(
+            EventBus.client.emitOn(callerAgentId,
                 Events.Memory.GET,
                 createMemoryGetEventPayload(Events.Memory.GET, callerAgentId, callerChannelId, { operationId, scope: MemoryScope.RELATIONSHIP, id: relationshipPayloadId })
             );
@@ -272,7 +272,7 @@ export class MxfMemoryService {
             EventBus.client.on(Events.Memory.UPDATE_RESULT, handler);
             
             // Send the update request using standardized payload creator
-            EventBus.client.emit(
+            EventBus.client.emitOn(callerAgentId,
                 Events.Memory.UPDATE,
                 createMemoryUpdateEventPayload(Events.Memory.UPDATE, callerAgentId, callerChannelId, { operationId, scope: MemoryScope.AGENT, id: targetAgentId, data: memoryData })
             );
@@ -324,7 +324,7 @@ export class MxfMemoryService {
             EventBus.client.on(Events.Memory.UPDATE_RESULT, handler);
             
             // Send the update request using standardized payload creator
-            EventBus.client.emit(
+            EventBus.client.emitOn(callerAgentId,
                 Events.Memory.UPDATE,
                 createMemoryUpdateEventPayload(Events.Memory.UPDATE, callerAgentId, callerChannelId, { operationId, scope: MemoryScope.CHANNEL, id: targetChannelId, data: memoryData })
             );
@@ -382,7 +382,7 @@ export class MxfMemoryService {
             const relationshipPayloadId = r_channelId ? [r_agentId1, r_agentId2, r_channelId] : [r_agentId1, r_agentId2];
             
             // Send the update request using standardized payload creator
-            EventBus.client.emit(
+            EventBus.client.emitOn(callerAgentId,
                 Events.Memory.UPDATE,
                 createMemoryUpdateEventPayload(Events.Memory.UPDATE, callerAgentId, callerChannelId, { operationId, scope: MemoryScope.RELATIONSHIP, id: relationshipPayloadId, data: memoryData })
             );
@@ -442,7 +442,7 @@ export class MxfMemoryService {
             EventBus.client.on(Events.Memory.DELETE_RESULT, handler);
             
             // Send the delete request using standardized payload creator
-            EventBus.client.emit(
+            EventBus.client.emitOn(callerAgentId,
                 Events.Memory.DELETE,
                 createMemoryDeleteEventPayload(Events.Memory.DELETE, callerAgentId, callerChannelId, { operationId, scope, id: idToDelete })
             );

@@ -46,7 +46,7 @@ function getTaskService(): TaskService {
 
 export const createTaskTool = {
     name: 'task_create',
-    description: 'Create a new task and assign it to a specific agent in the MXF task management system',
+    description: 'Create a new task in the MXF task management system. Optionally assign it to a specific agent.',
     inputSchema: {
         type: 'object',
         properties: {
@@ -60,7 +60,7 @@ export const createTaskTool = {
             },
             assignTo: {
                 type: 'string',
-                description: 'Agent ID to assign this task to (e.g., "content-agent", "distribution-agent"). REQUIRED for proper task delegation.'
+                description: 'Agent ID to assign this task to (e.g., "content-agent", "distribution-agent"). Optional - omit when creating tasks for dependency tracking without delegation.'
             },
             channelId: {
                 type: 'string',
@@ -71,9 +71,14 @@ export const createTaskTool = {
                 enum: ['low', 'medium', 'high', 'urgent'],
                 default: 'medium',
                 description: 'Task priority level'
+            },
+            dependsOn: {
+                type: 'array',
+                items: { type: 'string' },
+                description: 'Array of task IDs this task depends on. Used by the DAG system to track task dependencies and execution order.'
             }
         },
-        required: ['title', 'description', 'assignTo']
+        required: ['title', 'description']
     },
     handler: async (args: any, context: any) => {
         try {
@@ -92,8 +97,9 @@ export const createTaskTool = {
                 channelId: channelId,
                 priority: args.priority || 'medium',
                 assignedAgentId: args.assignTo,
-                assignmentStrategy: 'manual',
-                assignmentScope: 'single'
+                assignmentStrategy: args.assignTo ? 'manual' : 'none',
+                assignmentScope: 'single',
+                dependsOn: args.dependsOn,
             };
             
             const task = await taskService.createTask(createRequest, context.agentId);

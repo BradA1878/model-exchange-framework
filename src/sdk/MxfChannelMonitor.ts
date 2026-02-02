@@ -58,6 +58,11 @@ export class MxfChannelMonitor {
     private channelId: string;
     private subscriptions: Map<string, Subscription[]> = new Map();
     private isDestroyed: boolean = false;
+    // Dedup set: when the SDK and agent run in the same process, both sockets
+    // share a single EventBus.client Subject (singleton). The same event may be
+    // injected multiple times from different socket connections. We track recent
+    // eventIds to deliver each event exactly once.
+    private recentEventIds = new Set<string>();
 
     /**
      * Create a new channel monitor
@@ -99,6 +104,15 @@ export class MxfChannelMonitor {
             // Only process events that have a matching channelId
             // Events without channelId are filtered out to prevent cross-channel noise
             if (payload && typeof payload === 'object' && payload.channelId === this.channelId) {
+                // Deduplicate by eventId — multiple sockets in the same process share
+                // a single EventBus.client Subject, so the same event may be injected
+                // multiple times from different socket connections
+                const eventId = payload.eventId;
+                if (eventId) {
+                    if (this.recentEventIds.has(eventId)) return;
+                    this.recentEventIds.add(eventId);
+                    setTimeout(() => this.recentEventIds.delete(eventId), 5000);
+                }
                 handler(payload);
             }
             // Non-object payloads and events without channelId are ignored
@@ -134,6 +148,7 @@ export class MxfChannelMonitor {
             subs.forEach(sub => sub.unsubscribe());
         });
         this.subscriptions.clear();
+        this.recentEventIds.clear();
     }
 
     /**

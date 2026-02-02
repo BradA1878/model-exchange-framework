@@ -54,6 +54,10 @@ import { Task, TaskDocument } from '../../../shared/models/task';
 import { TaskEvents } from '../../../shared/events/event-definitions/TaskEvents';
 import { TaskCompletionMonitoringService } from './TaskCompletionMonitoringService';
 import { TaskCompletionConfig } from '../../../shared/types/TaskCompletionTypes';
+import { TaskDagService } from '../../../shared/services/dag/TaskDagService';
+import { isDagEnabled, isDagEnforcementEnabled } from '../../../shared/config/dag.config';
+import { DagEvents } from '../../../shared/events/event-definitions/DagEvents';
+import { createDagTaskBlockedPayload, createDagTaskDependenciesResolvedPayload } from '../../../shared/schemas/EventPayloadSchema';
 
 export class TaskService {
     private static instance: TaskService;
@@ -1025,7 +1029,9 @@ Respond with JSON:
             updatedAt: task.updatedAt?.getTime() || Date.now(),
             progress: task.progress || 0,
             metadata: task.metadata, // Preserve metadata
-            tags: task.tags // Preserve tags
+            tags: task.tags, // Preserve tags
+            dependsOn: task.dependsOn || [], // Preserve dependency edges for DAG
+            blockedBy: task.blockedBy || [] // Preserve blocker info for DAG
         };
     }
 
@@ -1045,14 +1051,105 @@ Respond with JSON:
     }
 
     /**
-     * Update task
+     * Update task with DAG enforcement
+     *
+     * When transitioning to in_progress, checks if task is blocked by incomplete dependencies.
+     * When completing, updates the DAG and emits events for newly unblocked tasks.
      */
     public async updateTask(taskId: string, update: UpdateTaskRequest): Promise<ChannelTask> {
+        // Get the current task state to check transitions
+        const existingTask = await Task.findById(taskId);
+        if (!existingTask) {
+            throw new Error(`Task ${taskId} not found`);
+        }
+
+        // DAG enforcement: Check if task can transition to in_progress
+        if (update.status === 'in_progress' && isDagEnforcementEnabled()) {
+            const blockedResult = await this.checkDagBlockers(existingTask.channelId, taskId);
+            if (blockedResult.blocked) {
+                // Emit blocked event
+                EventBus.server.emit(
+                    DagEvents.TASK_BLOCKED,
+                    createDagTaskBlockedPayload(
+                        existingTask.channelId,
+                        existingTask.assignedAgentId || 'system',
+                        taskId,
+                        blockedResult.blockerIds,
+                        'in_progress',
+                        `Task blocked by incomplete dependencies: ${blockedResult.blockerIds.join(', ')}`
+                    )
+                );
+                throw new Error(
+                    `Task ${taskId} blocked by incomplete dependencies: ${blockedResult.blockerIds.join(', ')}`
+                );
+            }
+        }
+
+        // When completing a task with DAG enabled, serialize the DB update + DAG update
+        // under a per-channel lock to prevent race conditions from concurrent completions.
+        if (update.status === 'completed' && isDagEnabled()) {
+            const dagService = TaskDagService.getInstance();
+            return dagService.withChannelLock(existingTask.channelId, async () => {
+                const task = await Task.findByIdAndUpdate(taskId, update, { new: true });
+                if (!task) {
+                    throw new Error(`Task ${taskId} not found`);
+                }
+                const channelTask = this.taskDocumentToChannelTask(task);
+                await this.handleDagTaskCompletion(existingTask.channelId, taskId);
+                return channelTask;
+            });
+        }
+
+        // Non-DAG or non-completion path: no lock needed
         const task = await Task.findByIdAndUpdate(taskId, update, { new: true });
         if (!task) {
             throw new Error(`Task ${taskId} not found`);
         }
+
         return this.taskDocumentToChannelTask(task);
+    }
+
+    /**
+     * Check if a task is blocked by incomplete dependencies in the DAG
+     *
+     * @param channelId - The channel ID
+     * @param taskId - The task ID to check
+     * @returns Object with blocked status and blocker IDs
+     */
+    private async checkDagBlockers(
+        channelId: ChannelId,
+        taskId: string
+    ): Promise<{ blocked: boolean; blockerIds: string[] }> {
+        const dagService = TaskDagService.getInstance();
+        if (!dagService.isEnabled()) {
+            return { blocked: false, blockerIds: [] };
+        }
+
+        const blockerIds = dagService.getBlockingTasks(channelId, taskId);
+        return {
+            blocked: blockerIds.length > 0,
+            blockerIds,
+        };
+    }
+
+    /**
+     * Handle DAG updates when a task completes
+     *
+     * Updates the DAG status and emits events for newly unblocked tasks.
+     *
+     * @param channelId - The channel ID
+     * @param taskId - The completed task ID
+     */
+    private async handleDagTaskCompletion(channelId: ChannelId, taskId: string): Promise<void> {
+        const dagService = TaskDagService.getInstance();
+        if (!dagService.isEnabled()) {
+            return;
+        }
+
+        // Update task status in the DAG (this also emits dag:task_dependencies_resolved events)
+        dagService.updateTaskStatus(channelId, taskId, 'completed');
+
+        this.logger.debug(`Updated DAG for completed task ${taskId} in channel ${channelId}`);
     }
 
     /**
@@ -1115,9 +1212,15 @@ Respond with JSON:
 
     /**
      * Handle task creation event for orchestration
+     *
+     * Adds the task to the DAG if DAG is enabled, and triggers workload analysis.
      */
     private async handleTaskCreated(task: ChannelTask): Promise<void> {
         try {
+            // Add task to DAG if enabled
+            if (isDagEnabled()) {
+                this.addTaskToDag(task);
+            }
 
             // Add channel to active channels
             const channels = this.activeChannels.value;
@@ -1129,6 +1232,13 @@ Respond with JSON:
 
             // Skip assignment if intelligent assignment is disabled
             if (!this.config.enableIntelligentAssignment) {
+                return;
+            }
+
+            // Skip assignment for tasks with 'none' strategy (e.g., DAG sub-tasks
+            // created for dependency tracking, not for delegation)
+            if (task.assignmentStrategy === 'none') {
+                this.logger.debug(`[ASSIGNMENT] Skipping assignment for task "${task.title}" (strategy: none)`);
                 return;
             }
 
@@ -1197,6 +1307,56 @@ Respond with JSON:
         } catch (error) {
             this.logger.error(`❌ Failed to handle agent activity pattern: ${error}`);
         }
+    }
+
+    /**
+     * Add a task to the DAG
+     *
+     * If a DAG doesn't exist for the channel, builds one from all channel tasks.
+     * Otherwise, adds the new task to the existing DAG.
+     *
+     * @param task - The task to add
+     */
+    private addTaskToDag(task: ChannelTask): void {
+        try {
+            const dagService = TaskDagService.getInstance();
+            if (!dagService.isEnabled()) {
+                return;
+            }
+
+            // Check if DAG exists for this channel
+            const existingDag = dagService.getDag(task.channelId);
+            if (existingDag) {
+                // Add task to existing DAG
+                dagService.addTask(task.channelId, task);
+            } else {
+                // Build new DAG with all tasks in channel (async, fire and forget)
+                this.buildChannelDag(task.channelId).catch((err) => {
+                    this.logger.error(`Failed to build DAG for channel ${task.channelId}: ${err}`);
+                });
+            }
+        } catch (error) {
+            this.logger.error(`Failed to add task ${task.id} to DAG: ${error}`);
+        }
+    }
+
+    /**
+     * Build DAG for a channel from all its tasks
+     *
+     * @param channelId - The channel ID
+     */
+    private async buildChannelDag(channelId: ChannelId): Promise<void> {
+        const dagService = TaskDagService.getInstance();
+        if (!dagService.isEnabled()) {
+            return;
+        }
+
+        // Get all tasks for the channel
+        const tasks = await this.getTasks({ channelId });
+
+        // Build the DAG
+        dagService.buildDag(channelId, tasks);
+        this.logger.debug(`Built DAG for channel ${channelId} with ${tasks.length} tasks`);
     }
 
     /**

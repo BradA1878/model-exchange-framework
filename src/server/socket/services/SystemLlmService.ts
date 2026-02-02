@@ -3529,8 +3529,12 @@ ${JSON.stringify(TOOL_RECOMMENDATION_SCHEMA, null, 2)}`;
                     });
                 }
             });
-            
-            
+
+            // Guard: Skip expensive LLM call when no agents are connected
+            if (activeAgentIds.length === 0) {
+                return this.createEmptyCoordinationAnalysis(channelId);
+            }
+
             // Create rich agent descriptions for LLM analysis
             const agentDescriptions = agentContexts.map(agent => {
                 const capabilities = agent.capabilities.length > 0 

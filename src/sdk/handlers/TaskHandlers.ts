@@ -139,7 +139,7 @@ export class TaskHandlers extends Handler {
             this.channelId,     // Context channel
             taskRequestData
         );
-        EventBus.client.emit(Events.Task.REQUEST, requestPayload);
+        EventBus.client.emitOn(this.agentId,Events.Task.REQUEST, requestPayload);
         
         return taskId;
     }
@@ -190,7 +190,7 @@ export class TaskHandlers extends Handler {
             this.channelId,              // Context channel
             taskResponseData
         );
-        EventBus.client.emit(Events.Task.RESPONSE, responsePayload);
+        EventBus.client.emitOn(this.agentId,Events.Task.RESPONSE, responsePayload);
     }
     
     /**
@@ -230,7 +230,7 @@ export class TaskHandlers extends Handler {
                     this.channelId, // Context channel
                     responseData
                 );
-                EventBus.client.emit(Events.Task.RESPONSE, responsePayload);
+                EventBus.client.emitOn(this.agentId,Events.Task.RESPONSE, responsePayload);
             } catch (error) {
                 this.logger.error('Error handling task request:', error);
             }
@@ -345,7 +345,7 @@ export class TaskHandlers extends Handler {
                         taskRequest: taskRequest
                     }
                 );
-                EventBus.client.emit(AgentEvents.TASK_ASSIGNED, taskAssignmentPayload);
+                EventBus.client.emitOn(this.agentId,AgentEvents.TASK_ASSIGNED, taskAssignmentPayload);
                 
                 // Always trigger task execution - agent roles affect behavior, not task processing
                 // Reactive agents will still process tasks and messages, but won't take proactive actions

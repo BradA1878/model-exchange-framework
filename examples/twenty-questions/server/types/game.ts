@@ -1,9 +1,12 @@
 /**
  * Twenty Questions Game Types
  *
- * This game demonstrates the ORPAR cognitive cycle:
- * - Guesser: Observe → Reason → Plan → Act (ask question) → Reflect
- * - Thinker: Observe (question) → Reason → Act (answer) → Reflect
+ * This game demonstrates advanced MXF features:
+ * - ORPAR Cognitive Cycle: Observe → Reason → Plan → Act → Reflect
+ * - Knowledge Graph: Guesser builds explicit knowledge model of possibility space
+ * - MULS: Q-value tracking of which memories/strategies proved most useful
+ * - TensorFlow/ML: Risk assessment for "should I guess now or ask more?"
+ * - ORPAR-Memory Integration: Phase-aware memory strata routing
  */
 
 export type PlayerRole = 'thinker' | 'guesser';
@@ -27,6 +30,10 @@ export interface GameState {
     lastActionTime: number | null;
     currentTurn: PlayerRole;
     orparCycleCount: number;  // Track ORPAR cycles for demo purposes
+    // Advanced MXF feature tracking
+    knowledgeGraph: KnowledgeGraphState;
+    riskAssessments: RiskAssessment[];
+    mulsRewards: MulsReward[];
 }
 
 export interface PlayerInfo {
@@ -110,6 +117,44 @@ export interface GameStateView {
     yourRole: PlayerRole;
     // secretThing only included for thinker
     secretThing?: string;
+}
+
+// Knowledge Graph tracking for the Guesser's mental model of the possibility space
+export interface KnowledgeNode {
+    entity: string;
+    type: 'category' | 'property' | 'candidate' | 'eliminated';
+    confidence: number;
+    questionNumber: number;  // When this was learned
+}
+
+export interface KnowledgeEdge {
+    from: string;
+    to: string;
+    relationship: string;  // e.g., "has_property", "is_not", "could_be"
+    questionNumber: number;
+}
+
+// Aggregated knowledge graph state for dashboard visualization
+export interface KnowledgeGraphState {
+    nodes: KnowledgeNode[];
+    edges: KnowledgeEdge[];
+}
+
+// ML risk assessment tracking — Guesser uses this to decide when to guess vs ask more
+export interface RiskAssessment {
+    questionNumber: number;
+    riskScore: number;       // 0-1, higher = riskier to guess now
+    confidence: number;      // 0-1, how confident the model is in its assessment
+    recommendation: string;  // "ask_more" or "guess_now"
+    timestamp: number;
+}
+
+// MULS reward tracking — records which memories/strategies were rewarded
+export interface MulsReward {
+    questionNumber: number;
+    reward: number;          // Reward value injected
+    reason: string;          // Why this reward was given
+    timestamp: number;
 }
 
 // MCP Tool schemas for the game

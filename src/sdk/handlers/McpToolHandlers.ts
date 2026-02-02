@@ -132,7 +132,7 @@ export class McpToolHandlers extends McpHandler {
                     mcpDataForRegister
                 );
                 
-                EventBus.client.emit(Events.Mcp.TOOL_REGISTER, registerPayload);
+                EventBus.client.emitOn(this.agentId,Events.Mcp.TOOL_REGISTER, registerPayload);
             } catch (error) {
                 this.logger.error(`Error registering tool: ${error instanceof Error ? error.message : String(error)}`);
                 reject(error);
@@ -180,7 +180,7 @@ export class McpToolHandlers extends McpHandler {
                     channelId,
                     mcpDataForUnregister
                 );
-                EventBus.client.emit(Events.Mcp.TOOL_UNREGISTER, unregisterPayload);
+                EventBus.client.emitOn(this.agentId,Events.Mcp.TOOL_UNREGISTER, unregisterPayload);
             } catch (error) {
                 this.logger.error(`Error unregistering tool: ${error instanceof Error ? error.message : String(error)}`);
                 reject(error);
@@ -242,7 +242,7 @@ export class McpToolHandlers extends McpHandler {
                         // Clean up handlers using subscriptions
                         cleanup();
                         
-                        this.logger.error(`Tool call error for ${requestId}: ${payload.data.error}`);
+                        this.logger.debug(`Tool call error for ${requestId}: ${payload.data.error}`);
                         reject(new Error(payload.data.error || 'Unknown tool call error'));
                     }
                 });
@@ -353,7 +353,7 @@ export class McpToolHandlers extends McpHandler {
                     channelId,
                     mcpDataForList
                 );
-                EventBus.client.emit(Events.Mcp.TOOL_LIST, listPayload);
+                EventBus.client.emitOn(this.agentId,Events.Mcp.TOOL_LIST, listPayload);
             } catch (error) {
                 this.logger.error(`Error listing tools: ${error instanceof Error ? error.message : String(error)}`);
                 reject(error);

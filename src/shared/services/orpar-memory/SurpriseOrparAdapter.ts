@@ -50,6 +50,11 @@ import {
 } from '../../types/OrparMemoryIntegrationTypes';
 import { OrparMemoryEvents } from '../../events/event-definitions/OrparMemoryEvents';
 import {
+    KnowledgeGraphEvents,
+    HighSurpriseRelationshipEventData,
+} from '../../events/event-definitions/KnowledgeGraphEvents';
+import { isKnowledgeGraphEnabled, isSurpriseDetectionEnabled } from '../../config/knowledge-graph.config';
+import {
     getOrparMemoryConfig,
     isOrparMemoryIntegrationEnabled,
     getSurpriseThresholds
@@ -115,8 +120,88 @@ export class SurpriseOrparAdapter {
                 `moderate=${this.thresholds.moderate}, plan=${this.thresholds.plan}, ` +
                 `maxExtraObs=${this.thresholds.maxExtraObservations}`
             );
+
+            // Set up Knowledge Graph surprise event listener if KG is enabled
+            this.setupGraphSurpriseListener();
         } else {
             this.logger.debug('[SurpriseOrparAdapter] ORPAR-Memory integration is disabled');
+        }
+    }
+
+    /**
+     * Set up listener for Knowledge Graph surprise events
+     *
+     * Listens for HIGH_SURPRISE_RELATIONSHIP events from the Knowledge Graph
+     * and converts them to ORPAR decisions, potentially triggering additional
+     * observation cycles.
+     */
+    private setupGraphSurpriseListener(): void {
+        // Only set up listener if Knowledge Graph surprise detection is enabled
+        if (!isKnowledgeGraphEnabled() || !isSurpriseDetectionEnabled()) {
+            this.logger.debug('[SurpriseOrparAdapter] Knowledge Graph surprise integration disabled');
+            return;
+        }
+
+        EventBus.server.on(
+            KnowledgeGraphEvents.HIGH_SURPRISE_RELATIONSHIP,
+            (payload: { data: HighSurpriseRelationshipEventData; agentId?: AgentId; channelId?: ChannelId }) => {
+                this.handleGraphSurpriseEvent(payload);
+            }
+        );
+
+        this.logger.info('[SurpriseOrparAdapter] Knowledge Graph surprise listener registered');
+    }
+
+    /**
+     * Handle a Knowledge Graph surprise event
+     *
+     * Converts high-surprise graph events to ORPAR decisions, potentially
+     * triggering additional observation cycles or injecting context.
+     *
+     * @param payload - The graph surprise event payload
+     */
+    private handleGraphSurpriseEvent(payload: {
+        data: HighSurpriseRelationshipEventData;
+        agentId?: AgentId;
+        channelId?: ChannelId;
+    }): void {
+        const { data, agentId, channelId } = payload;
+
+        this.logger.info(
+            `[SurpriseOrparAdapter] Received graph surprise event: ` +
+            `score=${data.surpriseScore}, reason=${data.reason}`
+        );
+
+        // Emit surprise detected event for the graph event
+        EventBus.server.emit(OrparMemoryEvents.SURPRISE_DETECTED, {
+            agentId: agentId || 'system',
+            channelId: channelId || data.channelId,
+            cycleId: `graph-surprise-${Date.now()}`,
+            surpriseScore: data.surpriseScore,
+            surpriseType: 'novel_pattern',
+            observation: `Graph surprise: ${data.reason}`,
+            explanation: `A surprising relationship was detected: ${data.type} between entities ` +
+                `${data.fromEntityId} and ${data.toEntityId}`
+        });
+
+        // If surprise is high enough, emit additional observation queued event
+        if (data.surpriseScore >= this.thresholds.high) {
+            const additionalObservations = Math.min(
+                Math.ceil((data.surpriseScore - this.thresholds.high) / 0.1) + 1,
+                this.thresholds.maxExtraObservations
+            );
+
+            EventBus.server.emit(OrparMemoryEvents.ADDITIONAL_OBSERVATION_QUEUED, {
+                agentId: agentId || 'system',
+                channelId: channelId || data.channelId,
+                cycleId: `graph-surprise-${Date.now()}`,
+                queuedCount: additionalObservations
+            });
+
+            this.logger.info(
+                `[SurpriseOrparAdapter] Graph surprise triggered ${additionalObservations} ` +
+                `additional observation cycles`
+            );
         }
     }
 

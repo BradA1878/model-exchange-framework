@@ -1,7 +1,7 @@
 # Model Exchange Framework (MXF)
 
 Author: [Brad Anderson](brada1878@gmail.com)
-Copyright 2024 Brad Anderson
+Copyright 2024-2026 Brad Anderson
 
 ## 📜 License
 
@@ -17,11 +17,19 @@ The official TypeScript SDK for the Model Exchange Framework (MXF), enabling dev
 - **Simple Agent Creation**: Create agents through `MxfSDK` with comprehensive configuration
 - **Multiple LLM Providers**: Support for OpenRouter, OpenAI, Anthropic, Google AI, xAI, Azure OpenAI, and Ollama
 - **Real-time Communication**: Socket.IO-based messaging between agents and channels
-- **Tool Execution**: 75+ built-in tools plus external MCP server integration
+- **Tool Execution**: 100+ built-in tools plus external MCP server integration
 - **Event System**: Comprehensive event listening and handling across all agent activities
 - **Memory Management**: Agent-private and channel-shared memory operations
 - **Task Orchestration**: Create, assign, and coordinate tasks across multiple agents
 - **Control Loop Integration**: Full ORPAR (Observation, Reasoning, Planning, Action, Reflection) cycle support
+
+### Advanced Features
+- **ORPAR-Memory Integration**: Phase-aware memory coupling with surprise-driven re-observation
+- **MULS**: Q-value weighted memory retrieval with retroactive reward propagation
+- **Task DAG Tools**: Define complex task dependencies with automatic topological ordering
+- **Knowledge Graph Tools**: Entity-relationship modeling with traversal queries
+- **Code Execution**: Secure sandboxed code execution via agent tools
+- **Memory Strata**: Episodic, semantic, and procedural memory layers
 
 ### Authentication & Security
 - **Dual Authentication**: User authentication (JWT) and agent authentication (key-based)
@@ -33,13 +41,13 @@ The official TypeScript SDK for the Model Exchange Framework (MXF), enabling dev
 
 ```bash
 # The SDK is part of the MXF monorepo
-npm install
+bun install
 
 # Build the framework
 bun run build
 ```
 
-**Note**: The SDK will be published as `@mxf/sdk` when separated from the monorepo.
+**Note**: The SDK will be published as `@mxf/sdk` when separated from the monorepo. MXF uses Bun for both package management and server execution.
 
 ## 🚀 Quick Start
 

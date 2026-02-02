@@ -1,6 +1,6 @@
 {
   "name": "model-exchange-framework",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "description": "Model Exchange Framework (MXF): Multi-agent AI orchestration framework with advanced optimization",
   "private": true,
   "scripts": {
@@ -31,6 +31,10 @@
     "demo:nested-learning": "NODE_ENV=test bun run examples/nested-learning-demo/nested-learning-demo.ts",
     "demo:muls": "NODE_ENV=test bun run examples/muls-demo/muls-demo.ts",
     "demo:orpar-memory": "NODE_ENV=test bun run examples/orpar-memory-demo/orpar-memory-demo.ts",
+    "demo:dag": "NODE_ENV=test bun run examples/dag-demo/dag-demo.ts",
+    "demo:kg": "NODE_ENV=test bun run examples/kg-demo/kg-demo.ts",
+    "demo:tensorflow": "NODE_ENV=test TENSORFLOW_ENABLED=true bun run examples/tensorflow-demo/tensorflow-demo.ts",
+    "demo:twenty-questions": "NODE_ENV=test TENSORFLOW_ENABLED=true bun run examples/twenty-questions/connect-agents.ts & PID=$!; cd examples/twenty-questions/client && npx vite --port 3007; kill $PID 2>/dev/null; wait $PID 2>/dev/null; lsof -ti:3006 | xargs kill -9 2>/dev/null",
     "test": "jest --config tests/jest.config.ts tests/integration",
     "test:integration": "jest --config tests/jest.config.ts tests/integration",
     "test:integration:manual": "jest --config tests/jest.config.ts tests/integration",

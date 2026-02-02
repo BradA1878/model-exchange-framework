@@ -127,6 +127,21 @@ export class HybridMcpToolRegistry {
     }
 
     /**
+     * Refresh internal tools snapshot from McpToolRegistry.
+     * Call after registering new tools so the hybrid registry picks them up.
+     */
+    public refreshInternalTools(): void {
+        this.internalRegistry.listTools().subscribe({
+            next: (tools) => {
+                this.internalToolsSubject.next(tools);
+            },
+            error: (error) => {
+                logger.error(`❌ Error refreshing internal tools: ${error instanceof Error ? error.message : String(error)}`);
+            }
+        });
+    }
+
+    /**
      * Refresh external tools from all running servers
      */
     private refreshExternalTools(): void {

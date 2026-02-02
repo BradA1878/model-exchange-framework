@@ -465,8 +465,11 @@ export class MxfAgent extends MxfClient {
         while (iteration < maxIterations && !taskComplete) {
             iteration++;
 
-            // Check if task was canceled externally
-            if (!this.currentTask && !taskPrompt) {
+            // Check if task was canceled externally (e.g., disconnect() or cancelCurrentTask())
+            // When currentTask is cleared, stop the loop regardless of whether taskPrompt was set.
+            // Previously, the `&& !taskPrompt` guard prevented this check from firing during
+            // task-based execution, causing the loop to continue after disconnect.
+            if (!this.currentTask) {
                 this.modelLogger.debug('🛑 Task canceled externally - stopping LLM loop');
                 break;
             }
@@ -581,7 +584,7 @@ export class MxfAgent extends MxfClient {
                 );
 
                 // Emit reasoning event for transparency
-                EventBus.client.emit(AgentEvents.LLM_REASONING, reasoningPayload);
+                EventBus.client.emitOn(this.agentId,AgentEvents.LLM_REASONING, reasoningPayload);
 
                 // Parse reasoning for tool intentions ONLY if no standard tool_calls are present
                 // This prevents duplicate tool calls when models provide both reasoning and standard tool_calls
@@ -620,7 +623,7 @@ export class MxfAgent extends MxfClient {
                                 synthesizedData
                             );
                             
-                            EventBus.client.emit(AgentEvents.LLM_REASONING_TOOLS_SYNTHESIZED, synthesisPayload);
+                            EventBus.client.emitOn(this.agentId,AgentEvents.LLM_REASONING_TOOLS_SYNTHESIZED, synthesisPayload);
                         } else {
                             this.modelLogger.debug(`🔍 No tool intentions found in reasoning text`);
                         }
@@ -636,6 +639,13 @@ export class MxfAgent extends MxfClient {
                 .map((content: any) => 'text' in content ? content.text : '')
                 .join('\n');
 
+            // Check if task was canceled while LLM call was in-flight
+            // Must happen BEFORE emitting LLM_RESPONSE to prevent stale output after cancellation
+            if (!this.currentTask) {
+                this.modelLogger.debug('🛑 Task canceled during LLM call - discarding response');
+                break;
+            }
+
             const payload = createBaseEventPayload(
                 AgentEvents.LLM_RESPONSE,
                 this.agentId,
@@ -644,7 +654,7 @@ export class MxfAgent extends MxfClient {
             );
 
             // Emit LLM response event for external monitoring
-            EventBus.client.emit(AgentEvents.LLM_RESPONSE, payload);
+            EventBus.client.emitOn(this.agentId,AgentEvents.LLM_RESPONSE, payload);
 
             // Handle tool calls first to include them in conversation message
             let toolCalls = response.content.filter((content: any) => content.type === McpContentType.TOOL_USE);
@@ -924,9 +934,25 @@ export class MxfAgent extends MxfClient {
         const deferredFeedbackMessages: Array<{role: string; content: string; metadata?: Record<string, any>}> = [];
         
         for (const toolCall of toolCalls) {
+            // Skip remaining tools if task was canceled mid-execution
+            if (!this.taskExecutionManager.hasActiveTask()) {
+                this.modelLogger.debug(`🛑 Skipping tool ${toolCall.name} - task canceled`);
+                // Must provide a tool_result for every tool_call to avoid OpenRouter/Bedrock errors
+                const skipResult: McpToolResultContent = {
+                    type: McpContentType.TOOL_RESULT,
+                    tool_use_id: toolCall.id,
+                    content: {
+                        type: McpContentType.TEXT,
+                        text: 'Tool execution skipped: task was canceled'
+                    } as McpTextContent
+                };
+                allToolResults.push(skipResult);
+                continue;
+            }
+
             // Track tool call for circuit breaker pattern (include params for better stuck detection)
             this.trackToolCall(toolCall.name, iteration, toolCall.input);
-            
+
             // Check for stuck behavior before executing
             if (this.checkForStuckBehavior()) {
                 const stats = this.getCircuitBreakerStats();
@@ -1072,7 +1098,7 @@ This iteration has been skipped. Choose a different action or complete the task.
                 if (taskComplete) {
                     // Handle duplicate task_complete calls
                     if (!this.taskExecutionManager.hasActiveTask()) {
-                        this.modelLogger.warn('⚠️ DUPLICATE TASK_COMPLETE: Task already completed, treating as success');
+                        this.modelLogger.debug('DUPLICATE TASK_COMPLETE: Task already completed, treating as success');
                         // Still add the tool result for proper pairing, just mark as already complete
                         toolResultContent = {
                             ...toolResultContent,
@@ -1105,7 +1131,11 @@ This iteration has been skipped. Choose a different action or complete the task.
                 allToolResults.push(toolResultContent);
 
             } catch (error) {
-                this.modelLogger.error(`❌ Tool execution failed: ${error}`);
+                if (!this.taskExecutionManager.hasActiveTask()) {
+                    this.modelLogger.debug(`Tool execution skipped (task canceled): ${toolCall.name}`);
+                } else {
+                    this.modelLogger.error(`❌ Tool execution failed: ${error}`);
+                }
 
                 // Create error result to maintain tool_call/tool_result pairing
                 const errorResult: McpToolResultContent = {
@@ -1358,7 +1388,11 @@ This iteration has been skipped. Choose a different action or complete the task.
             return result;
             
         } catch (error) {
-            this.logger.error(`Tool execution failed for ${toolName}: ${error}`);
+            if (!this.taskExecutionManager.hasActiveTask()) {
+                this.logger.debug(`Tool execution skipped (task canceled): ${toolName}`);
+            } else {
+                this.logger.error(`Tool execution failed for ${toolName}: ${error}`);
+            }
             
             // Add error to conversation history 
             this.memoryManager.addConversationMessage({
@@ -1437,7 +1471,7 @@ This iteration has been skipped. Choose a different action or complete the task.
                 controlLoopReflectionData
             );
 
-            EventBus.client.emit(Events.ControlLoop.REFLECTION, payload);
+            EventBus.client.emitOn(this.agentId,Events.ControlLoop.REFLECTION, payload);
         } catch (error) {
             this.modelLogger.error(`Error generating reflection: ${error}`);
         }

@@ -59,6 +59,9 @@ import { JsonTools } from './JsonTools';
 import { orparTools } from './OrparTools';
 import { inferenceParameterTools } from './InferenceParameterTools';
 import { MemoryUtilityTools } from './MemoryUtilityTools';
+import { dagTools } from './DagTools';
+import { knowledgeGraphTools } from './KnowledgeGraphTools';
+import { predictiveTools } from './PredictiveTools';
 
 /**
  * All available MXF MCP tools organized by category
@@ -131,7 +134,16 @@ export const mxfMcpTools = {
     inferenceParameter: inferenceParameterTools,
 
     // Memory Utility Learning System (MULS) tools
-    memoryUtility: MemoryUtilityTools
+    memoryUtility: MemoryUtilityTools,
+
+    // Task DAG tools for dependency management
+    dag: dagTools,
+
+    // Knowledge Graph tools for entity/relationship management
+    knowledgeGraph: knowledgeGraphTools,
+
+    // Predictive analytics tools (ML error prediction, anomaly detection, risk scoring)
+    predictive: predictiveTools
 };
 
 /**
@@ -163,7 +175,10 @@ export const allMxfMcpTools = [
     JsonTools.jsonRead,
     ...orparTools,
     ...inferenceParameterTools,
-    ...MemoryUtilityTools
+    ...MemoryUtilityTools,
+    ...dagTools,
+    ...knowledgeGraphTools,
+    ...predictiveTools
 ];
 
 /**
@@ -204,6 +219,7 @@ export const getMxfMcpToolNames = () => {
         effectiveness: effectivenessTools.map(tool => tool.name),
         analytics: analyticsTools.map(tool => tool.name),
         dateTime: dateTimeTools.map(tool => tool.name),
+        predictive: predictiveTools.map(tool => tool.name),
         all: allMxfMcpTools.map(tool => tool.name)
     };
 };
@@ -214,7 +230,7 @@ export const getMxfMcpToolNames = () => {
 export const mxfMcpToolMetadata = {
     version: '1.0.0',
     description: 'MXF-specific MCP tools for enhanced agent capabilities',
-    categories: ['communication', 'coordination', 'controlLoop', 'infrastructure', 'contextMemory', 'actionValidation', 'meta', 'web', 'git', 'typescript', 'taskBridge', 'test', 'codeAnalysis', 'safety', 'planning', 'effectiveness', 'analytics', 'dateTime', 'memoryUtility'],
+    categories: ['communication', 'coordination', 'controlLoop', 'infrastructure', 'contextMemory', 'actionValidation', 'meta', 'web', 'git', 'typescript', 'taskBridge', 'test', 'codeAnalysis', 'safety', 'planning', 'effectiveness', 'analytics', 'dateTime', 'memoryUtility', 'dag', 'knowledgeGraph', 'predictive'],
     totalTools: allMxfMcpTools.length,
     capabilities: [
         'agent-to-agent messaging',
@@ -283,12 +299,28 @@ export const mxfMcpToolMetadata = {
         'relative time comparisons',
         'Q-value analytics and memory utility tracking',
         'utility-based memory retrieval configuration',
-        'manual reward injection for memory feedback'
+        'manual reward injection for memory feedback',
+        'task dependency management and DAG operations',
+        'topological task execution ordering',
+        'cycle detection and dependency validation',
+        'parallel task group identification',
+        'critical path analysis',
+        'knowledge graph entity management',
+        'entity extraction from text',
+        'relationship discovery and management',
+        'graph context retrieval for ORPAR phases',
+        'entity Q-value tracking and learning',
+        'semantic entity search and path finding',
+        'ML error prediction',
+        'parameter anomaly detection',
+        'proactive optimization suggestions',
+        'operation risk scoring',
+        'ML model metadata inspection'
     ]
 };
 
 // Re-export individual tool arrays for selective imports
-export { agentCommunicationTools, coordinationTools, controlLoopTools, infrastructureTools, contextMemoryTools, MemorySearchTools, actionValidationTools, metaTools, webTools, gitTools, typescriptTools, taskBridgeTools, testTools, codeAnalysisTools, safetyTools, planningTools, effectivenessTools, taskPlanningTools, analyticsTools, dateTimeTools, inferenceParameterTools, MemoryUtilityTools };
+export { agentCommunicationTools, coordinationTools, controlLoopTools, infrastructureTools, contextMemoryTools, MemorySearchTools, actionValidationTools, metaTools, webTools, gitTools, typescriptTools, taskBridgeTools, testTools, codeAnalysisTools, safetyTools, planningTools, effectivenessTools, taskPlanningTools, analyticsTools, dateTimeTools, inferenceParameterTools, MemoryUtilityTools, dagTools, knowledgeGraphTools, predictiveTools };
 
 // Re-export individual tools for direct imports
 export {
@@ -433,3 +465,40 @@ export {
     memory_utility_config,
     memory_inject_reward
 } from './MemoryUtilityTools';
+
+export {
+    // Task DAG Tools
+    dag_get_ready_tasks,
+    dag_validate_dependency,
+    dag_get_execution_order,
+    dag_get_blocking_tasks,
+    dag_get_parallel_groups,
+    dag_get_critical_path,
+    dag_get_stats
+} from './DagTools';
+
+export {
+    // Knowledge Graph Tools
+    kg_get_entity,
+    kg_find_entity,
+    kg_get_neighbors,
+    kg_find_path,
+    kg_get_context,
+    kg_get_high_utility_entities,
+    kg_create_entity,
+    kg_create_relationship,
+    kg_extract_from_text,
+    kg_extract_from_memory,
+    kg_get_phase_context,
+    kg_find_duplicates,
+    kg_merge_entities
+} from './KnowledgeGraphTools';
+
+export {
+    // Predictive Analytics Tools
+    predict_errors,
+    detect_anomalies,
+    proactive_suggestions,
+    calculate_risk,
+    model_metadata
+} from './PredictiveTools';

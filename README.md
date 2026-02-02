@@ -4,8 +4,8 @@ Author: [Brad Anderson](brada1878@gmail.com)
 Copyright 2024-2026 Brad Anderson
 
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](http://www.apache.org/licenses/LICENSE-2.0)
-[![Version](https://img.shields.io/badge/version-1.1.0-blue.svg)](https://github.com/BradA1878/model-exchange-framework)
-[![Node.js](https://img.shields.io/badge/node.js-20+-green.svg)](https://nodejs.org/)
+[![Version](https://img.shields.io/badge/version-1.5.0-blue.svg)](https://github.com/BradA1878/model-exchange-framework)
+[![Bun](https://img.shields.io/badge/Bun-1.1+-green.svg)](https://bun.sh/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.0+-blue.svg)](https://www.typescriptlang.org/)
 
 
@@ -35,7 +35,7 @@ A sophisticated framework for **autonomous multi-agent collaboration**, communic
 - **Rich Agent Profiles**: Detailed agent metadata, capabilities, and role definitions
 
 ### 🛠️ **Hybrid Tool System**
-- **95+ Built-in Tools**: Comprehensive tool library across 11 categories including memory search, analytics, coordination, and more - See [Tool Reference](docs/mxf/tool-reference.md)
+- **100+ Built-in Tools**: Comprehensive tool library across 11+ categories including memory search, analytics, coordination, DAG, Knowledge Graph, ML, and more - See [Tool Reference](docs/mxf/tool-reference.md)
 - **External MCP Server Integration**: Support for Model Context Protocol servers
 - **Channel-Scoped MCP Servers**: Register MCP servers available only within specific channels
 - **Channel-Level Tool Access Control**: Restrict which tools are available per channel using `allowedTools`
@@ -112,6 +112,110 @@ MXF includes sophisticated meta-tools that provide intelligent tool discovery an
 - **Learning Integration**: Recommendations improve based on successful tool usage patterns
 - **Cross-Agent Intelligence**: Shares successful tool combinations across the agent ecosystem
 - **Dynamic Adaptation**: Recommendations adapt as new tools are added to the registry
+
+### 🔀 **Task DAG System**
+- **Directed Acyclic Graph**: Define complex task dependencies with automatic topological ordering
+- **Parallel Execution**: Independent tasks run concurrently while respecting dependency constraints
+- **Cycle Detection**: Automatic validation prevents circular dependencies
+- **DAG Tools**: Create, query, and manage DAG-structured task workflows
+
+📖 **[Task DAG & Knowledge Graph Guide](docs/features/dag-knowledge-graph.md)** | **[DAG API Tools](docs/api/dag-tools.md)**
+
+### 🕸️ **Knowledge Graph System**
+- **Entity-Relationship Modeling**: Store and query structured knowledge with typed relationships
+- **Traversal Queries**: Graph traversal for multi-hop reasoning and relationship discovery
+- **TransE Embeddings**: TensorFlow.js-powered knowledge graph embeddings (opt-in)
+- **KG Tools**: Create entities, relationships, and run graph queries
+
+📖 **[Knowledge Graph Guide](docs/features/dag-knowledge-graph.md)** | **[KG API Tools](docs/api/knowledge-graph-tools.md)**
+
+### 📊 **Memory Utility Learning System (MULS)**
+- **Q-Value Weighted Retrieval**: Memories ranked by learned utility scores
+- **ORPAR Phase-Specific Lambdas**: Different retrieval weights per control loop phase
+- **Retroactive Reward Propagation**: Task outcomes flow back to update memory utility
+- **Memory Strata**: Episodic, semantic, and procedural memory layers
+
+📖 **[MULS Guide](docs/mxf/memory-utility-learning.md)** | **[ORPAR-Memory Integration](docs/mxf/orpar-memory-integration.md)**
+
+### 🧠 **ORPAR-Memory Integration**
+- **Phase-to-Strata Routing**: Each ORPAR phase reads/writes specific memory layers
+- **Surprise-Driven Re-Observation**: Unexpected outcomes trigger re-evaluation
+- **Phase-Weighted Rewards**: Reward signals weighted by ORPAR phase context
+- **Cycle Consolidation**: End-of-cycle memory consolidation and cleanup
+
+📖 **[ORPAR-Memory Integration Guide](docs/mxf/orpar-memory-integration.md)**
+
+### 🤖 **TensorFlow.js Integration**
+- **MxfMLService Singleton**: Manages TF.js model lifecycle (register, build, train, predict, save/load)
+- **7 Model Architectures**: Dense classifiers, autoencoders, LSTMs, DQNs, regression, embeddings, TransE
+- **Safe Inference API**: Consumers receive plain `number[]` values, never touching tensors
+- **Graceful Degradation**: Heuristic fallback when TF.js is disabled — zero overhead when feature flag is off
+
+📖 **[TensorFlow.js Demo](examples/tensorflow-demo/)** | Enable with `TENSORFLOW_ENABLED=true`
+
+### ⚡ **Code Execution Sandbox**
+- **Secure Docker Sandbox**: Isolated code execution in containerized environments
+- **Bun Runtime Support**: Execute TypeScript/JavaScript code with Bun runtime
+- **Resource Limits**: CPU, memory, and time limits for sandboxed execution
+- **Multi-Language Support**: Extensible architecture for additional language runtimes
+
+📖 **[Code Execution Guide](docs/mxf/code-execution.md)**
+
+### ⚡ **Dynamic Inference Parameters (P1)**
+- **Complexity-Based Model Selection**: Automatically select optimal LLM model based on task complexity
+- **Per-Request Temperature Tuning**: Dynamic temperature and token limit adjustment
+- **Provider-Aware Optimization**: Model selection strategies optimized per LLM provider
+
+📖 **[Dynamic Inference Parameters](docs/mxf/dynamic-inference-parameters.md)**
+
+### 📊 **TOON Optimization (P2)**
+- **Token-Optimized Object Notation**: Compact encoding reduces token usage
+- **Lossless Compression**: Full data fidelity preserved through encoding/decoding
+- **Automatic Integration**: Transparent optimization of tool schemas and responses
+
+📖 **[TOON Optimization](docs/mxf/toon-optimization.md)**
+
+### 📦 **Prompt Auto-Compaction (P3)**
+- **Automatic Token Reduction**: Compacts prompts when approaching token limits
+- **Residual Preservation**: Maintains critical context through compaction
+- **Configurable Strategies**: Multiple compaction algorithms available
+
+📖 **[Prompt Auto-Compaction](docs/mxf/prompt-auto-compaction.md)**
+
+### 🗄️ **Database Abstraction Layer (P4)**
+- **Adapter Pattern**: Swappable database backends via unified interface
+- **MongoDB Adapter**: Production-ready MongoDB implementation
+- **Repository Pattern**: Clean data access through typed repositories
+
+📖 **[Database Abstraction](docs/mxf/database-abstraction.md)**
+
+### 🔄 **Workflow System / Agent Dev Kit (P6)**
+- **Sequential, Parallel, Loop Patterns**: Composable workflow building blocks
+- **Workflow Templates**: Pre-built templates for common multi-agent patterns
+- **Event-Driven Execution**: Workflows react to real-time agent events
+
+📖 **[Workflow System](docs/mxf/workflow-system.md)**
+
+### 💻 **LSP-MCP Bridge (P7)**
+- **Language Server Protocol Integration**: Connect LSP servers as MCP tool providers
+- **Code Intelligence**: Hover, completion, diagnostics, and go-to-definition as agent tools
+- **Multi-Language Support**: Any LSP-compliant language server can be bridged
+
+📖 **[LSP Integration](docs/mxf/lsp-integration.md)**
+
+### 🧠 **Nested Learning / Continuum Memory (P8)**
+- **Multi-Timescale Memory**: Short-term, mid-term, and long-term memory consolidation
+- **SERC (Structured Experience Replay and Consolidation)**: Automated memory lifecycle
+- **Verification and Repair**: Memory integrity checking with self-healing
+
+📖 **[Nested Learning](docs/mxf/nested-learning.md)**
+
+### 🌐 **P2P Foundation / Decentralization (P9)**
+- **Peer-to-Peer Task Negotiation**: Agents negotiate task assignment directly
+- **Federation Support**: Cross-server agent collaboration
+- **Decentralized Coordination**: Reduce single-point-of-failure in orchestration
+
+📖 **[P2P Foundation](docs/mxf/p2p-foundation.md)**
 
 ### 🛡️ **Advanced Validation & Error Prevention System**
 
@@ -331,9 +435,24 @@ MXF provides comprehensive REST APIs for complete framework management:
 - Predictive analytics and anomaly detection
 - Automated optimization recommendations
 
+### DAG & Knowledge Graph (10+ tools)
+- Task DAG creation, querying, and dependency management
+- Knowledge Graph entity and relationship operations
+- Graph traversal and multi-hop reasoning queries
+
+### Machine Learning (5+ tools)
+- TensorFlow.js model management and inference
+- Error prediction and anomaly detection
+- Knowledge graph embedding operations
+
+### Code Execution (3+ tools)
+- Secure sandboxed code execution
+- Multi-runtime support (Bun, Docker)
+- Resource-limited execution environments
+
 ### External MCP Servers (43 tools)
 - **Calculator Server**: Advanced mathematical operations
-- **Memory Server**: Knowledge graph operations  
+- **Memory Server**: Knowledge graph operations
 - **Filesystem Server**: File system interactions
 - **MongoDB Lens**: Database analysis and optimization
 - **Sequential Thinking**: Structured problem solving
@@ -348,7 +467,7 @@ MXF provides comprehensive REST APIs for complete framework management:
 - **LLM Provider API Key** (optional, for LLM-powered agents)
 
 **Option B: Local Development**
-- **Node.js 20+** (or Bun 1.1+ for fast package management)
+- **Bun 1.1+** (primary runtime and package manager)
 - **MongoDB** (local or cloud instance)
 - **LLM Provider API Key** (optional, for LLM-powered agents) - Choose from:
   - [OpenRouter](https://openrouter.ai/) - Access to 200+ models
@@ -512,34 +631,67 @@ bun run demo:fog-of-war
 
 ### 🎨 **Example Demos**
 
-Explore our collection of multi-agent demos in the `/examples` directory:
+Explore our collection of 20 multi-agent demos in the `/examples` directory:
 
 **Strategy & Collaboration:**
 - **First Contact Demo**: Starship crew encounters alien vessel (6 agents)
 - **Interview Scheduling Demo**: Multi-agent coordination for scheduling
 - **Fog of War Game**: Team strategy game with 8 AI commanders competing for resources
 
-**AI Game Demos:**
-- **Tic-Tac-Toe**: AI vs AI with personality-driven trash talk (2 agents)
-- **Go Fish**: Card game with memory, strategy, and character personalities (2 agents)
-- **Twenty Questions**: Classic guessing game with AI agents
+**Memory & Learning:**
+- **ORPAR-Memory Demo**: Phase-aware memory integration with surprise-driven re-observation
+- **MULS Demo**: Memory Utility Learning System with Q-value weighted retrieval
+- **Memory Strata Demo**: Episodic, semantic, and procedural memory layers
+- **Nested Learning Demo**: Multi-timescale memory consolidation with SERC
+
+**Advanced Features:**
+- **DAG Demo**: Directed Acyclic Graph task dependency workflows
+- **KG Demo**: Knowledge Graph entity-relationship operations
+- **TensorFlow Demo**: ML model training and inference (requires `TENSORFLOW_ENABLED=true`)
+- **Code Execution Demo**: Secure sandboxed code execution
+- **Workflow Patterns Demo**: Sequential, parallel, and loop workflow patterns
+- **LSP Code Intelligence Demo**: Language Server Protocol integration
+- **P2P Task Negotiation Demo**: Peer-to-peer decentralized task assignment
+
+**Optimization:**
+- **TOON Optimization Demo**: Token-Optimized Object Notation encoding
+- **Prompt Compaction Demo**: Automatic prompt auto-compaction
+- **Inference Parameters Demo**: Dynamic inference parameter tuning
+- **MCP Prompts Demo**: MCP prompt template discovery and resolution
 
 **SDK Patterns:**
 - **Channel MCP Registration**: Example of channel-scoped MCP server registration
 - **External MCP Registration**: Example of global MCP server registration
 
 ```bash
-# Run demos with npm scripts
-bun run demo:first-contact    # First contact scenario (6 agents)
-bun run demo:fog-of-war       # Strategy game with 8 agents
-bun run demo:interview        # Interview scheduling demo
-bun run demo:external-mcp     # External MCP server registration
-bun run demo:channel-mcp      # Channel-scoped MCP registration
+# Strategy & Collaboration
+bun run demo:first-contact       # First contact scenario (6 agents)
+bun run demo:fog-of-war          # Strategy game with 8 agents
+bun run demo:interview           # Interview scheduling demo
 
-# Game demos (run directly with ts-node)
-bun run examples/tic-tac-toe/connect-agents.ts
-bun run examples/go-fish/connect-agents.ts
-bun run examples/twenty-questions/connect-agents.ts
+# Memory & Learning
+bun run demo:orpar-memory        # ORPAR-Memory integration
+bun run demo:muls                # Memory Utility Learning System
+bun run demo:nested-learning     # Nested learning / continuum memory
+
+# Advanced Features
+bun run demo:dag                 # Task DAG workflows
+bun run demo:kg                  # Knowledge Graph operations
+bun run demo:tensorflow          # TensorFlow.js ML models
+bun run demo:code-execution      # Sandboxed code execution
+bun run demo:workflow-patterns   # Workflow system patterns
+bun run demo:lsp-code-intelligence  # LSP integration
+bun run demo:p2p-task-negotiation   # P2P task negotiation
+
+# Optimization
+bun run demo:toon-optimization   # TOON encoding
+bun run demo:prompt-compaction   # Prompt auto-compaction
+bun run demo:inference-params    # Dynamic inference parameters
+bun run demo:mcp-prompts         # MCP prompt templates
+
+# SDK Patterns
+bun run demo:external-mcp        # External MCP server registration
+bun run demo:channel-mcp         # Channel-scoped MCP registration
 ```
 
 ### 🧪 **Other Ways to Explore MXF**
@@ -620,6 +772,22 @@ AUTO_CORRECTION_CONFIDENCE_THRESHOLD=0.7
 ANALYTICS_AGGREGATION_INTERVAL=60000
 ANALYTICS_RETENTION_DAYS=90
 OPTIMIZATION_AUTO_TUNE=true
+
+# TensorFlow.js (Optional - on-device ML)
+TENSORFLOW_ENABLED=false
+TENSORFLOW_STORAGE_BACKEND=gridfs
+TENSORFLOW_DEBUG=false
+
+# Task DAG (Optional)
+TASK_DAG_ENABLED=true
+
+# Knowledge Graph (Optional)
+KNOWLEDGE_GRAPH_ENABLED=true
+
+# Memory Systems (Optional)
+ORPAR_MEMORY_INTEGRATION_ENABLED=true
+MEMORY_UTILITY_LEARNING_ENABLED=true
+MEMORY_STRATA_ENABLED=true
 ```
 
 ## 🏗️ Architecture
@@ -627,30 +795,33 @@ OPTIMIZATION_AUTO_TUNE=true
 ### Core Components
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                      MXF Framework                          │
-├─────────────────┬─────────────────┬─────────────────────────┤
-│   Agent SDK     │   Server Core   │   External MCP Servers  │
-│                 │                 │                         │
-│ • Agent Client  │ • Socket.IO     │ • Calculator Server     │
-│ • Tool Executor │ • REST API      │ • Memory Server         │
-│ • Event System  │ • Auth System   │ • Filesystem Server     │
-│ • Control Loop  │ • Tool Registry │ • MongoDB Lens          │
-│ • Validation    │ • LLM Service   │ • Sequential Thinking   │
-│                 │                 │                         │
-│ Validation Layer│ Validation Core │ Analytics & Optimization│
-│ • Pre-execution │ • Auto-Correct  │ • ML Predictions        │
-│ • Error Prevent │ • Pattern Learn │ • Performance Tuning   │
-│ • Risk Scoring  │ • Cache System  │ • A/B Testing          │
-└─────────────────┴─────────────────┴─────────────────────────┘
-                           │
-         ┌─────────────────┴──────────────────┐
-         │         Data Layer (Docker)        │
-         ├────────────────────────────────────┤
-         │ • MongoDB (Persistence)            │
-         │ • Meilisearch (Semantic Search)   │
-         │ • Redis (Caching)                  │
-         └────────────────────────────────────┘
+┌───────────────────────────────────────────────────────────────────┐
+│                        MXF Framework                              │
+├──────────────────┬──────────────────┬─────────────────────────────┤
+│   Agent SDK      │   Server Core    │   External MCP Servers      │
+│                  │                  │                             │
+│ • Agent Client   │ • Socket.IO      │ • Calculator Server         │
+│ • Tool Executor  │ • REST API       │ • Memory Server             │
+│ • Event System   │ • Auth System    │ • Filesystem Server         │
+│ • Control Loop   │ • Tool Registry  │ • MongoDB Lens              │
+│ • Validation     │ • LLM Service    │ • Sequential Thinking       │
+│                  │                  │                             │
+│ Advanced Systems │ Intelligence     │ ML & Analytics              │
+│ • DAG Engine     │ • ORPAR-Memory   │ • TensorFlow.js (opt-in)    │
+│ • Knowledge Graph│ • MULS Q-Values  │ • Error Prediction          │
+│ • Memory Strata  │ • Nested Learning│ • Anomaly Detection         │
+│ • Code Execution │ • Auto-Correct   │ • Performance Tuning        │
+│ • Workflow System│ • Pattern Learn  │ • TransE Embeddings         │
+│ • LSP Bridge     │ • P2P Foundation │ • TOON Optimization         │
+└──────────────────┴──────────────────┴─────────────────────────────┘
+                            │
+          ┌─────────────────┴──────────────────┐
+          │         Data Layer (Docker)         │
+          ├────────────────────────────────────┤
+          │ • MongoDB (Persistence)             │
+          │ • Meilisearch (Semantic Search)     │
+          │ • Redis (Caching)                   │
+          └────────────────────────────────────┘
 ```
 
 ### Data Flow
@@ -717,12 +888,19 @@ src/
 │   ├── socket/            # Socket.IO services and handlers
 │   └── index.ts           # Server entry point
 └── shared/                # Shared utilities and types
-    ├── protocols/mcp/tools/  # 95+ built-in MCP tools
+    ├── protocols/mcp/tools/  # 100+ built-in MCP tools
     ├── events/            # EventBus architecture
     ├── models/            # MongoDB models
     ├── services/          # Shared services
+    │   ├── dag/           # Task DAG engine
+    │   ├── kg/            # Knowledge Graph system
+    │   ├── orpar-memory/  # ORPAR-Memory integration
+    │   ├── lsp/           # LSP-MCP bridge
+    │   ├── p2p/           # P2P / decentralization
+    │   └── ml/            # TensorFlow.js ML service
+    ├── database/          # Database abstraction layer
     ├── interfaces/        # TypeScript interfaces
-    └── utils/             # Utility functions (Logger, etc.)
+    └── utils/             # Utility functions (Logger, TOON, etc.)
 ```
 
 ### Development Workflow

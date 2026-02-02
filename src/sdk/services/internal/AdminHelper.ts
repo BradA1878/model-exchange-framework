@@ -147,7 +147,7 @@ export class AdminHelper {
                 }
             );
 
-            EventBus.client.emit(Events.Channel.CREATE, createPayload);
+            EventBus.client.emitOn(createdBy, Events.Channel.CREATE, createPayload);
         });
     }
 
@@ -219,7 +219,7 @@ export class AdminHelper {
                 }
             );
 
-            EventBus.client.emit(Events.Key.GENERATE, generatePayload);
+            EventBus.client.emitOn(requestedBy, Events.Key.GENERATE, generatePayload);
         });
     }
 
@@ -279,7 +279,7 @@ export class AdminHelper {
                 }
             );
 
-            EventBus.client.emit(Events.Key.DEACTIVATE, deactivatePayload);
+            EventBus.client.emitOn(requestedBy, Events.Key.DEACTIVATE, deactivatePayload);
         });
     }
 
@@ -341,7 +341,7 @@ export class AdminHelper {
                 }
             );
 
-            EventBus.client.emit(Events.Key.LIST, listPayload);
+            EventBus.client.emitOn(requestedBy, Events.Key.LIST, listPayload);
         });
     }
 }

@@ -233,17 +233,21 @@ export const updateAgent = async (req: Request, res: Response): Promise<void> =>
  */
 export const deleteAgent = async (req: Request, res: Response): Promise<void> => {
     try {
-        // Get user from authentication middleware
-        const user = (req as any).user;
-
-        // Validate user authentication
-        validate.assertIsObject(user, 'User authentication required');
-        validate.assertIsObject(user.id, 'User ID is required');
-
-        const userId = user.id.toString();
+        const authType = (req as any).authType;
         const agentId = req.params.agentId;
 
-        const agent = await Agent.findOneAndDelete({ agentId: agentId, createdBy: userId });
+        let agent;
+        if (authType === 'key') {
+            // API key auth: key validation already proved authorization
+            agent = await Agent.findOneAndDelete({ agentId });
+        } else {
+            // JWT auth: ownership check via createdBy
+            const user = (req as any).user;
+            validate.assertIsObject(user, 'User authentication required');
+            validate.assertIsObject(user.id, 'User ID is required');
+            const userId = user.id.toString();
+            agent = await Agent.findOneAndDelete({ agentId, createdBy: userId });
+        }
 
         if (!agent) {
             res.status(404).json({

@@ -6,7 +6,7 @@
         <span class="title-icon">?</span>
         <span class="title-text">Twenty Questions</span>
       </h1>
-      <p class="subtitle">ORPAR Cognitive Cycle Demo</p>
+      <p class="subtitle">Advanced MXF Features Demo</p>
     </header>
 
     <!-- Main Layout -->
@@ -51,6 +51,14 @@
           </div>
           <div v-if="category" class="category-badge">
             Category: {{ category }}
+          </div>
+          <!-- Risk Gauge: ML-based guess timing indicator -->
+          <div v-if="latestRisk" class="risk-gauge" :class="riskLevel">
+            <div class="risk-label">Risk</div>
+            <div class="risk-bar-track">
+              <div class="risk-bar-fill" :style="{ width: (latestRisk.riskScore * 100) + '%' }"></div>
+            </div>
+            <div class="risk-text">{{ latestRisk.recommendation === 'guess_now' ? 'Guess!' : 'Ask more' }}</div>
           </div>
           <div v-if="thinkingStates['agent-guesser']" class="thinking-indicator">
             <span class="dot"></span><span class="dot"></span><span class="dot"></span>
@@ -147,14 +155,52 @@
               v-for="event in orparEvents.slice(-10)"
               :key="event.timestamp"
               class="timeline-event"
-              :class="event.role"
+              :class="[event.role, { 'has-reward': hasMulsRewardForQuestion(event) }]"
             >
               <span class="event-time">{{ formatTime(event.timestamp) }}</span>
               <span class="event-role">{{ event.role }}</span>
               <span class="event-phase">{{ event.phase }}</span>
+              <!-- MULS reward indicator on Reflect phase events -->
+              <span v-if="event.phase === 'Reflect' && hasMulsRewardForQuestion(event)" class="muls-indicator" title="MULS reward injected">Q</span>
             </div>
             <div v-if="orparEvents.length === 0" class="timeline-empty">
               Waiting for ORPAR events...
+            </div>
+          </div>
+        </div>
+
+        <!-- Knowledge Model Panel: Guesser's mental model of the possibility space -->
+        <div class="knowledge-panel">
+          <h3 class="knowledge-title">Knowledge Model</h3>
+          <div v-if="knowledgeGraph.nodes.length === 0" class="knowledge-empty">
+            Guesser hasn't built a model yet...
+          </div>
+          <div v-else class="knowledge-content">
+            <div class="knowledge-stats">
+              <span class="kg-stat">{{ knowledgeGraph.nodes.length }} entities</span>
+              <span class="kg-stat-sep">|</span>
+              <span class="kg-stat">{{ knowledgeGraph.edges.length }} relationships</span>
+            </div>
+            <!-- Confirmed properties -->
+            <div v-if="kgProperties.length > 0" class="kg-section">
+              <div class="kg-section-label">Confirmed</div>
+              <div class="kg-tags">
+                <span v-for="node in kgProperties" :key="node.entity" class="kg-tag property">{{ node.entity }}</span>
+              </div>
+            </div>
+            <!-- Candidate guesses -->
+            <div v-if="kgCandidates.length > 0" class="kg-section">
+              <div class="kg-section-label">Candidates</div>
+              <div class="kg-tags">
+                <span v-for="node in kgCandidates" :key="node.entity" class="kg-tag candidate">{{ node.entity }}</span>
+              </div>
+            </div>
+            <!-- Eliminated -->
+            <div v-if="kgEliminated.length > 0" class="kg-section">
+              <div class="kg-section-label">Eliminated</div>
+              <div class="kg-tags">
+                <span v-for="node in kgEliminated" :key="node.entity" class="kg-tag eliminated">{{ node.entity }}</span>
+              </div>
             </div>
           </div>
         </div>
@@ -221,7 +267,7 @@
       <span class="separator">|</span>
       <span>Model Exchange Framework</span>
       <span class="separator">|</span>
-      <span>ORPAR: Observe → Reason → Plan → Act → Reflect</span>
+      <span>ORPAR + Knowledge Graph + MULS + TensorFlow ML</span>
     </footer>
   </div>
 </template>
@@ -272,6 +318,38 @@ interface OrparEvent {
   timestamp: number
 }
 
+// Knowledge Graph types for Guesser's mental model
+interface KnowledgeNode {
+  entity: string
+  type: 'category' | 'property' | 'candidate' | 'eliminated'
+  confidence: number
+  questionNumber: number
+}
+
+interface KnowledgeEdge {
+  from: string
+  to: string
+  relationship: string
+  questionNumber: number
+}
+
+// Risk assessment from TF/ML service
+interface RiskAssessment {
+  questionNumber: number
+  riskScore: number
+  confidence: number
+  recommendation: string
+  timestamp: number
+}
+
+// MULS reward tracking
+interface MulsReward {
+  questionNumber: number
+  reward: number
+  reason: string
+  timestamp: number
+}
+
 interface GameState {
   phase: string
   secretThing: string | null
@@ -287,6 +365,9 @@ interface GameState {
   }
   currentTurn: string
   orparCycleCount: number
+  knowledgeGraph: { nodes: KnowledgeNode[], edges: KnowledgeEdge[] }
+  riskAssessments: RiskAssessment[]
+  mulsRewards: MulsReward[]
 }
 
 // ORPAR phase definitions
@@ -317,9 +398,6 @@ const players = ref<{ thinker: PlayerInfo | null; guesser: PlayerInfo | null }>(
 const chatHistory = ref<ChatMessage[]>([])
 const orparEvents = ref<OrparEvent[]>([])
 const thinkingStates = ref<Record<string, boolean>>({})
-const currentOrparPhase = ref<string | null>(null)
-const currentPhaseAgent = ref<string>('')
-const currentPhaseSummary = ref<string>('')
 
 // Separate ORPAR tracking per agent
 const thinkerOrparPhase = ref<string | null>(null)
@@ -327,21 +405,37 @@ const thinkerPhaseSummary = ref<string>('')
 const guesserOrparPhase = ref<string | null>(null)
 const guesserPhaseSummary = ref<string>('')
 
+// Advanced feature state: Knowledge Graph, Risk Assessment, MULS
+const knowledgeGraph = ref<{ nodes: KnowledgeNode[], edges: KnowledgeEdge[] }>({ nodes: [], edges: [] })
+const latestRisk = ref<RiskAssessment | null>(null)
+const mulsRewards = ref<MulsReward[]>([])
+
+// Computed: Knowledge Graph filtered views
+const kgProperties = computed(() => knowledgeGraph.value.nodes.filter(n => n.type === 'property'))
+const kgCandidates = computed(() => knowledgeGraph.value.nodes.filter(n => n.type === 'candidate'))
+const kgEliminated = computed(() => knowledgeGraph.value.nodes.filter(n => n.type === 'eliminated'))
+
+// Computed: Risk level classification for color coding
+const riskLevel = computed(() => {
+  if (!latestRisk.value) return 'low'
+  const score = latestRisk.value.riskScore
+  if (score > 0.7) return 'high'
+  if (score > 0.4) return 'medium'
+  return 'low'
+})
+
+// Helper: Check if a MULS reward was injected near an ORPAR event's question
+const hasMulsRewardForQuestion = (event: OrparEvent): boolean => {
+  // Match rewards that happened within 5 seconds of the event
+  return mulsRewards.value.some(r =>
+    Math.abs(r.timestamp - event.timestamp) < 5000
+  )
+}
+
 // Refs for auto-scroll
 const qaContainer = ref<HTMLElement | null>(null)
 const chatContainer = ref<HTMLElement | null>(null)
 const timelineContainer = ref<HTMLElement | null>(null)
-
-// Computed
-const isPhaseActive = (phaseName: string): boolean => {
-  return currentOrparPhase.value === phaseName
-}
-
-const isPhaseCompleted = (phaseName: string, index: number): boolean => {
-  if (!currentOrparPhase.value) return false
-  const currentIndex = orparPhases.findIndex(p => p.name === currentOrparPhase.value)
-  return index < currentIndex
-}
 
 // Helper functions for per-agent ORPAR tracking
 const isThinkerPhaseActive = (phaseName: string): boolean => {
@@ -389,12 +483,15 @@ const resetGame = async () => {
   try {
     await fetch('http://localhost:3006/api/game/reset', { method: 'POST' })
     orparEvents.value = []
-    currentOrparPhase.value = null
     // Reset per-agent ORPAR state
     thinkerOrparPhase.value = null
     thinkerPhaseSummary.value = ''
     guesserOrparPhase.value = null
     guesserPhaseSummary.value = ''
+    // Reset advanced feature state
+    knowledgeGraph.value = { nodes: [], edges: [] }
+    latestRisk.value = null
+    mulsRewards.value = []
   } catch (error) {
     console.error('Failed to reset game:', error)
   }
@@ -440,6 +537,16 @@ onMounted(() => {
     gameOver.value = state.gameOver
     currentTurn.value = state.currentTurn
     players.value = state.players
+    // Sync advanced feature state from full game state
+    if (state.knowledgeGraph) {
+      knowledgeGraph.value = state.knowledgeGraph
+    }
+    if (state.riskAssessments && state.riskAssessments.length > 0) {
+      latestRisk.value = state.riskAssessments[state.riskAssessments.length - 1]
+    }
+    if (state.mulsRewards) {
+      mulsRewards.value = state.mulsRewards
+    }
   })
 
   socket.value.on('chatHistory', (history: ChatMessage[]) => {
@@ -469,9 +576,6 @@ onMounted(() => {
 
   socket.value.on('orparEvent', (event: OrparEvent) => {
     orparEvents.value.push(event)
-    currentOrparPhase.value = event.phase
-    currentPhaseAgent.value = event.role.toUpperCase()
-    currentPhaseSummary.value = event.summary
 
     // Update agent-specific ORPAR state
     if (event.role.toLowerCase() === 'thinker') {
@@ -496,6 +600,35 @@ onMounted(() => {
     currentTurn.value = role
   })
 
+  socket.value.on('gameOver', ({ winner: w }: { winner: string }) => {
+    winner.value = w
+    gameOver.value = true
+  })
+
+  // Advanced feature event listeners
+
+  // Knowledge Graph: Initial state on connect and live updates
+  socket.value.on('knowledgeGraph', (kg: { nodes: KnowledgeNode[], edges: KnowledgeEdge[] }) => {
+    knowledgeGraph.value = kg
+  })
+
+  socket.value.on('knowledgeUpdate', (event: any) => {
+    if (event.knowledgeGraph) {
+      knowledgeGraph.value = event.knowledgeGraph
+    }
+  })
+
+  // Risk Assessment: Track latest ML risk score
+  socket.value.on('riskAssessment', (assessment: RiskAssessment) => {
+    latestRisk.value = assessment
+  })
+
+  // MULS Rewards: Track reward injections
+  socket.value.on('mulsReward', (reward: MulsReward) => {
+    mulsRewards.value.push(reward)
+  })
+
+  // Handle game reset for advanced features
   socket.value.on('gameReset', (state: GameState) => {
     phase.value = state.phase
     secretThing.value = state.secretThing
@@ -509,17 +642,15 @@ onMounted(() => {
     players.value = state.players
     gameStarted.value = false
     orparEvents.value = []
-    currentOrparPhase.value = null
     // Reset per-agent ORPAR state
     thinkerOrparPhase.value = null
     thinkerPhaseSummary.value = ''
     guesserOrparPhase.value = null
     guesserPhaseSummary.value = ''
-  })
-
-  socket.value.on('gameOver', ({ winner: w }: { winner: string }) => {
-    winner.value = w
-    gameOver.value = true
+    // Reset advanced feature state
+    knowledgeGraph.value = { nodes: [], edges: [] }
+    latestRisk.value = null
+    mulsRewards.value = []
   })
 })
 </script>
@@ -1382,5 +1513,188 @@ body {
 
 ::-webkit-scrollbar-thumb:hover {
   background: var(--purple-primary);
+}
+
+/* Risk Gauge (in Guesser card) */
+.risk-gauge {
+  margin-top: 0.75rem;
+  padding: 0.5rem;
+  border-radius: 0.5rem;
+  font-size: 0.75rem;
+  border: 1px solid var(--border-color);
+}
+
+.risk-gauge.low {
+  background: rgba(46, 204, 113, 0.15);
+  border-color: var(--green-primary);
+}
+
+.risk-gauge.medium {
+  background: rgba(243, 156, 18, 0.15);
+  border-color: var(--orange-primary);
+}
+
+.risk-gauge.high {
+  background: rgba(231, 76, 60, 0.15);
+  border-color: var(--red-primary);
+}
+
+.risk-label {
+  font-size: 0.6rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--text-secondary);
+  margin-bottom: 0.25rem;
+}
+
+.risk-bar-track {
+  height: 6px;
+  background: var(--bg-dark);
+  border-radius: 3px;
+  overflow: hidden;
+  margin-bottom: 0.25rem;
+}
+
+.risk-bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.5s ease;
+}
+
+.risk-gauge.low .risk-bar-fill {
+  background: var(--green-primary);
+}
+
+.risk-gauge.medium .risk-bar-fill {
+  background: var(--orange-primary);
+}
+
+.risk-gauge.high .risk-bar-fill {
+  background: var(--red-primary);
+}
+
+.risk-text {
+  text-align: center;
+  font-weight: 600;
+  font-size: 0.7rem;
+}
+
+.risk-gauge.low .risk-text { color: var(--green-primary); }
+.risk-gauge.medium .risk-text { color: var(--orange-primary); }
+.risk-gauge.high .risk-text { color: var(--red-primary); }
+
+/* Knowledge Model Panel */
+.knowledge-panel {
+  background: var(--bg-dark);
+  border-radius: 0.75rem;
+  padding: 0.75rem;
+  border: 2px solid var(--border-color);
+  border-left: 4px solid var(--teal-primary);
+}
+
+.knowledge-title {
+  font-size: 0.85rem;
+  color: var(--teal-primary);
+  margin-bottom: 0.5rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+
+.knowledge-empty {
+  color: var(--text-secondary);
+  font-style: italic;
+  font-size: 0.75rem;
+  text-align: center;
+  padding: 0.5rem;
+}
+
+.knowledge-content {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.knowledge-stats {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+}
+
+.kg-stat {
+  font-weight: 600;
+  color: var(--teal-primary);
+}
+
+.kg-stat-sep {
+  color: var(--border-color);
+}
+
+.kg-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.kg-section-label {
+  font-size: 0.6rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--text-secondary);
+}
+
+.kg-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
+.kg-tag {
+  padding: 0.15rem 0.5rem;
+  border-radius: 1rem;
+  font-size: 0.65rem;
+  font-weight: 600;
+}
+
+.kg-tag.property {
+  background: rgba(46, 204, 113, 0.2);
+  color: var(--green-primary);
+  border: 1px solid rgba(46, 204, 113, 0.3);
+}
+
+.kg-tag.candidate {
+  background: rgba(52, 152, 219, 0.2);
+  color: var(--blue-primary);
+  border: 1px solid rgba(52, 152, 219, 0.3);
+}
+
+.kg-tag.eliminated {
+  background: rgba(231, 76, 60, 0.2);
+  color: var(--red-primary);
+  border: 1px solid rgba(231, 76, 60, 0.3);
+  text-decoration: line-through;
+}
+
+/* MULS Reward Indicator on Timeline Events */
+.muls-indicator {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: rgba(155, 89, 182, 0.3);
+  color: var(--purple-light);
+  font-size: 0.6rem;
+  font-weight: 700;
+  margin-left: auto;
+  border: 1px solid var(--purple-primary);
+}
+
+.timeline-event.has-reward {
+  background: rgba(155, 89, 182, 0.08);
 }
 </style>

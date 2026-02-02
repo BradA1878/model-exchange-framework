@@ -490,16 +490,23 @@ export class MxfMemoryManager {
     }
 
     /**
-     * Clear the conversation history, keeping system messages
+     * Clear the conversation history, keeping system messages.
+     * Awaits the save so callers can guarantee the cleared state is persisted
+     * before starting a new turn (prevents stale 10.80MB warnings from racing saves).
      */
-    public clearConversationHistory(): void {
+    public async clearConversationHistory(): Promise<void> {
         // Keep only system messages
         this.conversationHistory = this.conversationHistory.filter((msg: ConversationMessage) => msg.role === 'system');
-        
-        // Save the change
-        this.saveAgentMemory().catch(error => {
+
+        // Reset saved count since we truncated the history
+        this.lastSavedMessageCount = 0;
+
+        // Await the save to ensure cleared state is persisted before the next turn
+        try {
+            await this.saveAgentMemory();
+        } catch (error) {
             this.logger.error(`Error saving cleared conversation history: ${error instanceof Error ? error.message : String(error)}`);
-        });
+        }
     }
 
     /**

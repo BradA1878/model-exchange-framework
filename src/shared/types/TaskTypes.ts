@@ -46,7 +46,7 @@ export type TaskCreatedBy = 'human' | 'system' | AgentId;
 /**
  * Agent assignment strategy types
  */
-export type AssignmentStrategy = 'role_based' | 'workload_balanced' | 'expertise_driven' | 'manual' | 'intelligent';
+export type AssignmentStrategy = 'role_based' | 'workload_balanced' | 'expertise_driven' | 'manual' | 'intelligent' | 'none';
 
 /**
  * Core Channel Task interface

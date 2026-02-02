@@ -687,7 +687,7 @@ export class MxfClient {
                 reject(new Error('[REJECT] register() - Registration timed out after 10 seconds'));
             }, 10000);
 
-            EventBus.client.emit(Events.Agent.REGISTER, registrationPayload);
+            EventBus.client.emitOn(this.agentId, Events.Agent.REGISTER, registrationPayload);
         });
     }
 
@@ -1129,7 +1129,7 @@ export class MxfClient {
             });
 
             // Emit bulk persistence request event
-            EventBus.client.emit('PERSIST_BULK_CHANNEL_MESSAGES_REQUEST', {
+            EventBus.client.emitOn(this.agentId, 'PERSIST_BULK_CHANNEL_MESSAGES_REQUEST', {
                 eventId: require('uuid').v4(),
                 eventType: 'PERSIST_BULK_CHANNEL_MESSAGES_REQUEST',
                 agentId: this.agentId,
@@ -1220,7 +1220,7 @@ export class MxfClient {
             data: agentDataForStatusChange
         };
 
-        EventBus.client.emit(Events.Agent.STATUS_CHANGE, payload);
+        EventBus.client.emitOn(this.agentId, Events.Agent.STATUS_CHANGE, payload);
     }
 
     /**
@@ -1273,7 +1273,7 @@ export class MxfClient {
                 }
             };
 
-            EventBus.client.emit('heartbeat', heartbeatPayload);
+            EventBus.client.emitOn(this.agentId, 'heartbeat', heartbeatPayload);
         } catch (error) {
             this.logger.error(`Error sending heartbeat: ${error}`);
         }
@@ -1412,7 +1412,7 @@ export class MxfClient {
                         data: agentDataForRegistration
                     };
 
-                    EventBus.client.emit(Events.Agent.REGISTER, registrationPayload);
+                    EventBus.client.emitOn(this.agentId, Events.Agent.REGISTER, registrationPayload);
                 } catch (regError) {
                     this.logger.error(`Failed to send agent registration event:`, regError);
                     
@@ -1610,7 +1610,7 @@ export class MxfClient {
                     data: serverConfig
                 };
 
-                EventBus.client.emit(Events.Mcp.EXTERNAL_SERVER_REGISTER, registrationPayload);
+                EventBus.client.emitOn(this.agentId, Events.Mcp.EXTERNAL_SERVER_REGISTER, registrationPayload);
 
                 // Timeout after 30 seconds
                 setTimeout(() => {
@@ -1669,7 +1669,7 @@ export class MxfClient {
                     data: { serverId }
                 };
 
-                EventBus.client.emit(Events.Mcp.EXTERNAL_SERVER_UNREGISTER, unregistrationPayload);
+                EventBus.client.emitOn(this.agentId, Events.Mcp.EXTERNAL_SERVER_UNREGISTER, unregistrationPayload);
 
                 // Timeout after 30 seconds
                 setTimeout(() => {
@@ -1801,7 +1801,7 @@ export class MxfClient {
                     }
                 };
 
-                EventBus.client.emit(McpEvents.CHANNEL_SERVER_REGISTER, registrationPayload);
+                EventBus.client.emitOn(this.agentId, McpEvents.CHANNEL_SERVER_REGISTER, registrationPayload);
 
                 // Timeout after 30 seconds
                 setTimeout(() => {
@@ -1902,7 +1902,7 @@ export class MxfClient {
                     }
                 };
 
-                EventBus.client.emit(McpEvents.CHANNEL_SERVER_UNREGISTER, unregistrationPayload);
+                EventBus.client.emitOn(this.agentId, McpEvents.CHANNEL_SERVER_UNREGISTER, unregistrationPayload);
 
                 // Timeout after 30 seconds
                 setTimeout(() => {
@@ -2119,7 +2119,7 @@ export class MxfClient {
             return this;
         }
 
-        EventBus.client.emit(eventName, data);
+        EventBus.client.emitOn(this.agentId, eventName, data);
         return this;
     }
 }

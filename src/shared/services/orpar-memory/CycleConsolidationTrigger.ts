@@ -143,7 +143,9 @@ export class CycleConsolidationTrigger {
      * Handle cycle completed event
      */
     private async onCycleCompleted(payload: any): Promise<void> {
-        const { agentId, channelId, cycleId, outcome, finalState } = payload;
+        // agentId/channelId are top-level in BaseEventPayload; cycleId/outcome/finalState are in data
+        const { agentId, channelId } = payload;
+        const { cycleId, outcome, finalState } = payload.data || {};
 
         if (!outcome) {
             this.logger.debug('[CycleConsolidationTrigger] No outcome in cycle completed event');

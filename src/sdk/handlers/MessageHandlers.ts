@@ -256,7 +256,7 @@ export class MessageHandlers extends Handler {
         );
         
         // 3. Emit the agent message event
-        EventBus.client.emit(Events.Message.AGENT_MESSAGE, payload);
+        EventBus.client.emitOn(this.agentId,Events.Message.AGENT_MESSAGE, payload);
     }
 
     /**

@@ -201,7 +201,7 @@ const TaskSchema: Schema = new Schema(
         },
         assignmentStrategy: {
             type: String,
-            enum: ['role_based', 'workload_balanced', 'expertise_driven', 'manual', 'intelligent'],
+            enum: ['role_based', 'workload_balanced', 'expertise_driven', 'manual', 'intelligent', 'none'],
             default: 'intelligent',
             index: true
         },

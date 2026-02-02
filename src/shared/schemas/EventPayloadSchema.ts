@@ -37,10 +37,39 @@ import {
     CycleStartedEventData,
     PhaseChangedEventData,
     CycleCompletedEventData
-} from '../events/event-definitions/OrparMemoryEvents'; 
+} from '../events/event-definitions/OrparMemoryEvents';
+import {
+    DagEvents,
+    TaskDependenciesResolvedEventData,
+    TaskBlockedEventData,
+    TaskUnblockedEventData,
+    CycleDetectedEventData,
+    DagUpdatedEventData,
+    DependencyAddedEventData,
+    DependencyRemovedEventData,
+} from '../events/event-definitions/DagEvents';
+import {
+    TensorFlowEvents,
+    ModelRegisteredEventData,
+    ModelTrainingStartedEventData,
+    ModelTrainingCompletedEventData,
+    ModelTrainingFailedEventData,
+    ModelLoadedEventData,
+    ModelSavedEventData,
+    InferenceCompletedEventData,
+    InferenceFallbackEventData,
+    MemoryWarningEventData,
+    MemoryStatsEventData,
+} from '../events/event-definitions/TensorFlowEvents';
 
 // Create logger instance for event payload schema
 const logger = new Logger('warn', 'EventPayloadSchema', 'server');
+
+/** Agent ID for system-level events not tied to a specific agent (e.g., MxfMLService, PredictiveAnalyticsService) */
+export const SYSTEM_AGENT_ID: AgentId = 'system' as AgentId;
+
+/** Channel ID for system-level events not tied to a specific channel */
+export const SYSTEM_CHANNEL_ID: ChannelId = 'system' as ChannelId;
 
 /**
  * Base interface for all event payloads.
@@ -3253,6 +3282,675 @@ export function createOrparMemoryCycleCompletedPayload(
 
     return createBaseEventPayload<CycleCompletedEventData>(
         OrparMemoryEvents.CYCLE_COMPLETED,
+        agentId,
+        channelId,
+        data,
+        options
+    );
+}
+
+// ============================================================================
+// Task DAG Event Payload Helpers
+// ============================================================================
+
+/**
+ * Creates a DAG Task Dependencies Resolved event payload.
+ * Emitted when all dependencies for a task have been completed.
+ *
+ * @param channelId - The Channel ID context.
+ * @param agentId - The Agent ID context (or 'system').
+ * @param taskId - The task that is now unblocked.
+ * @param resolvedDependencies - IDs of the dependencies that were resolved.
+ * @param options - Optional base event payload options.
+ * @returns A BaseEventPayload with TaskDependenciesResolvedEventData.
+ */
+export function createDagTaskDependenciesResolvedPayload(
+    channelId: ChannelId,
+    agentId: AgentId,
+    taskId: string,
+    resolvedDependencies: string[],
+    options: { source?: string; eventId?: string; timestamp?: number; } = {}
+): BaseEventPayload<TaskDependenciesResolvedEventData> {
+    const validator = createStrictValidator('createDagTaskDependenciesResolvedPayload');
+    validator.assertIsNonEmptyString(channelId, 'channelId is required');
+    validator.assertIsNonEmptyString(taskId, 'taskId is required');
+
+    const data: TaskDependenciesResolvedEventData = {
+        taskId,
+        channelId,
+        resolvedDependencies,
+        resolvedAt: Date.now(),
+    };
+
+    return createBaseEventPayload<TaskDependenciesResolvedEventData>(
+        DagEvents.TASK_DEPENDENCIES_RESOLVED,
+        agentId,
+        channelId,
+        data,
+        options
+    );
+}
+
+/**
+ * Creates a DAG Task Blocked event payload.
+ * Emitted when a task cannot proceed due to unresolved dependencies.
+ *
+ * @param channelId - The Channel ID context.
+ * @param agentId - The Agent ID context (or 'system').
+ * @param taskId - The task that is blocked.
+ * @param blockingTasks - IDs of the tasks blocking this one.
+ * @param attemptedStatus - The status transition that was attempted.
+ * @param reason - Reason for the block.
+ * @param options - Optional base event payload options.
+ * @returns A BaseEventPayload with TaskBlockedEventData.
+ */
+export function createDagTaskBlockedPayload(
+    channelId: ChannelId,
+    agentId: AgentId,
+    taskId: string,
+    blockingTasks: string[],
+    attemptedStatus: string,
+    reason: string,
+    options: { source?: string; eventId?: string; timestamp?: number; } = {}
+): BaseEventPayload<TaskBlockedEventData> {
+    const validator = createStrictValidator('createDagTaskBlockedPayload');
+    validator.assertIsNonEmptyString(channelId, 'channelId is required');
+    validator.assertIsNonEmptyString(taskId, 'taskId is required');
+
+    const data: TaskBlockedEventData = {
+        taskId,
+        channelId,
+        blockingTasks,
+        attemptedStatus,
+        reason,
+    };
+
+    return createBaseEventPayload<TaskBlockedEventData>(
+        DagEvents.TASK_BLOCKED,
+        agentId,
+        channelId,
+        data,
+        options
+    );
+}
+
+/**
+ * Creates a DAG Task Unblocked event payload.
+ * Emitted when a blocking dependency is resolved.
+ *
+ * @param channelId - The Channel ID context.
+ * @param agentId - The Agent ID context (or 'system').
+ * @param taskId - The task that was unblocked.
+ * @param resolvedDependency - The dependency that was resolved.
+ * @param remainingBlockers - Remaining blocking tasks (if any).
+ * @param isReady - Whether the task is now fully ready.
+ * @param options - Optional base event payload options.
+ * @returns A BaseEventPayload with TaskUnblockedEventData.
+ */
+export function createDagTaskUnblockedPayload(
+    channelId: ChannelId,
+    agentId: AgentId,
+    taskId: string,
+    resolvedDependency: string,
+    remainingBlockers: string[],
+    isReady: boolean,
+    options: { source?: string; eventId?: string; timestamp?: number; } = {}
+): BaseEventPayload<TaskUnblockedEventData> {
+    const validator = createStrictValidator('createDagTaskUnblockedPayload');
+    validator.assertIsNonEmptyString(channelId, 'channelId is required');
+    validator.assertIsNonEmptyString(taskId, 'taskId is required');
+
+    const data: TaskUnblockedEventData = {
+        taskId,
+        channelId,
+        resolvedDependency,
+        remainingBlockers,
+        isReady,
+    };
+
+    return createBaseEventPayload<TaskUnblockedEventData>(
+        DagEvents.TASK_UNBLOCKED,
+        agentId,
+        channelId,
+        data,
+        options
+    );
+}
+
+/**
+ * Creates a DAG Cycle Detected event payload.
+ * Emitted when a dependency would create a cycle.
+ *
+ * @param channelId - The Channel ID where the cycle was detected.
+ * @param agentId - The Agent ID context (or 'system').
+ * @param dependentTaskId - The dependency that would create the cycle.
+ * @param dependencyTaskId - The dependency task that would complete the cycle.
+ * @param cyclePath - The full cycle path.
+ * @param cycleDescription - Human-readable description of the cycle.
+ * @param options - Optional base event payload options.
+ * @returns A BaseEventPayload with CycleDetectedEventData.
+ */
+export function createDagCycleDetectedPayload(
+    channelId: ChannelId,
+    agentId: AgentId,
+    dependentTaskId: string,
+    dependencyTaskId: string,
+    cyclePath: string[],
+    cycleDescription: string,
+    options: { source?: string; eventId?: string; timestamp?: number; } = {}
+): BaseEventPayload<CycleDetectedEventData> {
+    const validator = createStrictValidator('createDagCycleDetectedPayload');
+    validator.assertIsNonEmptyString(channelId, 'channelId is required');
+
+    const data: CycleDetectedEventData = {
+        channelId,
+        dependentTaskId,
+        dependencyTaskId,
+        cyclePath,
+        cycleDescription,
+    };
+
+    return createBaseEventPayload<CycleDetectedEventData>(
+        DagEvents.CYCLE_DETECTED,
+        agentId,
+        channelId,
+        data,
+        options
+    );
+}
+
+/**
+ * Creates a DAG Updated event payload.
+ * Emitted when the DAG structure changes.
+ *
+ * @param channelId - The Channel ID whose DAG was updated.
+ * @param agentId - The Agent ID context (or 'system').
+ * @param updateType - Type of update.
+ * @param affectedTaskIds - Affected task IDs.
+ * @param version - New DAG version.
+ * @param options - Optional base event payload options.
+ * @returns A BaseEventPayload with DagUpdatedEventData.
+ */
+export function createDagUpdatedPayload(
+    channelId: ChannelId,
+    agentId: AgentId,
+    updateType: 'node_added' | 'node_removed' | 'edge_added' | 'edge_removed' | 'status_changed',
+    affectedTaskIds: string[],
+    version: number,
+    options: { source?: string; eventId?: string; timestamp?: number; } = {}
+): BaseEventPayload<DagUpdatedEventData> {
+    const validator = createStrictValidator('createDagUpdatedPayload');
+    validator.assertIsNonEmptyString(channelId, 'channelId is required');
+
+    const data: DagUpdatedEventData = {
+        channelId,
+        updateType,
+        affectedTaskIds,
+        version,
+    };
+
+    return createBaseEventPayload<DagUpdatedEventData>(
+        DagEvents.DAG_UPDATED,
+        agentId,
+        channelId,
+        data,
+        options
+    );
+}
+
+/**
+ * Creates a DAG Dependency Added event payload.
+ * Emitted when a dependency is added to the DAG.
+ *
+ * @param channelId - The Channel ID context.
+ * @param agentId - The Agent ID context (or 'system').
+ * @param edgeId - The edge ID.
+ * @param dependentTaskId - The dependent task.
+ * @param dependencyTaskId - The dependency task.
+ * @param label - Optional label for the dependency.
+ * @param options - Optional base event payload options.
+ * @returns A BaseEventPayload with DependencyAddedEventData.
+ */
+export function createDagDependencyAddedPayload(
+    channelId: ChannelId,
+    agentId: AgentId,
+    edgeId: string,
+    dependentTaskId: string,
+    dependencyTaskId: string,
+    label?: string,
+    options: { source?: string; eventId?: string; timestamp?: number; } = {}
+): BaseEventPayload<DependencyAddedEventData> {
+    const validator = createStrictValidator('createDagDependencyAddedPayload');
+    validator.assertIsNonEmptyString(channelId, 'channelId is required');
+
+    const data: DependencyAddedEventData = {
+        edgeId,
+        dependentTaskId,
+        dependencyTaskId,
+        channelId,
+        label,
+    };
+
+    return createBaseEventPayload<DependencyAddedEventData>(
+        DagEvents.DEPENDENCY_ADDED,
+        agentId,
+        channelId,
+        data,
+        options
+    );
+}
+
+/**
+ * Creates a DAG Dependency Removed event payload.
+ * Emitted when a dependency is removed from the DAG.
+ *
+ * @param channelId - The Channel ID context.
+ * @param agentId - The Agent ID context (or 'system').
+ * @param edgeId - The edge ID.
+ * @param dependentTaskId - The dependent task.
+ * @param dependencyTaskId - The dependency task.
+ * @param options - Optional base event payload options.
+ * @returns A BaseEventPayload with DependencyRemovedEventData.
+ */
+export function createDagDependencyRemovedPayload(
+    channelId: ChannelId,
+    agentId: AgentId,
+    edgeId: string,
+    dependentTaskId: string,
+    dependencyTaskId: string,
+    options: { source?: string; eventId?: string; timestamp?: number; } = {}
+): BaseEventPayload<DependencyRemovedEventData> {
+    const validator = createStrictValidator('createDagDependencyRemovedPayload');
+    validator.assertIsNonEmptyString(channelId, 'channelId is required');
+
+    const data: DependencyRemovedEventData = {
+        edgeId,
+        dependentTaskId,
+        dependencyTaskId,
+        channelId,
+    };
+
+    return createBaseEventPayload<DependencyRemovedEventData>(
+        DagEvents.DEPENDENCY_REMOVED,
+        agentId,
+        channelId,
+        data,
+        options
+    );
+}
+
+// ─── TensorFlow.js Event Payload Helpers ────────────────────────────────────
+
+/**
+ * Create a model registered event payload.
+ *
+ * @param channelId - Channel context (use 'system' for server-level events)
+ * @param agentId - Agent context (use 'system' for server-level events)
+ * @param modelId - The registered model ID
+ * @param type - Model architecture type
+ * @param inputShape - Model input shape
+ * @param outputShape - Model output shape
+ * @param options - Optional base event payload options
+ * @returns A BaseEventPayload with ModelRegisteredEventData
+ */
+export function createTfModelRegisteredPayload(
+    channelId: ChannelId,
+    agentId: AgentId,
+    modelId: string,
+    type: string,
+    inputShape: number[],
+    outputShape: number[],
+    options: { source?: string; eventId?: string; timestamp?: number; } = {}
+): BaseEventPayload<ModelRegisteredEventData> {
+    const validator = createStrictValidator('createTfModelRegisteredPayload');
+    validator.assertIsNonEmptyString(modelId, 'modelId is required');
+
+    const data: ModelRegisteredEventData = {
+        modelId,
+        type,
+        inputShape,
+        outputShape,
+    };
+
+    return createBaseEventPayload<ModelRegisteredEventData>(
+        TensorFlowEvents.MODEL_REGISTERED,
+        agentId,
+        channelId,
+        data,
+        options
+    );
+}
+
+/**
+ * Create a model training started event payload.
+ *
+ * @param channelId - Channel context
+ * @param agentId - Agent context
+ * @param modelId - The model being trained
+ * @param trainingSamples - Number of training samples
+ * @param epochs - Number of training epochs
+ * @param options - Optional base event payload options
+ * @returns A BaseEventPayload with ModelTrainingStartedEventData
+ */
+export function createTfModelTrainingStartedPayload(
+    channelId: ChannelId,
+    agentId: AgentId,
+    modelId: string,
+    trainingSamples: number,
+    epochs: number,
+    options: { source?: string; eventId?: string; timestamp?: number; } = {}
+): BaseEventPayload<ModelTrainingStartedEventData> {
+    const validator = createStrictValidator('createTfModelTrainingStartedPayload');
+    validator.assertIsNonEmptyString(modelId, 'modelId is required');
+
+    const data: ModelTrainingStartedEventData = {
+        modelId,
+        trainingSamples,
+        epochs,
+    };
+
+    return createBaseEventPayload<ModelTrainingStartedEventData>(
+        TensorFlowEvents.MODEL_TRAINING_STARTED,
+        agentId,
+        channelId,
+        data,
+        options
+    );
+}
+
+/**
+ * Create a model training completed event payload.
+ *
+ * @param channelId - Channel context
+ * @param agentId - Agent context
+ * @param modelId - The model that completed training
+ * @param loss - Final training loss
+ * @param durationMs - Training duration in milliseconds
+ * @param samplesUsed - Number of training samples used
+ * @param extras - Optional valLoss and accuracy
+ * @param options - Optional base event payload options
+ * @returns A BaseEventPayload with ModelTrainingCompletedEventData
+ */
+export function createTfModelTrainingCompletedPayload(
+    channelId: ChannelId,
+    agentId: AgentId,
+    modelId: string,
+    loss: number,
+    durationMs: number,
+    samplesUsed: number,
+    extras: { valLoss?: number; accuracy?: number } = {},
+    options: { source?: string; eventId?: string; timestamp?: number; } = {}
+): BaseEventPayload<ModelTrainingCompletedEventData> {
+    const validator = createStrictValidator('createTfModelTrainingCompletedPayload');
+    validator.assertIsNonEmptyString(modelId, 'modelId is required');
+
+    const data: ModelTrainingCompletedEventData = {
+        modelId,
+        loss,
+        valLoss: extras.valLoss,
+        accuracy: extras.accuracy,
+        durationMs,
+        samplesUsed,
+    };
+
+    return createBaseEventPayload<ModelTrainingCompletedEventData>(
+        TensorFlowEvents.MODEL_TRAINING_COMPLETED,
+        agentId,
+        channelId,
+        data,
+        options
+    );
+}
+
+/**
+ * Create a model training failed event payload.
+ *
+ * @param channelId - Channel context
+ * @param agentId - Agent context
+ * @param modelId - The model that failed training
+ * @param error - Error message
+ * @param trainingSamples - Number of training samples attempted
+ * @param options - Optional base event payload options
+ * @returns A BaseEventPayload with ModelTrainingFailedEventData
+ */
+export function createTfModelTrainingFailedPayload(
+    channelId: ChannelId,
+    agentId: AgentId,
+    modelId: string,
+    error: string,
+    trainingSamples: number,
+    options: { source?: string; eventId?: string; timestamp?: number; } = {}
+): BaseEventPayload<ModelTrainingFailedEventData> {
+    const validator = createStrictValidator('createTfModelTrainingFailedPayload');
+    validator.assertIsNonEmptyString(modelId, 'modelId is required');
+
+    const data: ModelTrainingFailedEventData = {
+        modelId,
+        error,
+        trainingSamples,
+    };
+
+    return createBaseEventPayload<ModelTrainingFailedEventData>(
+        TensorFlowEvents.MODEL_TRAINING_FAILED,
+        agentId,
+        channelId,
+        data,
+        options
+    );
+}
+
+/**
+ * Create a model loaded event payload.
+ *
+ * @param channelId - Channel context
+ * @param agentId - Agent context
+ * @param modelId - The loaded model ID
+ * @param source - Storage source (e.g., 'gridfs://model_id' or 'file://path')
+ * @param options - Optional base event payload options
+ * @returns A BaseEventPayload with ModelLoadedEventData
+ */
+export function createTfModelLoadedPayload(
+    channelId: ChannelId,
+    agentId: AgentId,
+    modelId: string,
+    source: string,
+    options: { source?: string; eventId?: string; timestamp?: number; } = {}
+): BaseEventPayload<ModelLoadedEventData> {
+    const validator = createStrictValidator('createTfModelLoadedPayload');
+    validator.assertIsNonEmptyString(modelId, 'modelId is required');
+
+    const data: ModelLoadedEventData = {
+        modelId,
+        source,
+    };
+
+    return createBaseEventPayload<ModelLoadedEventData>(
+        TensorFlowEvents.MODEL_LOADED,
+        agentId,
+        channelId,
+        data,
+        options
+    );
+}
+
+/**
+ * Create a model saved event payload.
+ *
+ * @param channelId - Channel context
+ * @param agentId - Agent context
+ * @param modelId - The saved model ID
+ * @param destination - Storage destination
+ * @param sizeBytes - Optional model size in bytes
+ * @param options - Optional base event payload options
+ * @returns A BaseEventPayload with ModelSavedEventData
+ */
+export function createTfModelSavedPayload(
+    channelId: ChannelId,
+    agentId: AgentId,
+    modelId: string,
+    destination: string,
+    sizeBytes?: number,
+    options: { source?: string; eventId?: string; timestamp?: number; } = {}
+): BaseEventPayload<ModelSavedEventData> {
+    const validator = createStrictValidator('createTfModelSavedPayload');
+    validator.assertIsNonEmptyString(modelId, 'modelId is required');
+
+    const data: ModelSavedEventData = {
+        modelId,
+        destination,
+        sizeBytes,
+    };
+
+    return createBaseEventPayload<ModelSavedEventData>(
+        TensorFlowEvents.MODEL_SAVED,
+        agentId,
+        channelId,
+        data,
+        options
+    );
+}
+
+/**
+ * Create an inference completed event payload.
+ *
+ * @param channelId - Channel context
+ * @param agentId - Agent context
+ * @param modelId - The model used for inference
+ * @param latencyMs - Inference latency in milliseconds
+ * @param inferenceSource - Whether result came from 'model' or 'heuristic'
+ * @param options - Optional base event payload options
+ * @returns A BaseEventPayload with InferenceCompletedEventData
+ */
+export function createTfInferenceCompletedPayload(
+    channelId: ChannelId,
+    agentId: AgentId,
+    modelId: string,
+    latencyMs: number,
+    inferenceSource: 'model' | 'heuristic',
+    options: { source?: string; eventId?: string; timestamp?: number; } = {}
+): BaseEventPayload<InferenceCompletedEventData> {
+    const validator = createStrictValidator('createTfInferenceCompletedPayload');
+    validator.assertIsNonEmptyString(modelId, 'modelId is required');
+
+    const data: InferenceCompletedEventData = {
+        modelId,
+        latencyMs,
+        source: inferenceSource,
+    };
+
+    return createBaseEventPayload<InferenceCompletedEventData>(
+        TensorFlowEvents.INFERENCE_COMPLETED,
+        agentId,
+        channelId,
+        data,
+        options
+    );
+}
+
+/**
+ * Create an inference fallback event payload.
+ *
+ * @param channelId - Channel context
+ * @param agentId - Agent context
+ * @param modelId - The model that was unavailable
+ * @param reason - Why the fallback was used
+ * @param error - Optional error message
+ * @param options - Optional base event payload options
+ * @returns A BaseEventPayload with InferenceFallbackEventData
+ */
+export function createTfInferenceFallbackPayload(
+    channelId: ChannelId,
+    agentId: AgentId,
+    modelId: string,
+    reason: 'disabled' | 'untrained' | 'error',
+    error?: string,
+    options: { source?: string; eventId?: string; timestamp?: number; } = {}
+): BaseEventPayload<InferenceFallbackEventData> {
+    const validator = createStrictValidator('createTfInferenceFallbackPayload');
+    validator.assertIsNonEmptyString(modelId, 'modelId is required');
+
+    const data: InferenceFallbackEventData = {
+        modelId,
+        reason,
+        error,
+    };
+
+    return createBaseEventPayload<InferenceFallbackEventData>(
+        TensorFlowEvents.INFERENCE_FALLBACK,
+        agentId,
+        channelId,
+        data,
+        options
+    );
+}
+
+/**
+ * Create a memory warning event payload.
+ *
+ * @param channelId - Channel context
+ * @param agentId - Agent context
+ * @param numTensors - Number of tensors currently allocated
+ * @param numBytes - Total bytes used
+ * @param maxBytes - Configured memory threshold
+ * @param utilizationPercent - Memory utilization percentage
+ * @param options - Optional base event payload options
+ * @returns A BaseEventPayload with MemoryWarningEventData
+ */
+export function createTfMemoryWarningPayload(
+    channelId: ChannelId,
+    agentId: AgentId,
+    numTensors: number,
+    numBytes: number,
+    maxBytes: number,
+    utilizationPercent: number,
+    options: { source?: string; eventId?: string; timestamp?: number; } = {}
+): BaseEventPayload<MemoryWarningEventData> {
+    const data: MemoryWarningEventData = {
+        numTensors,
+        numBytes,
+        maxBytes,
+        utilizationPercent,
+    };
+
+    return createBaseEventPayload<MemoryWarningEventData>(
+        TensorFlowEvents.MEMORY_WARNING,
+        agentId,
+        channelId,
+        data,
+        options
+    );
+}
+
+/**
+ * Create a memory stats event payload.
+ *
+ * @param channelId - Channel context
+ * @param agentId - Agent context
+ * @param numTensors - Number of tensors
+ * @param numDataBuffers - Number of data buffers
+ * @param numBytes - Total bytes used
+ * @param timestamp - When stats were collected
+ * @param options - Optional base event payload options
+ * @returns A BaseEventPayload with MemoryStatsEventData
+ */
+export function createTfMemoryStatsPayload(
+    channelId: ChannelId,
+    agentId: AgentId,
+    numTensors: number,
+    numDataBuffers: number,
+    numBytes: number,
+    timestamp: number,
+    options: { source?: string; eventId?: string; timestamp?: number; } = {}
+): BaseEventPayload<MemoryStatsEventData> {
+    const data: MemoryStatsEventData = {
+        numTensors,
+        numDataBuffers,
+        numBytes,
+        timestamp,
+    };
+
+    return createBaseEventPayload<MemoryStatsEventData>(
+        TensorFlowEvents.MEMORY_STATS,
         agentId,
         channelId,
         data,

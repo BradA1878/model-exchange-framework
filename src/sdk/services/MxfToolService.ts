@@ -180,7 +180,7 @@ export class MxfToolService implements IToolService {
                     requestData
                 );
 
-                EventBus.client.emit(Events.Mcp.MXF_TOOL_LIST, requestPayload);
+                EventBus.client.emitOn(this.agentId, Events.Mcp.MXF_TOOL_LIST, requestPayload);
                 
             } catch (error) {
                 this.loadingPromise = null;

@@ -100,8 +100,8 @@ export const TaskHelper = {
             }
         );
         
-        EventBus.client.emit(TaskEvents.CREATE_REQUEST, payload);
-        
+        EventBus.client.emitOn(creatorAgentId, TaskEvents.CREATE_REQUEST, payload);
+
         return taskId;
     },
 
@@ -134,8 +134,8 @@ export const TaskHelper = {
             }
         );
         
-        // Emit completion event through EventBus (hidden from developer)
-        EventBus.client.emit(TaskEvents.COMPLETE_REQUEST, payload);
+        // Emit completion event through agent socket (hidden from developer)
+        EventBus.client.emitOn(agentId, TaskEvents.COMPLETE_REQUEST, payload);
     },
 
     /**
@@ -167,7 +167,7 @@ export const TaskHelper = {
             }
         );
         
-        // Emit cancellation event through EventBus (hidden from developer)
-        EventBus.client.emit(TaskEvents.CANCEL_REQUEST, payload);
+        // Emit cancellation event through agent socket (hidden from developer)
+        EventBus.client.emitOn(agentId, TaskEvents.CANCEL_REQUEST, payload);
     }
 };

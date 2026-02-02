@@ -137,7 +137,7 @@ export class ControlLoopHandlers extends Handler {
         // Log before emitting to help debug the event flow
         
         // Emit through EventBus following the architecture
-        EventBus.client.emit(Events.ControlLoop.INITIALIZE, payload);
+        EventBus.client.emitOn(this.agentId,Events.ControlLoop.INITIALIZE, payload);
         
         return loopId;
     }
@@ -166,7 +166,7 @@ export class ControlLoopHandlers extends Handler {
         // Validate control loop payload before sending
         this.validator.assertIsControlLoopPayload(payload);
         
-        EventBus.client.emit(Events.ControlLoop.STARTED, payload);
+        EventBus.client.emitOn(this.agentId,Events.ControlLoop.STARTED, payload);
     }
 
     /**
@@ -195,7 +195,7 @@ export class ControlLoopHandlers extends Handler {
         // Validate control loop payload before sending
         this.validator.assertIsControlLoopPayload(payload);
         
-        EventBus.client.emit(Events.ControlLoop.STOPPED, payload);
+        EventBus.client.emitOn(this.agentId,Events.ControlLoop.STOPPED, payload);
     }
     
     /**
@@ -244,7 +244,7 @@ export class ControlLoopHandlers extends Handler {
         // Validate control loop payload before sending
         this.validator.assertIsControlLoopPayload(payload);
         
-        EventBus.client.emit(Events.ControlLoop.OBSERVATION, payload);
+        EventBus.client.emitOn(this.agentId,Events.ControlLoop.OBSERVATION, payload);
 
         return Promise.resolve(true);
     }
@@ -275,7 +275,7 @@ export class ControlLoopHandlers extends Handler {
         // Validate control loop payload before sending
         this.validator.assertIsControlLoopPayload(payload);
         
-        EventBus.client.emit(Events.ControlLoop.EXECUTION, payload);
+        EventBus.client.emitOn(this.agentId,Events.ControlLoop.EXECUTION, payload);
 
         return Promise.resolve(true);
     }
@@ -575,7 +575,7 @@ export class ControlLoopHandlers extends Handler {
                 controlLoopDataForPlan
             );
             
-            EventBus.client.emit(Events.ControlLoop.PLAN, payload);
+            EventBus.client.emitOn(this.agentId,Events.ControlLoop.PLAN, payload);
         } catch (error) {
             this.logger.error(`Error generating plan: ${error instanceof Error ? error.message : String(error)}`);
         }
@@ -705,7 +705,7 @@ export class ControlLoopHandlers extends Handler {
                 controlLoopDataForReflection
             );
             
-            EventBus.client.emit(Events.ControlLoop.REFLECTION, payload);
+            EventBus.client.emitOn(this.agentId,Events.ControlLoop.REFLECTION, payload);
         } catch (error) {
             this.logger.error(`Error generating reflection: ${error instanceof Error ? error.message : String(error)}`);
         }
