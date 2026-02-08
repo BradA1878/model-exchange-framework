@@ -396,11 +396,17 @@ async function connectAgents() {
 
     console.log('📡 Step 2: Connecting to MXF server...\n');
 
+    // Create SDK with Personal Access Token authentication (REQUIRED)
+    const accessToken = process.env.MXF_DEMO_ACCESS_TOKEN;
+    if (!accessToken) {
+        console.error('❌ MXF_DEMO_ACCESS_TOKEN is required. Run: bun run server:cli -- demo:setup');
+        process.exit(1);
+    }
+
     const sdk = new MxfSDK({
         serverUrl: mxfServerUrl,
         domainKey: process.env.MXF_DOMAIN_KEY!,
-        username: process.env.MXF_DEMO_USERNAME || 'demo-user',
-        password: process.env.MXF_DEMO_PASSWORD || 'demo-password-1234'
+        accessToken: accessToken
     });
 
     await sdk.connect();
@@ -738,15 +744,6 @@ async function connectAgents() {
             //    CRITICAL: Agent memory persists in MongoDB even after disconnect!
             //    Must manually delete to prevent memory accumulation across game runs
             console.log('🗑️  Cleaning up agent memory from MongoDB...');
-            const axios = require('axios');
-            const apiUrl = process.env.MXF_SERVER_URL || 'http://localhost:3001';
-
-            // Get JWT token for API calls
-            const authResponse = await axios.post(`${apiUrl}/api/users/login`, {
-                username: process.env.MXF_DEMO_USERNAME || 'demo-user',
-                password: process.env.MXF_DEMO_PASSWORD || 'demo-password-1234'
-            });
-            const jwtToken = authResponse.data.token;
 
             // Delete agent memory via MongoDB directly (since API doesn't expose this)
             const { AgentMemory } = require('../../src/shared/models/memory');

@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue';
 import { useAdminStore } from '../../stores/admin';
+import { useAgentsStore } from '../../stores/agents';
 
 const adminStore = useAdminStore();
+const agentsStore = useAgentsStore();
 
 // Local state for snackbar
 const snackbar = ref(false);
@@ -122,6 +124,124 @@ const refreshAgents = async (): Promise<void> => {
         snackbarColor.value = 'error';
         snackbar.value = true;
     }
+};
+
+// Helper to show snackbar messages
+const showSnackbar = (message: string, color: string = 'success'): void => {
+    snackbarMessage.value = message;
+    snackbarColor.value = color;
+    snackbar.value = true;
+};
+
+// Lifecycle control state
+const metricsDialog = ref(false);
+const metricsData = ref<any>(null);
+const metricsLoading = ref(false);
+const metricsAgent = ref<any>(null);
+const confirmDialog = ref(false);
+const confirmAction = ref<{ title: string; message: string; action: () => Promise<void> } | null>(null);
+const lifecycleLoading = computed(() => agentsStore.lifecycleLoading);
+
+// Admin agents use 'id' field as the agent identifier for API calls
+const getAgentIdForApi = (item: any): string => item.agentId || item.id;
+
+// Lifecycle action handlers
+const handleViewMetrics = async (item: any): Promise<void> => {
+    metricsAgent.value = item;
+    metricsLoading.value = true;
+    metricsDialog.value = true;
+    try {
+        metricsData.value = await agentsStore.getAgentMetrics(getAgentIdForApi(item));
+    } catch {
+        showSnackbar('Failed to load agent metrics', 'error');
+        metricsDialog.value = false;
+    } finally {
+        metricsLoading.value = false;
+    }
+};
+
+const handleRestart = async (item: any): Promise<void> => {
+    try {
+        await agentsStore.restartAgent(getAgentIdForApi(item));
+        showSnackbar(`Agent "${item.name}" restart requested`);
+        await adminStore.fetchAgents();
+    } catch {
+        showSnackbar('Failed to restart agent', 'error');
+    }
+};
+
+const handlePauseResume = async (item: any): Promise<void> => {
+    const isPaused = item.status?.toLowerCase() === 'paused';
+    try {
+        if (isPaused) {
+            await agentsStore.resumeAgent(getAgentIdForApi(item));
+            showSnackbar(`Agent "${item.name}" resumed`);
+        } else {
+            await agentsStore.pauseAgent(getAgentIdForApi(item));
+            showSnackbar(`Agent "${item.name}" paused`);
+        }
+        await adminStore.fetchAgents();
+    } catch {
+        showSnackbar(`Failed to ${isPaused ? 'resume' : 'pause'} agent`, 'error');
+    }
+};
+
+const openConfirmDialog = (title: string, message: string, action: () => Promise<void>): void => {
+    confirmAction.value = { title, message, action };
+    confirmDialog.value = true;
+};
+
+const executeConfirmAction = async (): Promise<void> => {
+    if (!confirmAction.value) return;
+    try {
+        await confirmAction.value.action();
+    } finally {
+        confirmDialog.value = false;
+        confirmAction.value = null;
+    }
+};
+
+const handleShutdown = (item: any): void => {
+    openConfirmDialog(
+        'Confirm Shutdown',
+        `Are you sure you want to shutdown agent "${item.name}"?`,
+        async () => {
+            try {
+                await agentsStore.shutdownAgent(getAgentIdForApi(item));
+                showSnackbar(`Agent "${item.name}" shutdown requested`);
+                await adminStore.fetchAgents();
+            } catch {
+                showSnackbar('Failed to shutdown agent', 'error');
+            }
+        }
+    );
+};
+
+const handleClearMemory = (item: any): void => {
+    openConfirmDialog(
+        'Confirm Clear Memory',
+        `Are you sure you want to clear all memory for agent "${item.name}"? This action cannot be undone.`,
+        async () => {
+            try {
+                await agentsStore.deleteAgentMemory(getAgentIdForApi(item));
+                showSnackbar(`Memory cleared for agent "${item.name}"`);
+            } catch {
+                showSnackbar('Failed to clear agent memory', 'error');
+            }
+        }
+    );
+};
+
+// Format uptime from milliseconds to human-readable string
+const formatUptime = (ms: number): string => {
+    const seconds = Math.floor(ms / 1000);
+    const minutes = Math.floor(seconds / 60);
+    const hours = Math.floor(minutes / 60);
+    const days = Math.floor(hours / 24);
+    if (days > 0) return `${days}d ${hours % 24}h`;
+    if (hours > 0) return `${hours}h ${minutes % 60}m`;
+    if (minutes > 0) return `${minutes}m`;
+    return `${seconds}s`;
 };
 </script>
 
@@ -297,19 +417,66 @@ const refreshAgents = async (): Promise<void> => {
                 <template #item.actions="{ item }">
                     <div class="d-flex gap-2">
                         <v-btn
-                            icon="mdi-eye"
+                            icon="mdi-chart-box"
                             variant="text"
                             size="small"
-                            color="primary"
-                            @click="() => {}"
+                            color="info"
+                            title="View Metrics"
+                            @click="handleViewMetrics(item)"
                         />
-                        <v-btn
-                            icon="mdi-stop"
-                            variant="text"
-                            size="small"
-                            color="orange"
-                            @click="() => {}"
-                        />
+                        <v-menu>
+                            <template #activator="{ props: menuProps }">
+                                <v-btn
+                                    icon="mdi-dots-vertical"
+                                    variant="text"
+                                    size="small"
+                                    v-bind="menuProps"
+                                />
+                            </template>
+                            <v-list density="compact">
+                                <v-list-item
+                                    @click="handleRestart(item)"
+                                    :disabled="lifecycleLoading === getAgentIdForApi(item)"
+                                >
+                                    <template #prepend>
+                                        <v-icon color="primary" size="20">mdi-restart</v-icon>
+                                    </template>
+                                    <v-list-item-title>Restart</v-list-item-title>
+                                </v-list-item>
+                                <v-list-item
+                                    @click="handlePauseResume(item)"
+                                    :disabled="lifecycleLoading === getAgentIdForApi(item)"
+                                >
+                                    <template #prepend>
+                                        <v-icon color="warning" size="20">
+                                            {{ item.status?.toLowerCase() === 'paused' ? 'mdi-play' : 'mdi-pause' }}
+                                        </v-icon>
+                                    </template>
+                                    <v-list-item-title>
+                                        {{ item.status?.toLowerCase() === 'paused' ? 'Resume' : 'Pause' }}
+                                    </v-list-item-title>
+                                </v-list-item>
+                                <v-list-item
+                                    @click="handleShutdown(item)"
+                                    :disabled="lifecycleLoading === getAgentIdForApi(item)"
+                                >
+                                    <template #prepend>
+                                        <v-icon color="error" size="20">mdi-power</v-icon>
+                                    </template>
+                                    <v-list-item-title>Shutdown</v-list-item-title>
+                                </v-list-item>
+                                <v-divider class="my-1" />
+                                <v-list-item
+                                    @click="handleClearMemory(item)"
+                                    :disabled="lifecycleLoading === getAgentIdForApi(item)"
+                                >
+                                    <template #prepend>
+                                        <v-icon color="warning" size="20">mdi-broom</v-icon>
+                                    </template>
+                                    <v-list-item-title>Clear Memory</v-list-item-title>
+                                </v-list-item>
+                            </v-list>
+                        </v-menu>
                     </div>
                 </template>
 
@@ -332,6 +499,128 @@ const refreshAgents = async (): Promise<void> => {
                 </template>
             </v-data-table>
         </v-card>
+
+        <!-- Agent Metrics Dialog -->
+        <v-dialog v-model="metricsDialog" max-width="500px">
+            <v-card>
+                <v-card-title class="d-flex align-center">
+                    <v-icon class="mr-2" color="info">mdi-chart-box</v-icon>
+                    Agent Metrics
+                </v-card-title>
+                <v-card-subtitle v-if="metricsAgent" class="pb-0">
+                    {{ metricsAgent.name }}
+                </v-card-subtitle>
+                <v-card-text>
+                    <div v-if="metricsLoading" class="text-center pa-4">
+                        <v-progress-circular indeterminate color="primary" />
+                    </div>
+                    <div v-else-if="metricsData">
+                        <v-list density="compact">
+                            <v-list-item>
+                                <template #prepend>
+                                    <v-icon color="primary">mdi-circle-outline</v-icon>
+                                </template>
+                                <v-list-item-title>Status</v-list-item-title>
+                                <template #append>
+                                    <v-chip
+                                        :color="getStatusColor(metricsData.status)"
+                                        size="small"
+                                        variant="tonal"
+                                    >
+                                        {{ metricsData.status }}
+                                    </v-chip>
+                                </template>
+                            </v-list-item>
+                            <v-list-item>
+                                <template #prepend>
+                                    <v-icon color="success">mdi-clock-outline</v-icon>
+                                </template>
+                                <v-list-item-title>Uptime</v-list-item-title>
+                                <template #append>
+                                    <span class="text-body-2">{{ formatUptime(metricsData.uptime) }}</span>
+                                </template>
+                            </v-list-item>
+                            <v-list-item>
+                                <template #prepend>
+                                    <v-icon color="info">mdi-checkbox-marked-circle-outline</v-icon>
+                                </template>
+                                <v-list-item-title>Total Tasks</v-list-item-title>
+                                <template #append>
+                                    <span class="text-body-2">{{ metricsData.totalTasks }}</span>
+                                </template>
+                            </v-list-item>
+                            <v-list-item>
+                                <template #prepend>
+                                    <v-icon color="success">mdi-check-circle</v-icon>
+                                </template>
+                                <v-list-item-title>Completed Tasks</v-list-item-title>
+                                <template #append>
+                                    <span class="text-body-2">{{ metricsData.completedTasks }}</span>
+                                </template>
+                            </v-list-item>
+                            <v-list-item>
+                                <template #prepend>
+                                    <v-icon color="error">mdi-alert-circle</v-icon>
+                                </template>
+                                <v-list-item-title>Failed Tasks</v-list-item-title>
+                                <template #append>
+                                    <span class="text-body-2">{{ metricsData.failedTasks }}</span>
+                                </template>
+                            </v-list-item>
+                            <v-list-item>
+                                <template #prepend>
+                                    <v-icon color="warning">mdi-speedometer</v-icon>
+                                </template>
+                                <v-list-item-title>Avg Response Time</v-list-item-title>
+                                <template #append>
+                                    <span class="text-body-2">{{ metricsData.avgResponseTime }}ms</span>
+                                </template>
+                            </v-list-item>
+                            <v-list-item>
+                                <template #prepend>
+                                    <v-icon color="primary">mdi-percent</v-icon>
+                                </template>
+                                <v-list-item-title>Success Rate</v-list-item-title>
+                                <template #append>
+                                    <span class="text-body-2">{{ metricsData.successRate }}%</span>
+                                </template>
+                            </v-list-item>
+                        </v-list>
+                    </div>
+                </v-card-text>
+                <v-card-actions>
+                    <v-spacer />
+                    <v-btn variant="text" @click="metricsDialog = false">Close</v-btn>
+                </v-card-actions>
+            </v-card>
+        </v-dialog>
+
+        <!-- Confirm Action Dialog -->
+        <v-dialog v-model="confirmDialog" max-width="400px">
+            <v-card v-if="confirmAction">
+                <v-card-title class="d-flex align-center">
+                    <v-icon class="mr-2" color="warning">mdi-alert</v-icon>
+                    {{ confirmAction.title }}
+                </v-card-title>
+                <v-card-text>{{ confirmAction.message }}</v-card-text>
+                <v-card-actions>
+                    <v-spacer />
+                    <v-btn
+                        variant="text"
+                        @click="confirmDialog = false; confirmAction = null"
+                    >
+                        Cancel
+                    </v-btn>
+                    <v-btn
+                        color="error"
+                        variant="elevated"
+                        @click="executeConfirmAction"
+                    >
+                        Confirm
+                    </v-btn>
+                </v-card-actions>
+            </v-card>
+        </v-dialog>
 
         <!-- Snackbar for notifications -->
         <v-snackbar

@@ -46,12 +46,16 @@ Create `.env` file:
 # Domain key (from server operator)
 MXF_DOMAIN_KEY=your-64-char-domain-key
 
-# User credentials
-MXF_USERNAME=your-username
-MXF_PASSWORD=your-password
+# Access token (recommended - generate via dashboard or CLI)
+MXF_ACCESS_TOKEN=pat_xxx:your-secret
 
 # LLM API key
 OPENROUTER_API_KEY=your-openrouter-key
+```
+
+**Generate access token via CLI:**
+```bash
+bun run server:cli -- demo:setup
 ```
 
 ## Basic Setup
@@ -68,12 +72,11 @@ const credentials = JSON.parse(
     fs.readFileSync('./credentials.json', 'utf-8')
 );
 
-// Initialize SDK with domain key and user auth
+// Initialize SDK with domain key and access token (recommended)
 const sdk = new MxfSDK({
     serverUrl: 'http://localhost:3001',
     domainKey: process.env.MXF_DOMAIN_KEY!,
-    username: process.env.MXF_USERNAME!,
-    password: process.env.MXF_PASSWORD!
+    accessToken: process.env.MXF_ACCESS_TOKEN!
 });
 
 await sdk.connect();
@@ -106,8 +109,7 @@ import credentials from './credentials.json';
 const sdk = new MxfSDK({
     serverUrl: 'http://localhost:3001',
     domainKey: process.env.MXF_DOMAIN_KEY!,
-    username: process.env.MXF_USERNAME!,
-    password: process.env.MXF_PASSWORD!
+    accessToken: process.env.MXF_ACCESS_TOKEN!
 });
 
 await sdk.connect();
@@ -187,8 +189,7 @@ import { MxfSDK, Events } from '@mxf/sdk';
 const sdk = new MxfSDK({
     serverUrl: 'http://localhost:3001',
     domainKey: process.env.MXF_DOMAIN_KEY!,
-    username: process.env.MXF_USERNAME!,
-    password: process.env.MXF_PASSWORD!
+    accessToken: process.env.MXF_ACCESS_TOKEN!
 });
 
 await sdk.connect();
@@ -242,8 +243,7 @@ import credentials from './credentials.json';
 const sdk = new MxfSDK({
     serverUrl: 'http://localhost:3001',
     domainKey: process.env.MXF_DOMAIN_KEY!,
-    username: process.env.MXF_USERNAME!,
-    password: process.env.MXF_PASSWORD!
+    accessToken: process.env.MXF_ACCESS_TOKEN!
 });
 
 await sdk.connect();

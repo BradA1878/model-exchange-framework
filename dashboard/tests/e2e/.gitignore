@@ -1,0 +1,6 @@
+# Playwright auth state (contains sensitive session data)
+.auth/user.json
+.auth/*.json
+
+# Test results
+../test-results/

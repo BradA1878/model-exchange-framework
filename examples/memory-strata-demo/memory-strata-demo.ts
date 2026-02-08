@@ -332,11 +332,17 @@ async function demo() {
 
   console.log('\nConnecting to MXF server...');
 
+  // Create SDK with Personal Access Token authentication (REQUIRED)
+  const accessToken = process.env.MXF_DEMO_ACCESS_TOKEN;
+  if (!accessToken) {
+    console.error('MXF_DEMO_ACCESS_TOKEN is required. Run: bun run server:cli -- demo:setup');
+    process.exit(1);
+  }
+
   const sdk = new MxfSDK({
     serverUrl: 'http://localhost:3001',
     domainKey: process.env.MXF_DOMAIN_KEY!,
-    username: process.env.MXF_DEMO_USERNAME || 'demo-user',
-    password: process.env.MXF_DEMO_PASSWORD || 'demo-password-1234'
+    accessToken: accessToken
   });
 
   let agent: any = null;

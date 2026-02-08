@@ -2,6 +2,8 @@
 import { ref, computed, onMounted, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useChannelsStore } from '../stores/channels';
+import axios from '../plugins/axios';
+import HelpTooltip from '../components/HelpTooltip.vue';
 
 const route = useRoute();
 const router = useRouter();
@@ -46,6 +48,11 @@ const newChannelId = ref('');
 const generatedChannelKey = ref<{ keyId: string; secretKey: string; tempChannelId: string } | null>(null);
 const keyGenerationLoading = ref(false);
 
+// Channel ID validation state
+const channelIdValidating = ref(false);
+const channelIdError = ref<string | null>(null);
+const channelIdValid = ref(true);
+
 // Generate channel ID preview from name
 const previewChannelId = computed(() => {
     if (!newChannelName.value.trim()) return '';
@@ -57,6 +64,49 @@ const previewChannelId = computed(() => {
         .replace(/^-|-$/g, '') // Remove leading/trailing hyphens
         .substring(0, 50); // Limit length
 });
+
+// Validate channel ID uniqueness
+const validateChannelId = async (channelId: string): Promise<void> => {
+    if (!channelId.trim()) {
+        channelIdError.value = null;
+        channelIdValid.value = true;
+        return;
+    }
+
+    channelIdValidating.value = true;
+    channelIdError.value = null;
+
+    try {
+        // Check if channel ID already exists by looking through existing channels
+        const existingChannel = channelsStore.channels.find(
+            ch => ch.id.toLowerCase() === channelId.toLowerCase()
+        );
+
+        if (existingChannel) {
+            channelIdError.value = `Channel ID "${channelId}" is already in use`;
+            channelIdValid.value = false;
+        } else {
+            channelIdValid.value = true;
+        }
+    } catch (error) {
+        console.error('Error validating channel ID:', error);
+        channelIdError.value = 'Error validating channel ID';
+        channelIdValid.value = false;
+    } finally {
+        channelIdValidating.value = false;
+    }
+};
+
+// Debounced channel ID validation
+let channelIdValidationTimeout: ReturnType<typeof setTimeout> | null = null;
+const debouncedValidateChannelId = (channelId: string): void => {
+    if (channelIdValidationTimeout) {
+        clearTimeout(channelIdValidationTimeout);
+    }
+    channelIdValidationTimeout = setTimeout(() => {
+        validateChannelId(channelId);
+    }, 300);
+};
 
 // Channel creation with real API call
 const createChannel = async (): Promise<void> => {
@@ -74,13 +124,8 @@ const createChannel = async (): Promise<void> => {
         // Associate the generated key with the actual channel
         if (generatedChannelKey.value) {
             try {
-                await fetch(`/api/channel-keys/${generatedChannelKey.value.keyId}/associate`, {
-                    method: 'PUT',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${localStorage.getItem('token')}`
-                    },
-                    body: JSON.stringify({ channelId: createdChannel.id })
+                await axios.put(`/api/channel-keys/${generatedChannelKey.value.keyId}/associate`, {
+                    channelId: createdChannel.id
                 });
             } catch (error) {
                 console.error('Error associating channel key:', error);
@@ -113,25 +158,15 @@ const generateChannelKeys = async (): Promise<void> => {
     
     keyGenerationLoading.value = true;
     try {
-        const response = await fetch('/api/channel-keys/generate', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${localStorage.getItem('token')}`
-            },
-            body: JSON.stringify({ channelName: newChannelName.value })
+        const response = await axios.post('/api/channel-keys/generate', {
+            channelName: newChannelName.value
         });
-        
-        if (response.ok) {
-            const data = await response.json();
-            generatedChannelKey.value = {
-                keyId: data.data.keyId,
-                secretKey: data.data.secretKey,
-                tempChannelId: data.data.tempChannelId
-            };
-        } else {
-            console.error('Failed to generate channel key');
-        }
+
+        generatedChannelKey.value = {
+            keyId: response.data.data.keyId,
+            secretKey: response.data.data.secretKey,
+            tempChannelId: response.data.data.tempChannelId
+        };
     } catch (error) {
         console.error('Error generating channel key:', error);
     } finally {
@@ -144,12 +179,7 @@ const cleanupChannelKeys = async (): Promise<void> => {
     if (!generatedChannelKey.value) return;
     
     try {
-        await fetch(`/api/channel-keys/cleanup/${generatedChannelKey.value.keyId}`, {
-            method: 'DELETE',
-            headers: {
-                'Authorization': `Bearer ${localStorage.getItem('token')}`
-            }
-        });
+        await axios.delete(`/api/channel-keys/cleanup/${generatedChannelKey.value.keyId}`);
     } catch (error) {
         console.error('Error cleaning up channel key:', error);
     }
@@ -215,408 +245,1081 @@ const navigateToTab = (tabRoute: string): void => {
 </script>
 
 <template>
-    <div class="channels-container">
-        <!-- Header Section -->
-        <div class="channels-header mb-6">
-            <div class="d-flex align-center justify-space-between mb-4">
-                <div>
-                    <h1 class="text-h4 mb-2">Channel Management</h1>
-                    <p class="text-body-1 text-medium-emphasis">
-                        Manage agents, tools, memory, and context across communication channels
-                    </p>
-                </div>
-                <div class="d-flex align-center gap-3">
-                    <v-btn
-                        variant="outlined"
-                        prepend-icon="mdi-refresh"
-                        :loading="channelLoading"
-                        @click="refreshChannel"
-                    >
-                        Refresh
-                    </v-btn>
-                    <v-btn
-                        color="primary"
-                        prepend-icon="mdi-plus"
-                        @click="createChannelDialog = true"
-                    >
-                        New Channel
-                    </v-btn>
-                </div>
-            </div>
+    <div class="channels-page">
+    <div class="ch">
 
-            <!-- Channel Selection & Metrics -->
-            <v-row>
-                <!-- Channel Selector -->
-                <v-col cols="12" md="4">
-                    <v-card elevation="0" class="channel-selector">
-                        <v-card-text>
-                            <div class="d-flex align-center justify-space-between mb-3">
-                                <span class="text-body-2 text-medium-emphasis">Active Channel</span>
+        <!-- ░░ Header Strip ░░ -->
+        <header class="ch-header">
+            <div class="ch-header__left">
+                <h1 class="ch-header__title">Channel Management</h1>
+                <span class="ch-header__divider">/</span>
+                <span class="ch-header__sub">Agents, tools, memory &amp; context</span>
+            </div>
+            <div class="ch-header__actions">
+                <button
+                    class="ch-btn ch-btn--ghost"
+                    :class="{ 'ch-btn--loading': channelLoading }"
+                    @click="refreshChannel"
+                    :disabled="channelLoading"
+                >
+                    <v-icon size="14">mdi-refresh</v-icon>
+                    <span>Refresh</span>
+                </button>
+                <button class="ch-btn ch-btn--primary" @click="createChannelDialog = true">
+                    <v-icon size="14">mdi-plus</v-icon>
+                    <span>New Channel</span>
+                </button>
+            </div>
+        </header>
+
+        <!-- ░░ Channel Selector + Metrics Strip ░░ -->
+        <section class="ch-topbar">
+            <div class="ch-selector">
+                <div class="ch-selector__head">
+                    <span class="ch-selector__label">Active Channel</span>
+                    <span
+                        class="ch-status-dot"
+                        :class="selectedChannelData?.status === 'active' ? 'ch-status-dot--ok' : 'ch-status-dot--warn'"
+                    />
+                </div>
+                <v-select
+                    v-model="channelsStore.selectedChannelId"
+                    :items="channelsStore.channels"
+                    item-title="name"
+                    item-value="id"
+                    variant="outlined"
+                    density="compact"
+                    hide-details
+                    :loading="loading"
+                    @update:model-value="switchChannel"
+                    class="ch-selector__input"
+                >
+                    <template #item="{ props, item }">
+                        <v-list-item v-bind="props" :key="item.raw.id">
+                            <template #prepend>
+                                <v-avatar size="28" color="primary">
+                                    <v-icon size="14">mdi-pound</v-icon>
+                                </v-avatar>
+                            </template>
+                            <template #append>
                                 <v-chip
-                                    :color="selectedChannelData?.status === 'active' ? 'success' : 'warning'"
-                                    size="small"
+                                    :color="item.raw.status === 'active' ? 'success' : 'warning'"
+                                    size="x-small"
                                     variant="tonal"
                                 >
-                                    {{ selectedChannelData?.status || 'inactive' }}
+                                    {{ item.raw.participants }}
                                 </v-chip>
-                            </div>
-                            <v-select
-                                v-model="channelsStore.selectedChannelId"
-                                :items="channelsStore.channels"
-                                item-title="name"
-                                item-value="id"
-                                variant="outlined"
-                                density="comfortable"
-                                :loading="loading"
-                                @update:model-value="switchChannel"
-                            >
-                                <template #item="{ props, item }">
-                                    <v-list-item v-bind="props" :key="item.raw.id">
-                                        <template #prepend>
-                                            <v-avatar size="32" color="primary">
-                                                <v-icon>mdi-pound</v-icon>
-                                            </v-avatar>
-                                        </template>
-                                        <template #append>
-                                            <v-chip
-                                                :color="item.raw.status === 'active' ? 'success' : 'warning'"
-                                                size="small"
-                                                variant="tonal"
-                                            >
-                                                {{ item.raw.participants }}
-                                            </v-chip>
-                                        </template>
-                                    </v-list-item>
-                                </template>
-                            </v-select>
-                        </v-card-text>
-                    </v-card>
-                </v-col>
+                            </template>
+                        </v-list-item>
+                    </template>
+                </v-select>
+            </div>
 
-                <!-- Channel Metrics -->
-                <v-col cols="12" md="8">
-                    <v-card elevation="0" class="metrics-card">
-                        <v-card-text>
-                            <v-row>
-                                <v-col cols="6" sm="3">
-                                    <div class="metric-item">
-                                        <div class="metric-icon mb-2">
-                                            <v-icon color="primary">mdi-message-text</v-icon>
-                                        </div>
-                                        <div class="metric-value">{{ channelsStore.channelMetrics.totalMessages.toLocaleString() }}</div>
-                                        <div class="metric-label">Messages</div>
-                                    </div>
-                                </v-col>
-                                <v-col cols="6" sm="3">
-                                    <div class="metric-item">
-                                        <div class="metric-icon mb-2">
-                                            <v-icon color="success">mdi-robot</v-icon>
-                                        </div>
-                                        <div class="metric-value">{{ channelsStore.channelMetrics.activeAgents }}</div>
-                                        <div class="metric-label">Active Agents</div>
-                                    </div>
-                                </v-col>
-                                <v-col cols="6" sm="3">
-                                    <div class="metric-item">
-                                        <div class="metric-icon mb-2">
-                                            <v-icon color="warning">mdi-check-circle</v-icon>
-                                        </div>
-                                        <div class="metric-value">{{ channelsStore.channelMetrics.completedTasks }}</div>
-                                        <div class="metric-label">Tasks</div>
-                                    </div>
-                                </v-col>
-                                <v-col cols="6" sm="3">
-                                    <div class="metric-item">
-                                        <div class="metric-icon mb-2">
-                                            <v-icon color="info">mdi-clock-fast</v-icon>
-                                        </div>
-                                        <div class="metric-value">{{ channelsStore.channelMetrics.avgResponseTime }}s</div>
-                                        <div class="metric-label">Avg Response</div>
-                                    </div>
-                                </v-col>
-                            </v-row>
-                        </v-card-text>
-                    </v-card>
-                </v-col>
-            </v-row>
-        </div>
+            <div class="ch-metrics">
+                <div class="ch-metric" data-accent="blue">
+                    <div class="ch-metric__head">
+                        <span class="ch-metric__label">Messages</span>
+                        <v-icon size="13" class="ch-metric__ico">mdi-message-text-outline</v-icon>
+                    </div>
+                    <div class="ch-metric__number">{{ channelsStore.channelMetrics.totalMessages.toLocaleString() }}</div>
+                </div>
+                <div class="ch-metric" data-accent="green">
+                    <div class="ch-metric__head">
+                        <span class="ch-metric__label">Agents</span>
+                        <v-icon size="13" class="ch-metric__ico">mdi-robot-outline</v-icon>
+                    </div>
+                    <div class="ch-metric__number">{{ channelsStore.channelMetrics.activeAgents }}</div>
+                </div>
+                <div class="ch-metric" data-accent="amber">
+                    <div class="ch-metric__head">
+                        <span class="ch-metric__label">Tasks</span>
+                        <v-icon size="13" class="ch-metric__ico">mdi-check-circle-outline</v-icon>
+                    </div>
+                    <div class="ch-metric__number">{{ channelsStore.channelMetrics.completedTasks }}</div>
+                </div>
+                <div class="ch-metric" data-accent="cyan">
+                    <div class="ch-metric__head">
+                        <span class="ch-metric__label">Avg Response</span>
+                        <v-icon size="13" class="ch-metric__ico">mdi-clock-fast</v-icon>
+                    </div>
+                    <div class="ch-metric__number">{{ channelsStore.channelMetrics.avgResponseTime }}<span class="ch-metric__unit">s</span></div>
+                </div>
+            </div>
+        </section>
 
-        <!-- Navigation Tabs -->
-        <div class="channel-navigation mb-6">
-            <v-card elevation="0" class="nav-card">
-                <v-tabs
-                    :model-value="activeTab"
-                    color="primary"
-                    grow
-                    show-arrows
-                >
-                    <v-tab
-                        v-for="tab in tabs"
-                        :key="tab.name"
-                        :value="tab.name"
-                        @click="navigateToTab(tab.route)"
-                    >
-                        <v-icon class="mr-2">{{ tab.icon }}</v-icon>
-                        {{ tab.name }}
-                    </v-tab>
-                </v-tabs>
-            </v-card>
-        </div>
+        <!-- ░░ Tab Navigation ░░ -->
+        <nav class="ch-tabs">
+            <button
+                v-for="tab in tabs"
+                :key="tab.name"
+                class="ch-tab"
+                :class="{ 'ch-tab--active': activeTab === tab.name }"
+                @click="navigateToTab(tab.route)"
+            >
+                <v-icon size="16">{{ tab.icon }}</v-icon>
+                <span>{{ tab.name }}</span>
+            </button>
+        </nav>
 
-        <!-- Content Area -->
-        <div class="channel-content">
-            <div v-if="channelLoading" class="content-loading">
-                <v-card elevation="0" class="pa-8 text-center">
-                    <v-progress-circular
-                        indeterminate
-                        color="primary"
-                        size="64"
-                    />
-                    <p class="text-body-1 mt-4">Loading channel data...</p>
-                </v-card>
+        <!-- ░░ Content Area ░░ -->
+        <section class="ch-content">
+            <div v-if="channelLoading" class="ch-loading">
+                <v-progress-circular indeterminate color="primary" size="40" width="3" />
+                <p class="ch-loading__text">Loading channel data…</p>
             </div>
             <router-view v-else v-slot="{ Component }">
                 <v-fade-transition mode="out-in">
-                    <component :is="Component" :channel="selectedChannelData" />
+                    <component v-if="Component" :is="Component" :channel="selectedChannelData" />
+                    <div v-else class="ch-empty">
+                        <div class="ch-empty__icon">
+                            <v-icon size="32" style="opacity: 0.3">mdi-forum-outline</v-icon>
+                        </div>
+                        <p class="ch-empty__title">Select a channel tab</p>
+                        <p class="ch-empty__sub">Choose a tab above to view channel details</p>
+                    </div>
                 </v-fade-transition>
             </router-view>
-        </div>
+        </section>
     </div>
 
     <!-- Create Channel Dialog -->
-    <v-dialog v-model="createChannelDialog" max-width="500">
-        <v-card>
-            <v-card-title>
-                <span class="text-h5">Create New Channel</span>
-            </v-card-title>
-            <v-card-text>
-                <v-container>
-                    <v-row>
-                        <v-col cols="12">
-                            <v-text-field
-                                v-model="newChannelName"
-                                label="Channel Name*"
-                                variant="outlined"
-                                :error-messages="!newChannelName.trim() && newChannelName ? ['Channel name is required'] : []"
-                                required
+    <v-dialog v-model="createChannelDialog" max-width="520" content-class="ch-create-dialog">
+        <div class="ch-dialog">
+            <header class="ch-dialog__header">
+                <h2 class="ch-dialog__title">Create New Channel</h2>
+                <button class="ch-dialog__close" @click="createChannelDialog = false">
+                    <v-icon size="18">mdi-close</v-icon>
+                </button>
+            </header>
+
+            <div class="ch-dialog__body">
+                <div class="ch-dialog__field">
+                    <v-text-field
+                        v-model="newChannelName"
+                        label="Channel Name*"
+                        variant="outlined"
+                        density="compact"
+                        :error-messages="!newChannelName.trim() && newChannelName ? ['Channel name is required'] : []"
+                        required
+                        hide-details="auto"
+                    >
+                        <template #append>
+                            <HelpTooltip
+                                text="A human-readable name for your channel. This will be displayed in the channel list."
+                                docLink="http://mxf.dev/sdk/channels.html"
                             />
-                        </v-col>
-                        <v-col cols="12">
-                            <v-text-field
-                                :model-value="newChannelId || previewChannelId"
-                                @update:model-value="newChannelId = $event"
-                                label="Channel ID"
-                                variant="outlined"
-                                :placeholder="previewChannelId"
-                                hint="Auto-generated from name, but you can customize it"
-                                persistent-hint
+                        </template>
+                    </v-text-field>
+                </div>
+
+                <div class="ch-dialog__field">
+                    <v-text-field
+                        :model-value="newChannelId || previewChannelId"
+                        @update:model-value="(val: string) => { newChannelId = val; debouncedValidateChannelId(val || previewChannelId); }"
+                        label="Channel ID"
+                        variant="outlined"
+                        density="compact"
+                        :placeholder="previewChannelId"
+                        :hint="channelIdError || 'Auto-generated from name, but you can customize it'"
+                        persistent-hint
+                        :error="!!channelIdError"
+                        :loading="channelIdValidating"
+                        :append-inner-icon="channelIdValid && !channelIdValidating && (newChannelId || previewChannelId) ? 'mdi-check-circle' : undefined"
+                    >
+                        <template #append>
+                            <HelpTooltip
+                                text="A unique identifier for this channel. Must be URL-safe (lowercase letters, numbers, and hyphens only)."
+                                docLink="http://mxf.dev/sdk/channels.html#channel-id"
                             />
-                        </v-col>
-                        <v-col cols="12">
-                            <v-textarea
-                                v-model="newChannelDescription"
-                                label="Description (optional)"
-                                variant="outlined"
-                                rows="3"
-                                no-resize
-                            />
-                        </v-col>
-                        
-                        <!-- Channel Authentication Keys Section -->
-                        <v-col cols="12">
-                            <v-card elevation="0" class="pa-4" style="background-color: rgba(var(--v-theme-primary), 0.05); border: 1px solid rgba(var(--v-theme-primary), 0.2);">
-                                <div class="d-flex align-center justify-space-between mb-3">
-                                    <h4 class="text-subtitle-1">Channel Authentication Keys</h4>
-                                    <v-btn
-                                        v-if="generatedChannelKey"
-                                        size="small"
-                                        variant="outlined"
-                                        color="primary"
-                                        :loading="keyGenerationLoading"
-                                        @click="regenerateChannelKeys"
-                                    >
-                                        Regenerate
-                                    </v-btn>
-                                </div>
-                                
-                                <div v-if="keyGenerationLoading" class="text-center py-4">
-                                    <v-progress-circular
-                                        indeterminate
-                                        color="primary"
-                                        size="32"
-                                    />
-                                    <div class="mt-2 text-body-2">Generating keys...</div>
-                                </div>
-                                
-                                <div v-else-if="generatedChannelKey">
-                                    <div class="mb-3">
-                                        <label class="text-caption text-medium-emphasis">Key ID</label>
-                                        <div class="d-flex align-center mt-1">
-                                            <v-text-field
-                                                :model-value="generatedChannelKey.keyId"
-                                                readonly
-                                                variant="outlined"
-                                                density="compact"
-                                                hide-details
-                                                class="flex-grow-1 mr-2"
-                                            />
-                                            <v-btn
-                                                icon="mdi-content-copy"
-                                                size="small"
-                                                variant="text"
-                                                @click="copyToClipboard(generatedChannelKey.keyId)"
-                                            />
-                                        </div>
-                                    </div>
-                                    
-                                    <div class="mb-3">
-                                        <label class="text-caption text-medium-emphasis">Secret Key</label>
-                                        <div class="d-flex align-center mt-1">
-                                            <v-text-field
-                                                :model-value="generatedChannelKey.secretKey"
-                                                readonly
-                                                variant="outlined"
-                                                density="compact"
-                                                hide-details
-                                                class="flex-grow-1 mr-2"
-                                                type="password"
-                                            />
-                                            <v-btn
-                                                icon="mdi-content-copy"
-                                                size="small"
-                                                variant="text"
-                                                @click="copyToClipboard(generatedChannelKey.secretKey)"
-                                            />
-                                        </div>
-                                    </div>
-                                    
-                                    <v-alert
-                                        type="info"
-                                        variant="tonal"
-                                        density="compact"
-                                    >
-                                        <template #text>
-                                            <span class="text-caption">
-                                                These keys will be associated with your channel upon creation. 
-                                                Save them securely as they won't be shown again.
-                                            </span>
-                                        </template>
-                                    </v-alert>
-                                </div>
-                                
-                                <div v-else class="text-center py-4">
-                                    <v-icon color="primary" size="48" class="mb-3">mdi-key-plus</v-icon>
-                                    <div class="text-h6 mb-2">Channel Authentication Keys</div>
-                                    <div class="text-body-2 text-medium-emphasis mb-4">Generate secure keys for your channel to enable authentication</div>
-                                    <v-btn
-                                        color="primary"
-                                        variant="flat"
-                                        :disabled="!newChannelName.trim()"
-                                        :loading="keyGenerationLoading"
-                                        @click="generateChannelKeys"
-                                    >
-                                        Generate Keys
-                                    </v-btn>
-                                    <div v-if="!newChannelName.trim()" class="text-caption text-medium-emphasis mt-2">
-                                        Enter a channel name first to generate keys
-                                    </div>
-                                </div>
-                            </v-card>
-                        </v-col>
-                    </v-row>
-                </v-container>
-                <small class="text-caption">*indicates required field</small>
-            </v-card-text>
-            <v-card-actions>
-                <v-spacer />
-                <v-btn
-                    color="grey"
-                    variant="text"
-                    @click="createChannelDialog = false"
-                >
-                    Cancel
-                </v-btn>
-                <v-btn
-                    color="primary"
-                    variant="flat"
-                    :disabled="!newChannelName.trim()"
-                    :loading="channelsStore.loading"
+                        </template>
+                    </v-text-field>
+                </div>
+
+                <div class="ch-dialog__field">
+                    <v-textarea
+                        v-model="newChannelDescription"
+                        label="Description (optional)"
+                        variant="outlined"
+                        density="compact"
+                        rows="3"
+                        no-resize
+                        hide-details
+                    />
+                </div>
+
+                <!-- Channel Authentication Keys -->
+                <div class="ch-dialog__keys">
+                    <div class="ch-dialog__keys-header">
+                        <span class="ch-dialog__keys-title">Channel Authentication Keys</span>
+                        <button
+                            v-if="generatedChannelKey"
+                            class="ch-btn ch-btn--ghost ch-btn--xs"
+                            :disabled="keyGenerationLoading"
+                            @click="regenerateChannelKeys"
+                        >
+                            <v-icon size="12">mdi-refresh</v-icon>
+                            <span>Regenerate</span>
+                        </button>
+                    </div>
+
+                    <!-- Loading -->
+                    <div v-if="keyGenerationLoading" class="ch-dialog__keys-loading">
+                        <v-progress-circular indeterminate color="primary" size="24" width="2" />
+                        <span>Generating keys…</span>
+                    </div>
+
+                    <!-- Generated Keys -->
+                    <div v-else-if="generatedChannelKey" class="ch-dialog__keys-generated">
+                        <div class="ch-dialog__key-field">
+                            <label>Key ID</label>
+                            <div class="ch-dialog__key-input">
+                                <v-text-field
+                                    :model-value="generatedChannelKey.keyId"
+                                    readonly
+                                    variant="outlined"
+                                    density="compact"
+                                    hide-details
+                                />
+                                <button class="ch-dialog__copy-btn" @click="copyToClipboard(generatedChannelKey.keyId)">
+                                    <v-icon size="14">mdi-content-copy</v-icon>
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class="ch-dialog__key-field">
+                            <label>Secret Key</label>
+                            <div class="ch-dialog__key-input">
+                                <v-text-field
+                                    :model-value="generatedChannelKey.secretKey"
+                                    readonly
+                                    variant="outlined"
+                                    density="compact"
+                                    hide-details
+                                    type="password"
+                                />
+                                <button class="ch-dialog__copy-btn" @click="copyToClipboard(generatedChannelKey.secretKey)">
+                                    <v-icon size="14">mdi-content-copy</v-icon>
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class="ch-dialog__keys-notice">
+                            <v-icon size="14" color="info">mdi-information-outline</v-icon>
+                            <span>Keys will be associated on creation. Save them securely — they won't be shown again.</span>
+                        </div>
+                    </div>
+
+                    <!-- Empty / Generate -->
+                    <div v-else class="ch-dialog__keys-empty">
+                        <v-icon size="32" style="opacity: 0.25; color: var(--ch-blue)">mdi-key-variant</v-icon>
+                        <p>Generate secure keys for your channel to enable authentication</p>
+                        <button
+                            class="ch-btn ch-btn--primary ch-btn--sm"
+                            :disabled="!newChannelName.trim()"
+                            @click="generateChannelKeys"
+                        >
+                            <v-icon size="14">mdi-key-plus</v-icon>
+                            <span>Generate Keys</span>
+                        </button>
+                        <span v-if="!newChannelName.trim()" class="ch-dialog__keys-hint">
+                            Enter a channel name first to generate keys
+                        </span>
+                    </div>
+                </div>
+
+                <p class="ch-dialog__required-note">*indicates required field</p>
+            </div>
+
+            <footer class="ch-dialog__footer">
+                <button class="ch-btn ch-btn--ghost" @click="createChannelDialog = false">Cancel</button>
+                <button
+                    class="ch-btn ch-btn--primary"
+                    :disabled="!newChannelName.trim() || !channelIdValid || channelIdValidating"
                     @click="createChannel"
                 >
-                    Create Channel
-                </v-btn>
-            </v-card-actions>
-        </v-card>
+                    <v-icon size="14">mdi-plus</v-icon>
+                    <span>Create Channel</span>
+                </button>
+            </footer>
+        </div>
     </v-dialog>
+    </div>
 </template>
 
 <style scoped>
-.channels-container {
-    max-width: 1400px;
-    margin: 0 auto;
+/* ════════════════════════════════════════════
+   MXF Channel Management — Polished UI
+   Matches Dashboard command-center aesthetic
+   ════════════════════════════════════════════ */
+
+.ch {
+    --ch-blue: #4A90C2;
+    --ch-green: #10B981;
+    --ch-amber: #F59E0B;
+    --ch-cyan: #22D3EE;
+    --ch-red: #EF4444;
+    position: relative;
 }
 
-.channel-selector,
-.metrics-card,
-.nav-card {
-    background: var(--v-theme-card-bg);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-}
-
-.metric-item {
-    text-align: center;
-    padding: 0.5rem;
-}
-
-.metric-icon {
+/* ── Header Strip ─────────────────────── */
+.ch-header {
     display: flex;
-    justify-content: center;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 0 var(--space-4);
+    border-bottom: 1px solid var(--border-subtle);
+    margin-bottom: var(--space-4);
 }
 
-.metric-value {
-    font-size: 1.5rem;
+.ch-header__left {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+}
+
+.ch-header__title {
+    font-size: var(--text-lg);
     font-weight: 600;
-    line-height: 1.2;
-    margin-bottom: 0.25rem;
+    color: var(--text-primary);
+    letter-spacing: -0.01em;
+    margin: 0;
 }
 
-.metric-label {
-    font-size: 0.75rem;
+.ch-header__divider {
+    color: var(--text-muted);
+    opacity: 0.4;
+    font-weight: 300;
+}
+
+.ch-header__sub {
+    font-size: var(--text-sm);
+    color: var(--text-muted);
+}
+
+.ch-header__actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+}
+
+/* ── Buttons ──────────────────────────── */
+.ch-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 14px;
+    border-radius: var(--radius-md);
+    font-size: var(--text-sm);
+    font-weight: 500;
+    cursor: pointer;
+    transition: all var(--transition-base);
+    border: 1px solid transparent;
+    white-space: nowrap;
+}
+
+.ch-btn--ghost {
+    background: transparent;
+    border-color: var(--border-default);
+    color: var(--text-secondary);
+}
+
+.ch-btn--ghost:hover {
+    color: var(--text-primary);
+    border-color: var(--ch-blue);
+    background: rgba(74, 144, 194, 0.08);
+}
+
+.ch-btn--primary {
+    background: var(--ch-blue);
+    color: #fff;
+    border-color: var(--ch-blue);
+}
+
+.ch-btn--primary:hover {
+    background: #3a7db0;
+    box-shadow: 0 2px 8px rgba(74, 144, 194, 0.3);
+}
+
+.ch-btn--loading .v-icon {
+    animation: ch-spin 1s linear infinite;
+}
+
+@keyframes ch-spin {
+    to { transform: rotate(360deg); }
+}
+
+/* ── Topbar (Selector + Metrics) ──────── */
+.ch-topbar {
+    display: grid;
+    grid-template-columns: 280px 1fr;
+    gap: var(--space-3);
+    margin-bottom: var(--space-4);
+}
+
+.ch-selector {
+    background: var(--bg-base);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-lg);
+    padding: var(--space-3) var(--space-4);
+    transition: border-color var(--transition-base);
+}
+
+.ch-selector:hover {
+    border-color: var(--border-default);
+}
+
+.ch-selector__head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: var(--space-2);
+}
+
+.ch-selector__label {
+    font-size: var(--text-xs);
+    font-weight: 500;
     text-transform: uppercase;
-    letter-spacing: 0.05em;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+}
+
+.ch-status-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--text-muted);
+}
+
+.ch-status-dot--ok {
+    background: var(--ch-green);
+    box-shadow: 0 0 6px rgba(16, 185, 129, 0.4);
+}
+
+.ch-status-dot--warn {
+    background: var(--ch-amber);
+    box-shadow: 0 0 6px rgba(245, 158, 11, 0.4);
+}
+
+.ch-selector__input :deep(.v-field) {
+    border-radius: var(--radius-md);
+}
+
+/* ── Metrics Grid ─────────────────────── */
+.ch-metrics {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: var(--space-3);
+}
+
+.ch-metric {
+    position: relative;
+    padding: var(--space-3) var(--space-4);
+    background: var(--bg-base);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-lg);
+    transition: all var(--transition-base);
+    overflow: hidden;
+}
+
+/* Left accent stripe */
+.ch-metric::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 3px;
+    border-radius: 3px 0 0 3px;
+    opacity: 0.6;
+    transition: opacity var(--transition-base);
+}
+
+.ch-metric[data-accent="blue"]::before  { background: var(--ch-blue); }
+.ch-metric[data-accent="green"]::before { background: var(--ch-green); }
+.ch-metric[data-accent="amber"]::before { background: var(--ch-amber); }
+.ch-metric[data-accent="cyan"]::before  { background: var(--ch-cyan); }
+
+.ch-metric:hover {
+    border-color: var(--border-default);
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+}
+
+.ch-metric:hover::before {
+    opacity: 1;
+}
+
+.ch-metric__head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: var(--space-1);
+}
+
+.ch-metric__label {
+    font-size: var(--text-xs);
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+}
+
+.ch-metric__ico {
+    color: var(--text-muted);
+    opacity: 0.5;
+}
+
+.ch-metric__number {
+    font-family: var(--font-mono);
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: var(--text-primary);
+    line-height: 1;
+    letter-spacing: -0.02em;
+}
+
+.ch-metric__unit {
+    font-size: 0.6em;
+    font-weight: 500;
     opacity: 0.7;
 }
 
-.channel-navigation {
+/* ── Tab Navigation ───────────────────── */
+.ch-tabs {
+    display: flex;
+    gap: 1px;
+    background: var(--bg-base);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+    margin-bottom: var(--space-4);
     position: sticky;
     top: 0;
     z-index: 10;
-    background: var(--v-theme-surface);
-    padding-top: 1rem;
-    margin-top: -1rem;
 }
 
-.content-loading {
-    min-height: 400px;
+.ch-tab {
+    flex: 1;
     display: flex;
     align-items: center;
     justify-content: center;
+    gap: var(--space-2);
+    padding: var(--space-3) var(--space-2);
+    background: transparent;
+    border: none;
+    color: var(--text-secondary);
+    font-size: var(--text-sm);
+    font-weight: 500;
+    cursor: pointer;
+    transition: all var(--transition-base);
+    position: relative;
 }
 
-.gap-3 {
-    gap: 0.75rem;
+.ch-tab:hover:not(.ch-tab--active) {
+    color: var(--text-primary);
+    background: var(--bg-hover);
 }
 
-/* Responsive adjustments */
+.ch-tab--active {
+    color: var(--ch-blue);
+    background: linear-gradient(180deg, transparent 0%, rgba(74, 144, 194, 0.08) 100%);
+}
+
+.ch-tab--active::after {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    left: 20%;
+    right: 20%;
+    height: 2px;
+    background: var(--ch-blue);
+    border-radius: 2px 2px 0 0;
+}
+
+/* ── Content Area ─────────────────────── */
+.ch-content {
+    min-height: 400px;
+}
+
+.ch-loading {
+    min-height: 400px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-3);
+}
+
+.ch-loading__text {
+    font-size: var(--text-sm);
+    color: var(--text-muted);
+    margin: 0;
+}
+
+/* ── Empty State ──────────────────────── */
+.ch-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: var(--space-10) var(--space-4);
+    text-align: center;
+    background: var(--bg-base);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-lg);
+    min-height: 300px;
+}
+
+.ch-empty__icon {
+    margin-bottom: var(--space-3);
+}
+
+.ch-empty__title {
+    font-size: var(--text-sm);
+    font-weight: 500;
+    color: var(--text-secondary);
+    margin: 0 0 var(--space-1);
+}
+
+.ch-empty__sub {
+    font-size: var(--text-xs);
+    color: var(--text-muted);
+    margin: 0;
+    max-width: 260px;
+    line-height: 1.5;
+}
+
+/* ── Dialog Styling ───────────────────── */
+.ch-dialog {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-xl);
+    overflow: hidden;
+}
+
+.ch-dialog__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--space-5) var(--space-6);
+    border-bottom: 1px solid var(--border-subtle);
+}
+
+.ch-dialog__title {
+    font-size: var(--text-lg);
+    font-weight: 600;
+    color: var(--text-primary);
+    margin: 0;
+}
+
+.ch-dialog__close {
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    border-radius: var(--radius-md);
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: all var(--transition-base);
+}
+
+.ch-dialog__close:hover {
+    color: var(--text-primary);
+    background: var(--bg-hover);
+}
+
+.ch-dialog__body {
+    padding: var(--space-5) var(--space-6);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+}
+
+.ch-dialog__field {
+    /* Fields get their spacing from the gap on __body */
+}
+
+.ch-dialog__keys {
+    background: var(--bg-base);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-lg);
+    padding: var(--space-4);
+}
+
+.ch-dialog__keys-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: var(--space-3);
+}
+
+.ch-dialog__keys-title {
+    font-size: var(--text-sm);
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.ch-dialog__keys-loading {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-4);
+    font-size: var(--text-sm);
+    color: var(--text-muted);
+}
+
+.ch-dialog__keys-generated {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+}
+
+.ch-dialog__key-field label {
+    font-size: var(--text-xs);
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-muted);
+    display: block;
+    margin-bottom: var(--space-1);
+}
+
+.ch-dialog__key-input {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+}
+
+.ch-dialog__key-input .v-text-field {
+    flex: 1;
+}
+
+.ch-dialog__copy-btn {
+    width: 34px;
+    height: 34px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: all var(--transition-base);
+    flex-shrink: 0;
+}
+
+.ch-dialog__copy-btn:hover {
+    color: var(--ch-blue);
+    border-color: var(--ch-blue);
+    background: rgba(74, 144, 194, 0.08);
+}
+
+.ch-dialog__keys-notice {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-3);
+    background: rgba(74, 144, 194, 0.08);
+    border: 1px solid rgba(74, 144, 194, 0.15);
+    border-radius: var(--radius-md);
+    font-size: var(--text-xs);
+    color: var(--text-secondary);
+    line-height: 1.4;
+}
+
+.ch-dialog__keys-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    padding: var(--space-4) 0;
+    gap: var(--space-2);
+}
+
+.ch-dialog__keys-empty p {
+    font-size: var(--text-sm);
+    color: var(--text-muted);
+    margin: 0;
+    max-width: 280px;
+}
+
+.ch-dialog__keys-hint {
+    font-size: var(--text-xs);
+    color: var(--text-muted);
+    opacity: 0.7;
+}
+
+.ch-dialog__required-note {
+    font-size: var(--text-xs);
+    color: var(--text-muted);
+    margin: 0;
+}
+
+.ch-dialog__footer {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: var(--space-2);
+    padding: var(--space-4) var(--space-6);
+    border-top: 1px solid var(--border-subtle);
+}
+
+/* Button size variants */
+.ch-btn--xs {
+    padding: 3px 8px;
+    font-size: var(--text-xs);
+    gap: 4px;
+}
+
+.ch-btn--sm {
+    padding: 5px 12px;
+    font-size: var(--text-xs);
+}
+
+/* ── Responsive ───────────────────────── */
+@media (max-width: 1024px) {
+    .ch-topbar {
+        grid-template-columns: 1fr;
+    }
+
+    .ch-metrics {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+
 @media (max-width: 768px) {
-    .channels-header .d-flex {
+    .ch-header {
         flex-direction: column;
-        align-items: stretch;
-        gap: 1rem;
+        align-items: flex-start;
+        gap: var(--space-2);
     }
-    
-    .metric-value {
-        font-size: 1.25rem;
+
+    .ch-header__actions {
+        align-self: flex-end;
     }
+
+    .ch-metrics {
+        grid-template-columns: repeat(2, 1fr);
+    }
+
+    .ch-tabs {
+        overflow-x: auto;
+    }
+}
+
+@media (max-width: 480px) {
+    .ch-metrics {
+        grid-template-columns: 1fr;
+    }
+}
+</style>
+
+<!-- Non-scoped styles for teleported dialog -->
+<style>
+.ch-create-dialog {
+    overflow: visible !important;
+}
+
+.ch-create-dialog > .v-overlay__content {
+    max-width: 520px !important;
+    width: 100%;
+}
+
+.ch-create-dialog .ch-dialog {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-xl);
+    box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(148, 163, 184, 0.05);
+    overflow: hidden;
+}
+
+.ch-create-dialog .ch-dialog__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--space-5) var(--space-6);
+    border-bottom: 1px solid var(--border-subtle);
+}
+
+.ch-create-dialog .ch-dialog__title {
+    font-size: var(--text-lg);
+    font-weight: 600;
+    color: var(--text-primary);
+    margin: 0;
+    letter-spacing: -0.01em;
+}
+
+.ch-create-dialog .ch-dialog__close {
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    border-radius: var(--radius-md);
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: all var(--transition-base);
+}
+
+.ch-create-dialog .ch-dialog__close:hover {
+    color: var(--text-primary);
+    background: var(--bg-hover);
+}
+
+.ch-create-dialog .ch-dialog__body {
+    padding: var(--space-5) var(--space-6);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+}
+
+.ch-create-dialog .ch-dialog__keys {
+    background: var(--bg-base);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-lg);
+    padding: var(--space-4);
+}
+
+.ch-create-dialog .ch-dialog__keys-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: var(--space-3);
+}
+
+.ch-create-dialog .ch-dialog__keys-title {
+    font-size: var(--text-sm);
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.ch-create-dialog .ch-dialog__keys-loading {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-4);
+    font-size: var(--text-sm);
+    color: var(--text-muted);
+}
+
+.ch-create-dialog .ch-dialog__keys-generated {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+}
+
+.ch-create-dialog .ch-dialog__key-field label {
+    font-size: var(--text-xs);
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-muted);
+    display: block;
+    margin-bottom: var(--space-1);
+}
+
+.ch-create-dialog .ch-dialog__key-input {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+}
+
+.ch-create-dialog .ch-dialog__key-input .v-text-field {
+    flex: 1;
+}
+
+.ch-create-dialog .ch-dialog__copy-btn {
+    width: 34px;
+    height: 34px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: all var(--transition-base);
+    flex-shrink: 0;
+}
+
+.ch-create-dialog .ch-dialog__copy-btn:hover {
+    color: var(--ch-blue);
+    border-color: var(--ch-blue);
+    background: rgba(74, 144, 194, 0.08);
+}
+
+.ch-create-dialog .ch-dialog__keys-notice {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-2);
+    padding: var(--space-3);
+    background: rgba(74, 144, 194, 0.06);
+    border: 1px solid rgba(74, 144, 194, 0.12);
+    border-radius: var(--radius-md);
+    font-size: var(--text-xs);
+    color: var(--text-secondary);
+    line-height: 1.5;
+}
+
+.ch-create-dialog .ch-dialog__keys-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    padding: var(--space-5) 0;
+    gap: var(--space-2);
+}
+
+.ch-create-dialog .ch-dialog__keys-empty p {
+    font-size: var(--text-sm);
+    color: var(--text-muted);
+    margin: 0;
+    max-width: 280px;
+    line-height: 1.5;
+}
+
+.ch-create-dialog .ch-dialog__keys-hint {
+    font-size: var(--text-xs);
+    color: var(--text-muted);
+    opacity: 0.6;
+    margin-top: var(--space-1);
+}
+
+.ch-create-dialog .ch-dialog__required-note {
+    font-size: var(--text-xs);
+    color: var(--text-muted);
+    margin: 0;
+}
+
+.ch-create-dialog .ch-dialog__footer {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: var(--space-2);
+    padding: var(--space-4) var(--space-6);
+    border-top: 1px solid var(--border-subtle);
+}
+
+/* Override Vuetify field styles within the dialog */
+.ch-create-dialog .v-field {
+    background: var(--bg-base) !important;
+}
+
+.ch-create-dialog .v-field__outline {
+    border-color: var(--border-default) !important;
+}
+
+.ch-create-dialog .v-field--focused .v-field__outline {
+    border-color: var(--ch-blue) !important;
 }
 </style>

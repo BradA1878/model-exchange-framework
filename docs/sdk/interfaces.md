@@ -586,11 +586,11 @@ export interface MxfSDKConfig {
     serverUrl: string;                       // MXF server URL
     domainKey: string;                       // Domain key for SDK authentication
 
-    // User authentication (one of these sets is required)
+    // User authentication (one of these is required)
+    accessToken?: string;                    // Personal Access Token (RECOMMENDED)
     userId?: string;                         // User ID (with JWT)
     userToken?: string;                      // JWT token
-    username?: string;                       // Username (with password)
-    password?: string;                       // Password
+    // username/password deprecated - use accessToken instead
 
     // Optional settings
     secure?: boolean;                        // Force HTTPS
@@ -638,12 +638,11 @@ interface ChannelMcpServerConfig {
 import { MxfSDK, Events } from '@mxf/sdk';
 import type { MxfAgent } from '@mxf/sdk';
 
-// Initialize SDK
+// Initialize SDK with access token (recommended)
 const sdk = new MxfSDK({
     serverUrl: 'http://localhost:3001',
     domainKey: process.env.MXF_DOMAIN_KEY!,
-    username: process.env.MXF_USERNAME!,
-    password: process.env.MXF_PASSWORD!
+    accessToken: process.env.MXF_ACCESS_TOKEN!
 });
 await sdk.connect();
 

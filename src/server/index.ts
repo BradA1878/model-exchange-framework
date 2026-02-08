@@ -49,6 +49,7 @@ import { McpToolRegistry } from './api/services/McpToolRegistry'; // Import McpT
 import { firstValueFrom } from 'rxjs';
 import { MxfMeilisearchService, EmbeddingGenerator } from '../shared/services/MxfMeilisearchService';
 import { CodeExecutionSandboxService } from '../shared/services/CodeExecutionSandboxService';
+import { ToolExecutionPersistenceService } from './services/ToolExecutionPersistenceService';
 
 /**
  * Initialize logger with appropriate context
@@ -335,6 +336,16 @@ const initializeServer = async () => {
         } catch (error) {
             logger.error(`❌ Failed to initialize Hybrid MCP Service: ${error instanceof Error ? error.message : String(error)}`);
             // Don't exit - let the server continue without hybrid MCP if it fails
+        }
+
+        // Step 3.5: Initialize Tool Execution Persistence Service
+        // This listens to tool execution events and persists them to the database
+        try {
+            await ToolExecutionPersistenceService.getInstance().initialize();
+            logger.info('Tool execution persistence service initialized');
+        } catch (error) {
+            logger.error(`❌ Failed to initialize Tool Execution Persistence Service: ${error instanceof Error ? error.message : String(error)}`);
+            // Non-fatal: continue without persistence if it fails
         }
 
         // Step 4: Load existing MCP tools from database and register new ones

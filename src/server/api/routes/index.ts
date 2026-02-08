@@ -37,6 +37,11 @@ import configRoutes from './config';
 import taskEffectivenessRoutes from './taskEffectiveness';
 import demoRoutes from './demoRoutes';
 import n8nWebhookRoutes from './n8nWebhooks';
+import knowledgeGraphRoutes from './knowledgeGraph';
+import dagRoutes from './dag';
+import memoryBrowserRoutes from './memory';
+import orparRoutes from './orpar';
+import tokenRoutes from './tokenRoutes';
 
 const router = express.Router();
 
@@ -139,5 +144,20 @@ router.use('/demo', demoRoutes);
 
 // n8n Webhook routes (minimal auth for external integration)
 router.use('/webhooks/n8n', n8nWebhookRoutes);
+
+// Knowledge Graph routes
+router.use('/kg', knowledgeGraphRoutes);
+
+// DAG (Directed Acyclic Graph) routes
+router.use('/dag', dagRoutes);
+
+// Memory Browser routes
+router.use('/memory-browser', memoryBrowserRoutes);
+
+// ORPAR Control Loop routes
+router.use('/orpar', orparRoutes);
+
+// Personal Access Token routes (for SDK authentication)
+router.use('/tokens', tokenRoutes);
 
 export default router;

@@ -73,7 +73,7 @@ bun run build
 ### Prerequisites
 
 1. **Domain Key**: Obtain from MXF server operator via secure channel
-2. **User Credentials**: Username/password or JWT token from server operator
+2. **Access Token**: Personal Access Token (PAT) - generate via dashboard or `bun run server:cli -- demo:setup`
 3. **Agent Keys**: Generate via SDK CLI (see below)
 
 ### Step 1: Initialize SDK
@@ -82,16 +82,11 @@ bun run build
 import { MxfSDK, Events } from '@mxf/sdk';
 import type { MxfAgent } from '@mxf/sdk';
 
-// Initialize SDK with domain key and user authentication
+// Initialize SDK with domain key and access token (recommended)
 const sdk = new MxfSDK({
     serverUrl: 'http://localhost:3001',
     domainKey: process.env.MXF_DOMAIN_KEY!,  // REQUIRED
-    // Authentication: Use JWT token OR username/password
-    userId: 'your-user-id',
-    userToken: process.env.MXF_USER_TOKEN   // JWT token
-    // OR use username/password for socket-based auth:
-    // username: 'demo-user',
-    // password: process.env.MXF_USER_PASSWORD
+    accessToken: process.env.MXF_ACCESS_TOKEN!  // Personal Access Token (recommended)
 });
 
 // Connect the SDK
@@ -150,12 +145,11 @@ agent.on(Events.Message.AGENT_MESSAGE, (payload) => {
 ```typescript
 import { MxfSDK, Events } from '@mxf/sdk';
 
-// Initialize SDK (done once)
+// Initialize SDK with access token (recommended)
 const sdk = new MxfSDK({
     serverUrl: 'http://localhost:3001',
     domainKey: process.env.MXF_DOMAIN_KEY!,
-    username: 'demo-user',
-    password: process.env.MXF_USER_PASSWORD
+    accessToken: process.env.MXF_ACCESS_TOKEN!
 });
 await sdk.connect();
 
@@ -608,12 +602,11 @@ Create multiple agents from one SDK instance (efficient connection reuse):
 ```typescript
 import { MxfSDK, Events } from '@mxf/sdk';
 
-// Initialize SDK once
+// Initialize SDK once with access token (recommended)
 const sdk = new MxfSDK({
     serverUrl: 'http://localhost:3001',
     domainKey: process.env.MXF_DOMAIN_KEY!,
-    username: 'demo-user',
-    password: process.env.MXF_USER_PASSWORD
+    accessToken: process.env.MXF_ACCESS_TOKEN!
 });
 await sdk.connect();
 

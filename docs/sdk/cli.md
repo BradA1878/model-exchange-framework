@@ -509,12 +509,11 @@ import dotenv from 'dotenv';
 // Load credentials from .env file
 dotenv.config();
 
-// Initialize SDK with user credentials
+// Initialize SDK with access token (recommended)
 const sdk = new MxfSDK({
     serverUrl: 'http://localhost:3001',
     domainKey: process.env.MXF_DOMAIN_KEY!,
-    username: process.env.MXF_USERNAME!,
-    password: process.env.MXF_PASSWORD!
+    accessToken: process.env.MXF_ACCESS_TOKEN!
 });
 
 await sdk.connect();
@@ -536,7 +535,7 @@ await agent.connect();
 ```
 
 **Environment Variable Format:**
-- User credentials: `MXF_USERNAME`, `MXF_PASSWORD`
+- Access token: `MXF_ACCESS_TOKEN` (recommended for SDK usage)
 - Agent keys: `MXF_<CHANNEL_ID>_<AGENT_ID>_KEY_ID`, `MXF_<CHANNEL_ID>_<AGENT_ID>_SECRET_KEY`
 - Channel and agent IDs are uppercased with hyphens converted to underscores
 

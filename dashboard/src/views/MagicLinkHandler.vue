@@ -22,9 +22,13 @@ onMounted(async () => {
 
         // Verify magic link token with backend
         await authStore.verifyMagicLink(token);
-        
-        // Navigate to dashboard
-        router.push('/dashboard');
+
+        // Navigate to onboarding if profile is incomplete, otherwise dashboard
+        if (authStore.needsOnboarding) {
+            router.push('/onboarding');
+        } else {
+            router.push('/dashboard');
+        }
     } catch (err: any) {
         error.value = err.message || 'Invalid magic link. Please try logging in again.';
         setTimeout(() => router.push('/login'), 2000);

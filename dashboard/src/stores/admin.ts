@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
-import axios from 'axios';
+import axios from '../plugins/axios';
 
 // Types based on backend User model and admin API responses
 interface User {

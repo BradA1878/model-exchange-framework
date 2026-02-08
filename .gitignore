@@ -84,3 +84,4 @@ build-config/
 presentation/
 sync-to-public.sh
 src/**/*.md
+backups/*

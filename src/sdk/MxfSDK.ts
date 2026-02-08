@@ -20,26 +20,41 @@
 
 /**
  * MxfSDK - Primary SDK entry point for Model Exchange Framework
- * 
+ *
  * This class handles:
  * 1. Domain key authentication (SDK → Server)
- * 2. User authentication (JWT or username/password)
+ * 2. User authentication (JWT, username/password, or Personal Access Token)
  * 3. Agent creation and management
- * 
+ *
  * USAGE:
  * ```typescript
  * import { MxfSDK } from '@mxf/sdk';
- * 
- * // Initialize SDK with domain key and user credentials
+ *
+ * // Option 1: Personal Access Token (RECOMMENDED for SDK)
  * const sdk = new MxfSDK({
  *     serverUrl: 'http://localhost:3001',
  *     domainKey: process.env.MXF_DOMAIN_KEY,
- *     userId: 'demo-user',
- *     userToken: 'jwt_token'  // OR use username/password
+ *     accessToken: process.env.MXF_ACCESS_TOKEN  // Format: pat_xxx:secret
  * });
- * 
+ *
+ * // Option 2: JWT token (pre-authenticated)
+ * const sdk = new MxfSDK({
+ *     serverUrl: 'http://localhost:3001',
+ *     domainKey: process.env.MXF_DOMAIN_KEY,
+ *     userId: 'user-id',
+ *     userToken: 'jwt_token'
+ * });
+ *
+ * // Option 3: Username/password (legacy)
+ * const sdk = new MxfSDK({
+ *     serverUrl: 'http://localhost:3001',
+ *     domainKey: process.env.MXF_DOMAIN_KEY,
+ *     username: 'demo-user',
+ *     password: 'demo-password'
+ * });
+ *
  * await sdk.connect();
- * 
+ *
  * // Create agents via SDK instance
  * const agent = await sdk.createAgent({
  *     agentId: 'my-agent',
@@ -49,7 +64,8 @@
  *     secretKey: 'secret-456',
  *     llmProvider: 'openrouter',
  *     defaultModel: 'anthropic/claude-3.5-sonnet'
- * 
+ * });
+ *
  * await agent.connect();
  * ```
  */
@@ -76,13 +92,19 @@ export interface MxfSDKConfig {
     // Server connection
     serverUrl: string;
     domainKey: string;
-    
+
     // User authentication (one of these sets is required)
+    // Option 1: Personal Access Token (RECOMMENDED)
+    accessToken?: string;  // Format: pat_xxx:secret
+
+    // Option 2: Pre-authenticated JWT
     userId?: string;
     userToken?: string;  // JWT token
+
+    // Option 3: Username/password (legacy)
     username?: string;
     password?: string;
-    
+
     // Optional settings
     secure?: boolean;
     reconnection?: boolean;
@@ -154,12 +176,18 @@ export class MxfSDK {
             throw new Error('domainKey is required');
         }
 
-        // Validate user authentication
+        // Validate user authentication - one of three options required
+        const hasPAT = config.accessToken && config.accessToken.includes(':');
         const hasJWT = config.userId && config.userToken;
         const hasCredentials = config.username && config.password;
-        
-        if (!hasJWT && !hasCredentials) {
-            throw new Error('User authentication required: provide either (userId + userToken) or (username + password)');
+
+        if (!hasPAT && !hasJWT && !hasCredentials) {
+            throw new Error('User authentication required: provide accessToken (pat_xxx:secret), (userId + userToken), or (username + password)');
+        }
+
+        // Validate PAT format if provided
+        if (config.accessToken && !config.accessToken.includes(':')) {
+            throw new Error('Invalid accessToken format. Expected: tokenId:secret (e.g., pat_xxx:secret)');
         }
 
         this.config = config;
@@ -171,21 +199,25 @@ export class MxfSDK {
      */
     async connect(): Promise<void> {
         // Validate we have authentication credentials
-        if (!this.config.userToken && !(this.config.username && this.config.password)) {
-            throw new Error('Must provide either userToken or username/password for authentication');
+        const hasPAT = this.config.accessToken && this.config.accessToken.includes(':');
+        const hasJWT = this.config.userToken;
+        const hasCredentials = this.config.username && this.config.password;
+
+        if (!hasPAT && !hasJWT && !hasCredentials) {
+            throw new Error('Must provide accessToken, userToken, or username/password for authentication');
         }
-        
+
         // Validate domain key
         if (!this.config.domainKey) {
             throw new Error('Domain key is required for SDK connection');
         }
-        
-        // Set userId for socket events
+
+        // Set userId for socket events (will be updated from server response)
         this.userId = this.config.userId || this.config.username || 'sdk-user';
-        
+
         // Connect socket for admin operations
         await this.connectSocket();
-        
+
         this.authenticated = true;
     }
 
@@ -202,11 +234,16 @@ export class MxfSDK {
                 }
             };
 
-            // Add user authentication
-            if (this.config.userToken) {
+            // Add user authentication (priority: PAT > JWT > username/password)
+            if (this.config.accessToken) {
+                // Personal Access Token authentication (RECOMMENDED)
+                socketOptions.auth.accessToken = this.config.accessToken;
+            } else if (this.config.userToken) {
+                // JWT authentication
                 socketOptions.auth.token = this.config.userToken;
                 socketOptions.auth.userId = this.userId;
             } else if (this.config.username && this.config.password) {
+                // Username/password authentication (legacy)
                 socketOptions.auth.username = this.config.username;
                 socketOptions.auth.password = this.config.password;
             }

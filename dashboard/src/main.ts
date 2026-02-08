@@ -9,20 +9,42 @@ import '@mdi/font/css/materialdesignicons.css';
 import App from './App.vue';
 import router from './router';
 import './plugins/axios'; // Configure axios with base URL
-import { mxfTheme } from './plugins/theme';
+import { neuralDark, neuralLight } from './plugins/theme';
 
-// Create Vuetify instance with all components
+// Create Vuetify instance with dual theme support
 const vuetify = createVuetify({
     components,
     directives,
     theme: {
-        defaultTheme: 'mxfTheme',
+        defaultTheme: 'neuralDark',
         themes: {
-            mxfTheme,
+            neuralDark,
+            neuralLight,
         },
     },
     icons: {
         defaultSet: 'mdi',
+    },
+    defaults: {
+        // Global component defaults for consistent styling
+        VCard: {
+            elevation: 0,
+            rounded: 'lg',
+        },
+        VBtn: {
+            rounded: 'lg',
+        },
+        VTextField: {
+            variant: 'outlined',
+            density: 'comfortable',
+        },
+        VSelect: {
+            variant: 'outlined',
+            density: 'comfortable',
+        },
+        VChip: {
+            rounded: 'lg',
+        },
     },
 });
 

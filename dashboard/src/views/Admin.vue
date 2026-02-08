@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue';
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useAdminStore } from '../stores/admin';
 
@@ -15,9 +15,15 @@ const tabs = [
     { name: 'MCP Tools', route: 'mcptools', icon: 'mdi-tools' },
     { name: 'Tool Executions', route: 'executions', icon: 'mdi-play-circle' },
     { name: 'Task Analytics', route: 'tasks', icon: 'mdi-chart-line' },
+    { name: 'Knowledge Graph', route: 'knowledge-graph', icon: 'mdi-graph' },
+    { name: 'Task DAG', route: 'task-dag', icon: 'mdi-source-branch' },
+    { name: 'Memory Browser', route: 'memory-browser', icon: 'mdi-brain' },
+    { name: 'Control Loop', route: 'control-loop', icon: 'mdi-sync' },
     { name: 'Audit Logs', route: 'auditlogs', icon: 'mdi-shield-search' },
     { name: 'Security', route: 'security', icon: 'mdi-security' },
-    { name: 'System Health', route: 'system', icon: 'mdi-monitor-dashboard' }
+    { name: 'System Health', route: 'system', icon: 'mdi-monitor-dashboard' },
+    { name: 'Config', route: 'config', icon: 'mdi-cog-outline' },
+    { name: 'Webhooks', route: 'webhooks', icon: 'mdi-webhook' }
 ];
 
 // Local reactive state for active tab
@@ -45,11 +51,11 @@ watch(() => route.path, (newPath) => {
     }
 }, { immediate: true });
 
-// Initialize data on mount
+// Refresh interval for periodic stats updates
+const refreshInterval = ref<number | null>(null);
+
+// Initialize data and start periodic refresh on mount
 onMounted(async () => {
-    // Wait a bit to ensure user authentication is fully loaded
-    await new Promise(resolve => setTimeout(resolve, 100));
-    
     try {
         // Load initial admin data (users will be loaded by the Users tab component)
         await Promise.all([
@@ -59,24 +65,19 @@ onMounted(async () => {
     } catch (error) {
         console.error('Error loading admin data:', error);
     }
-});
 
-// Refresh data periodically for real-time updates
-const refreshInterval = ref<number | null>(null);
-
-onMounted(() => {
     // Refresh every 30 seconds
     refreshInterval.value = setInterval(async () => {
         await Promise.all([
             adminStore.fetchAdminStats(),
             adminStore.fetchSystemHealth()
         ]);
-    }, 30000);
+    }, 30000) as unknown as number;
 });
 
-// Cleanup on unmount
-watch(() => route.path, (newPath) => {
-    if (!newPath.startsWith('/dashboard/admin') && refreshInterval.value) {
+// Cleanup refresh interval on unmount
+onUnmounted(() => {
+    if (refreshInterval.value) {
         clearInterval(refreshInterval.value);
         refreshInterval.value = null;
     }
@@ -164,24 +165,115 @@ watch(() => route.path, (newPath) => {
 .admin-page {
     max-width: 1400px;
     margin: 0 auto;
-    padding: 0 1rem;
 }
 
+/* Page Header */
 .page-header {
-    padding: 2rem 0;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+    padding: var(--space-6) 0;
+    border-bottom: 1px solid var(--border-subtle);
+    margin-bottom: var(--space-6);
 }
 
+.page-header h1 {
+    font-size: var(--text-2xl);
+    font-weight: 700;
+    color: var(--text-primary);
+    margin: 0 0 var(--space-2);
+    display: flex;
+    align-items: center;
+}
+
+.page-header p {
+    color: var(--text-secondary);
+    margin: 0;
+}
+
+/* Quick Stats Cards */
+.d-flex.gap-4 > .v-card {
+    background: var(--bg-base) !important;
+    border: 1px solid var(--border-subtle) !important;
+    border-radius: var(--radius-lg) !important;
+    transition: all var(--transition-base) !important;
+}
+
+.d-flex.gap-4 > .v-card:hover {
+    border-color: var(--border-default) !important;
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-md) !important;
+}
+
+.d-flex.gap-4 > .v-card .text-h6 {
+    font-family: var(--font-mono);
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+.d-flex.gap-4 > .v-card .text-caption {
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-size: var(--text-xs);
+}
+
+/* Admin Tabs */
 .admin-tabs {
-    background: var(--v-theme-card-bg);
-    border-radius: 8px;
+    background: var(--bg-base) !important;
+    border: 1px solid var(--border-subtle) !important;
+    border-radius: var(--radius-lg) !important;
+    overflow: hidden;
 }
 
 .admin-tabs :deep(.v-tab) {
     min-height: 56px;
+    font-weight: 500;
+    text-transform: none;
+    letter-spacing: 0.01em;
+    transition: all var(--transition-base);
 }
 
+.admin-tabs :deep(.v-tab:hover:not(.v-tab--selected)) {
+    background: var(--bg-hover);
+}
+
+.admin-tabs :deep(.v-tab--selected) {
+    color: var(--primary-500) !important;
+    background: linear-gradient(180deg, transparent 0%, rgba(74, 144, 194, 0.1) 100%);
+}
+
+.admin-tabs :deep(.v-tabs-slider) {
+    background: var(--primary-500);
+    height: 3px;
+}
+
+/* Utility Classes */
 .gap-4 {
-    gap: 1rem;
+    gap: var(--space-4);
+}
+
+/* Responsive */
+@media (max-width: 1200px) {
+    .page-header .d-flex.justify-space-between {
+        flex-direction: column;
+        gap: var(--space-4);
+    }
+
+    .d-flex.gap-4 {
+        flex-wrap: wrap;
+    }
+
+    .d-flex.gap-4 > .v-card {
+        flex: 1;
+        min-width: 100px;
+    }
+}
+
+@media (max-width: 768px) {
+    .d-flex.gap-4 > .v-card {
+        min-width: calc(50% - var(--space-2));
+    }
+
+    .page-header h1 {
+        font-size: var(--text-xl);
+    }
 }
 </style>

@@ -33,12 +33,13 @@ import {
     getSystemHealth,
     requestReport
 } from '../controllers/analyticsController';
-import { authenticateUser } from '../middleware/auth';
+import { authenticateUser, requireAdmin } from '../middleware/auth';
 import validationAnalyticsRoutes from './validationAnalytics';
 import mongoose from 'mongoose';
 import { Logger } from '../../../shared/utils/Logger';
 import { ValidationPerformanceService } from '../../../shared/services/ValidationPerformanceService';
 import { AgentService } from '../../socket/services/AgentService';
+import { UserRole } from '../../../shared/models/user';
 
 // Create logger instance for analytics routes
 const logger = new Logger('error', 'AnalyticsRoutes', 'server');
@@ -125,14 +126,55 @@ router.get('/stats', async (req: Request, res: Response) => {
             throw new Error('Database connection not available');
         }
 
-        // Fetch real counts from database
-        const [agentsCount, channelsCount, tasksCount, usersCount, mcpToolsCount] = await Promise.all([
-            db.collection('agents').countDocuments(),
-            db.collection('channels').countDocuments(),
-            db.collection('tasks').countDocuments(),
-            db.collection('users').countDocuments(),
-            db.collection('mcptools').countDocuments()
-        ]);
+        // Check if user is admin - admins see all data, non-admins see only their own
+        const isAdmin = user.role === UserRole.ADMIN;
+        const userId = user.id.toString();
+
+        let agentsCount: number;
+        let channelsCount: number;
+        let tasksCount: number;
+        let usersCount: number;
+        let mcpToolsCount: number;
+
+        if (isAdmin) {
+            // Admin sees all data
+            [agentsCount, channelsCount, tasksCount, usersCount, mcpToolsCount] = await Promise.all([
+                db.collection('agents').countDocuments(),
+                db.collection('channels').countDocuments(),
+                db.collection('tasks').countDocuments(),
+                db.collection('users').countDocuments(),
+                db.collection('mcptools').countDocuments()
+            ]);
+        } else {
+            // Non-admin sees only their own channels/agents
+            // First get user's channel IDs and agent IDs for scoping tasks
+            const [userChannels, userAgents] = await Promise.all([
+                db.collection('channels').find({ createdBy: userId }).project({ channelId: 1 }).toArray(),
+                db.collection('agents').find({ createdBy: userId }).project({ agentId: 1 }).toArray()
+            ]);
+
+            const userChannelIds = userChannels.map(c => c.channelId);
+            const userAgentIds = userAgents.map(a => a.agentId);
+
+            // Count user-scoped data
+            channelsCount = userChannels.length;
+            agentsCount = userAgents.length;
+
+            // Tasks associated with user's channels or agents
+            tasksCount = await db.collection('tasks').countDocuments({
+                $or: [
+                    { channelId: { $in: userChannelIds } },
+                    { assignedAgentId: { $in: userAgentIds } },
+                    { createdBy: userId }
+                ]
+            });
+
+            // Users count is always 1 for non-admin (themselves)
+            usersCount = 1;
+
+            // MCP tools count is system-wide (tools are shared)
+            mcpToolsCount = await db.collection('mcptools').countDocuments();
+        }
 
         // Calculate system uptime (process uptime)
         const uptimeSeconds = process.uptime();
@@ -323,14 +365,10 @@ router.get('/agents', getAgentPerformance);
  * @desc Get all channels for admin view
  * @access Private (JWT required, admin only)
  */
-router.get('/admin/channels', async (req: Request, res: Response) => {
+router.get('/admin/channels', requireAdmin, async (req: Request, res: Response) => {
     try {
-        // Validate authenticated user
+        // User is already validated by requireAdmin middleware
         const user = (req as any).user;
-        if (!user?.id) {
-            res.status(401).json({ success: false, message: 'User not authenticated' });
-            return;
-        }
 
         // Get database connection
         const db = mongoose.connection.db;
@@ -469,14 +507,10 @@ router.get('/admin/channels', async (req: Request, res: Response) => {
  * @desc Get all agents for admin view
  * @access Private (JWT required, admin only)
  */
-router.get('/admin/agents', async (req: Request, res: Response) => {
+router.get('/admin/agents', requireAdmin, async (req: Request, res: Response) => {
     try {
-        // Validate authenticated user
+        // User is already validated by requireAdmin middleware
         const user = (req as any).user;
-        if (!user?.id) {
-            res.status(401).json({ success: false, message: 'User not authenticated' });
-            return;
-        }
 
         // Get database connection
         const db = mongoose.connection.db;
@@ -581,14 +615,10 @@ router.get('/admin/agents', async (req: Request, res: Response) => {
  * @desc Get all MCP tools for admin view
  * @access Private (JWT required, admin only)
  */
-router.get('/admin/mcptools', async (req: Request, res: Response) => {
+router.get('/admin/mcptools', requireAdmin, async (req: Request, res: Response) => {
     try {
-        // Validate authenticated user
+        // User is already validated by requireAdmin middleware
         const user = (req as any).user;
-        if (!user?.id) {
-            res.status(401).json({ success: false, message: 'User not authenticated' });
-            return;
-        }
 
         // Get database connection
         const db = mongoose.connection.db;
@@ -645,17 +675,16 @@ router.get('/admin/mcptools', async (req: Request, res: Response) => {
 
 /**
  * @route GET /api/analytics/admin/executions
- * @desc Get active tool executions for admin view
+ * @desc Get tool executions for admin view (from McpToolExecution collection)
+ * @query status (optional) - Filter by status (running, completed, failed, timeout)
+ * @query limit (optional) - Limit number of results (default 100)
+ * @query toolName (optional) - Filter by tool name
  * @access Private (JWT required, admin only)
  */
-router.get('/admin/executions', async (req: Request, res: Response) => {
+router.get('/admin/executions', requireAdmin, async (req: Request, res: Response) => {
     try {
-        // Validate authenticated user
+        // User is already validated by requireAdmin middleware
         const user = (req as any).user;
-        if (!user?.id) {
-            res.status(401).json({ success: false, message: 'User not authenticated' });
-            return;
-        }
 
         // Get database connection
         const db = mongoose.connection.db;
@@ -663,42 +692,86 @@ router.get('/admin/executions', async (req: Request, res: Response) => {
             throw new Error('Database connection not available');
         }
 
-        // Fetch active tool executions
-        const activeExecutions = await db.collection('tasks')
-            .find({ 
-                status: { $in: ['running', 'pending', 'queued'] },
-                type: 'mcp-tool-execution'
-            }, {
+        // Build query from request params
+        const { status, limit = 100, toolName } = req.query;
+        const query: Record<string, any> = {};
+
+        if (status) {
+            query.status = status;
+        }
+        if (toolName) {
+            query.toolName = { $regex: toolName, $options: 'i' };
+        }
+
+        // Fetch tool executions from the new collection
+        const executions = await db.collection('mcptoolexecutions')
+            .find(query, {
                 projection: {
-                    taskId: 1,
+                    requestId: 1,
                     toolName: 1,
+                    source: 1,
+                    serverId: 1,
                     agentId: 1,
                     channelId: 1,
                     status: 1,
-                    startTime: 1,
+                    startedAt: 1,
+                    completedAt: 1,
+                    durationMs: 1,
                     parameters: 1,
-                    progress: 1
+                    result: 1,
+                    errorMessage: 1,
+                    category: 1
                 }
             })
-            .sort({ startTime: -1 })
+            .sort({ startedAt: -1 })
+            .limit(parseInt(limit as string) || 100)
             .toArray();
 
+        // Get execution statistics
+        const [total, completed, failed, running] = await Promise.all([
+            db.collection('mcptoolexecutions').countDocuments(),
+            db.collection('mcptoolexecutions').countDocuments({ status: 'completed' }),
+            db.collection('mcptoolexecutions').countDocuments({ status: 'failed' }),
+            db.collection('mcptoolexecutions').countDocuments({ status: 'running' })
+        ]);
+
+        // Get average duration for completed executions
+        const avgResult = await db.collection('mcptoolexecutions').aggregate([
+            { $match: { status: 'completed', durationMs: { $exists: true } } },
+            { $group: { _id: null, avgDuration: { $avg: '$durationMs' } } }
+        ]).toArray();
+        const avgDurationMs = avgResult[0]?.avgDuration || 0;
+
         // Map executions with proper field names for frontend
-        const mappedExecutions = activeExecutions.map(execution => ({
-            id: execution.taskId || execution._id,
+        const mappedExecutions = executions.map(execution => ({
+            id: execution.requestId || execution._id,
             toolName: execution.toolName || 'Unknown Tool',
-            agentId: execution.agentId || 'Unknown Agent',
-            channelId: execution.channelId || 'Unknown Channel', 
+            source: execution.source || 'internal',
+            serverId: execution.serverId,
+            agentId: execution.agentId || 'system',
+            channelId: execution.channelId || 'default',
             status: execution.status || 'unknown',
-            startTime: execution.startTime,
+            startedAt: execution.startedAt,
+            startTime: execution.startedAt, // Alias for dashboard component compatibility
+            completedAt: execution.completedAt,
+            durationMs: execution.durationMs,
             parameters: execution.parameters || {},
-            progress: execution.progress || 0
+            result: execution.result,
+            errorMessage: execution.errorMessage,
+            category: execution.category
         }));
 
         res.json({
             success: true,
             executions: mappedExecutions,
-            total: mappedExecutions.length
+            total: mappedExecutions.length,
+            stats: {
+                total,
+                completed,
+                failed,
+                running,
+                avgDurationMs: Math.round(avgDurationMs)
+            }
         });
     } catch (error: any) {
         logger.error('Error fetching tool executions:', error);
@@ -714,13 +787,10 @@ router.get('/admin/executions', async (req: Request, res: Response) => {
  * @desc Get comprehensive task analytics data
  * @access Private (JWT required, admin only)
  */
-router.get('/admin/tasks', async (req: Request, res: Response) => {
+router.get('/admin/tasks', requireAdmin, async (req: Request, res: Response) => {
     try {
+        // User is already validated by requireAdmin middleware
         const user = (req as any).user;
-        if (!user?.id) {
-            res.status(401).json({ success: false, message: 'User not authenticated' });
-            return;
-        }
 
         const db = mongoose.connection.db;
         if (!db) {
@@ -830,13 +900,10 @@ router.get('/admin/tasks', async (req: Request, res: Response) => {
  * @desc Get audit log analytics data
  * @access Private (JWT required, admin only)
  */
-router.get('/admin/auditlogs', async (req: Request, res: Response) => {
+router.get('/admin/auditlogs', requireAdmin, async (req: Request, res: Response) => {
     try {
+        // User is already validated by requireAdmin middleware
         const user = (req as any).user;
-        if (!user?.id) {
-            res.status(401).json({ success: false, message: 'User not authenticated' });
-            return;
-        }
 
         const db = mongoose.connection.db;
         if (!db) {
@@ -917,13 +984,10 @@ router.get('/admin/auditlogs', async (req: Request, res: Response) => {
  * @desc Get security analytics (channel keys usage)
  * @access Private (JWT required, admin only)
  */
-router.get('/admin/security', async (req: Request, res: Response) => {
+router.get('/admin/security', requireAdmin, async (req: Request, res: Response) => {
     try {
+        // User is already validated by requireAdmin middleware
         const user = (req as any).user;
-        if (!user?.id) {
-            res.status(401).json({ success: false, message: 'User not authenticated' });
-            return;
-        }
 
         const db = mongoose.connection.db;
         if (!db) {

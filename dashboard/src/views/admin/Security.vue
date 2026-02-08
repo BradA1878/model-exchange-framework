@@ -287,6 +287,6 @@ onMounted(async () => {
 }
 
 .font-mono {
-    font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+    font-family: var(--font-mono);
 }
 </style>

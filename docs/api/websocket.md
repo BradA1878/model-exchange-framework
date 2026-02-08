@@ -15,12 +15,11 @@ ws://localhost:3001/socket.io/
 ```typescript
 import { MxfSDK } from '@mxf/sdk';
 
-// Initialize SDK with authentication
+// Initialize SDK with Personal Access Token (recommended)
 const sdk = new MxfSDK({
     serverUrl: 'http://localhost:3001',
     domainKey: process.env.MXF_DOMAIN_KEY!,
-    username: process.env.MXF_USERNAME!,
-    password: process.env.MXF_PASSWORD!,
+    accessToken: process.env.MXF_DEMO_ACCESS_TOKEN!,
     // Optional connection settings
     timeout: 600000, // 10 minutes for LLM operations
     reconnection: true,
@@ -50,12 +49,11 @@ const agent = sdk.createAgent({
 ```typescript
 import { MxfSDK, Events } from '@mxf/sdk';
 
-// Initialize SDK with authentication
+// Initialize SDK with Personal Access Token (recommended)
 const sdk = new MxfSDK({
     serverUrl: 'http://localhost:3001',
     domainKey: process.env.MXF_DOMAIN_KEY!,
-    username: process.env.MXF_USERNAME!,
-    password: process.env.MXF_PASSWORD!
+    accessToken: process.env.MXF_DEMO_ACCESS_TOKEN!
 });
 
 await sdk.connect();
@@ -710,12 +708,11 @@ function sendMessage(message) {
 import { MxfSDK, Events } from '@mxf/sdk';
 
 const testConnection = async (): Promise<void> => {
-    // Initialize SDK
+    // Initialize SDK with Personal Access Token (recommended)
     const sdk = new MxfSDK({
         serverUrl: 'http://localhost:3001',
         domainKey: process.env.MXF_DOMAIN_KEY!,
-        username: process.env.MXF_USERNAME!,
-        password: process.env.MXF_PASSWORD!
+        accessToken: process.env.MXF_DEMO_ACCESS_TOKEN!
     });
     
     console.log('✓ Connecting...');

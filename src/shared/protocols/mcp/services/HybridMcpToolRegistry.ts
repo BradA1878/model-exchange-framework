@@ -422,26 +422,74 @@ export class HybridMcpToolRegistry {
 
     /**
      * Execute a tool (internal or external)
+     * Emits events for tool execution tracking and persistence
      */
     public async executeTool(
-        toolName: string, 
-        input: Record<string, any>, 
-        agentId?: string, 
+        toolName: string,
+        input: Record<string, any>,
+        agentId?: string,
         channelId?: string
     ): Promise<any> {
         const context = this.getToolExecutionContext(toolName, input, { agentId, channelId });
-        
+
         if (!context) {
             throw new Error(`Tool ${toolName} not found`);
         }
 
+        const requestId = context.requestId || this.generateRequestId();
 
-        if (context.source === 'internal') {
-            // Route to internal MXF tool registry
-            return this.executeInternalTool(context);
-        } else {
-            // Route to external server
-            return this.executeExternalTool(context);
+        // Emit tool call event for persistence tracking
+        EventBus.server.emit(McpEvents.TOOL_CALL, {
+            requestId,
+            name: toolName,
+            input,
+            agentId,
+            channelId,
+            source: context.source,
+            serverId: context.source !== 'internal' ? context.source : undefined
+        });
+
+        try {
+            let result: any;
+
+            if (context.source === 'internal') {
+                // Route to internal MXF tool registry
+                result = await this.executeInternalTool(context);
+            } else {
+                // Route to external server
+                result = await this.executeExternalTool(context);
+            }
+
+            // Emit tool result event for persistence tracking
+            EventBus.server.emit(McpEvents.TOOL_RESULT, {
+                requestId,
+                result,
+                metadata: {
+                    toolName,
+                    source: context.source,
+                    agentId,
+                    channelId
+                }
+            });
+
+            return result;
+        } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+
+            // Emit tool error event for persistence tracking
+            EventBus.server.emit(McpEvents.TOOL_ERROR, {
+                requestId,
+                error: errorMessage,
+                code: 'EXECUTION_ERROR',
+                details: {
+                    toolName,
+                    source: context.source,
+                    agentId,
+                    channelId
+                }
+            });
+
+            throw error;
         }
     }
 

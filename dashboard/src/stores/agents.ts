@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
-import axios from 'axios';
+import axios from '../plugins/axios';
 
 // Types based on backend Agent model
 interface Agent {
@@ -11,7 +11,7 @@ interface Agent {
     type: string;
     serviceTypes: string[];
     capabilities: string[];
-    status: 'ACTIVE' | 'IDLE' | 'BUSY' | 'OFFLINE' | 'ERROR';
+    status: 'ACTIVE' | 'IDLE' | 'BUSY' | 'OFFLINE' | 'ERROR' | 'PAUSED';
     version: string;
     lastActive: Date;
     performance?: {
@@ -64,6 +64,8 @@ export const useAgentsStore = defineStore('agents', () => {
     const loadingAgent = ref(false);
     const savingAgent = ref(false);
     const deletingAgent = ref(false);
+    // Tracks which agentId has a lifecycle operation in progress
+    const lifecycleLoading = ref<string | null>(null);
 
     // Error state
     const error = ref<string | null>(null);
@@ -339,6 +341,89 @@ export const useAgentsStore = defineStore('agents', () => {
         }
     };
 
+    // Agent lifecycle actions — POST /api/agents/:agentId/{restart,shutdown,pause,resume}
+    const restartAgent = async (agentId: string, reason?: string): Promise<void> => {
+        lifecycleLoading.value = agentId;
+        try {
+            await axios.post(`/api/agents/${agentId}/restart`, { reason });
+            await fetchAgents();
+        } catch (err: any) {
+            console.error('Failed to restart agent:', err);
+            error.value = err.response?.data?.message || 'Failed to restart agent';
+            throw err;
+        } finally {
+            lifecycleLoading.value = null;
+        }
+    };
+
+    const shutdownAgent = async (agentId: string, reason?: string): Promise<void> => {
+        lifecycleLoading.value = agentId;
+        try {
+            await axios.post(`/api/agents/${agentId}/shutdown`, { reason });
+            await fetchAgents();
+        } catch (err: any) {
+            console.error('Failed to shutdown agent:', err);
+            error.value = err.response?.data?.message || 'Failed to shutdown agent';
+            throw err;
+        } finally {
+            lifecycleLoading.value = null;
+        }
+    };
+
+    const pauseAgent = async (agentId: string, reason?: string): Promise<void> => {
+        lifecycleLoading.value = agentId;
+        try {
+            await axios.post(`/api/agents/${agentId}/pause`, { reason });
+            await fetchAgents();
+        } catch (err: any) {
+            console.error('Failed to pause agent:', err);
+            error.value = err.response?.data?.message || 'Failed to pause agent';
+            throw err;
+        } finally {
+            lifecycleLoading.value = null;
+        }
+    };
+
+    const resumeAgent = async (agentId: string, reason?: string): Promise<void> => {
+        lifecycleLoading.value = agentId;
+        try {
+            await axios.post(`/api/agents/${agentId}/resume`, { reason });
+            await fetchAgents();
+        } catch (err: any) {
+            console.error('Failed to resume agent:', err);
+            error.value = err.response?.data?.message || 'Failed to resume agent';
+            throw err;
+        } finally {
+            lifecycleLoading.value = null;
+        }
+    };
+
+    // GET /api/agents/:agentId/metrics — returns uptime, status, task counts
+    const getAgentMetrics = async (agentId: string): Promise<any> => {
+        try {
+            const response = await axios.get(`/api/agents/${agentId}/metrics`);
+            if (response.data.success) {
+                return response.data.data;
+            }
+            throw new Error(response.data.message || 'Failed to fetch metrics');
+        } catch (err: any) {
+            console.error('Failed to fetch agent metrics:', err);
+            error.value = err.response?.data?.message || 'Failed to fetch agent metrics';
+            throw err;
+        }
+    };
+
+    // DELETE /api/agents/:agentId/memory — clears agent-scoped memory
+    const deleteAgentMemory = async (agentId: string): Promise<void> => {
+        try {
+            await axios.delete(`/api/agents/${agentId}/memory`);
+        } catch (err: any) {
+            console.error('Failed to delete agent memory:', err);
+            error.value = err.response?.data?.message || 'Failed to delete agent memory';
+            throw err;
+        }
+    };
+
     const refreshAgents = async (): Promise<void> => {
         await fetchAgents();
     };
@@ -361,27 +446,34 @@ export const useAgentsStore = defineStore('agents', () => {
         agents,
         selectedAgent,
         filters,
-        
+
         // Loading states
         loadingAgents,
         loadingAgent,
         savingAgent,
         deletingAgent,
+        lifecycleLoading,
         isLoading,
-        
+
         // Error state
         error,
-        
+
         // Computed
         agentStats,
         filteredAgents,
-        
+
         // Actions
         fetchAgents,
         fetchAgentById,
         createAgent,
         updateAgent,
         deleteAgent,
+        restartAgent,
+        shutdownAgent,
+        pauseAgent,
+        resumeAgent,
+        getAgentMetrics,
+        deleteAgentMemory,
         refreshAgents,
         setFilters,
         clearError,

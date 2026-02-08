@@ -16,6 +16,7 @@ interface AuthResponse {
     user: User;
     token: string;
     message?: string;
+    profileComplete?: boolean;
 }
 
 interface MagicLinkResponse {
@@ -30,9 +31,14 @@ export const useAuthStore = defineStore('auth', () => {
     const token = ref<string | null>(null);
     const loading = ref(false);
     const error = ref<string | null>(null);
+    const profileComplete = ref<boolean>(
+        localStorage.getItem('mxf_profileComplete') === 'true'
+    );
 
     // Getters
     const isAuthenticated = computed(() => !!token.value && !!user.value);
+    // User needs onboarding when authenticated but profile is incomplete
+    const needsOnboarding = computed(() => isAuthenticated.value && !profileComplete.value);
 
     // Actions
     const login = async (email: string, password: string): Promise<void> => {
@@ -127,68 +133,28 @@ export const useAuthStore = defineStore('auth', () => {
     };
 
     const verifyMagicLink = async (magicToken: string): Promise<void> => {
-        console.log('🔐 Auth store verifyMagicLink started', { tokenPresent: !!magicToken });
-        console.log('🔐 Axios configuration:', {
-            baseURL: axios.defaults.baseURL,
-            timeout: axios.defaults.timeout,
-            headers: axios.defaults.headers.common
-        });
         loading.value = true;
         error.value = null;
-        
+
         try {
-            // First, let's test if the server is reachable
-            console.log('🔐 Testing server connectivity...');
-            try {
-                const healthResponse = await axios.get('/health');
-                console.log('🔐 Server health check:', healthResponse.status);
-            } catch (healthErr) {
-                console.error('🔐 Server health check failed:', healthErr);
-            }
-            
-            const apiUrl = '/api/users/magic-link/verify';
-            const fullUrl = `${axios.defaults.baseURL}${apiUrl}`;
-            console.log('🔐 Making API call to:', fullUrl);
-            console.log('🔐 Request payload:', { token: magicToken?.substring(0, 20) + '...' });
-            console.log('🔐 Current timestamp:', new Date().toISOString());
-            
-            const response = await axios.post<AuthResponse>(apiUrl, {
+            const response = await axios.post<AuthResponse>('/api/users/magic-link/verify', {
                 token: magicToken
-            });
-            console.log('🔐 API response received:', { 
-                success: response.data.success,
-                status: response.status,
-                statusText: response.statusText
             });
 
             if (response.data.success) {
-                console.log('🔐 Setting user and token data');
-                
-                // Use setAuthData to properly store everything
                 setAuthData(response.data.user, response.data.token);
-                
-                console.log('🔐 Token stored in localStorage');
-                console.log('🔐 Authorization header set');
-                
-                console.log('🔐 Magic link verification complete:', {
-                    hasUser: !!user.value,
-                    hasToken: !!token.value,
-                    isAuthenticated: !!token.value && !!user.value
-                });
+
+                // Track profile completion state from server response
+                const isProfileComplete = response.data.profileComplete ?? false;
+                profileComplete.value = isProfileComplete;
+                localStorage.setItem('mxf_profileComplete', String(isProfileComplete));
+
+
             } else {
-                console.error('🔐 API returned success: false');
                 throw new Error(response.data.message || 'Magic link verification failed');
             }
         } catch (err: any) {
-            console.error('🔐 Magic link verification error:', err);
-            console.error('🔐 Error details:', {
-                message: err.message,
-                status: err.response?.status,
-                statusText: err.response?.statusText,
-                data: err.response?.data,
-                isNetworkError: !err.response,
-                code: err.code
-            });
+            console.error('Auth: magic link verification failed', err.response?.status || err.message);
             error.value = err.response?.data?.message || err.message || 'Magic link verification failed';
             throw err;
         } finally {
@@ -197,52 +163,33 @@ export const useAuthStore = defineStore('auth', () => {
     };
 
     const logout = (): void => {
-        console.log('🚪 logout called - clearing authentication state');
-        console.log('🚪 logout: Current state before clearing:', {
-            hasUser: !!user.value,
-            hasToken: !!token.value,
-            isAuthenticated: isAuthenticated.value
-        });
-        
         user.value = null;
         token.value = null;
-        
-        // Remove token from localStorage
+
+        // Remove token and profile state from localStorage
         localStorage.removeItem('mxf_token');
         localStorage.removeItem('mxf_user');
-        
+        localStorage.removeItem('mxf_profileComplete');
+        profileComplete.value = false;
+
         // Remove authorization header
         delete axios.defaults.headers.common['Authorization'];
-        
-        console.log('🚪 logout complete - authentication cleared');
+
     };
 
     const checkAuth = async (): Promise<void> => {
-        console.log('🔍 checkAuth called - checking authentication state');
-        console.log('🔍 Current auth state before checkAuth:', {
-            hasToken: !!token.value,
-            hasUser: !!user.value,
-            isAuthenticated: isAuthenticated.value
-        });
-        
         // If we already have a valid authentication state, don't override it
         if (isAuthenticated.value) {
-            console.log('🔍 Skipping checkAuth - already authenticated');
             return;
         }
-        
+
         const storedToken = localStorage.getItem('mxf_token');
         const storedUser = localStorage.getItem('mxf_user');
-        
-        console.log('🔍 localStorage data:', {
-            hasStoredToken: !!storedToken,
-            hasStoredUser: !!storedUser
-        });
-        
+
         if (storedToken) {
             token.value = storedToken;
             axios.defaults.headers.common['Authorization'] = `Bearer ${storedToken}`;
-            
+
             // Restore user data from localStorage if available
             if (storedUser) {
                 try {
@@ -252,7 +199,7 @@ export const useAuthStore = defineStore('auth', () => {
                     localStorage.removeItem('mxf_user');
                 }
             }
-            
+
             // Verify token is still valid by fetching user profile
             await fetchUserProfile();
         }
@@ -260,36 +207,24 @@ export const useAuthStore = defineStore('auth', () => {
 
     const fetchUserProfile = async (): Promise<void> => {
         if (!token.value) {
-            console.log('👤 fetchUserProfile: No token present');
             return;
         }
-        
-        console.log('👤 fetchUserProfile: Fetching user profile to validate token');
-        
+
         try {
             const response = await axios.get<{ success: boolean; user: User }>('/api/users/profile');
-            
-            console.log('👤 fetchUserProfile response:', {
-                status: response.status,
-                success: response.data.success,
-                hasUser: !!response.data.user
-            });
-            
+
             if (response.data.success) {
                 user.value = response.data.user;
-                console.log('👤 fetchUserProfile: Profile updated successfully');
+                // Update profile completion based on fetched profile data
+                const isComplete = !!(response.data.user.firstName && response.data.user.lastName);
+                profileComplete.value = isComplete;
+                localStorage.setItem('mxf_profileComplete', String(isComplete));
             } else {
-                console.log('👤 fetchUserProfile: Server returned success: false - calling logout');
                 // Token is invalid, logout
                 logout();
             }
         } catch (err: any) {
-            console.log('👤 fetchUserProfile error - calling logout:', {
-                status: err.response?.status,
-                statusText: err.response?.statusText,
-                message: err.message,
-                data: err.response?.data
-            });
+            console.error('Auth: profile fetch failed', err.response?.status || err.message);
             // Token is invalid, logout
             logout();
         }
@@ -300,50 +235,15 @@ export const useAuthStore = defineStore('auth', () => {
     };
 
     const setAuthData = (userData: User, authToken: string): void => {
-        console.log('💾 setAuthData called:', {
-            hasUserData: !!userData,
-            hasToken: !!authToken,
-            tokenLength: authToken?.length
-        });
-        
         user.value = userData;
         token.value = authToken;
-        
+
         // Store in localStorage
-        console.log('💾 Storing token in localStorage...');
         localStorage.setItem('mxf_token', authToken);
         localStorage.setItem('mxf_user', JSON.stringify(userData));
-        
-        // Verify storage immediately
-        const storedToken = localStorage.getItem('mxf_token');
-        const storedUser = localStorage.getItem('mxf_user');
-        console.log('💾 localStorage verification after storage:', {
-            storedTokenExists: !!storedToken,
-            storedUserExists: !!storedUser,
-            tokensMatch: storedToken === authToken
-        });
-        
+
         // Set authorization header
         axios.defaults.headers.common['Authorization'] = `Bearer ${authToken}`;
-        
-        console.log('💾 setAuthData complete');
-        
-        // Monitor localStorage for token changes
-        setTimeout(() => {
-            const tokenAfter1s = localStorage.getItem('mxf_token');
-            console.log('🔍 Token check after 1 second:', {
-                tokenExists: !!tokenAfter1s,
-                tokenStillMatches: tokenAfter1s === authToken
-            });
-        }, 1000);
-        
-        setTimeout(() => {
-            const tokenAfter5s = localStorage.getItem('mxf_token');
-            console.log('🔍 Token check after 5 seconds:', {
-                tokenExists: !!tokenAfter5s,
-                tokenStillMatches: tokenAfter5s === authToken
-            });
-        }, 5000);
     };
 
     const updateUserProfile = async (profileData: Partial<User>): Promise<void> => {
@@ -358,9 +258,14 @@ export const useAuthStore = defineStore('auth', () => {
             if (response.data.success) {
                 // Update user object with server response
                 user.value = response.data.user;
-                
+
                 // Update localStorage
                 localStorage.setItem('mxf_user', JSON.stringify(response.data.user));
+
+                // Update profile completion state based on updated profile
+                const isComplete = !!(response.data.user.firstName && response.data.user.lastName);
+                profileComplete.value = isComplete;
+                localStorage.setItem('mxf_profileComplete', String(isComplete));
             } else {
                 throw new Error(response.data.message || 'Profile update failed');
             }
@@ -389,8 +294,10 @@ export const useAuthStore = defineStore('auth', () => {
         token,
         loading,
         error,
+        profileComplete,
         // Getters
         isAuthenticated,
+        needsOnboarding,
         // Actions
         login,
         register,

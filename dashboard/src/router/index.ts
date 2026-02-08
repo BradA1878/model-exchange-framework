@@ -20,6 +20,12 @@ const router = createRouter({
             component: () => import(/* webpackChunkName: "magic-link" */ '../views/MagicLinkHandler.vue')
         },
         {
+            path: '/onboarding',
+            name: 'Onboarding',
+            component: () => import('../views/Onboarding.vue'),
+            meta: { requiresAuth: true }
+        },
+        {
             path: '/dashboard',
             component: () => import('../layouts/DashboardLayout.vue'),
             meta: { requiresAuth: true },
@@ -56,6 +62,10 @@ const router = createRouter({
                     name: 'Channels',
                     component: () => import('../views/Channels.vue'),
                     children: [
+                        {
+                            path: ':channelId',
+                            redirect: to => `/dashboard/channels/${to.params.channelId}/memory`
+                        },
                         {
                             path: ':channelId/memory',
                             name: 'ChannelMemory',
@@ -149,6 +159,42 @@ const router = createRouter({
                             name: 'AdminSystem',
                             // @ts-ignore
                             component: () => import('../views/admin/System.vue')
+                        },
+                        {
+                            path: 'config',
+                            name: 'AdminConfig',
+                            // @ts-ignore
+                            component: () => import('../views/admin/Config.vue')
+                        },
+                        {
+                            path: 'webhooks',
+                            name: 'AdminWebhooks',
+                            // @ts-ignore
+                            component: () => import('../views/admin/Webhooks.vue')
+                        },
+                        {
+                            path: 'knowledge-graph',
+                            name: 'AdminKnowledgeGraph',
+                            // @ts-ignore
+                            component: () => import('../views/admin/KnowledgeGraph.vue')
+                        },
+                        {
+                            path: 'task-dag',
+                            name: 'AdminTaskDAG',
+                            // @ts-ignore
+                            component: () => import('../views/admin/TaskDAG.vue')
+                        },
+                        {
+                            path: 'memory-browser',
+                            name: 'AdminMemoryBrowser',
+                            // @ts-ignore
+                            component: () => import('../views/admin/MemoryBrowser.vue')
+                        },
+                        {
+                            path: 'control-loop',
+                            name: 'AdminControlLoop',
+                            // @ts-ignore
+                            component: () => import('../views/admin/ControlLoop.vue')
                         }
                     ]
                 }
@@ -160,38 +206,29 @@ const router = createRouter({
 // Navigation guards
 router.beforeEach((to, from, next) => {
     const authStore = useAuthStore();
-    
-    console.log('🧭 Router guard:', {
-        from: from.path,
-        to: to.path,
-        requiresAuth: to.meta.requiresAuth,
-        requiresGuest: to.meta.requiresGuest,
-        requiresAdmin: to.meta.requiresAdmin,
-        isAuthenticated: authStore.isAuthenticated,
-        hasUser: !!authStore.user,
-        hasToken: !!authStore.token,
-        userRole: authStore.user?.role
-    });
-    
+
     if (to.meta.requiresAuth && !authStore.isAuthenticated) {
-        console.log('🧭 Redirecting to login - auth required but not authenticated');
         next('/login');
     } else if (to.meta.requiresGuest && authStore.isAuthenticated) {
-        console.log('🧭 Redirecting to dashboard - guest route but authenticated');
-        next('/dashboard');
+        // Authenticated user on guest route: send to onboarding or dashboard
+        if (authStore.needsOnboarding) {
+            next('/onboarding');
+        } else {
+            next('/dashboard');
+        }
+    } else if (authStore.isAuthenticated && authStore.needsOnboarding
+               && to.path !== '/onboarding' && to.name !== 'MagicLink') {
+        // Authenticated but profile incomplete: force onboarding (except the magic link handler page)
+        next('/onboarding');
     } else if (to.meta.requiresAdmin) {
         if (!authStore.isAuthenticated) {
-            console.log('🧭 Redirecting to login - admin access required but not authenticated');
             next('/login');
         } else if (authStore.user?.role !== 'admin') {
-            console.log('🧭 Redirecting to dashboard - admin access required but user is not admin', { userRole: authStore.user?.role });
             next('/dashboard');
         } else {
-            console.log('🧭 Allowing admin navigation');
             next();
         }
     } else {
-        console.log('🧭 Allowing navigation');
         next();
     }
 });

@@ -25,8 +25,7 @@ import { MxfSDK } from '@mxf/sdk';
 const sdk = new MxfSDK({
     serverUrl: 'http://localhost:3001',
     domainKey: process.env.MXF_DOMAIN_KEY!,
-    username: process.env.MXF_USERNAME!,
-    password: process.env.MXF_PASSWORD!
+    accessToken: process.env.MXF_ACCESS_TOKEN!
 });
 await sdk.connect();
 
@@ -948,8 +947,7 @@ async function processUserFeedback(agent: MxfAgent) {
 const sdk = new MxfSDK({
     serverUrl: 'http://localhost:3001',
     domainKey: process.env.MXF_DOMAIN_KEY!,
-    username: process.env.MXF_USERNAME!,
-    password: process.env.MXF_PASSWORD!
+    accessToken: process.env.MXF_ACCESS_TOKEN!
 });
 await sdk.connect();
 

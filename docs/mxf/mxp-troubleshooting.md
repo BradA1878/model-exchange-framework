@@ -542,12 +542,11 @@ export class MXP2PerformanceDiagnostics {
    ```typescript
    import { MxfSDK } from '@mxf/sdk';
    
-   // Test connection to MXF server
+   // Test connection to MXF server with Personal Access Token (recommended)
    const sdk = new MxfSDK({
        serverUrl: 'http://localhost:3001',
        domainKey: process.env.MXF_DOMAIN_KEY!,
-       username: process.env.MXF_USERNAME!,
-       password: process.env.MXF_PASSWORD!
+       accessToken: process.env.MXF_DEMO_ACCESS_TOKEN!
    });
    
    try {

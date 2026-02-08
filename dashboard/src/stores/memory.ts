@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
-import axios from 'axios';
+import axios from '../plugins/axios';
 
 export interface MemoryEntry {
     id: string;
@@ -114,11 +114,9 @@ export const useMemoryStore = defineStore('memory', () => {
     const deleteMemoryEntry = async (channelId: string, memoryId: string): Promise<void> => {
         if (!channelMemory.value?.customData) return;
 
-        const updatedCustomData = { ...channelMemory.value.customData };
-        delete updatedCustomData[memoryId];
-
+        // Send null for the deleted key so the server removes it during merge
         await updateChannelMemory(channelId, {
-            customData: updatedCustomData
+            customData: { [memoryId]: null }
         });
     };
 

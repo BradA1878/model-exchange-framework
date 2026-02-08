@@ -18,56 +18,55 @@
 
 /**
  * @fileoverview MXF First Contact Demo - Multi-Agent Coordination with 6 Agents
- * 
+ *
  * @description
  * Demonstrates complex multi-agent coordination with USS Sentinel Horizon crew
  * encountering an alien vessel. Shows how 6 agents coordinate autonomously through
  * natural language communication.
- * 
+ *
  * @prerequisites
  * Before running this demo, complete these setup steps:
- * 
+ *
  * **First-Time Setup (One-Time Only):**
  * ```bash
  * # 1. Start the MXF server in one terminal (runs on port 3001)
- * npm run start:dev
- * 
- * # 2. In another terminal, create demo user (auto-creates demo-user/demo-password-1234)
- * npm run server:cli -- demo:setup
- * # This automatically adds MXF_DEMO_USERNAME and MXF_DEMO_PASSWORD to .env
- * 
+ * bun run start:dev
+ *
+ * # 2. In another terminal, create demo user and generate access token
+ * bun run server:cli -- demo:setup
+ * # This creates a Personal Access Token and adds MXF_DEMO_ACCESS_TOKEN to .env
+ *
  * # 3. Generate domain key (REQUIRED for SDK authentication)
- * npm run server:cli -- domain-key:generate
+ * bun run server:cli -- domain-key:generate
  * ```
- * 
+ *
  * **Every Time You Run the Demo:**
  * ```bash
  * # Terminal 1: Start the MXF server (if not already running)
- * npm run start:dev
- * 
+ * bun run start:dev
+ *
  * # Terminal 2: Run this demo
- * npx tsx examples/first-contact-demo/first-contact-demo.ts
+ * bun run demo:first-contact
  * ```
- * 
+ *
  * The SDK requires a running MXF server to handle authentication, channel management,
  * and agent coordination. The server provides the infrastructure for multi-agent
  * communication and tool execution.
- * 
- * @example SDK Usage Pattern (Same as Interview Scheduling Demo)
+ *
+ * @example SDK Usage Pattern (using Personal Access Token - RECOMMENDED)
  * ```typescript
- * // 1. Initialize SDK
+ * // 1. Initialize SDK with Personal Access Token
  * const sdk = new MxfSDK({
  *   serverUrl: 'http://localhost:3001',
  *   domainKey: process.env.MXF_DOMAIN_KEY!,
- *   username: 'demo-user',
- *   password: 'demo-password'
+ *   accessToken: process.env.MXF_DEMO_ACCESS_TOKEN!  // Format: pat_xxx:secret
  * });
  * await sdk.connect();
- * 
+ *
  * // 2. Create channel and keys
  * await sdk.createChannel({ channelId, name, description });
  * const keys = await sdk.generateKey({ channelId, name });
- * 
+ *
  * // 3. Create agents
  * const agent = await sdk.createAgent({
  *   agentId, name, channelId,
@@ -78,7 +77,7 @@
  *   defaultModel: 'anthropic/claude-3.5-haiku',
  *   allowedTools: ['messaging_send']
  * });
- * 
+ *
  * // 4. Monitor with channel monitor
  * const monitor = sdk.createChannelMonitor(channelId);
  * monitor.on(Events.Message.AGENT_MESSAGE, callback);
@@ -796,15 +795,21 @@ const runFirstContactScenario = async (): Promise<void> => {
         
         StoryLogger.logScenarioStart('Initializing First Contact Mission');
         
-        // Initialize SDK
+        // Create SDK with Personal Access Token authentication (REQUIRED)
         StoryLogger.logSystemUpdate('🚀 Initializing MxfSDK...');
+
+        const accessToken = process.env.MXF_DEMO_ACCESS_TOKEN;
+        if (!accessToken) {
+            console.error('❌ MXF_DEMO_ACCESS_TOKEN is required. Run: bun run server:cli -- demo:setup');
+            process.exit(1);
+        }
+
         const sdk = new MxfSDK({
             serverUrl: config.serverUrl,
             domainKey: process.env.MXF_DOMAIN_KEY!,
-            // Use same credentials as interview-scheduling-demo
-            username: process.env.MXF_DEMO_USERNAME || 'demo-user',
-            password: process.env.MXF_DEMO_PASSWORD || 'demo-password-1234'
+            accessToken: accessToken
         });
+        StoryLogger.logSystemUpdate('🔑 Using Personal Access Token for authentication');
         await sdk.connect();
         StoryLogger.logSystemUpdate('✅ SDK connected and ready');
         

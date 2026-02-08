@@ -10,6 +10,14 @@ const selectedUser = ref<any>(null);
 const newUserRole = ref('');
 const roleUpdateLoading = ref(false);
 
+// Bulk operations state
+const selectedUsers = ref<any[]>([]);
+const bulkRoleDialog = ref(false);
+const bulkRole = ref('');
+const bulkActionLoading = ref(false);
+const bulkConfirmDialog = ref(false);
+const bulkAction = ref<'activate' | 'deactivate' | null>(null);
+
 // Snackbar for notifications
 const snackbar = ref(false);
 const snackbarMessage = ref('');
@@ -104,15 +112,78 @@ const formatDate = (dateString: string | Date | undefined): string => {
 };
 
 const getRoleColor = (role: string): string => {
-    console.log('getRoleColor called with role:', role);
     const roleOption = roleOptions.find(opt => opt.value === role);
-    console.log('Found roleOption:', roleOption);
     return roleOption?.color || 'primary';
 };
 
 const getRoleIcon = (role: string): string => {
     const roleOption = roleOptions.find(opt => opt.value === role);
     return roleOption?.icon || 'mdi-account';
+};
+
+// Bulk operations methods
+const clearSelection = (): void => {
+    selectedUsers.value = [];
+};
+
+const openBulkRoleDialog = (): void => {
+    bulkRole.value = '';
+    bulkRoleDialog.value = true;
+};
+
+const confirmBulkAction = (action: 'activate' | 'deactivate'): void => {
+    bulkAction.value = action;
+    bulkConfirmDialog.value = true;
+};
+
+const executeBulkRoleChange = async (): Promise<void> => {
+    if (!bulkRole.value || selectedUsers.value.length === 0) return;
+
+    bulkActionLoading.value = true;
+    let successCount = 0;
+    let failCount = 0;
+
+    for (const user of selectedUsers.value) {
+        if (user.role !== bulkRole.value) {
+            try {
+                await adminStore.updateUserRole(user.id, bulkRole.value as 'admin' | 'provider' | 'consumer');
+                successCount++;
+            } catch (error) {
+                failCount++;
+            }
+        }
+    }
+
+    bulkActionLoading.value = false;
+    bulkRoleDialog.value = false;
+    clearSelection();
+
+    if (failCount === 0) {
+        snackbarMessage.value = `Successfully updated ${successCount} user(s) to ${bulkRole.value}`;
+        snackbarColor.value = 'success';
+    } else {
+        snackbarMessage.value = `Updated ${successCount} user(s), ${failCount} failed`;
+        snackbarColor.value = 'warning';
+    }
+    snackbar.value = true;
+};
+
+const executeBulkStatusChange = async (): Promise<void> => {
+    if (!bulkAction.value || selectedUsers.value.length === 0) return;
+
+    bulkActionLoading.value = true;
+    const isActivate = bulkAction.value === 'activate';
+
+    // Note: This assumes there's an API endpoint for status change
+    // For now, show a message that this feature requires API implementation
+    snackbarMessage.value = `Bulk ${bulkAction.value} requires API endpoint implementation`;
+    snackbarColor.value = 'info';
+    snackbar.value = true;
+
+    bulkActionLoading.value = false;
+    bulkConfirmDialog.value = false;
+    bulkAction.value = null;
+    clearSelection();
 };
 
 // Watch for errors
@@ -128,10 +199,7 @@ watch(error, (newError) => {
 // Initialize data
 onMounted(async () => {
     try {
-        // Always refresh users to ensure we have the latest data
-        console.log('Users component mounted, fetching users...');
         await refreshUsers();
-        console.log('Users loaded:', users.value.length, 'first user role:', users.value[0]?.role);
     } catch (error) {
         console.error('Error initializing users component:', error);
         snackbarMessage.value = 'Failed to load users data';
@@ -282,8 +350,51 @@ onMounted(async () => {
                     </v-btn>
                 </div>
 
+                <!-- Bulk Actions Toolbar -->
+                <v-slide-y-transition>
+                    <v-toolbar
+                        v-if="selectedUsers.length > 0"
+                        color="primary"
+                        density="compact"
+                        class="mb-4 rounded"
+                    >
+                        <v-toolbar-title class="text-body-1">
+                            <v-icon class="mr-2">mdi-checkbox-marked-circle</v-icon>
+                            {{ selectedUsers.length }} user(s) selected
+                        </v-toolbar-title>
+                        <v-spacer />
+                        <v-btn
+                            variant="text"
+                            prepend-icon="mdi-account-switch"
+                            @click="openBulkRoleDialog"
+                        >
+                            Change Role
+                        </v-btn>
+                        <v-btn
+                            variant="text"
+                            prepend-icon="mdi-account-check"
+                            @click="confirmBulkAction('activate')"
+                        >
+                            Activate
+                        </v-btn>
+                        <v-btn
+                            variant="text"
+                            prepend-icon="mdi-account-off"
+                            @click="confirmBulkAction('deactivate')"
+                        >
+                            Deactivate
+                        </v-btn>
+                        <v-btn
+                            icon="mdi-close"
+                            variant="text"
+                            @click="clearSelection"
+                        />
+                    </v-toolbar>
+                </v-slide-y-transition>
+
                 <!-- Users Table -->
                 <v-data-table
+                    v-model="selectedUsers"
                     :items="users"
                     :loading="loading"
                     :headers="[
@@ -298,6 +409,8 @@ onMounted(async () => {
                     ]"
                     class="users-table"
                     item-value="id"
+                    show-select
+                    return-object
                 >
                     <!-- User Column -->
                     <template #item.user="{ item }">
@@ -445,6 +558,114 @@ onMounted(async () => {
                         :disabled="!newUserRole || newUserRole === selectedUser?.role"
                     >
                         Update Role
+                    </v-btn>
+                </v-card-actions>
+            </v-card>
+        </v-dialog>
+
+        <!-- Bulk Role Change Dialog -->
+        <v-dialog v-model="bulkRoleDialog" max-width="500">
+            <v-card>
+                <v-card-title>
+                    <div class="d-flex align-center">
+                        <v-icon class="mr-2">mdi-account-switch</v-icon>
+                        Change Role for {{ selectedUsers.length }} User(s)
+                    </div>
+                </v-card-title>
+
+                <v-card-text>
+                    <p class="text-body-2 mb-4">
+                        Select a new role to apply to all selected users.
+                    </p>
+
+                    <v-select
+                        v-model="bulkRole"
+                        :items="roleOptions"
+                        label="Select new role"
+                        variant="outlined"
+                        :disabled="bulkActionLoading"
+                    >
+                        <template #item="{ props, item }">
+                            <v-list-item v-bind="props">
+                                <template #prepend>
+                                    <v-icon :color="item.raw.color">{{ item.raw.icon }}</v-icon>
+                                </template>
+                            </v-list-item>
+                        </template>
+                        <template #selection="{ item }">
+                            <div class="d-flex align-center">
+                                <v-icon :color="item.raw.color" class="mr-2">{{ item.raw.icon }}</v-icon>
+                                {{ item.raw.title }}
+                            </div>
+                        </template>
+                    </v-select>
+
+                    <v-alert
+                        v-if="bulkRole === 'admin'"
+                        type="warning"
+                        density="compact"
+                        class="mt-4"
+                    >
+                        <strong>Warning:</strong> Granting admin role gives full system access.
+                    </v-alert>
+                </v-card-text>
+
+                <v-card-actions>
+                    <v-spacer />
+                    <v-btn
+                        variant="text"
+                        @click="bulkRoleDialog = false"
+                        :disabled="bulkActionLoading"
+                    >
+                        Cancel
+                    </v-btn>
+                    <v-btn
+                        color="primary"
+                        @click="executeBulkRoleChange"
+                        :loading="bulkActionLoading"
+                        :disabled="!bulkRole"
+                    >
+                        Apply to {{ selectedUsers.length }} User(s)
+                    </v-btn>
+                </v-card-actions>
+            </v-card>
+        </v-dialog>
+
+        <!-- Bulk Action Confirm Dialog -->
+        <v-dialog v-model="bulkConfirmDialog" max-width="400">
+            <v-card>
+                <v-card-title>
+                    <div class="d-flex align-center">
+                        <v-icon class="mr-2" :color="bulkAction === 'activate' ? 'success' : 'error'">
+                            {{ bulkAction === 'activate' ? 'mdi-account-check' : 'mdi-account-off' }}
+                        </v-icon>
+                        Confirm Bulk {{ bulkAction === 'activate' ? 'Activation' : 'Deactivation' }}
+                    </div>
+                </v-card-title>
+
+                <v-card-text>
+                    <p>
+                        Are you sure you want to
+                        <strong>{{ bulkAction }}</strong>
+                        {{ selectedUsers.length }} user(s)?
+                    </p>
+                </v-card-text>
+
+                <v-card-actions>
+                    <v-spacer />
+                    <v-btn
+                        variant="text"
+                        @click="bulkConfirmDialog = false"
+                        :disabled="bulkActionLoading"
+                    >
+                        Cancel
+                    </v-btn>
+                    <v-btn
+                        :color="bulkAction === 'activate' ? 'success' : 'error'"
+                        @click="executeBulkStatusChange"
+                        :loading="bulkActionLoading"
+                    >
+                        {{ bulkAction === 'activate' ? 'Activate' : 'Deactivate' }}
                     </v-btn>
                 </v-card-actions>
             </v-card>

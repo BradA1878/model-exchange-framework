@@ -19,6 +19,7 @@
  */
 
 import { Request, Response } from 'express';
+import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
 import { User, UserRole } from '../../../shared/models/user';
 import { Logger } from '../../../shared/utils/Logger';
@@ -408,7 +409,7 @@ export const userController = {
     requestMagicLink: async (req: Request, res: Response): Promise<void> => {
         try {
             const { email } = req.body;
-            
+
             if (!email) {
                 res.status(400).json({
                     success: false,
@@ -416,18 +417,36 @@ export const userController = {
                 });
                 return;
             }
-            
-            // Find user by email
-            const user = await User.findOne({ email });
-            
+
+            // Find existing user or auto-create a new one
+            let user = await User.findOne({ email });
+            let isNewUser = false;
+
             if (!user) {
-                res.status(404).json({
-                    success: false,
-                    message: 'User not found with this email'
+                // Auto-create user from email address
+                // Derive username from email local part, ensure uniqueness
+                const localPart = email.split('@')[0];
+                let username = localPart;
+                let suffix = 0;
+                while (await User.findOne({ username })) {
+                    suffix++;
+                    username = `${localPart}${suffix}`;
+                }
+
+                // Generate a random password (user authenticates via magic link, not password)
+                const randomPassword = crypto.randomBytes(32).toString('hex');
+
+                user = new User({
+                    username,
+                    email,
+                    password: randomPassword,
+                    role: UserRole.CONSUMER
                 });
-                return;
+                await user.save();
+                isNewUser = true;
+                logger.info(`Auto-created new user '${username}' via magic link for ${email}`);
             }
-            
+
             // Generate magic link token (JWT with short expiry)
             const secret = process.env.JWT_SECRET || 'default_jwt_secret_for_dev';
             const magicToken = jwt.sign(
@@ -435,13 +454,15 @@ export const userController = {
                 secret,
                 { expiresIn: '15m' } // 15 minutes expiry
             );
-            
-            
+
             // In production, this would send an email
             // For development, return the token directly
             res.status(200).json({
                 success: true,
-                message: 'Magic link generated successfully',
+                message: isNewUser
+                    ? 'Account created and magic link generated successfully'
+                    : 'Magic link generated successfully',
+                isNewUser,
                 // For development only - remove in production
                 magicLink: magicToken,
                 expiresIn: '15 minutes'
@@ -523,12 +544,16 @@ export const userController = {
                 role: user.role,
                 avatar: user.avatar
             };
-            
+
+            // Profile is complete when user has both first and last name set
+            const profileComplete = !!(user.firstName && user.lastName);
+
             res.status(200).json({
                 success: true,
                 message: 'Authentication successful',
                 user: userData,
-                token: authToken
+                token: authToken,
+                profileComplete
             });
         } catch (error) {
             logger.error('Magic link verification error:', error);

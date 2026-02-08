@@ -20,9 +20,15 @@
 
 /**
  * Authentication Handlers
- * 
+ *
  * This module provides socket authentication handling for the MXF.
  * It handles socket authentication middleware and verification.
+ *
+ * Supported authentication methods (in priority order):
+ * 1. Personal Access Token (PAT) - accessToken in format tokenId:secret
+ * 2. JWT token - Pre-authenticated user token
+ * 3. Username/password - Legacy credential-based auth
+ * 4. Channel key - For agent connections (keyId + secretKey)
  */
 
 import { Socket } from 'socket.io';
@@ -35,6 +41,7 @@ import KeyAuthHelper from '../../utils/keyAuthHelper';
 import { Channel } from '../../../shared/models/channel';
 import { AgentService } from '../services/AgentService';
 import { ConfigManager } from '../../../sdk/config/ConfigManager';
+import { PersonalAccessTokenService } from '../../api/services/PersonalAccessTokenService';
 
 // Create module logger
 const moduleLogger = logger.child('AuthenticationHandlers');
@@ -99,8 +106,8 @@ export const createAuthMiddleware = () => {
 /**
  * Handle socket authentication
  * This is the main authentication function that validates auth data and registers the agent
- * Supports both JWT (users) and key-based (agents) authentication
- * 
+ * Supports PAT (users), JWT (users), username/password (users), and key-based (agents) authentication
+ *
  * @param socket Socket instance
  * @param authData Authentication data
  * @returns Agent ID if authentication successful, null otherwise
@@ -108,23 +115,28 @@ export const createAuthMiddleware = () => {
 export const handleSocketAuthentication = async (socket: Socket, authData: any): Promise<string | null> => {
     try {
         // Domain key was already validated by middleware
-        
-        
+
         if (!authData || typeof authData !== 'object') {
             moduleLogger.warn(`Invalid auth data format for socket ${socket.id}`);
             return null;
         }
-        
-        // Try JWT authentication first
-        
-        // Try JWT authentication first (for users)
+
+        // Try Personal Access Token authentication first (RECOMMENDED for SDK)
+        if (authData.accessToken) {
+            const patResult = await tryPATSocketAuthentication(socket, authData.accessToken);
+            if (patResult) {
+                return patResult;
+            }
+        }
+
+        // Try JWT authentication (for users with pre-authenticated sessions)
         if (authData.token) {
             const jwtResult = await tryJwtSocketAuthentication(socket, authData.token);
             if (jwtResult) {
                 return jwtResult;
             }
         }
-        
+
         // Try username/password authentication (for users - no API required)
         if (authData.username && authData.password) {
             const userPassResult = await tryUsernamePasswordSocketAuthentication(socket, authData.username, authData.password);
@@ -132,7 +144,7 @@ export const handleSocketAuthentication = async (socket: Socket, authData: any):
                 return userPassResult;
             }
         }
-        
+
         // Try key-based authentication (for agents)
         if (authData.keyId && authData.secretKey) {
             const keyResult = await tryKeySocketAuthentication(socket, authData.keyId, authData.secretKey, authData.agentId);
@@ -140,11 +152,11 @@ export const handleSocketAuthentication = async (socket: Socket, authData: any):
                 return keyResult;
             }
         }
-        
+
         // If we reach here, authentication failed
         moduleLogger.warn(`Authentication failed for socket ${socket.id} - no valid credentials provided`);
         return null;
-        
+
     } catch (error) {
         moduleLogger.error(`Authentication error for socket ${socket.id}: ${error}`);
         return null;
@@ -152,8 +164,71 @@ export const handleSocketAuthentication = async (socket: Socket, authData: any):
 };
 
 /**
+ * Try Personal Access Token (PAT) authentication for socket connection
+ * This is the RECOMMENDED auth method for SDK users
+ *
+ * @param socket Socket instance
+ * @param accessToken Full token in format tokenId:secret
+ * @returns User ID if successful, null otherwise
+ */
+const tryPATSocketAuthentication = async (socket: Socket, accessToken: string): Promise<string | null> => {
+    try {
+        // Validate token format
+        if (!accessToken || typeof accessToken !== 'string' || !accessToken.includes(':')) {
+            moduleLogger.warn(`Invalid PAT format for socket ${socket.id}`);
+            return null;
+        }
+
+        // Parse token format: tokenId:secret
+        const colonIndex = accessToken.indexOf(':');
+        const tokenId = accessToken.substring(0, colonIndex);
+        const secret = accessToken.substring(colonIndex + 1);
+
+        if (!tokenId || !secret) {
+            moduleLogger.warn(`Invalid PAT components for socket ${socket.id}`);
+            return null;
+        }
+
+        // Validate token using PersonalAccessTokenService
+        const tokenService = PersonalAccessTokenService.getInstance();
+        const validation = await tokenService.validateToken(tokenId, secret);
+
+        if (!validation.valid || !validation.userId) {
+            moduleLogger.warn(`PAT validation failed for socket ${socket.id}: ${validation.error || 'unknown error'}`);
+            return null;
+        }
+
+        // Fetch user to get username
+        const { User } = require('../../../shared/models/user');
+        const user = await User.findById(validation.userId);
+
+        if (!user || !user.isActive) {
+            moduleLogger.warn(`PAT user not found or inactive for socket ${socket.id}`);
+            return null;
+        }
+
+        // Store user auth data
+        socket.data = {
+            userId: validation.userId,
+            username: user.username,
+            tokenId: validation.tokenId,
+            scopes: validation.scopes,
+            authType: 'pat',
+            authenticated: true
+        };
+
+        moduleLogger.debug(`PAT authentication successful for socket ${socket.id}, user ${validation.userId}`);
+        return validation.userId;
+
+    } catch (error) {
+        moduleLogger.error(`PAT authentication error for socket: ${error instanceof Error ? error.message : String(error)}`);
+        return null;
+    }
+};
+
+/**
  * Try JWT authentication for socket connection
- * 
+ *
  * @param socket Socket instance
  * @param token JWT token
  * @returns User ID if successful, null otherwise
@@ -162,21 +237,21 @@ const tryJwtSocketAuthentication = async (socket: Socket, token: string): Promis
     try {
         const jwt = require('jsonwebtoken');
         const { User } = require('../../../shared/models/user');
-        
+
         // Verify token
         const secret = process.env.JWT_SECRET || 'default_jwt_secret_for_dev';
         const decoded = jwt.verify(token, secret) as any;
-        
+
         if (!decoded || !decoded.userId) {
             return null;
         }
-        
+
         // Find user in database
         const user = await User.findById(decoded.userId);
         if (!user || !user.isActive) {
             return null;
         }
-        
+
         // Store user auth data
         socket.data = {
             userId: user._id.toString(),
@@ -184,9 +259,9 @@ const tryJwtSocketAuthentication = async (socket: Socket, token: string): Promis
             authType: 'jwt',
             authenticated: true
         };
-        
+
         return user._id.toString();
-        
+
     } catch (error) {
         return null;
     }
@@ -295,7 +370,7 @@ const tryKeySocketAuthentication = async (socket: Socket, keyId: string, secretK
 
 /**
  * Validate authentication data structure
- * 
+ *
  * @param authData Authentication data to validate
  * @returns True if auth data has valid structure, false otherwise
  */
@@ -303,26 +378,32 @@ export const validateAuthData = (authData: any): boolean => {
     if (!authData || typeof authData !== 'object') {
         return false;
     }
-    
+
+    // Check for Personal Access Token authentication (RECOMMENDED)
+    if (authData.accessToken && typeof authData.accessToken === 'string' &&
+        authData.accessToken.trim() && authData.accessToken.includes(':')) {
+        return true;
+    }
+
     // Check for JWT authentication
     if (authData.token && typeof authData.token === 'string' && authData.token.trim()) {
         return true;
     }
-    
+
     // Check for username/password authentication
     if (authData.username && authData.password &&
         typeof authData.username === 'string' && typeof authData.password === 'string' &&
         authData.username.trim() && authData.password.trim()) {
         return true;
     }
-    
+
     // Check for key-based authentication
-    if (authData.keyId && authData.secretKey && 
+    if (authData.keyId && authData.secretKey &&
         typeof authData.keyId === 'string' && typeof authData.secretKey === 'string' &&
         authData.keyId.trim() && authData.secretKey.trim()) {
         return true;
     }
-    
+
     return false;
 };
 
@@ -341,8 +422,8 @@ export const sendAuthResponse = async (socket: Socket, authenticatedId: string |
         const authType = socketData?.authType || 'unknown';
 
 
-        if (authType === 'jwt' || authType === 'password') {
-            // JWT or password authentication response
+        if (authType === 'jwt' || authType === 'password' || authType === 'pat') {
+            // JWT, password, or PAT authentication response
             socket.emit(AuthEvents.SUCCESS, {
                 userId: authenticatedId,
                 username: socketData?.username,
@@ -414,7 +495,7 @@ export const sendAuthResponse = async (socket: Socket, authenticatedId: string |
         moduleLogger.warn(`Sending ${AuthEvents.ERROR} to socket ${socket.id}`);
 
         socket.emit(AuthEvents.ERROR, {
-            error: 'Authentication failed - please provide valid JWT token or key credentials',
+            error: 'Authentication failed - please provide valid accessToken (PAT), JWT token, username/password, or key credentials',
             timestamp: Date.now()
         });
     }

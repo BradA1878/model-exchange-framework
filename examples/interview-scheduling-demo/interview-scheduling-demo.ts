@@ -30,11 +30,11 @@
  * **First-Time Setup (One-Time Only):**
  * ```bash
  * # 1. Start the MXF server in one terminal (runs on port 3001)
- * npm run start:dev
- * 
- * # 2. In another terminal, create demo user (auto-creates demo-user/demo-password-1234)
- * npm run server:cli -- demo:setup
- * # This automatically adds MXF_DEMO_USERNAME and MXF_DEMO_PASSWORD to .env
+ * bun run start:dev
+ *
+ * # 2. In another terminal, create demo user and generate access token
+ * bun run server:cli -- demo:setup
+ * # This creates a Personal Access Token and adds MXF_DEMO_ACCESS_TOKEN to .env
  * ```
  * 
  * Note: Agent keys are generated fresh each time you run the demo.
@@ -55,11 +55,11 @@
  * 
  * @example Basic SDK Usage Pattern
  * ```typescript
- * // 1. Initialize SDK with domain-level authentication
+ * // 1. Initialize SDK with Personal Access Token authentication
  * const sdk = new MxfSDK({
- *   username: 'demo-user',
- *   password: 'demo-password',
- *   serverUrl: 'http://localhost:3001'
+ *   serverUrl: 'http://localhost:3001',
+ *   domainKey: process.env.MXF_DOMAIN_KEY!,
+ *   accessToken: process.env.MXF_DEMO_ACCESS_TOKEN!  // Format: pat_xxx:secret
  * });
  * await sdk.connect();
  * 
@@ -415,11 +415,11 @@ const displayStartBanner = (): void => {
  * This can also be done via the Dashboard and CLI.
  * 
  * ```typescript
- * // Connect SDK with admin credentials
+ * // Connect SDK with Personal Access Token
  * const sdk = new MxfSDK({
- *   username: 'admin-user',
- *   password: 'admin-password',
- *   serverUrl: 'http://localhost:3001'
+ *   serverUrl: 'http://localhost:3001',
+ *   domainKey: process.env.MXF_DOMAIN_KEY!,
+ *   accessToken: process.env.MXF_DEMO_ACCESS_TOKEN!  // Format: pat_xxx:secret
  * });
  * await sdk.connect();
  * 
@@ -1312,18 +1312,23 @@ const runDemo = async (): Promise<void> => {
         // Disable MXP 2.0 features for this demo
         disableMxp2Features();
         
-        // Initialize MxfSDK
+        // Create SDK with Personal Access Token authentication (REQUIRED)
         StoryLogger.logSystemUpdate('🚀 Initializing MxfSDK...');
+
+        const accessToken = process.env.MXF_DEMO_ACCESS_TOKEN;
+        if (!accessToken) {
+            console.error('❌ MXF_DEMO_ACCESS_TOKEN is required. Run: bun run server:cli -- demo:setup');
+            process.exit(1);
+        }
+
         const sdk = new MxfSDK({
             serverUrl: config.serverUrl,
             domainKey: process.env.MXF_DOMAIN_KEY!,
-            // Use username/password for socket-based authentication (no API required)
-            username: process.env.MXF_DEMO_USERNAME || 'demo-user',
-            password: process.env.MXF_DEMO_PASSWORD || 'demo-password-1234'
+            accessToken: accessToken
         });
-        
+        StoryLogger.logSystemUpdate('🔑 Using Personal Access Token for authentication');
         await sdk.connect();
-        StoryLogger.logSystemUpdate('✅ SDK connected with domain key authentication');
+        StoryLogger.logSystemUpdate('✅ SDK connected and ready');
         
         // Create channel and keys via SDK
         StoryLogger.logSystemUpdate('Creating secure scheduling channel...');

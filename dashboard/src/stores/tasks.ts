@@ -6,7 +6,7 @@
 
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
-import axios from 'axios';
+import axios from '../plugins/axios';
 import type { 
     ChannelTask, 
     CreateTaskRequest, 

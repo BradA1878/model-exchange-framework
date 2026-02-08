@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
-import axios from 'axios';
+import axios from '../plugins/axios';
 
 // Types
 interface Channel {
@@ -12,6 +12,10 @@ interface Channel {
     domain?: string;
     createdAt?: string;
     updatedAt?: string;
+    // Tool access control - empty array means no restrictions, non-empty is a whitelist
+    allowedTools?: string[];
+    // SystemLLM control
+    systemLlmEnabled?: boolean;
 }
 
 interface ChannelMetrics {
@@ -226,6 +230,40 @@ export const useChannelsStore = defineStore('channels', () => {
         error.value = null;
     };
 
+    /**
+     * Update the allowed tools for a channel.
+     * Empty array means no restrictions (agents can use any tool in their allowedTools).
+     * Non-empty array restricts agents to only use tools in this list.
+     */
+    const updateChannelTools = async (channelId: string, allowedTools: string[]): Promise<boolean> => {
+        loading.value = true;
+        error.value = null;
+
+        try {
+            const response = await axios.put<{ success: boolean; channel: Channel; message?: string }>(
+                `/api/channels/${channelId}`,
+                { allowedTools }
+            );
+
+            if (response.data.success) {
+                // Update the channel in local state
+                const channelIndex = channels.value.findIndex(c => c.id === channelId);
+                if (channelIndex >= 0) {
+                    channels.value[channelIndex] = response.data.channel;
+                }
+                return true;
+            } else {
+                throw new Error(response.data.message || 'Failed to update channel tools');
+            }
+        } catch (err: any) {
+            error.value = err.response?.data?.message || err.message || 'Failed to update channel tools';
+            console.error('Update channel tools error:', err);
+            return false;
+        } finally {
+            loading.value = false;
+        }
+    };
+
     return {
         // State
         channels,
@@ -244,6 +282,7 @@ export const useChannelsStore = defineStore('channels', () => {
         deleteChannel,
         fetchChannelMetrics,
         setSelectedChannel,
+        updateChannelTools,
         clearError
     };
 });

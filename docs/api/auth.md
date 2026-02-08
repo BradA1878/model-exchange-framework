@@ -203,3 +203,144 @@ Detailed reference for all `/users` authentication and user management endpoints
 }
 ```
 
+---
+
+# Personal Access Tokens (PAT) API
+
+Personal Access Tokens are the **recommended** authentication method for SDK usage, especially for users who signed up via magic link and don't know their auto-generated password.
+
+## Create Token
+**POST** `/tokens`
+- **Auth:** JWT
+- **Description:** Create a new personal access token.
+
+**Body:**
+```json
+{
+  "name": "string",                // required - friendly name for the token
+  "description": "string",         // optional - what this token is used for
+  "expiresAt": "ISO-8601 date",    // optional - when the token expires
+  "maxRequestsPerDay": 1000,       // optional - daily rate limit
+  "maxRequestsPerMonth": 30000     // optional - monthly rate limit
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Token created successfully",
+  "token": {
+    "tokenId": "pat_abc123",
+    "secret": "xyz789...",         // ⚠️ Shown ONCE - save immediately!
+    "name": "My SDK Token",
+    "expiresAt": null,
+    "createdAt": "2025-01-01T00:00:00Z"
+  }
+}
+```
+
+**Note:** The `secret` is only returned once at creation time. Store it securely.
+
+---
+
+## List Tokens
+**GET** `/tokens`
+- **Auth:** JWT
+- **Description:** List all your personal access tokens with usage stats.
+
+**Response:**
+```json
+{
+  "success": true,
+  "tokens": [
+    {
+      "tokenId": "pat_abc123",
+      "name": "My SDK Token",
+      "description": "For local development",
+      "createdAt": "2025-01-01T00:00:00Z",
+      "expiresAt": null,
+      "lastUsed": "2025-01-15T12:00:00Z",
+      "usageCount": 150,
+      "isActive": true
+    }
+  ]
+}
+```
+
+---
+
+## Get Token Details
+**GET** `/tokens/:tokenId`
+- **Auth:** JWT
+- **Description:** Get detailed information about a specific token.
+
+**Response:**
+```json
+{
+  "success": true,
+  "token": {
+    "tokenId": "pat_abc123",
+    "name": "My SDK Token",
+    "description": "For local development",
+    "createdAt": "2025-01-01T00:00:00Z",
+    "expiresAt": null,
+    "lastUsed": "2025-01-15T12:00:00Z",
+    "usageCount": 150,
+    "dailyUsageCount": 25,
+    "monthlyUsageCount": 500,
+    "maxRequestsPerDay": 1000,
+    "maxRequestsPerMonth": 30000,
+    "isActive": true
+  }
+}
+```
+
+---
+
+## Revoke Token
+**DELETE** `/tokens/:tokenId`
+- **Auth:** JWT
+- **Description:** Permanently revoke a personal access token.
+
+**Query Parameters:**
+- `reason` (optional): Reason for revocation
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Token revoked successfully"
+}
+```
+
+---
+
+## Using PAT with SDK
+
+Once you have a PAT, use it with the SDK:
+
+```typescript
+import { MxfSDK } from '@mxf/sdk';
+
+const sdk = new MxfSDK({
+    serverUrl: 'http://localhost:3001',
+    domainKey: process.env.MXF_DOMAIN_KEY!,
+    accessToken: 'pat_abc123:xyz789...'  // tokenId:secret format
+});
+
+await sdk.connect();
+```
+
+---
+
+## PAT vs Other Auth Methods
+
+| Method | Use Case | Pros | Cons |
+|--------|----------|------|------|
+| **PAT** | SDK usage (RECOMMENDED) | Works for magic link users, revocable, rate limits | Must store securely |
+| JWT | Pre-authenticated sessions | Short-lived, secure | Requires login first |
+| Username/Password | Dashboard login only (DEPRECATED for SDK) | Simple | Doesn't work for magic link users, deprecated for programmatic access |
+
+> **Note:** Username/password authentication is deprecated for SDK usage. Use Personal Access Tokens (PAT) for all programmatic SDK access. Username/password is only supported for dashboard login.
+

@@ -36,7 +36,10 @@ MXF implements **mandatory two-layer authentication** for maximum security:
 - **Security**: Mandatory - no bypass option
 
 ### Layer 2: User/Agent Authentication (REQUIRED)
-- **User Auth**: Authenticates specific user identity (JWT or username/password)
+- **User Auth**: Authenticates specific user identity via:
+  - **Personal Access Token (PAT)** - RECOMMENDED for SDK usage
+  - JWT token - For pre-authenticated sessions
+  - Username/password - Legacy method
 - **Agent Auth**: Authenticates specific agent identity (keyId + secretKey)
 - **Scope**: Per-connection authentication
 - **Management**: Via MXF dashboard or CLI tools
@@ -128,15 +131,57 @@ Create a `.env` file in your project:
 # Domain key (from server operator)
 MXF_DOMAIN_KEY=99cfb5f95a8e60ae80a99232e838219c4970438513beaa26cd16fb88f4a1eb9a
 
-# User credentials (from server operator)
-MXF_USERNAME=dev-user
-MXF_PASSWORD=secure-password-123
+# User authentication - Choose ONE method:
+
+# RECOMMENDED: Personal Access Token (PAT)
+# Generate via dashboard Settings > API Tokens or CLI
+MXF_ACCESS_TOKEN=pat_abc123:your-secret-here
+
+# OR use username/password (legacy)
+# MXF_USERNAME=dev-user
+# MXF_PASSWORD=secure-password-123
 
 # OR use JWT token
 # MXF_USER_TOKEN=your-jwt-token
 
 # LLM Provider
 OPENROUTER_API_KEY=your-openrouter-api-key
+```
+
+### 2a. Generate Personal Access Token (RECOMMENDED)
+
+Personal Access Tokens are the recommended authentication method for SDK usage. They are especially useful for users who signed up via magic link and don't know their auto-generated password.
+
+**Via Dashboard:**
+1. Log in to the MXF Dashboard
+2. Go to Settings > API Tokens
+3. Click "Create Token"
+4. Enter a name (e.g., "My SDK Token")
+5. Copy the token immediately - it's shown only once!
+6. Add to your `.env` file as `MXF_ACCESS_TOKEN`
+
+**Via CLI (for demo setup):**
+```bash
+# Generate demo user and PAT
+bun run server:cli -- demo:setup
+
+# Output:
+# ✅ Demo user created: demo-user
+# ✅ Demo access token generated!
+#
+# Add this to your .env file:
+# MXF_DEMO_ACCESS_TOKEN=pat_abc123:secretxyz789
+#
+# ⚠️  This token is shown ONCE. Save it now!
+```
+
+**Via API:**
+```bash
+# Create a PAT (requires JWT authentication)
+curl -X POST http://localhost:3001/api/tokens \
+  -H "Authorization: Bearer <your-jwt-token>" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "My SDK Token"}'
 ```
 
 ### 3. Create Channel and Generate Agent Keys
@@ -208,9 +253,14 @@ dotenv.config();
 const sdk = new MxfSDK({
     serverUrl: 'http://localhost:3001',
     domainKey: process.env.MXF_DOMAIN_KEY!,  // REQUIRED
-    // Socket-based authentication (no REST API required)
-    username: process.env.MXF_USERNAME!,
-    password: process.env.MXF_PASSWORD!
+
+    // RECOMMENDED: Personal Access Token
+    accessToken: process.env.MXF_ACCESS_TOKEN!
+
+    // OR use username/password (legacy):
+    // username: process.env.MXF_USERNAME!,
+    // password: process.env.MXF_PASSWORD!
+
     // OR use JWT token:
     // userId: 'dev-user',
     // userToken: process.env.MXF_USER_TOKEN
@@ -276,8 +326,7 @@ dotenv.config();
 const sdk = new MxfSDK({
     serverUrl: process.env.MXF_SERVER_URL!,
     domainKey: process.env.MXF_DOMAIN_KEY!,
-    username: process.env.MXF_USERNAME!,
-    password: process.env.MXF_PASSWORD!
+    accessToken: process.env.MXF_ACCESS_TOKEN!  // RECOMMENDED
 });
 
 await sdk.connect();
@@ -378,14 +427,16 @@ MXF_DOMAIN_KEY=your-64-char-domain-key
 
 **Solution**:
 ```typescript
-// Must provide EITHER (userId + userToken) OR (username + password)
+// Must provide ONE of: accessToken, (userId + userToken), or (username + password)
 const sdk = new MxfSDK({
     serverUrl: 'http://localhost:3001',
     domainKey: process.env.MXF_DOMAIN_KEY!,
-    // Option 1: JWT token
-    userId: 'your-user-id',
-    userToken: process.env.MXF_USER_TOKEN
-    // Option 2: Username/password
+    // Option 1: Personal Access Token (RECOMMENDED)
+    accessToken: process.env.MXF_ACCESS_TOKEN
+    // Option 2: JWT token
+    // userId: 'your-user-id',
+    // userToken: process.env.MXF_USER_TOKEN
+    // Option 3: Username/password (legacy)
     // username: 'dev-user',
     // password: process.env.MXF_USER_PASSWORD
 });
@@ -466,8 +517,14 @@ NODE_ENV=production
 ```bash
 # Required
 MXF_DOMAIN_KEY=domain-key-from-server-operator
-MXF_USERNAME=your-username
-MXF_PASSWORD=your-password
+
+# User Authentication - Choose ONE:
+# RECOMMENDED: Personal Access Token
+MXF_ACCESS_TOKEN=pat_xxx:your-secret
+
+# OR legacy username/password
+# MXF_USERNAME=your-username
+# MXF_PASSWORD=your-password
 
 # Optional
 OPENROUTER_API_KEY=your-openrouter-key
@@ -492,12 +549,11 @@ import { MxfSDK, Events } from '@mxf/sdk';
 // Test SDK connection and agent creation
 async function testAuthentication(): Promise<void> {
     try {
-        // Test SDK connection
+        // Test SDK connection with PAT (recommended)
         const sdk = new MxfSDK({
             serverUrl: process.env.MXF_SERVER_URL!,
             domainKey: process.env.MXF_DOMAIN_KEY!,
-            username: process.env.MXF_USERNAME!,
-            password: process.env.MXF_PASSWORD!
+            accessToken: process.env.MXF_ACCESS_TOKEN!
         });
         
         await sdk.connect();
@@ -547,6 +603,26 @@ bun run server:cli -- domain-key:show
 # User management
 bun run server:cli -- user:create --email <email> --password <password> [--username <username>]
 bun run server:cli -- user:list
+
+# Demo setup (creates demo user + PAT)
+bun run server:cli -- demo:setup
+```
+
+### Personal Access Token (PAT) API
+
+```bash
+# Create a PAT (requires JWT auth)
+POST /api/tokens
+Body: { "name": "My Token", "description": "Optional", "expiresAt": "2025-12-31" }
+
+# List your tokens
+GET /api/tokens
+
+# Get token details
+GET /api/tokens/:tokenId
+
+# Revoke a token
+DELETE /api/tokens/:tokenId
 ```
 
 ### SDK CLI Commands

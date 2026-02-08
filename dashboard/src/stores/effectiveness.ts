@@ -1,6 +1,5 @@
 import { defineStore } from 'pinia';
-import axios from 'axios';
-import { API_BASE_URL } from '@/config';
+import axios from '../plugins/axios';
 
 interface TaskTypeStats {
   type: string;
@@ -90,7 +89,7 @@ export const useEffectivenessStore = defineStore('effectiveness', {
           ? `/api/effectiveness/analytics/${channelId}`
           : '/api/effectiveness/trends';
           
-        const response = await axios.get(`${API_BASE_URL}${endpoint}`, { params });
+        const response = await axios.get(endpoint, { params });
         const { data } = response.data;
         
         if (channelId && data.analytics) {
@@ -113,7 +112,7 @@ export const useEffectivenessStore = defineStore('effectiveness', {
         const params: any = { timeRange, interval: 'day' };
         if (channelId) params.channelId = channelId;
         
-        const response = await axios.get(`${API_BASE_URL}/api/effectiveness/trends`, { params });
+        const response = await axios.get(`/api/effectiveness/trends`, { params });
         const { data } = response.data;
         
         this.trends = {
@@ -131,7 +130,7 @@ export const useEffectivenessStore = defineStore('effectiveness', {
       this.error = null;
       
       try {
-        const response = await axios.get(`${API_BASE_URL}/api/effectiveness/task/${taskId}`);
+        const response = await axios.get(`/api/effectiveness/task/${taskId}`);
         const { data } = response.data;
         
         this.currentTask = data;
@@ -149,7 +148,7 @@ export const useEffectivenessStore = defineStore('effectiveness', {
         if (channelId) params.channelId = channelId;
         
         const response = await axios.get(
-          `${API_BASE_URL}/api/effectiveness/agent/${agentId}`,
+          `/api/effectiveness/agent/${agentId}`,
           { params }
         );
         

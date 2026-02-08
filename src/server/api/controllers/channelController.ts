@@ -684,6 +684,12 @@ export const updateChannelMemory = async (req: Request, res: Response): Promise<
                 ...channel.sharedMemory.customData || {},
                 ...req.body.customData
             };
+            // Remove keys explicitly set to null (used for deletion)
+            for (const key of Object.keys(channel.sharedMemory.customData)) {
+                if (channel.sharedMemory.customData[key] === null) {
+                    delete channel.sharedMemory.customData[key];
+                }
+            }
         }
         
         // Handle conversation history (append if provided)

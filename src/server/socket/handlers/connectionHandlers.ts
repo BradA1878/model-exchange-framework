@@ -85,7 +85,7 @@ const initializeEventBusHandlers = (): void => {
 };
 
 /**
- * Setup admin event forwarding for password/JWT authenticated users
+ * Setup admin event forwarding for password/JWT/PAT authenticated users
  *
  * Handles bidirectional forwarding between admin socket and EventBus:
  * - Outbound: admin socket → EventBus.server (requests: channel:create, key:generate, MCP register)
@@ -196,8 +196,8 @@ export const handleConnection = (socket: Socket, socketService: ISocketService):
                 completeSocketConnection(socket, agentId, channelId, socketService).catch(error => {
                     moduleLogger.error(`Error completing socket connection for ${agentId}: ${error}`);
                 });
-            } else if (authenticatedId && (socket.data?.authType === 'jwt' || socket.data?.authType === 'password')) {
-                // JWT and password users don't need full agent setup, but they need admin event forwarding
+            } else if (authenticatedId && (socket.data?.authType === 'jwt' || socket.data?.authType === 'password' || socket.data?.authType === 'pat')) {
+                // JWT, password, and PAT users don't need full agent setup, but they need admin event forwarding
                 setupAdminSocketForwarding(socket, authenticatedId);
             } else {
                 moduleLogger.error(`Socket authentication failed on connection: ${socket.id}`);
@@ -233,13 +233,13 @@ export const handleConnection = (socket: Socket, socketService: ISocketService):
                         agentId, 
                         channelId
                     });
-                } else if (authenticatedId && (socket.data?.authType === 'jwt' || socket.data?.authType === 'password')) {
-                    
+                } else if (authenticatedId && (socket.data?.authType === 'jwt' || socket.data?.authType === 'password' || socket.data?.authType === 'pat')) {
+
                     // Setup admin event forwarding
                     setupAdminSocketForwarding(socket, authenticatedId);
-                    
-                    // Emit success event for JWT/password auth
-                    socket.emit(AuthEvents.SUCCESS, { 
+
+                    // Emit success event for JWT/password/PAT auth
+                    socket.emit(AuthEvents.SUCCESS, {
                         userId: socket.data.userId,
                         username: socket.data.username
                     });

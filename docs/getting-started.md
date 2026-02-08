@@ -220,14 +220,18 @@ bun run mxp:generate-key
 # Keys are automatically saved to your .env file
 ```
 
-### 4. Create Server User
+### 4. Create Server User & Access Token
 
 **Quick Demo Setup (Recommended):**
 ```bash
-# Automatically create demo user with standard credentials (demo-user/demo-password-1234)
+# Automatically create demo user and generate a Personal Access Token (PAT)
 bun run server:cli -- demo:setup
-# This auto-adds MXF_DEMO_USERNAME and MXF_DEMO_PASSWORD to .env
+
+# This auto-adds to your .env:
+# - MXF_DEMO_ACCESS_TOKEN=pat_xxx:secret  (RECOMMENDED for SDK auth)
 ```
+
+> **Note:** The PAT is shown once during setup. Save it immediately!
 
 **Or Create Custom User:**
 ```bash
@@ -236,7 +240,12 @@ bun run server:cli -- user:create \
   --email your-email@example.com \
   --password your-password \
   --username your-username
+
+# Then generate a PAT via the Dashboard (Settings > API Tokens)
+# or use the REST API: POST /api/tokens
 ```
+
+> **Note:** Username/password authentication is deprecated for SDK usage. Use Personal Access Tokens (PAT) instead. Username/password is only supported for dashboard login.
 
 ### 5. Start the Server
 
@@ -335,11 +344,13 @@ Create a `.env` file for your application:
 # Domain key provided by MXF server operator
 MXF_DOMAIN_KEY=your-64-char-domain-key
 
-# User credentials (from server operator)
-MXF_USERNAME=demo-user
-MXF_PASSWORD=demo-password-1234
+# User Authentication - Choose ONE method:
 
-# Or use JWT token
+# RECOMMENDED: Personal Access Token (PAT)
+# Get from Dashboard Settings > API Tokens or `bun run server:cli -- demo:setup`
+MXF_DEMO_ACCESS_TOKEN=pat_xxx:your-secret-here
+
+# Or use JWT token (for pre-authenticated sessions)
 # MXF_USER_TOKEN=your-jwt-token
 
 # LLM Provider API Key (choose your provider)
@@ -350,24 +361,24 @@ OPENROUTER_API_KEY=your-openrouter-api-key
 # or XAI_API_KEY=your-xai-key
 ```
 
+> **Note:** Username/password authentication is deprecated for SDK usage. Use Personal Access Tokens (PAT) instead.
+
 ### 3. Generate Channel and Keys
 
 Use the SDK CLI to set up your workspace:
 
 ```bash
-# Create a channel
+# Create a channel (using PAT authentication)
 bun run sdk:cli -- channel:create \
   --id getting-started \
   --name "Getting Started Channel" \
-  --email demo@example.com \
-  --password demo-password-1234
+  --access-token $MXF_DEMO_ACCESS_TOKEN
 
 # Generate agent keys
 bun run sdk:cli -- key:generate \
   --channel getting-started \
   --agents hello-agent,ai-assistant \
-  --email demo@example.com \
-  --password demo-password-1234 \
+  --access-token $MXF_DEMO_ACCESS_TOKEN \
   --output credentials.json
 ```
 
@@ -398,12 +409,11 @@ The CLI will create a `credentials.json` file with your agent keys:
 import { MxfSDK, Events } from '@mxf/sdk';
 import type { MxfAgent } from '@mxf/sdk';
 
-// 1. Initialize the SDK with domain key and user authentication
+// 1. Initialize the SDK with domain key and Personal Access Token
 const sdk = new MxfSDK({
     serverUrl: 'http://localhost:3001',
     domainKey: process.env.MXF_DOMAIN_KEY!,
-    username: process.env.MXF_USERNAME!,
-    password: process.env.MXF_PASSWORD!
+    accessToken: process.env.MXF_DEMO_ACCESS_TOKEN!
 });
 
 // Connect the SDK
@@ -444,8 +454,7 @@ import { MxfSDK, Events } from '@mxf/sdk';
 const sdk = new MxfSDK({
     serverUrl: 'http://localhost:3001',
     domainKey: process.env.MXF_DOMAIN_KEY!,
-    username: process.env.MXF_USERNAME!,
-    password: process.env.MXF_PASSWORD!
+    accessToken: process.env.MXF_DEMO_ACCESS_TOKEN!
 });
 
 await sdk.connect();
@@ -528,8 +537,7 @@ import { MxfSDK, Events } from '@mxf/sdk';
 const sdk = new MxfSDK({
     serverUrl: 'http://localhost:3001',
     domainKey: process.env.MXF_DOMAIN_KEY!,
-    username: process.env.MXF_USERNAME!,
-    password: process.env.MXF_PASSWORD!
+    accessToken: process.env.MXF_DEMO_ACCESS_TOKEN!
 });
 
 await sdk.connect();
@@ -1049,7 +1057,7 @@ echo $XAI_API_KEY
 ### Security
 
 1. **Domain Key**: Keep `MXF_DOMAIN_KEY` secure, never commit to version control
-2. **User Credentials**: Use environment variables for username/password or JWT tokens
+2. **User Credentials**: Use Personal Access Tokens (PAT) stored in environment variables
 3. **Agent Keys**: Store keys in separate credentials file (e.g., `credentials.json`)
 4. **Tool Access Control**: Restrict tools via `allowedTools` based on agent role
 5. **MXP Encryption**: Enable for sensitive communications in production
@@ -1118,10 +1126,9 @@ NODE_ENV                # Environment (development/production)
 # Required (from server operator)
 MXF_DOMAIN_KEY          # Domain key provided by server operator
 
-# Required (user credentials)
-MXF_USERNAME            # Your username
-MXF_PASSWORD            # Your password
-# OR use JWT token
+# Required (user credentials - choose one)
+MXF_DEMO_ACCESS_TOKEN   # Personal Access Token (RECOMMENDED)
+# OR
 MXF_USER_TOKEN          # JWT token from login
 
 # Required (LLM provider - choose one or more)

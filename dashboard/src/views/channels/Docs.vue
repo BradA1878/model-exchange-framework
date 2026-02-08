@@ -19,8 +19,16 @@ const props = withDefaults(defineProps<Props>(), {
 // Store
 const documentsStore = useDocumentsStore();
 
-// Error handling
-const showErrorSnackbar = ref(false);
+// Snackbar notifications
+const snackbar = ref(false);
+const snackbarMessage = ref('');
+const snackbarColor = ref('success');
+
+const showSnackbar = (message: string, color: string = 'success'): void => {
+    snackbarMessage.value = message;
+    snackbarColor.value = color;
+    snackbar.value = true;
+};
 
 // Computed properties from store
 const documents = computed(() => documentsStore.filteredDocuments);
@@ -81,7 +89,7 @@ const loadDocuments = async (): Promise<void> => {
         await documentsStore.fetchDocumentStats(props.channel?.id);
     } catch (error) {
         console.error('Failed to load documents:', error);
-        showErrorSnackbar.value = true;
+        showSnackbar('An error occurred', 'error');
     }
 };
 
@@ -90,15 +98,15 @@ const downloadDocument = async (doc: any): Promise<void> => {
         await documentsStore.downloadDocument(doc);
     } catch (error) {
         console.error('Failed to download document:', error);
-        showErrorSnackbar.value = true;
+        showSnackbar('An error occurred', 'error');
     }
 };
 
 const previewDocument = (doc: any): void => {
     // Set selected document for preview
     documentsStore.selectedDocument = doc;
-    // TODO: Open preview dialog or navigate to preview page
-    console.log('Previewing document:', doc.title);
+    // Preview not yet implemented — show info snackbar
+    showSnackbar(`Preview not yet available for "${doc.title}"`, 'info');
 };
 
 const deleteDocument = async (docId: string): Promise<void> => {
@@ -106,7 +114,7 @@ const deleteDocument = async (docId: string): Promise<void> => {
         await documentsStore.deleteDocument(docId);
     } catch (error) {
         console.error('Failed to delete document:', error);
-        showErrorSnackbar.value = true;
+        showSnackbar('An error occurred', 'error');
     }
 };
 
@@ -130,7 +138,7 @@ const uploadDocument = async (): Promise<void> => {
         uploadDialog.value = false;
     } catch (error) {
         console.error('Failed to upload document:', error);
-        showErrorSnackbar.value = true;
+        showSnackbar('An error occurred', 'error');
     }
 };
 
@@ -157,7 +165,7 @@ const applyFilters = (): void => {
 
 const clearError = (): void => {
     documentsStore.clearError();
-    showErrorSnackbar.value = false;
+    snackbar.value = false;
 };
 
 const formatFileSize = (sizeStr: string): string => {
@@ -231,7 +239,7 @@ watch([searchQuery, selectedType, selectedFormat, selectedStatus, sortBy, sortDe
 // Watch for error changes
 watch(errorMessage, (newError) => {
     if (newError) {
-        showErrorSnackbar.value = true;
+        showSnackbar('An error occurred', 'error');
     }
 });
 
@@ -241,259 +249,234 @@ onMounted(async () => {
 </script>
 
 <template>
-    <div class="docs-view">
-        <!-- Header with statistics -->
-        <v-row class="mb-4">
-            <v-col cols="12">
-                <v-card class="stats-card">
-                    <v-card-text>
-                        <v-row>
-                            <v-col cols="6" sm="3" md="2">
-                                <div class="stat-item">
-                                    <div class="stat-value">{{ stats.totalDocuments }}</div>
-                                    <div class="stat-label">Total</div>
-                                </div>
-                            </v-col>
-                            <v-col cols="6" sm="3" md="2">
-                                <div class="stat-item">
-                                    <div class="stat-value">{{ stats.publishedDocuments }}</div>
-                                    <div class="stat-label">Published</div>
-                                </div>
-                            </v-col>
-                            <v-col cols="6" sm="3" md="2">
-                                <div class="stat-item">
-                                    <div class="stat-value">{{ stats.draftDocuments }}</div>
-                                    <div class="stat-label">Draft</div>
-                                </div>
-                            </v-col>
-                            <v-col cols="6" sm="3" md="2">
-                                <div class="stat-item">
-                                    <div class="stat-value">{{ stats.totalViews }}</div>
-                                    <div class="stat-label">Views</div>
-                                </div>
-                            </v-col>
-                            <v-col cols="6" sm="3" md="2">
-                                <div class="stat-item">
-                                    <div class="stat-value">{{ stats.totalDownloads }}</div>
-                                    <div class="stat-label">Downloads</div>
-                                </div>
-                            </v-col>
-                        </v-row>
-                    </v-card-text>
-                </v-card>
-            </v-col>
-        </v-row>
+    <div class="ch-docs">
+        <!-- Header Strip -->
+        <header class="ch-docs__header">
+            <div class="ch-docs__header-left">
+                <h1 class="ch-docs__header-title">Documents</h1>
+                <span class="ch-docs__header-divider">/</span>
+                <span class="ch-docs__header-sub">Manage channel documents, guides, and shared resources.</span>
+            </div>
+            <div class="ch-docs__header-actions">
+                <button class="ch-docs__btn ch-docs__btn--primary" @click="uploadDialog = true">
+                    <v-icon size="14">mdi-plus</v-icon>
+                    <span>Upload</span>
+                </button>
+                <button class="ch-docs__btn ch-docs__btn--ghost" @click="loadDocuments">
+                    <v-icon size="14">mdi-refresh</v-icon>
+                    <span>Refresh</span>
+                </button>
+            </div>
+        </header>
 
-        <!-- Controls and filters -->
-        <v-row class="mb-4">
-            <v-col cols="12">
-                <v-card class="filters-card">
-                    <v-card-text>
-                        <!-- Action buttons -->
-                        <div class="d-flex align-center mb-4">
-                            <v-btn
-                                color="primary"
-                                prepend-icon="mdi-plus"
-                                @click="uploadDialog = true"
-                            >
-                                Upload
-                            </v-btn>
-                            <v-spacer />
-                            <v-btn
-                                variant="outlined"
-                                @click="loadDocuments"
-                                :loading="isLoading"
-                                prepend-icon="mdi-refresh"
-                            >
-                                Refresh
-                            </v-btn>
-                        </div>
+        <!-- Summary Metrics Strip -->
+        <section class="ch-docs__metrics">
+            <div class="ch-docs__metric" data-accent="blue">
+                <div class="ch-docs__metric-head">
+                    <span class="ch-docs__metric-label">Total</span>
+                    <v-icon size="13" class="ch-docs__metric-ico">mdi-file-document-multiple</v-icon>
+                </div>
+                <div class="ch-docs__metric-number" v-if="!isLoading">{{ stats.totalDocuments }}</div>
+                <v-skeleton-loader v-else type="text" width="40" />
+            </div>
+            <div class="ch-docs__metric" data-accent="green">
+                <div class="ch-docs__metric-head">
+                    <span class="ch-docs__metric-label">Published</span>
+                    <v-icon size="13" class="ch-docs__metric-ico">mdi-check-circle-outline</v-icon>
+                </div>
+                <div class="ch-docs__metric-number" v-if="!isLoading">{{ stats.publishedDocuments }}</div>
+                <v-skeleton-loader v-else type="text" width="40" />
+            </div>
+            <div class="ch-docs__metric" data-accent="cyan">
+                <div class="ch-docs__metric-head">
+                    <span class="ch-docs__metric-label">Draft</span>
+                    <v-icon size="13" class="ch-docs__metric-ico">mdi-pencil-outline</v-icon>
+                </div>
+                <div class="ch-docs__metric-number" v-if="!isLoading">{{ stats.draftDocuments }}</div>
+                <v-skeleton-loader v-else type="text" width="40" />
+            </div>
+            <div class="ch-docs__metric" data-accent="amber">
+                <div class="ch-docs__metric-head">
+                    <span class="ch-docs__metric-label">Views</span>
+                    <v-icon size="13" class="ch-docs__metric-ico">mdi-eye-outline</v-icon>
+                </div>
+                <div class="ch-docs__metric-number" v-if="!isLoading">{{ stats.totalViews }}</div>
+                <v-skeleton-loader v-else type="text" width="40" />
+            </div>
+            <div class="ch-docs__metric" data-accent="green">
+                <div class="ch-docs__metric-head">
+                    <span class="ch-docs__metric-label">Downloads</span>
+                    <v-icon size="13" class="ch-docs__metric-ico">mdi-download</v-icon>
+                </div>
+                <div class="ch-docs__metric-number" v-if="!isLoading">{{ stats.totalDownloads }}</div>
+                <v-skeleton-loader v-else type="text" width="40" />
+            </div>
+        </section>
 
-                        <!-- Filters row -->
-                        <v-row>
-                            <v-col cols="12" md="3">
-                                <v-text-field
-                                    v-model="searchQuery"
-                                    label="Search documents..."
-                                    variant="outlined"
-                                    density="compact"
-                                    prepend-inner-icon="mdi-magnify"
-                                    clearable
-                                />
-                            </v-col>
-                            <v-col cols="4" md="2">
-                                <v-select
-                                    v-model="selectedType"
-                                    :items="documentTypes"
-                                    label="Type"
-                                    variant="outlined"
-                                    density="compact"
-                                />
-                            </v-col>
-                            <v-col cols="4" md="2">
-                                <v-select
-                                    v-model="selectedFormat"
-                                    :items="documentFormats"
-                                    label="Format"
-                                    variant="outlined"
-                                    density="compact"
-                                />
-                            </v-col>
-                            <v-col cols="4" md="2">
-                                <v-select
-                                    v-model="selectedStatus"
-                                    :items="documentStatuses"
-                                    label="Status"
-                                    variant="outlined"
-                                    density="compact"
-                                />
-                            </v-col>
-                        </v-row>
-                    </v-card-text>
-                </v-card>
-            </v-col>
-        </v-row>
+        <!-- Filters -->
+        <div class="ch-docs__filters">
+            <div class="ch-docs__filters-head">
+                <span class="ch-docs__filters-title">Filters</span>
+            </div>
+            <div class="ch-docs__filters-body">
+                <v-text-field
+                    v-model="searchQuery"
+                    label="Search documents..."
+                    variant="outlined"
+                    density="compact"
+                    prepend-inner-icon="mdi-magnify"
+                    clearable
+                    hide-details
+                />
+                <v-select
+                    v-model="selectedType"
+                    :items="documentTypes"
+                    label="Type"
+                    variant="outlined"
+                    density="compact"
+                    hide-details
+                />
+                <v-select
+                    v-model="selectedFormat"
+                    :items="documentFormats"
+                    label="Format"
+                    variant="outlined"
+                    density="compact"
+                    hide-details
+                />
+                <v-select
+                    v-model="selectedStatus"
+                    :items="documentStatuses"
+                    label="Status"
+                    variant="outlined"
+                    density="compact"
+                    hide-details
+                />
+            </div>
+        </div>
 
         <!-- Documents List -->
-        <div class="documents-list">
-            <div v-if="isLoading" class="text-center pa-8">
-                <v-progress-circular indeterminate color="primary" size="64" />
-                <p class="text-body-1 mt-4">Loading documents...</p>
+        <div class="ch-docs__list">
+            <!-- Loading state -->
+            <div v-if="isLoading" class="ch-docs__empty">
+                <v-progress-circular indeterminate color="primary" size="48" />
+                <p class="ch-docs__empty-title">Loading documents...</p>
             </div>
-            
-            <div v-else-if="documents.length === 0" class="text-center pa-8">
-                <v-icon size="64" color="grey">mdi-file-document-multiple-outline</v-icon>
-                <p class="text-h6 mt-4">No documents found</p>
-                <p class="text-body-2 text-medium-emphasis">Try adjusting your filters or upload new documents</p>
+
+            <!-- Empty state -->
+            <div v-else-if="documents.length === 0" class="ch-docs__empty">
+                <v-icon size="48" color="grey">mdi-file-document-multiple-outline</v-icon>
+                <p class="ch-docs__empty-title">No documents found</p>
+                <p class="ch-docs__empty-sub">Try adjusting your filters or upload new documents</p>
             </div>
-            
-            <v-card
+
+            <!-- Document cards -->
+            <div
                 v-for="doc in documents"
                 :key="doc.id"
-                elevation="0"
-                class="document-card mb-4"
+                class="ch-docs__card"
+                :data-accent="doc.status === 'published' ? 'green' : doc.status === 'draft' ? 'cyan' : 'amber'"
             >
-                <v-card-text>
-                    <div class="d-flex align-start justify-space-between">
-                        <div class="document-header flex-grow-1">
-                            <div class="d-flex align-center mb-2">
-                                <v-icon :color="getTypeColor(doc.type)" class="mr-2">
-                                    {{ getFormatIcon(doc.format) }}
-                                </v-icon>
-                                <v-chip
-                                    :color="getTypeColor(doc.type)"
-                                    size="small"
-                                    variant="tonal"
-                                    class="mr-2"
-                                >
-                                    {{ doc.type }}
-                                </v-chip>
-                                <v-chip
-                                    :color="getStatusColor(doc.status)"
-                                    size="small"
-                                    variant="tonal"
-                                    class="mr-2"
-                                >
-                                    {{ doc.status }}
-                                </v-chip>
-                                <span class="text-body-2 text-medium-emphasis">{{ doc.size }}</span>
-                            </div>
-                            
-                            <h3 class="text-h6 mb-2">{{ doc.title }}</h3>
-                            <p class="text-body-2 text-medium-emphasis mb-3">{{ doc.content }}</p>
-                            
-                            <div class="document-metadata mb-3">
-                                <div class="d-flex align-center flex-wrap gap-2">
-                                    <div class="d-flex align-center">
-                                        <v-icon size="16" class="mr-1">mdi-account</v-icon>
-                                        <span class="text-body-2">{{ doc.author }}</span>
-                                    </div>
-                                    <v-divider vertical />
-                                    <div class="d-flex align-center">
-                                        <v-icon size="16" class="mr-1">mdi-calendar</v-icon>
-                                        <span class="text-body-2">{{ formatDate(doc.updatedAt) }}</span>
-                                    </div>
-                                    <v-divider vertical />
-                                    <div class="d-flex align-center">
-                                        <v-icon size="16" class="mr-1">mdi-eye</v-icon>
-                                        <span class="text-body-2">{{ doc.views }} views</span>
-                                    </div>
-                                    <v-divider vertical />
-                                    <div class="d-flex align-center">
-                                        <v-icon size="16" class="mr-1">mdi-download</v-icon>
-                                        <span class="text-body-2">{{ doc.downloads }} downloads</span>
-                                    </div>
-                                </div>
-                            </div>
-                            
-                            <div class="d-flex align-center flex-wrap gap-1">
-                                <v-chip
-                                    v-for="tag in doc.tags"
-                                    :key="tag"
-                                    size="x-small"
-                                    variant="outlined"
-                                >
-                                    {{ tag }}
-                                </v-chip>
-                            </div>
+                <div class="ch-docs__card-head">
+                    <div class="ch-docs__card-chips">
+                        <v-icon :color="getTypeColor(doc.type)" size="18">
+                            {{ getFormatIcon(doc.format) }}
+                        </v-icon>
+                        <v-chip
+                            :color="getTypeColor(doc.type)"
+                            size="small"
+                            variant="tonal"
+                        >
+                            {{ doc.type }}
+                        </v-chip>
+                        <v-chip
+                            :color="getStatusColor(doc.status)"
+                            size="small"
+                            variant="tonal"
+                        >
+                            {{ doc.status }}
+                        </v-chip>
+                        <span class="ch-docs__card-size">{{ doc.size }}</span>
+                    </div>
+
+                    <h3 class="ch-docs__card-title">{{ doc.title }}</h3>
+                    <p class="ch-docs__card-desc">{{ doc.content }}</p>
+
+                    <div class="ch-docs__card-meta">
+                        <div class="ch-docs__card-meta-item">
+                            <v-icon size="14">mdi-account</v-icon>
+                            <span>{{ doc.author }}</span>
                         </div>
-                        
-                        <div class="document-actions ml-4">
-                            <div class="d-flex flex-column gap-2">
-                                <v-btn
-                                    size="small"
-                                    variant="tonal"
-                                    prepend-icon="mdi-eye"
-                                    @click="previewDocument(doc)"
-                                >
-                                    Preview
-                                </v-btn>
-                                <v-btn
-                                    size="small"
-                                    variant="tonal"
-                                    prepend-icon="mdi-download"
-                                    @click="downloadDocument(doc)"
-                                >
-                                    Download
-                                </v-btn>
-                                <v-menu>
-                                    <template #activator="{ props: menuProps }">
-                                        <v-btn
-                                            icon="mdi-dots-vertical"
-                                            size="small"
-                                            variant="text"
-                                            v-bind="menuProps"
-                                        />
-                                    </template>
-                                    <v-list>
-                                        <v-list-item>
-                                            <template #prepend>
-                                                <v-icon>mdi-pencil</v-icon>
-                                            </template>
-                                            <v-list-item-title>Edit</v-list-item-title>
-                                        </v-list-item>
-                                        <v-list-item>
-                                            <template #prepend>
-                                                <v-icon>mdi-share-variant</v-icon>
-                                            </template>
-                                            <v-list-item-title>Share</v-list-item-title>
-                                        </v-list-item>
-                                        <v-list-item
-                                            @click="deleteDocument(doc.id)"
-                                            :loading="isLoading"
-                                        >
-                                            <template #prepend>
-                                                <v-icon color="error">mdi-delete</v-icon>
-                                            </template>
-                                            <v-list-item-title>Delete</v-list-item-title>
-                                        </v-list-item>
-                                    </v-list>
-                                </v-menu>
-                            </div>
+                        <span class="ch-docs__card-meta-sep">|</span>
+                        <div class="ch-docs__card-meta-item">
+                            <v-icon size="14">mdi-calendar</v-icon>
+                            <span>{{ formatDate(doc.updatedAt) }}</span>
+                        </div>
+                        <span class="ch-docs__card-meta-sep">|</span>
+                        <div class="ch-docs__card-meta-item">
+                            <v-icon size="14">mdi-eye</v-icon>
+                            <span>{{ doc.views }} views</span>
+                        </div>
+                        <span class="ch-docs__card-meta-sep">|</span>
+                        <div class="ch-docs__card-meta-item">
+                            <v-icon size="14">mdi-download</v-icon>
+                            <span>{{ doc.downloads }} downloads</span>
                         </div>
                     </div>
-                </v-card-text>
-            </v-card>
+
+                    <div class="ch-docs__card-tags">
+                        <v-chip
+                            v-for="tag in doc.tags"
+                            :key="tag"
+                            size="x-small"
+                            variant="outlined"
+                        >
+                            {{ tag }}
+                        </v-chip>
+                    </div>
+                </div>
+
+                <div class="ch-docs__card-actions">
+                    <button class="ch-docs__btn ch-docs__btn--ghost" @click="previewDocument(doc)">
+                        <v-icon size="14">mdi-eye</v-icon>
+                        <span>Preview</span>
+                    </button>
+                    <button class="ch-docs__btn ch-docs__btn--ghost" @click="downloadDocument(doc)">
+                        <v-icon size="14">mdi-download</v-icon>
+                        <span>Download</span>
+                    </button>
+                    <v-menu>
+                        <template #activator="{ props: menuProps }">
+                            <button class="ch-docs__btn ch-docs__btn--ghost" v-bind="menuProps">
+                                <v-icon size="14">mdi-dots-vertical</v-icon>
+                            </button>
+                        </template>
+                        <v-list>
+                            <v-list-item @click="showSnackbar('Edit not yet available', 'info')">
+                                <template #prepend>
+                                    <v-icon>mdi-pencil</v-icon>
+                                </template>
+                                <v-list-item-title>Edit</v-list-item-title>
+                            </v-list-item>
+                            <v-list-item @click="showSnackbar('Share not yet available', 'info')">
+                                <template #prepend>
+                                    <v-icon>mdi-share-variant</v-icon>
+                                </template>
+                                <v-list-item-title>Share</v-list-item-title>
+                            </v-list-item>
+                            <v-list-item
+                                @click="deleteDocument(doc.id)"
+                                :loading="isLoading"
+                            >
+                                <template #prepend>
+                                    <v-icon color="error">mdi-delete</v-icon>
+                                </template>
+                                <v-list-item-title>Delete</v-list-item-title>
+                            </v-list-item>
+                        </v-list>
+                    </v-menu>
+                </div>
+            </div>
         </div>
 
         <!-- Upload Dialog -->
@@ -535,76 +518,410 @@ onMounted(async () => {
                 </v-card-actions>
             </v-card>
         </v-dialog>
+
+        <!-- Snackbar notifications -->
+        <v-snackbar v-model="snackbar" :color="snackbarColor" :timeout="3000">
+            {{ snackbarMessage }}
+            <template #actions>
+                <v-btn variant="text" @click="snackbar = false">Close</v-btn>
+            </template>
+        </v-snackbar>
     </div>
 </template>
 
 <style scoped>
-.docs-view {
-    max-width: 1200px;
-    margin: 0 auto;
+/* ════════════════════════════════════════════
+   MXF Channel Docs — Design System
+   BEM prefix: ch-docs__
+   ════════════════════════════════════════════ */
+
+.ch-docs {
+    --ch-blue: #4A90C2;
+    --ch-green: #10B981;
+    --ch-amber: #F59E0B;
+    --ch-cyan: #22D3EE;
+    --ch-red: #EF4444;
+    position: relative;
 }
 
-.stats-card,
-.filters-card,
-.document-card {
-    background: var(--v-theme-card-bg);
-    border: 1px solid rgba(255, 255, 255, 0.1);
+/* ── Header Strip ─────────────────────── */
+.ch-docs__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 0 var(--space-4);
+    border-bottom: 1px solid var(--border-subtle);
+    margin-bottom: var(--space-4);
 }
 
-.stat-item {
+.ch-docs__header-left {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+}
+
+.ch-docs__header-title {
+    font-size: var(--text-lg);
+    font-weight: 600;
+    color: var(--text-primary);
+    letter-spacing: -0.01em;
+    margin: 0;
+}
+
+.ch-docs__header-divider {
+    color: var(--text-muted);
+    opacity: 0.4;
+    font-weight: 300;
+}
+
+.ch-docs__header-sub {
+    font-size: var(--text-sm);
+    color: var(--text-muted);
+}
+
+.ch-docs__header-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+}
+
+/* ── Buttons ──────────────────────────── */
+.ch-docs__btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 14px;
+    border-radius: var(--radius-md);
+    font-size: var(--text-sm);
+    font-weight: 500;
+    cursor: pointer;
+    transition: all var(--transition-base);
+    border: 1px solid transparent;
+    white-space: nowrap;
+    font-family: var(--font-sans);
+}
+
+.ch-docs__btn--ghost {
+    background: transparent;
+    border-color: var(--border-default);
+    color: var(--text-secondary);
+}
+
+.ch-docs__btn--ghost:hover {
+    color: var(--text-primary);
+    border-color: var(--ch-blue);
+    background: rgba(74, 144, 194, 0.08);
+}
+
+.ch-docs__btn--primary {
+    background: var(--ch-blue);
+    border-color: var(--ch-blue);
+    color: #fff;
+}
+
+.ch-docs__btn--primary:hover {
+    background: #3d7fb3;
+    border-color: #3d7fb3;
+}
+
+/* ── Metrics Grid ─────────────────────── */
+.ch-docs__metrics {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: var(--space-3);
+    margin-bottom: var(--space-4);
+}
+
+.ch-docs__metric {
+    position: relative;
+    padding: var(--space-3) var(--space-4);
+    background: var(--bg-base);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-lg);
+    transition: all var(--transition-base);
+    overflow: hidden;
+}
+
+.ch-docs__metric::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 3px;
+    border-radius: 3px 0 0 3px;
+    opacity: 0.6;
+    transition: opacity var(--transition-base);
+}
+
+.ch-docs__metric[data-accent="blue"]::before  { background: var(--ch-blue); }
+.ch-docs__metric[data-accent="green"]::before { background: var(--ch-green); }
+.ch-docs__metric[data-accent="amber"]::before { background: var(--ch-amber); }
+.ch-docs__metric[data-accent="cyan"]::before  { background: var(--ch-cyan); }
+
+.ch-docs__metric:hover {
+    border-color: var(--border-default);
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+}
+
+.ch-docs__metric:hover::before {
+    opacity: 1;
+}
+
+.ch-docs__metric-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: var(--space-1);
+}
+
+.ch-docs__metric-label {
+    font-size: var(--text-xs);
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+}
+
+.ch-docs__metric-ico {
+    color: var(--text-muted);
+    opacity: 0.5;
+}
+
+.ch-docs__metric-number {
+    font-family: var(--font-mono);
+    font-size: var(--text-2xl);
+    font-weight: 700;
+    color: var(--text-primary);
+    line-height: 1;
+    letter-spacing: -0.02em;
+}
+
+/* ── Filters ──────────────────────────── */
+.ch-docs__filters {
+    background: var(--bg-base);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-lg);
+    margin-bottom: var(--space-4);
+    overflow: hidden;
+}
+
+.ch-docs__filters-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--space-3) var(--space-4);
+    border-bottom: 1px solid var(--border-subtle);
+}
+
+.ch-docs__filters-title {
+    font-size: var(--text-xs);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+}
+
+.ch-docs__filters-body {
+    display: grid;
+    grid-template-columns: 2fr 1fr 1fr 1fr;
+    gap: var(--space-3);
+    padding: var(--space-4);
+}
+
+/* ── Document Cards ───────────────────── */
+.ch-docs__list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+}
+
+.ch-docs__card {
+    position: relative;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    background: var(--bg-base);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-lg);
+    padding: var(--space-4);
+    transition: all var(--transition-base);
+    overflow: hidden;
+}
+
+.ch-docs__card::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 3px;
+    border-radius: 3px 0 0 3px;
+    opacity: 0.6;
+    transition: opacity var(--transition-base);
+}
+
+.ch-docs__card[data-accent="green"]::before { background: var(--ch-green); }
+.ch-docs__card[data-accent="cyan"]::before  { background: var(--ch-cyan); }
+.ch-docs__card[data-accent="amber"]::before { background: var(--ch-amber); }
+.ch-docs__card[data-accent="blue"]::before  { background: var(--ch-blue); }
+
+.ch-docs__card:hover {
+    border-color: var(--border-default);
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+}
+
+.ch-docs__card:hover::before {
+    opacity: 1;
+}
+
+.ch-docs__card-head {
+    flex: 1;
+    min-width: 0;
+}
+
+.ch-docs__card-chips {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    margin-bottom: var(--space-2);
+}
+
+.ch-docs__card-size {
+    font-size: var(--text-xs);
+    color: var(--text-muted);
+}
+
+.ch-docs__card-title {
+    font-size: var(--text-base);
+    font-weight: 600;
+    color: var(--text-primary);
+    margin: 0 0 var(--space-1);
+}
+
+.ch-docs__card-desc {
+    font-size: var(--text-sm);
+    color: var(--text-secondary);
+    line-height: 1.5;
+    margin: 0 0 var(--space-3);
+}
+
+.ch-docs__card-meta {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    padding: var(--space-3) 0;
+    border-top: 1px solid var(--border-subtle);
+    margin-bottom: var(--space-3);
+}
+
+.ch-docs__card-meta-item {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    font-size: var(--text-sm);
+    color: var(--text-secondary);
+}
+
+.ch-docs__card-meta-sep {
+    color: var(--text-muted);
+    opacity: 0.3;
+    font-size: var(--text-xs);
+}
+
+.ch-docs__card-tags {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--space-1);
+}
+
+.ch-docs__card-actions {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    margin-left: var(--space-4);
+    flex-shrink: 0;
+}
+
+/* ── Empty State ──────────────────────── */
+.ch-docs__empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: var(--space-8) var(--space-4);
     text-align: center;
 }
 
-.stat-value {
-    font-size: 1.5rem;
+.ch-docs__empty-title {
+    font-size: var(--text-base);
     font-weight: 600;
-    line-height: 1.2;
+    color: var(--text-primary);
+    margin: var(--space-4) 0 var(--space-1);
 }
 
-.stat-label {
-    font-size: 0.75rem;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    opacity: 0.7;
-    margin-top: 4px;
+.ch-docs__empty-sub {
+    font-size: var(--text-sm);
+    color: var(--text-muted);
+    margin: 0;
 }
 
-.document-header {
-    min-width: 0; /* Allow text truncation */
-}
-
-.document-actions {
-    min-width: 120px;
-}
-
-.document-metadata {
-    border-top: 1px solid rgba(255, 255, 255, 0.1);
-    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-    padding: 0.75rem 0;
-}
-
-.gap-1 {
-    gap: 0.25rem;
-}
-
-.gap-2 {
-    gap: 0.5rem;
-}
-
-/* Responsive adjustments */
+/* ── Responsive ───────────────────────── */
 @media (max-width: 768px) {
-    .document-header,
-    .document-actions {
+    .ch-docs__header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: var(--space-2);
+    }
+
+    .ch-docs__header-actions {
+        align-self: flex-end;
+    }
+
+    .ch-docs__metrics {
+        grid-template-columns: repeat(2, 1fr);
+    }
+
+    .ch-docs__filters-body {
+        grid-template-columns: 1fr 1fr;
+    }
+
+    .ch-docs__card {
+        flex-direction: column;
+    }
+
+    .ch-docs__card-actions {
+        flex-direction: row;
         margin-left: 0;
+        margin-top: var(--space-3);
     }
-    
-    .document-actions {
-        min-width: unset;
-        margin-top: 1rem;
+}
+
+@media (max-width: 480px) {
+    .ch-docs__metrics {
+        grid-template-columns: 1fr;
     }
-    
-    .stat-value {
-        font-size: 1.25rem;
+
+    .ch-docs__filters-body {
+        grid-template-columns: 1fr;
+    }
+
+    .ch-docs__card-meta {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+
+    .ch-docs__card-meta-sep {
+        display: none;
+    }
+
+    .ch-docs__card-actions {
+        flex-direction: column;
     }
 }
 </style>

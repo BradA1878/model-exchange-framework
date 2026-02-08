@@ -1,0 +1,5645 @@
+- generic [ref=e6]:
+  - navigation [ref=e7]:
+    - generic [ref=e8]:
+      - generic [ref=e10]:
+        - generic [ref=e11]: 󰀑
+        - generic [ref=e12]:
+          - heading "MXF Dashboard" [level=3] [ref=e13]
+          - paragraph [ref=e14]: Model Exchange Framework
+      - separator [ref=e15]
+      - listbox [ref=e16]:
+        - link "Dashboard" [ref=e17] [cursor=pointer]:
+          - /url: /dashboard
+          - generic [ref=e19]: 󰕮
+          - generic [ref=e21]: Dashboard
+        - link "Account" [ref=e22] [cursor=pointer]:
+          - /url: /dashboard/account
+          - generic [ref=e24]: 󱍰
+          - generic [ref=e26]: Account
+        - generic [ref=e27]:
+          - generic [ref=e28] [cursor=pointer]:
+            - generic [ref=e30]: 󰄪
+            - generic [ref=e32]: Analytics
+            - generic [ref=e34]: 󰅀
+          - text: 󰆼 󰄨
+        - link "Channels" [ref=e35] [cursor=pointer]:
+          - /url: /dashboard/channels
+          - generic [ref=e37]: 󰊌
+          - generic [ref=e39]: Channels
+        - generic [ref=e40]:
+          - generic [ref=e41] [cursor=pointer]:
+            - generic [ref=e43]: 󱢼
+            - generic [ref=e45]: Administration
+            - generic [ref=e47]: 󰅀
+          - text: 󰀎 󰊌 󰚩 󱁤 󰐌 󰄪 󰶚 󰒃 󰨇
+      - generic [ref=e48]:
+        - separator [ref=e49]
+        - generic [ref=e50]:
+          - generic [ref=e52]: PT
+          - generic [ref=e53]:
+            - paragraph [ref=e54]: Playwright Tester
+            - paragraph [ref=e55]: newuser-playwright@example.com
+        - button "Sign Out" [ref=e56] [cursor=pointer]:
+          - generic [ref=e58]: 󰍃
+          - generic [ref=e59]: Sign Out
+  - banner [ref=e60]:
+    - generic [ref=e61]:
+      - button [ref=e62] [cursor=pointer]:
+        - generic [ref=e64]: 󰍜
+      - heading "ChannelTools" [level=2] [ref=e161]
+      - button [ref=e68] [cursor=pointer]:
+        - generic [ref=e70]: 󰂚
+      - button [ref=e71] [cursor=pointer]:
+        - generic [ref=e73]: 󰒓
+  - main [ref=e74]:
+    - generic [ref=e76]:
+      - generic [ref=e77]:
+        - generic [ref=e78]:
+          - generic [ref=e79]:
+            - heading "Channel Management" [level=1] [ref=e80]
+            - paragraph [ref=e81]: Manage agents, tools, memory, and context across communication channels
+          - generic [ref=e82]:
+            - button "Refresh" [ref=e83] [cursor=pointer]:
+              - generic [ref=e85]: 󰑐
+              - generic [ref=e86]: Refresh
+            - button "New Channel" [ref=e87] [cursor=pointer]:
+              - generic [ref=e89]: 󰐕
+              - generic [ref=e90]: New Channel
+        - generic [ref=e91]:
+          - generic [ref=e94]:
+            - generic [ref=e95]:
+              - generic [ref=e96]: Active Channel
+              - generic [ref=e98]: active
+            - generic [ref=e99]:
+              - combobox [ref=e101] [cursor=pointer]:
+                - generic [ref=e103]:
+                  - generic [ref=e105]: Test Channel
+                  - textbox "Open": test-channel
+                - generic [ref=e107]: 󰍝
+              - alert [ref=e108]
+          - generic [ref=e113]:
+            - generic [ref=e115]:
+              - generic [ref=e117]: 󰍩
+              - generic [ref=e118]: "0"
+              - generic [ref=e119]: Messages
+            - generic [ref=e121]:
+              - generic [ref=e123]: 󰚩
+              - generic [ref=e124]: "0"
+              - generic [ref=e125]: Active Agents
+            - generic [ref=e127]:
+              - generic [ref=e129]: 󰗠
+              - generic [ref=e130]: "0"
+              - generic [ref=e131]: Tasks
+            - generic [ref=e133]:
+              - generic [ref=e135]: 󰅒
+              - generic [ref=e136]: 0s
+              - generic [ref=e137]: Avg Response
+      - tablist [ref=e140]:
+        - generic [ref=e142]:
+          - tab "Memory" [ref=e143] [cursor=pointer]:
+            - generic [ref=e144]:
+              - generic [ref=e145]: 󰧑
+              - text: Memory
+          - tab "Context" [ref=e146] [cursor=pointer]:
+            - generic [ref=e147]:
+              - generic [ref=e148]: 󰪷
+              - text: Context
+          - tab "Docs" [ref=e149] [cursor=pointer]:
+            - generic [ref=e150]:
+              - generic [ref=e151]: 󱔗
+              - text: Docs
+          - tab "Agents" [ref=e152] [cursor=pointer]:
+            - generic [ref=e153]:
+              - generic [ref=e154]: 󰚩
+              - text: Agents
+          - tab "Tools" [selected] [ref=e155] [cursor=pointer]:
+            - generic [ref=e156]:
+              - generic [ref=e157]: 󱁤
+              - text: Tools
+          - tab "Tasks" [ref=e158] [cursor=pointer]:
+            - generic [ref=e159]:
+              - generic [ref=e160]: 󱃔
+              - text: Tasks
+      - generic [ref=e163]:
+        - generic [ref=e168]:
+          - generic [ref=e170]:
+            - generic [ref=e171]: "362"
+            - generic [ref=e172]: Total
+          - generic [ref=e174]:
+            - generic [ref=e175]: "362"
+            - generic [ref=e176]: Active
+          - generic [ref=e178]:
+            - generic [ref=e179]: "0"
+            - generic [ref=e180]: Disabled
+          - generic [ref=e182]:
+            - generic [ref=e183]: "362"
+            - generic [ref=e184]: Internal
+          - generic [ref=e186]:
+            - generic [ref=e187]: "0"
+            - generic [ref=e188]: External
+        - generic [ref=e191]:
+          - generic [ref=e192]:
+            - generic [ref=e193]: 󰒍
+            - text: MCP Servers
+            - generic [ref=e195]: 6 / 6
+            - button [ref=e196] [cursor=pointer]:
+              - generic [ref=e198]: 󰅃
+          - generic [ref=e200]:
+            - generic [ref=e201]:
+              - generic [ref=e203]:
+                - generic [ref=e204]: "6"
+                - generic [ref=e205]: Running
+              - generic [ref=e207]:
+                - generic [ref=e208]: "0"
+                - generic [ref=e209]: Stopped
+              - generic [ref=e211]:
+                - generic [ref=e212]: "0"
+                - generic [ref=e213]: Error
+              - generic [ref=e215]:
+                - generic [ref=e216]: "92"
+                - generic [ref=e217]: Total Tools
+            - generic [ref=e218]:
+              - button "Register Server" [ref=e219] [cursor=pointer]:
+                - generic [ref=e221]: 󰐕
+                - generic [ref=e222]: Register Server
+              - button "Refresh" [ref=e223] [cursor=pointer]:
+                - generic [ref=e225]: 󰑐
+                - generic [ref=e226]: Refresh
+            - listbox [ref=e227]:
+              - generic [ref=e228]:
+                - generic [ref=e230]: 󰗠
+                - generic [ref=e231]:
+                  - generic [ref=e232]:
+                    - generic [ref=e233]: Calculator Server
+                    - generic [ref=e235]: running
+                    - generic [ref=e237]: 6 tools
+                  - generic [ref=e238]: "calculatorPID: 35706Uptime: 30s"
+                - generic [ref=e240]:
+                  - button [ref=e241] [cursor=pointer]:
+                    - generic [ref=e243]: 󰓛
+                  - button [ref=e244] [cursor=pointer]:
+                    - generic [ref=e246]: 󰋽
+                  - button [ref=e247] [cursor=pointer]:
+                    - generic [ref=e249]: 󰧧
+              - generic [ref=e250]:
+                - generic [ref=e252]: 󰗠
+                - generic [ref=e253]:
+                  - generic [ref=e254]:
+                    - generic [ref=e255]: Sequential Thinking Server
+                    - generic [ref=e257]: running
+                    - generic [ref=e259]: 1 tools
+                  - generic [ref=e260]: "sequential-thinkingPID: 35707Uptime: 30s"
+                - generic [ref=e262]:
+                  - button [ref=e263] [cursor=pointer]:
+                    - generic [ref=e265]: 󰓛
+                  - button [ref=e266] [cursor=pointer]:
+                    - generic [ref=e268]: 󰋽
+                  - button [ref=e269] [cursor=pointer]:
+                    - generic [ref=e271]: 󰧧
+              - generic [ref=e272]:
+                - generic [ref=e274]: 󰗠
+                - generic [ref=e275]:
+                  - generic [ref=e276]:
+                    - generic [ref=e277]: Filesystem Server
+                    - generic [ref=e279]: running
+                    - generic [ref=e281]: 14 tools
+                  - generic [ref=e282]: "filesystemPID: 35708Uptime: 30s"
+                - generic [ref=e284]:
+                  - button [ref=e285] [cursor=pointer]:
+                    - generic [ref=e287]: 󰓛
+                  - button [ref=e288] [cursor=pointer]:
+                    - generic [ref=e290]: 󰋽
+                  - button [ref=e291] [cursor=pointer]:
+                    - generic [ref=e293]: 󰧧
+              - generic [ref=e294]:
+                - generic [ref=e296]: 󰗠
+                - generic [ref=e297]:
+                  - generic [ref=e298]:
+                    - generic [ref=e299]: Memory Server
+                    - generic [ref=e301]: running
+                    - generic [ref=e303]: 9 tools
+                  - generic [ref=e304]: "memoryPID: 35709Uptime: 30s"
+                - generic [ref=e306]:
+                  - button [ref=e307] [cursor=pointer]:
+                    - generic [ref=e309]: 󰓛
+                  - button [ref=e310] [cursor=pointer]:
+                    - generic [ref=e312]: 󰋽
+                  - button [ref=e313] [cursor=pointer]:
+                    - generic [ref=e315]: 󰧧
+              - generic [ref=e316]:
+                - generic [ref=e318]: 󰗠
+                - generic [ref=e319]:
+                  - generic [ref=e320]:
+                    - generic [ref=e321]: MongoDB Lens Server
+                    - generic [ref=e323]: running
+                    - generic [ref=e325]: 42 tools
+                  - generic [ref=e326]: "mongodb-lensPID: 35710Uptime: 30s"
+                - generic [ref=e328]:
+                  - button [ref=e329] [cursor=pointer]:
+                    - generic [ref=e331]: 󰓛
+                  - button [ref=e332] [cursor=pointer]:
+                    - generic [ref=e334]: 󰋽
+                  - button [ref=e335] [cursor=pointer]:
+                    - generic [ref=e337]: 󰧧
+              - generic [ref=e338]:
+                - generic [ref=e340]: 󰗠
+                - generic [ref=e341]:
+                  - generic [ref=e342]:
+                    - generic [ref=e343]: n8n Workflow Automation
+                    - generic [ref=e345]: running
+                    - generic [ref=e347]: 20 tools
+                  - generic [ref=e348]: "n8nPID: 35711Uptime: 30s"
+                - generic [ref=e350]:
+                  - button [ref=e351] [cursor=pointer]:
+                    - generic [ref=e353]: 󰓛
+                  - button [ref=e354] [cursor=pointer]:
+                    - generic [ref=e356]: 󰋽
+                  - button [ref=e357] [cursor=pointer]:
+                    - generic [ref=e359]: 󰧧
+        - generic [ref=e363]:
+          - button "Refresh" [ref=e365] [cursor=pointer]:
+            - generic [ref=e367]: 󰑐
+            - generic [ref=e368]: Refresh
+          - generic [ref=e369]:
+            - generic [ref=e371]:
+              - generic [ref=e373]:
+                - generic [ref=e375]: 󰍉
+                - generic [ref=e376]:
+                  - generic: Search tools...
+                  - textbox "Search tools... Search tools..." [ref=e377]
+                - text: 󰅙
+              - alert [ref=e378]
+            - generic [ref=e381]:
+              - combobox [ref=e383] [cursor=pointer]:
+                - generic [ref=e385]:
+                  - generic [ref=e387]: All Categories
+                  - textbox "Open": all
+                - generic [ref=e389]: 󰍝
+                - generic:
+                  - generic:
+                    - generic: Category
+              - alert [ref=e390]
+            - generic [ref=e393]:
+              - combobox [ref=e395] [cursor=pointer]:
+                - generic [ref=e397]:
+                  - generic [ref=e399]: All Types
+                  - textbox "Open": all
+                - generic [ref=e401]: 󰍝
+                - generic:
+                  - generic:
+                    - generic: Type
+              - alert [ref=e402]
+            - generic [ref=e405]:
+              - combobox [ref=e407] [cursor=pointer]:
+                - generic [ref=e409]:
+                  - generic [ref=e411]: Name
+                  - textbox "Open": name
+                - generic [ref=e413]: 󰍝
+                - generic:
+                  - generic:
+                    - generic: Sort By
+              - alert [ref=e414]
+        - generic [ref=e418]:
+          - generic [ref=e419]:
+            - generic [ref=e420]:
+              - generic [ref=e421]: 󰒓
+              - generic [ref=e422]:
+                - heading "add" [level=3] [ref=e423]
+                - generic [ref=e424]:
+                  - generic [ref=e426]: uncategorized
+                  - generic [ref=e428]: enabled
+                  - generic [ref=e430]: internal
+            - paragraph [ref=e431]: Add two numbers
+          - button "View Schema" [ref=e433] [cursor=pointer]:
+            - generic [ref=e435]: 󰈈
+            - generic [ref=e436]: View Schema
+        - generic [ref=e439]:
+          - generic [ref=e440]:
+            - generic [ref=e441]:
+              - generic [ref=e442]: 󰒓
+              - generic [ref=e443]:
+                - heading "add" [level=3] [ref=e444]
+                - generic [ref=e445]:
+                  - generic [ref=e447]: uncategorized
+                  - generic [ref=e449]: enabled
+                  - generic [ref=e451]: internal
+            - paragraph [ref=e452]: Add two numbers
+            - generic [ref=e453]:
+              - generic [ref=e454]: "Source:"
+              - generic [ref=e456]: external
+          - button "View Schema" [ref=e458] [cursor=pointer]:
+            - generic [ref=e460]: 󰈈
+            - generic [ref=e461]: View Schema
+        - generic [ref=e464]:
+          - generic [ref=e465]:
+            - generic [ref=e466]:
+              - generic [ref=e467]: 󰒓
+              - generic [ref=e468]:
+                - heading "add_observations" [level=3] [ref=e469]
+                - generic [ref=e470]:
+                  - generic [ref=e472]: uncategorized
+                  - generic [ref=e474]: enabled
+                  - generic [ref=e476]: internal
+            - paragraph [ref=e477]: Add new observations to existing entities in the knowledge graph
+          - button "View Schema" [ref=e479] [cursor=pointer]:
+            - generic [ref=e481]: 󰈈
+            - generic [ref=e482]: View Schema
+        - generic [ref=e485]:
+          - generic [ref=e486]:
+            - generic [ref=e487]:
+              - generic [ref=e488]: 󰒓
+              - generic [ref=e489]:
+                - heading "add_observations" [level=3] [ref=e490]
+                - generic [ref=e491]:
+                  - generic [ref=e493]: uncategorized
+                  - generic [ref=e495]: enabled
+                  - generic [ref=e497]: internal
+            - paragraph [ref=e498]: Add new observations to existing entities in the knowledge graph
+            - generic [ref=e499]:
+              - generic [ref=e500]: "Source:"
+              - generic [ref=e502]: external
+          - button "View Schema" [ref=e504] [cursor=pointer]:
+            - generic [ref=e506]: 󰈈
+            - generic [ref=e507]: View Schema
+        - generic [ref=e510]:
+          - generic [ref=e511]:
+            - generic [ref=e512]:
+              - generic [ref=e513]: 󰒓
+              - generic [ref=e514]:
+                - heading "add-connection-alias" [level=3] [ref=e515]
+                - generic [ref=e516]:
+                  - generic [ref=e518]: uncategorized
+                  - generic [ref=e520]: enabled
+                  - generic [ref=e522]: internal
+            - paragraph [ref=e523]: Add a new MongoDB connection alias
+          - button "View Schema" [ref=e525] [cursor=pointer]:
+            - generic [ref=e527]: 󰈈
+            - generic [ref=e528]: View Schema
+        - generic [ref=e531]:
+          - generic [ref=e532]:
+            - generic [ref=e533]:
+              - generic [ref=e534]: 󰒓
+              - generic [ref=e535]:
+                - heading "add-connection-alias" [level=3] [ref=e536]
+                - generic [ref=e537]:
+                  - generic [ref=e539]: uncategorized
+                  - generic [ref=e541]: enabled
+                  - generic [ref=e543]: internal
+            - paragraph [ref=e544]: Add a new MongoDB connection alias
+            - generic [ref=e545]:
+              - generic [ref=e546]: "Source:"
+              - generic [ref=e548]: external
+          - button "View Schema" [ref=e550] [cursor=pointer]:
+            - generic [ref=e552]: 󰈈
+            - generic [ref=e553]: View Schema
+        - generic [ref=e556]:
+          - generic [ref=e557]:
+            - generic [ref=e558]:
+              - generic [ref=e559]: 󰒓
+              - generic [ref=e560]:
+                - heading "agent_context_read" [level=3] [ref=e561]
+                - generic [ref=e562]:
+                  - generic [ref=e564]: uncategorized
+                  - generic [ref=e566]: enabled
+                  - generic [ref=e568]: internal
+            - paragraph [ref=e569]: Read agent's own context including profile, capabilities, and conversation history
+          - button "View Schema" [ref=e571] [cursor=pointer]:
+            - generic [ref=e573]: 󰈈
+            - generic [ref=e574]: View Schema
+        - generic [ref=e577]:
+          - generic [ref=e578]:
+            - generic [ref=e579]:
+              - generic [ref=e580]: 󰒓
+              - generic [ref=e581]:
+                - heading "agent_introspect" [level=3] [ref=e582]
+                - generic [ref=e583]:
+                  - generic [ref=e585]: uncategorized
+                  - generic [ref=e587]: enabled
+                  - generic [ref=e589]: internal
+            - paragraph [ref=e590]: Helps agents understand their own capabilities, available tools, and current state for better self-awareness.
+          - button "View Schema" [ref=e592] [cursor=pointer]:
+            - generic [ref=e594]: 󰈈
+            - generic [ref=e595]: View Schema
+        - generic [ref=e598]:
+          - generic [ref=e599]:
+            - generic [ref=e600]:
+              - generic [ref=e601]: 󰒓
+              - generic [ref=e602]:
+                - heading "agent_memory_read" [level=3] [ref=e603]
+                - generic [ref=e604]:
+                  - generic [ref=e606]: uncategorized
+                  - generic [ref=e608]: enabled
+                  - generic [ref=e610]: internal
+            - paragraph [ref=e611]: Enhanced agent memory operations with metadata and search capabilities
+          - button "View Schema" [ref=e613] [cursor=pointer]:
+            - generic [ref=e615]: 󰈈
+            - generic [ref=e616]: View Schema
+        - generic [ref=e619]:
+          - generic [ref=e620]:
+            - generic [ref=e621]:
+              - generic [ref=e622]: 󰒓
+              - generic [ref=e623]:
+                - heading "agent_memory_write" [level=3] [ref=e624]
+                - generic [ref=e625]:
+                  - generic [ref=e627]: uncategorized
+                  - generic [ref=e629]: enabled
+                  - generic [ref=e631]: internal
+            - paragraph [ref=e632]: Enhanced agent memory operations with metadata and organization capabilities
+          - button "View Schema" [ref=e634] [cursor=pointer]:
+            - generic [ref=e636]: 󰈈
+            - generic [ref=e637]: View Schema
+        - generic [ref=e640]:
+          - generic [ref=e641]:
+            - generic [ref=e642]:
+              - generic [ref=e643]: 󰒓
+              - generic [ref=e644]:
+                - heading "aggregate-data" [level=3] [ref=e645]
+                - generic [ref=e646]:
+                  - generic [ref=e648]: uncategorized
+                  - generic [ref=e650]: enabled
+                  - generic [ref=e652]: internal
+            - paragraph [ref=e653]: Run aggregation pipelines
+          - button "View Schema" [ref=e655] [cursor=pointer]:
+            - generic [ref=e657]: 󰈈
+            - generic [ref=e658]: View Schema
+        - generic [ref=e661]:
+          - generic [ref=e662]:
+            - generic [ref=e663]:
+              - generic [ref=e664]: 󰒓
+              - generic [ref=e665]:
+                - heading "aggregate-data" [level=3] [ref=e666]
+                - generic [ref=e667]:
+                  - generic [ref=e669]: uncategorized
+                  - generic [ref=e671]: enabled
+                  - generic [ref=e673]: internal
+            - paragraph [ref=e674]: Run aggregation pipelines
+            - generic [ref=e675]:
+              - generic [ref=e676]: "Source:"
+              - generic [ref=e678]: external
+          - button "View Schema" [ref=e680] [cursor=pointer]:
+            - generic [ref=e682]: 󰈈
+            - generic [ref=e683]: View Schema
+        - generic [ref=e686]:
+          - generic [ref=e687]:
+            - generic [ref=e688]:
+              - generic [ref=e689]: 󰒓
+              - generic [ref=e690]:
+                - heading "analytics_agent_performance" [level=3] [ref=e691]
+                - generic [ref=e692]:
+                  - generic [ref=e694]: uncategorized
+                  - generic [ref=e696]: enabled
+                  - generic [ref=e698]: internal
+            - paragraph [ref=e699]: Get comprehensive performance metrics for a specific agent or all agents
+          - button "View Schema" [ref=e701] [cursor=pointer]:
+            - generic [ref=e703]: 󰈈
+            - generic [ref=e704]: View Schema
+        - generic [ref=e707]:
+          - generic [ref=e708]:
+            - generic [ref=e709]:
+              - generic [ref=e710]: 󰒓
+              - generic [ref=e711]:
+                - heading "analytics_channel_activity" [level=3] [ref=e712]
+                - generic [ref=e713]:
+                  - generic [ref=e715]: uncategorized
+                  - generic [ref=e717]: enabled
+                  - generic [ref=e719]: internal
+            - paragraph [ref=e720]: Analyze channel activity patterns, message volume, and engagement metrics
+          - button "View Schema" [ref=e722] [cursor=pointer]:
+            - generic [ref=e724]: 󰈈
+            - generic [ref=e725]: View Schema
+        - generic [ref=e728]:
+          - generic [ref=e729]:
+            - generic [ref=e730]:
+              - generic [ref=e731]: 󰒓
+              - generic [ref=e732]:
+                - heading "analytics_compare_performance" [level=3] [ref=e733]
+                - generic [ref=e734]:
+                  - generic [ref=e736]: uncategorized
+                  - generic [ref=e738]: enabled
+                  - generic [ref=e740]: internal
+            - paragraph [ref=e741]: Compare performance metrics between different time periods, agents, or channels
+          - button "View Schema" [ref=e743] [cursor=pointer]:
+            - generic [ref=e745]: 󰈈
+            - generic [ref=e746]: View Schema
+        - generic [ref=e749]:
+          - generic [ref=e750]:
+            - generic [ref=e751]:
+              - generic [ref=e752]: 󰒓
+              - generic [ref=e753]:
+                - heading "analytics_dashboard_data" [level=3] [ref=e754]
+                - generic [ref=e755]:
+                  - generic [ref=e757]: uncategorized
+                  - generic [ref=e759]: enabled
+                  - generic [ref=e761]: internal
+            - paragraph [ref=e762]: Get real-time dashboard data with key metrics and status indicators
+          - button "View Schema" [ref=e764] [cursor=pointer]:
+            - generic [ref=e766]: 󰈈
+            - generic [ref=e767]: View Schema
+        - generic [ref=e770]:
+          - generic [ref=e771]:
+            - generic [ref=e772]:
+              - generic [ref=e773]: 󰒓
+              - generic [ref=e774]:
+                - heading "analytics_export_data" [level=3] [ref=e775]
+                - generic [ref=e776]:
+                  - generic [ref=e778]: uncategorized
+                  - generic [ref=e780]: enabled
+                  - generic [ref=e782]: internal
+            - paragraph [ref=e783]: Export analytics data in various formats for external analysis or reporting
+          - button "View Schema" [ref=e785] [cursor=pointer]:
+            - generic [ref=e787]: 󰈈
+            - generic [ref=e788]: View Schema
+        - generic [ref=e791]:
+          - generic [ref=e792]:
+            - generic [ref=e793]:
+              - generic [ref=e794]: 󰒓
+              - generic [ref=e795]:
+                - heading "analytics_generate_report" [level=3] [ref=e796]
+                - generic [ref=e797]:
+                  - generic [ref=e799]: uncategorized
+                  - generic [ref=e801]: enabled
+                  - generic [ref=e803]: internal
+            - paragraph [ref=e804]: Generate comprehensive analytics reports with customizable parameters
+          - button "View Schema" [ref=e806] [cursor=pointer]:
+            - generic [ref=e808]: 󰈈
+            - generic [ref=e809]: View Schema
+        - generic [ref=e812]:
+          - generic [ref=e813]:
+            - generic [ref=e814]:
+              - generic [ref=e815]: 󰒓
+              - generic [ref=e816]:
+                - heading "analytics_system_health" [level=3] [ref=e817]
+                - generic [ref=e818]:
+                  - generic [ref=e820]: uncategorized
+                  - generic [ref=e822]: enabled
+                  - generic [ref=e824]: internal
+            - paragraph [ref=e825]: Get comprehensive system health metrics including resource usage and service status
+          - button "View Schema" [ref=e827] [cursor=pointer]:
+            - generic [ref=e829]: 󰈈
+            - generic [ref=e830]: View Schema
+        - generic [ref=e833]:
+          - generic [ref=e834]:
+            - generic [ref=e835]:
+              - generic [ref=e836]: 󰒓
+              - generic [ref=e837]:
+                - heading "analytics_task_completion" [level=3] [ref=e838]
+                - generic [ref=e839]:
+                  - generic [ref=e841]: uncategorized
+                  - generic [ref=e843]: enabled
+                  - generic [ref=e845]: internal
+            - paragraph [ref=e846]: Analyze task completion rates, patterns, and effectiveness metrics
+          - button "View Schema" [ref=e848] [cursor=pointer]:
+            - generic [ref=e850]: 󰈈
+            - generic [ref=e851]: View Schema
+        - generic [ref=e854]:
+          - generic [ref=e855]:
+            - generic [ref=e856]:
+              - generic [ref=e857]: 󰒓
+              - generic [ref=e858]:
+                - heading "analytics_tool_usage" [level=3] [ref=e859]
+                - generic [ref=e860]:
+                  - generic [ref=e862]: uncategorized
+                  - generic [ref=e864]: enabled
+                  - generic [ref=e866]: internal
+            - paragraph [ref=e867]: Analyze MCP tool usage patterns, popularity, and performance
+          - button "View Schema" [ref=e869] [cursor=pointer]:
+            - generic [ref=e871]: 󰈈
+            - generic [ref=e872]: View Schema
+        - generic [ref=e875]:
+          - generic [ref=e876]:
+            - generic [ref=e877]:
+              - generic [ref=e878]: 󰒓
+              - generic [ref=e879]:
+                - heading "analytics_validation_metrics" [level=3] [ref=e880]
+                - generic [ref=e881]:
+                  - generic [ref=e883]: uncategorized
+                  - generic [ref=e885]: enabled
+                  - generic [ref=e887]: internal
+            - paragraph [ref=e888]: Get validation system performance and error prevention analytics
+          - button "View Schema" [ref=e890] [cursor=pointer]:
+            - generic [ref=e892]: 󰈈
+            - generic [ref=e893]: View Schema
+        - generic [ref=e896]:
+          - generic [ref=e897]:
+            - generic [ref=e898]:
+              - generic [ref=e899]: 󰒓
+              - generic [ref=e900]:
+                - heading "analyze_codebase" [level=3] [ref=e901]
+                - generic [ref=e902]:
+                  - generic [ref=e904]: uncategorized
+                  - generic [ref=e906]: enabled
+                  - generic [ref=e908]: internal
+            - paragraph [ref=e909]: Analyze codebase structure, dependencies, and architecture patterns
+          - button "View Schema" [ref=e911] [cursor=pointer]:
+            - generic [ref=e913]: 󰈈
+            - generic [ref=e914]: View Schema
+        - generic [ref=e917]:
+          - generic [ref=e918]:
+            - generic [ref=e919]:
+              - generic [ref=e920]: 󰒓
+              - generic [ref=e921]:
+                - heading "analyze-query-patterns" [level=3] [ref=e922]
+                - generic [ref=e923]:
+                  - generic [ref=e925]: uncategorized
+                  - generic [ref=e927]: enabled
+                  - generic [ref=e929]: internal
+            - paragraph [ref=e930]: Analyze query patterns and suggest optimizations
+          - button "View Schema" [ref=e932] [cursor=pointer]:
+            - generic [ref=e934]: 󰈈
+            - generic [ref=e935]: View Schema
+        - generic [ref=e938]:
+          - generic [ref=e939]:
+            - generic [ref=e940]:
+              - generic [ref=e941]: 󰒓
+              - generic [ref=e942]:
+                - heading "analyze-query-patterns" [level=3] [ref=e943]
+                - generic [ref=e944]:
+                  - generic [ref=e946]: uncategorized
+                  - generic [ref=e948]: enabled
+                  - generic [ref=e950]: internal
+            - paragraph [ref=e951]: Analyze query patterns and suggest optimizations
+            - generic [ref=e952]:
+              - generic [ref=e953]: "Source:"
+              - generic [ref=e955]: external
+          - button "View Schema" [ref=e957] [cursor=pointer]:
+            - generic [ref=e959]: 󰈈
+            - generic [ref=e960]: View Schema
+        - generic [ref=e963]:
+          - generic [ref=e964]:
+            - generic [ref=e965]:
+              - generic [ref=e966]: 󰒓
+              - generic [ref=e967]:
+                - heading "analyze-schema" [level=3] [ref=e968]
+                - generic [ref=e969]:
+                  - generic [ref=e971]: uncategorized
+                  - generic [ref=e973]: enabled
+                  - generic [ref=e975]: internal
+            - paragraph [ref=e976]: Automatically infer schema from collection
+          - button "View Schema" [ref=e978] [cursor=pointer]:
+            - generic [ref=e980]: 󰈈
+            - generic [ref=e981]: View Schema
+        - generic [ref=e984]:
+          - generic [ref=e985]:
+            - generic [ref=e986]:
+              - generic [ref=e987]: 󰒓
+              - generic [ref=e988]:
+                - heading "analyze-schema" [level=3] [ref=e989]
+                - generic [ref=e990]:
+                  - generic [ref=e992]: uncategorized
+                  - generic [ref=e994]: enabled
+                  - generic [ref=e996]: internal
+            - paragraph [ref=e997]: Automatically infer schema from collection
+            - generic [ref=e998]:
+              - generic [ref=e999]: "Source:"
+              - generic [ref=e1001]: external
+          - button "View Schema" [ref=e1003] [cursor=pointer]:
+            - generic [ref=e1005]: 󰈈
+            - generic [ref=e1006]: View Schema
+        - generic [ref=e1009]:
+          - generic [ref=e1010]:
+            - generic [ref=e1011]:
+              - generic [ref=e1012]: 󰒓
+              - generic [ref=e1013]:
+                - heading "api_fetch" [level=3] [ref=e1014]
+                - generic [ref=e1015]:
+                  - generic [ref=e1017]: uncategorized
+                  - generic [ref=e1019]: enabled
+                  - generic [ref=e1021]: internal
+            - paragraph [ref=e1022]: Fetch JSON data from API endpoints. Use this for APIs, not web_navigate (which is for HTML pages).
+          - button "View Schema" [ref=e1024] [cursor=pointer]:
+            - generic [ref=e1026]: 󰈈
+            - generic [ref=e1027]: View Schema
+        - generic [ref=e1030]:
+          - generic [ref=e1031]:
+            - generic [ref=e1032]:
+              - generic [ref=e1033]: 󰒓
+              - generic [ref=e1034]:
+                - heading "auto_correction_configure" [level=3] [ref=e1035]
+                - generic [ref=e1036]:
+                  - generic [ref=e1038]: uncategorized
+                  - generic [ref=e1040]: enabled
+                  - generic [ref=e1042]: internal
+            - paragraph [ref=e1043]: Configure auto-correction system settings including enabling/disabling services, adjusting thresholds, and modifying strategies.
+          - button "View Schema" [ref=e1045] [cursor=pointer]:
+            - generic [ref=e1047]: 󰈈
+            - generic [ref=e1048]: View Schema
+        - generic [ref=e1051]:
+          - generic [ref=e1052]:
+            - generic [ref=e1053]:
+              - generic [ref=e1054]: 󰒓
+              - generic [ref=e1055]:
+                - heading "auto_correction_insights" [level=3] [ref=e1056]
+                - generic [ref=e1057]:
+                  - generic [ref=e1059]: uncategorized
+                  - generic [ref=e1061]: enabled
+                  - generic [ref=e1063]: internal
+            - paragraph [ref=e1064]: Get learning insights, patterns, and recommendations from the auto-correction system to improve agent performance.
+          - button "View Schema" [ref=e1066] [cursor=pointer]:
+            - generic [ref=e1068]: 󰈈
+            - generic [ref=e1069]: View Schema
+        - generic [ref=e1072]:
+          - generic [ref=e1073]:
+            - generic [ref=e1074]:
+              - generic [ref=e1075]: 󰒓
+              - generic [ref=e1076]:
+                - heading "auto_correction_status" [level=3] [ref=e1077]
+                - generic [ref=e1078]:
+                  - generic [ref=e1080]: uncategorized
+                  - generic [ref=e1082]: enabled
+                  - generic [ref=e1084]: internal
+            - paragraph [ref=e1085]: Get comprehensive status, metrics, and health information for the Phase 4 auto-correction system including all services and components.
+          - button "View Schema" [ref=e1087] [cursor=pointer]:
+            - generic [ref=e1089]: 󰈈
+            - generic [ref=e1090]: View Schema
+        - generic [ref=e1093]:
+          - generic [ref=e1094]:
+            - generic [ref=e1095]:
+              - generic [ref=e1096]: 󰒓
+              - generic [ref=e1097]:
+                - heading "auto_correction_test" [level=3] [ref=e1098]
+                - generic [ref=e1099]:
+                  - generic [ref=e1101]: uncategorized
+                  - generic [ref=e1103]: enabled
+                  - generic [ref=e1105]: internal
+            - paragraph [ref=e1106]: Test the auto-correction system with a simulated tool execution error to verify functionality and measure response.
+          - button "View Schema" [ref=e1108] [cursor=pointer]:
+            - generic [ref=e1110]: 󰈈
+            - generic [ref=e1111]: View Schema
+        - generic [ref=e1114]:
+          - generic [ref=e1115]:
+            - generic [ref=e1116]:
+              - generic [ref=e1117]: 󰒓
+              - generic [ref=e1118]:
+                - heading "bulk-operations" [level=3] [ref=e1119]
+                - generic [ref=e1120]:
+                  - generic [ref=e1122]: uncategorized
+                  - generic [ref=e1124]: enabled
+                  - generic [ref=e1126]: internal
+            - paragraph [ref=e1127]: Perform bulk inserts, updates, or deletes
+          - button "View Schema" [ref=e1129] [cursor=pointer]:
+            - generic [ref=e1131]: 󰈈
+            - generic [ref=e1132]: View Schema
+        - generic [ref=e1135]:
+          - generic [ref=e1136]:
+            - generic [ref=e1137]:
+              - generic [ref=e1138]: 󰒓
+              - generic [ref=e1139]:
+                - heading "bulk-operations" [level=3] [ref=e1140]
+                - generic [ref=e1141]:
+                  - generic [ref=e1143]: uncategorized
+                  - generic [ref=e1145]: enabled
+                  - generic [ref=e1147]: internal
+            - paragraph [ref=e1148]: Perform bulk inserts, updates, or deletes
+            - generic [ref=e1149]:
+              - generic [ref=e1150]: "Source:"
+              - generic [ref=e1152]: external
+          - button "View Schema" [ref=e1154] [cursor=pointer]:
+            - generic [ref=e1156]: 󰈈
+            - generic [ref=e1157]: View Schema
+        - generic [ref=e1160]:
+          - generic [ref=e1161]:
+            - generic [ref=e1162]:
+              - generic [ref=e1163]: 󰒓
+              - generic [ref=e1164]:
+                - heading "calculate_risk" [level=3] [ref=e1165]
+                - generic [ref=e1166]:
+                  - generic [ref=e1168]: uncategorized
+                  - generic [ref=e1170]: enabled
+                  - generic [ref=e1172]: internal
+            - paragraph [ref=e1173]: Calculate a composite risk score (0-100) for a tool operation. Combines error probability, tool complexity, agent experience, system load, and parameter patterns. Returns risk factors with weights, mitigation strategies, and trend analysis.
+          - button "View Schema" [ref=e1175] [cursor=pointer]:
+            - generic [ref=e1177]: 󰈈
+            - generic [ref=e1178]: View Schema
+        - generic [ref=e1181]:
+          - generic [ref=e1182]:
+            - generic [ref=e1183]:
+              - generic [ref=e1184]: 󰒓
+              - generic [ref=e1185]:
+                - heading "channel_context_read" [level=3] [ref=e1186]
+                - generic [ref=e1187]:
+                  - generic [ref=e1189]: uncategorized
+                  - generic [ref=e1191]: enabled
+                  - generic [ref=e1193]: internal
+            - paragraph [ref=e1194]: Read channel context including metadata, summary, topics, and LLM analysis
+          - button "View Schema" [ref=e1196] [cursor=pointer]:
+            - generic [ref=e1198]: 󰈈
+            - generic [ref=e1199]: View Schema
+        - generic [ref=e1202]:
+          - generic [ref=e1203]:
+            - generic [ref=e1204]:
+              - generic [ref=e1205]: 󰒓
+              - generic [ref=e1206]:
+                - heading "channel_memory_read" [level=3] [ref=e1207]
+                - generic [ref=e1208]:
+                  - generic [ref=e1210]: uncategorized
+                  - generic [ref=e1212]: enabled
+                  - generic [ref=e1214]: internal
+            - paragraph [ref=e1215]: Read shared channel memory accessible by all channel agents
+          - button "View Schema" [ref=e1217] [cursor=pointer]:
+            - generic [ref=e1219]: 󰈈
+            - generic [ref=e1220]: View Schema
+        - generic [ref=e1223]:
+          - generic [ref=e1224]:
+            - generic [ref=e1225]:
+              - generic [ref=e1226]: 󰒓
+              - generic [ref=e1227]:
+                - heading "channel_memory_write" [level=3] [ref=e1228]
+                - generic [ref=e1229]:
+                  - generic [ref=e1231]: uncategorized
+                  - generic [ref=e1233]: enabled
+                  - generic [ref=e1235]: internal
+            - paragraph [ref=e1236]: Write shared channel memory for multi-agent collaboration
+          - button "View Schema" [ref=e1238] [cursor=pointer]:
+            - generic [ref=e1240]: 󰈈
+            - generic [ref=e1241]: View Schema
+        - generic [ref=e1244]:
+          - generic [ref=e1245]:
+            - generic [ref=e1246]:
+              - generic [ref=e1247]: 󰒓
+              - generic [ref=e1248]:
+                - heading "channel_messages_read" [level=3] [ref=e1249]
+                - generic [ref=e1250]:
+                  - generic [ref=e1252]: uncategorized
+                  - generic [ref=e1254]: enabled
+                  - generic [ref=e1256]: internal
+            - paragraph [ref=e1257]: Read channel message history with filtering and pagination
+          - button "View Schema" [ref=e1259] [cursor=pointer]:
+            - generic [ref=e1261]: 󰈈
+            - generic [ref=e1262]: View Schema
+        - generic [ref=e1265]:
+          - generic [ref=e1266]:
+            - generic [ref=e1267]:
+              - generic [ref=e1268]: 󰒓
+              - generic [ref=e1269]:
+                - heading "clear-cache" [level=3] [ref=e1270]
+                - generic [ref=e1271]:
+                  - generic [ref=e1273]: uncategorized
+                  - generic [ref=e1275]: enabled
+                  - generic [ref=e1277]: internal
+            - paragraph [ref=e1278]: Clear memory caches to ensure fresh data
+          - button "View Schema" [ref=e1280] [cursor=pointer]:
+            - generic [ref=e1282]: 󰈈
+            - generic [ref=e1283]: View Schema
+        - generic [ref=e1286]:
+          - generic [ref=e1287]:
+            - generic [ref=e1288]:
+              - generic [ref=e1289]: 󰒓
+              - generic [ref=e1290]:
+                - heading "clear-cache" [level=3] [ref=e1291]
+                - generic [ref=e1292]:
+                  - generic [ref=e1294]: uncategorized
+                  - generic [ref=e1296]: enabled
+                  - generic [ref=e1298]: internal
+            - paragraph [ref=e1299]: Clear memory caches to ensure fresh data
+            - generic [ref=e1300]:
+              - generic [ref=e1301]: "Source:"
+              - generic [ref=e1303]: external
+          - button "View Schema" [ref=e1305] [cursor=pointer]:
+            - generic [ref=e1307]: 󰈈
+            - generic [ref=e1308]: View Schema
+        - generic [ref=e1311]:
+          - generic [ref=e1312]:
+            - generic [ref=e1313]:
+              - generic [ref=e1314]: 󰒓
+              - generic [ref=e1315]:
+                - heading "code_execute" [level=3] [ref=e1316]
+                - generic [ref=e1317]:
+                  - generic [ref=e1319]: uncategorized
+                  - generic [ref=e1321]: enabled
+                  - generic [ref=e1323]: internal
+            - paragraph [ref=e1324]: Execute JavaScript or TypeScript code in a secure sandbox with timeout and resource limits. Ideal for data transformation, calculations, and multi-step workflows without model round-trips.
+          - button "View Schema" [ref=e1326] [cursor=pointer]:
+            - generic [ref=e1328]: 󰈈
+            - generic [ref=e1329]: View Schema
+        - generic [ref=e1332]:
+          - generic [ref=e1333]:
+            - generic [ref=e1334]:
+              - generic [ref=e1335]: 󰒓
+              - generic [ref=e1336]:
+                - heading "code_review_agent" [level=3] [ref=e1337]
+                - generic [ref=e1338]:
+                  - generic [ref=e1340]: uncategorized
+                  - generic [ref=e1342]: enabled
+                  - generic [ref=e1344]: internal
+            - paragraph [ref=e1345]: AI-powered code review agent that analyzes changes for quality, security, and best practices
+          - button "View Schema" [ref=e1347] [cursor=pointer]:
+            - generic [ref=e1349]: 󰈈
+            - generic [ref=e1350]: View Schema
+        - generic [ref=e1353]:
+          - generic [ref=e1354]:
+            - generic [ref=e1355]:
+              - generic [ref=e1356]: 󰒓
+              - generic [ref=e1357]:
+                - heading "collation-query" [level=3] [ref=e1358]
+                - generic [ref=e1359]:
+                  - generic [ref=e1361]: uncategorized
+                  - generic [ref=e1363]: enabled
+                  - generic [ref=e1365]: internal
+            - paragraph [ref=e1366]: Find documents with language-specific collation rules
+          - button "View Schema" [ref=e1368] [cursor=pointer]:
+            - generic [ref=e1370]: 󰈈
+            - generic [ref=e1371]: View Schema
+        - generic [ref=e1374]:
+          - generic [ref=e1375]:
+            - generic [ref=e1376]:
+              - generic [ref=e1377]: 󰒓
+              - generic [ref=e1378]:
+                - heading "collation-query" [level=3] [ref=e1379]
+                - generic [ref=e1380]:
+                  - generic [ref=e1382]: uncategorized
+                  - generic [ref=e1384]: enabled
+                  - generic [ref=e1386]: internal
+            - paragraph [ref=e1387]: Find documents with language-specific collation rules
+            - generic [ref=e1388]:
+              - generic [ref=e1389]: "Source:"
+              - generic [ref=e1391]: external
+          - button "View Schema" [ref=e1393] [cursor=pointer]:
+            - generic [ref=e1395]: 󰈈
+            - generic [ref=e1396]: View Schema
+        - generic [ref=e1399]:
+          - generic [ref=e1400]:
+            - generic [ref=e1401]:
+              - generic [ref=e1402]: 󰒓
+              - generic [ref=e1403]:
+                - heading "compare-schemas" [level=3] [ref=e1404]
+                - generic [ref=e1405]:
+                  - generic [ref=e1407]: uncategorized
+                  - generic [ref=e1409]: enabled
+                  - generic [ref=e1411]: internal
+            - paragraph [ref=e1412]: Compare schemas between two collections
+          - button "View Schema" [ref=e1414] [cursor=pointer]:
+            - generic [ref=e1416]: 󰈈
+            - generic [ref=e1417]: View Schema
+        - generic [ref=e1420]:
+          - generic [ref=e1421]:
+            - generic [ref=e1422]:
+              - generic [ref=e1423]: 󰒓
+              - generic [ref=e1424]:
+                - heading "compare-schemas" [level=3] [ref=e1425]
+                - generic [ref=e1426]:
+                  - generic [ref=e1428]: uncategorized
+                  - generic [ref=e1430]: enabled
+                  - generic [ref=e1432]: internal
+            - paragraph [ref=e1433]: Compare schemas between two collections
+            - generic [ref=e1434]:
+              - generic [ref=e1435]: "Source:"
+              - generic [ref=e1437]: external
+          - button "View Schema" [ref=e1439] [cursor=pointer]:
+            - generic [ref=e1441]: 󰈈
+            - generic [ref=e1442]: View Schema
+        - generic [ref=e1445]:
+          - generic [ref=e1446]:
+            - generic [ref=e1447]:
+              - generic [ref=e1448]: 󰒓
+              - generic [ref=e1449]:
+                - heading "connect-mongodb" [level=3] [ref=e1450]
+                - generic [ref=e1451]:
+                  - generic [ref=e1453]: uncategorized
+                  - generic [ref=e1455]: enabled
+                  - generic [ref=e1457]: internal
+            - paragraph [ref=e1458]: Connect to a different MongoDB URI or alias
+          - button "View Schema" [ref=e1460] [cursor=pointer]:
+            - generic [ref=e1462]: 󰈈
+            - generic [ref=e1463]: View Schema
+        - generic [ref=e1466]:
+          - generic [ref=e1467]:
+            - generic [ref=e1468]:
+              - generic [ref=e1469]: 󰒓
+              - generic [ref=e1470]:
+                - heading "connect-mongodb" [level=3] [ref=e1471]
+                - generic [ref=e1472]:
+                  - generic [ref=e1474]: uncategorized
+                  - generic [ref=e1476]: enabled
+                  - generic [ref=e1478]: internal
+            - paragraph [ref=e1479]: Connect to a different MongoDB URI or alias
+            - generic [ref=e1480]:
+              - generic [ref=e1481]: "Source:"
+              - generic [ref=e1483]: external
+          - button "View Schema" [ref=e1485] [cursor=pointer]:
+            - generic [ref=e1487]: 󰈈
+            - generic [ref=e1488]: View Schema
+        - generic [ref=e1491]:
+          - generic [ref=e1492]:
+            - generic [ref=e1493]:
+              - generic [ref=e1494]: 󰒓
+              - generic [ref=e1495]:
+                - heading "connect-original" [level=3] [ref=e1496]
+                - generic [ref=e1497]:
+                  - generic [ref=e1499]: uncategorized
+                  - generic [ref=e1501]: enabled
+                  - generic [ref=e1503]: internal
+            - paragraph [ref=e1504]: Connect back to the original MongoDB URI used at startup
+          - button "View Schema" [ref=e1506] [cursor=pointer]:
+            - generic [ref=e1508]: 󰈈
+            - generic [ref=e1509]: View Schema
+        - generic [ref=e1512]:
+          - generic [ref=e1513]:
+            - generic [ref=e1514]:
+              - generic [ref=e1515]: 󰒓
+              - generic [ref=e1516]:
+                - heading "connect-original" [level=3] [ref=e1517]
+                - generic [ref=e1518]:
+                  - generic [ref=e1520]: uncategorized
+                  - generic [ref=e1522]: enabled
+                  - generic [ref=e1524]: internal
+            - paragraph [ref=e1525]: Connect back to the original MongoDB URI used at startup
+            - generic [ref=e1526]:
+              - generic [ref=e1527]: "Source:"
+              - generic [ref=e1529]: external
+          - button "View Schema" [ref=e1531] [cursor=pointer]:
+            - generic [ref=e1533]: 󰈈
+            - generic [ref=e1534]: View Schema
+        - generic [ref=e1537]:
+          - generic [ref=e1538]:
+            - generic [ref=e1539]:
+              - generic [ref=e1540]: 󰒓
+              - generic [ref=e1541]:
+                - heading "control_loop_execute" [level=3] [ref=e1542]
+                - generic [ref=e1543]:
+                  - generic [ref=e1545]: uncategorized
+                  - generic [ref=e1547]: enabled
+                  - generic [ref=e1549]: internal
+            - paragraph [ref=e1550]: Execute specific plan actions or steps
+          - button "View Schema" [ref=e1552] [cursor=pointer]:
+            - generic [ref=e1554]: 󰈈
+            - generic [ref=e1555]: View Schema
+        - generic [ref=e1558]:
+          - generic [ref=e1559]:
+            - generic [ref=e1560]:
+              - generic [ref=e1561]: 󰒓
+              - generic [ref=e1562]:
+                - heading "control_loop_observe" [level=3] [ref=e1563]
+                - generic [ref=e1564]:
+                  - generic [ref=e1566]: uncategorized
+                  - generic [ref=e1568]: enabled
+                  - generic [ref=e1570]: internal
+            - paragraph [ref=e1571]: Submit observations to a running control loop
+          - button "View Schema" [ref=e1573] [cursor=pointer]:
+            - generic [ref=e1575]: 󰈈
+            - generic [ref=e1576]: View Schema
+        - generic [ref=e1579]:
+          - generic [ref=e1580]:
+            - generic [ref=e1581]:
+              - generic [ref=e1582]: 󰒓
+              - generic [ref=e1583]:
+                - heading "control_loop_plan" [level=3] [ref=e1584]
+                - generic [ref=e1585]:
+                  - generic [ref=e1587]: uncategorized
+                  - generic [ref=e1589]: enabled
+                  - generic [ref=e1591]: internal
+            - paragraph [ref=e1592]: Generate or modify plans based on reasoning results
+          - button "View Schema" [ref=e1594] [cursor=pointer]:
+            - generic [ref=e1596]: 󰈈
+            - generic [ref=e1597]: View Schema
+        - generic [ref=e1600]:
+          - generic [ref=e1601]:
+            - generic [ref=e1602]:
+              - generic [ref=e1603]: 󰒓
+              - generic [ref=e1604]:
+                - heading "control_loop_reason" [level=3] [ref=e1605]
+                - generic [ref=e1606]:
+                  - generic [ref=e1608]: uncategorized
+                  - generic [ref=e1610]: enabled
+                  - generic [ref=e1612]: internal
+            - paragraph [ref=e1613]: Trigger reasoning phase with context and parameters
+          - button "View Schema" [ref=e1615] [cursor=pointer]:
+            - generic [ref=e1617]: 󰈈
+            - generic [ref=e1618]: View Schema
+        - generic [ref=e1621]:
+          - generic [ref=e1622]:
+            - generic [ref=e1623]:
+              - generic [ref=e1624]: 󰒓
+              - generic [ref=e1625]:
+                - heading "control_loop_reflect" [level=3] [ref=e1626]
+                - generic [ref=e1627]:
+                  - generic [ref=e1629]: uncategorized
+                  - generic [ref=e1631]: enabled
+                  - generic [ref=e1633]: internal
+            - paragraph [ref=e1634]: Generate reflections on completed control loop cycles
+          - button "View Schema" [ref=e1636] [cursor=pointer]:
+            - generic [ref=e1638]: 󰈈
+            - generic [ref=e1639]: View Schema
+        - generic [ref=e1642]:
+          - generic [ref=e1643]:
+            - generic [ref=e1644]:
+              - generic [ref=e1645]: 󰒓
+              - generic [ref=e1646]:
+                - heading "control_loop_start" [level=3] [ref=e1647]
+                - generic [ref=e1648]:
+                  - generic [ref=e1650]: uncategorized
+                  - generic [ref=e1652]: enabled
+                  - generic [ref=e1654]: internal
+            - paragraph [ref=e1655]: Initialize and start an agent's control loop with configuration
+          - button "View Schema" [ref=e1657] [cursor=pointer]:
+            - generic [ref=e1659]: 󰈈
+            - generic [ref=e1660]: View Schema
+        - generic [ref=e1663]:
+          - generic [ref=e1664]:
+            - generic [ref=e1665]:
+              - generic [ref=e1666]: 󰒓
+              - generic [ref=e1667]:
+                - heading "control_loop_status" [level=3] [ref=e1668]
+                - generic [ref=e1669]:
+                  - generic [ref=e1671]: uncategorized
+                  - generic [ref=e1673]: enabled
+                  - generic [ref=e1675]: internal
+            - paragraph [ref=e1676]: Get current state and metrics of control loops
+          - button "View Schema" [ref=e1678] [cursor=pointer]:
+            - generic [ref=e1680]: 󰈈
+            - generic [ref=e1681]: View Schema
+        - generic [ref=e1684]:
+          - generic [ref=e1685]:
+            - generic [ref=e1686]:
+              - generic [ref=e1687]: 󰒓
+              - generic [ref=e1688]:
+                - heading "control_loop_stop" [level=3] [ref=e1689]
+                - generic [ref=e1690]:
+                  - generic [ref=e1692]: uncategorized
+                  - generic [ref=e1694]: enabled
+                  - generic [ref=e1696]: internal
+            - paragraph [ref=e1697]: Stop a running control loop
+          - button "View Schema" [ref=e1699] [cursor=pointer]:
+            - generic [ref=e1701]: 󰈈
+            - generic [ref=e1702]: View Schema
+        - generic [ref=e1705]:
+          - generic [ref=e1706]:
+            - generic [ref=e1707]:
+              - generic [ref=e1708]: 󰒓
+              - generic [ref=e1709]:
+                - heading "controlLoop_execute" [level=3] [ref=e1710]
+                - generic [ref=e1711]:
+                  - generic [ref=e1713]: uncategorized
+                  - generic [ref=e1715]: enabled
+                  - generic [ref=e1717]: internal
+            - paragraph [ref=e1718]: Execute specific plan actions or steps
+          - button "View Schema" [ref=e1720] [cursor=pointer]:
+            - generic [ref=e1722]: 󰈈
+            - generic [ref=e1723]: View Schema
+        - generic [ref=e1726]:
+          - generic [ref=e1727]:
+            - generic [ref=e1728]:
+              - generic [ref=e1729]: 󰒓
+              - generic [ref=e1730]:
+                - heading "controlLoop_observe" [level=3] [ref=e1731]
+                - generic [ref=e1732]:
+                  - generic [ref=e1734]: uncategorized
+                  - generic [ref=e1736]: enabled
+                  - generic [ref=e1738]: internal
+            - paragraph [ref=e1739]: Execute the observation phase of the control loop
+          - button "View Schema" [ref=e1741] [cursor=pointer]:
+            - generic [ref=e1743]: 󰈈
+            - generic [ref=e1744]: View Schema
+        - generic [ref=e1747]:
+          - generic [ref=e1748]:
+            - generic [ref=e1749]:
+              - generic [ref=e1750]: 󰒓
+              - generic [ref=e1751]:
+                - heading "controlLoop_plan" [level=3] [ref=e1752]
+                - generic [ref=e1753]:
+                  - generic [ref=e1755]: uncategorized
+                  - generic [ref=e1757]: enabled
+                  - generic [ref=e1759]: internal
+            - paragraph [ref=e1760]: Generate or modify plans based on reasoning results
+          - button "View Schema" [ref=e1762] [cursor=pointer]:
+            - generic [ref=e1764]: 󰈈
+            - generic [ref=e1765]: View Schema
+        - generic [ref=e1768]:
+          - generic [ref=e1769]:
+            - generic [ref=e1770]:
+              - generic [ref=e1771]: 󰒓
+              - generic [ref=e1772]:
+                - heading "controlLoop_reason" [level=3] [ref=e1773]
+                - generic [ref=e1774]:
+                  - generic [ref=e1776]: uncategorized
+                  - generic [ref=e1778]: enabled
+                  - generic [ref=e1780]: internal
+            - paragraph [ref=e1781]: Trigger reasoning phase with context and parameters
+          - button "View Schema" [ref=e1783] [cursor=pointer]:
+            - generic [ref=e1785]: 󰈈
+            - generic [ref=e1786]: View Schema
+        - generic [ref=e1789]:
+          - generic [ref=e1790]:
+            - generic [ref=e1791]:
+              - generic [ref=e1792]: 󰒓
+              - generic [ref=e1793]:
+                - heading "controlLoop_reflect" [level=3] [ref=e1794]
+                - generic [ref=e1795]:
+                  - generic [ref=e1797]: uncategorized
+                  - generic [ref=e1799]: enabled
+                  - generic [ref=e1801]: internal
+            - paragraph [ref=e1802]: Generate reflections on completed control loop cycles
+          - button "View Schema" [ref=e1804] [cursor=pointer]:
+            - generic [ref=e1806]: 󰈈
+            - generic [ref=e1807]: View Schema
+        - generic [ref=e1810]:
+          - generic [ref=e1811]:
+            - generic [ref=e1812]:
+              - generic [ref=e1813]: 󰒓
+              - generic [ref=e1814]:
+                - heading "controlLoop_start" [level=3] [ref=e1815]
+                - generic [ref=e1816]:
+                  - generic [ref=e1818]: uncategorized
+                  - generic [ref=e1820]: enabled
+                  - generic [ref=e1822]: internal
+            - paragraph [ref=e1823]: Initialize and start an agent's control loop with configuration
+          - button "View Schema" [ref=e1825] [cursor=pointer]:
+            - generic [ref=e1827]: 󰈈
+            - generic [ref=e1828]: View Schema
+        - generic [ref=e1831]:
+          - generic [ref=e1832]:
+            - generic [ref=e1833]:
+              - generic [ref=e1834]: 󰒓
+              - generic [ref=e1835]:
+                - heading "controlLoop_status" [level=3] [ref=e1836]
+                - generic [ref=e1837]:
+                  - generic [ref=e1839]: uncategorized
+                  - generic [ref=e1841]: enabled
+                  - generic [ref=e1843]: internal
+            - paragraph [ref=e1844]: Get current state and metrics of control loops
+          - button "View Schema" [ref=e1846] [cursor=pointer]:
+            - generic [ref=e1848]: 󰈈
+            - generic [ref=e1849]: View Schema
+        - generic [ref=e1852]:
+          - generic [ref=e1853]:
+            - generic [ref=e1854]:
+              - generic [ref=e1855]: 󰒓
+              - generic [ref=e1856]:
+                - heading "controlLoop_stop" [level=3] [ref=e1857]
+                - generic [ref=e1858]:
+                  - generic [ref=e1860]: uncategorized
+                  - generic [ref=e1862]: enabled
+                  - generic [ref=e1864]: internal
+            - paragraph [ref=e1865]: Stop a running control loop
+          - button "View Schema" [ref=e1867] [cursor=pointer]:
+            - generic [ref=e1869]: 󰈈
+            - generic [ref=e1870]: View Schema
+        - generic [ref=e1873]:
+          - generic [ref=e1874]:
+            - generic [ref=e1875]:
+              - generic [ref=e1876]: 󰒓
+              - generic [ref=e1877]:
+                - heading "coordination_accept" [level=3] [ref=e1878]
+                - generic [ref=e1879]:
+                  - generic [ref=e1881]: uncategorized
+                  - generic [ref=e1883]: enabled
+                  - generic [ref=e1885]: internal
+            - paragraph [ref=e1886]: Accept a coordination request from another agent
+          - button "View Schema" [ref=e1888] [cursor=pointer]:
+            - generic [ref=e1890]: 󰈈
+            - generic [ref=e1891]: View Schema
+        - generic [ref=e1894]:
+          - generic [ref=e1895]:
+            - generic [ref=e1896]:
+              - generic [ref=e1897]: 󰒓
+              - generic [ref=e1898]:
+                - heading "coordination_complete" [level=3] [ref=e1899]
+                - generic [ref=e1900]:
+                  - generic [ref=e1902]: uncategorized
+                  - generic [ref=e1904]: enabled
+                  - generic [ref=e1906]: internal
+            - paragraph [ref=e1907]: Mark a coordination as completed with final results
+          - button "View Schema" [ref=e1909] [cursor=pointer]:
+            - generic [ref=e1911]: 󰈈
+            - generic [ref=e1912]: View Schema
+        - generic [ref=e1915]:
+          - generic [ref=e1916]:
+            - generic [ref=e1917]:
+              - generic [ref=e1918]: 󰒓
+              - generic [ref=e1919]:
+                - heading "coordination_list" [level=3] [ref=e1920]
+                - generic [ref=e1921]:
+                  - generic [ref=e1923]: uncategorized
+                  - generic [ref=e1925]: enabled
+                  - generic [ref=e1927]: internal
+            - paragraph [ref=e1928]: List active coordinations involving the current agent
+          - button "View Schema" [ref=e1930] [cursor=pointer]:
+            - generic [ref=e1932]: 󰈈
+            - generic [ref=e1933]: View Schema
+        - generic [ref=e1936]:
+          - generic [ref=e1937]:
+            - generic [ref=e1938]:
+              - generic [ref=e1939]: 󰒓
+              - generic [ref=e1940]:
+                - heading "coordination_reject" [level=3] [ref=e1941]
+                - generic [ref=e1942]:
+                  - generic [ref=e1944]: uncategorized
+                  - generic [ref=e1946]: enabled
+                  - generic [ref=e1948]: internal
+            - paragraph [ref=e1949]: Reject a coordination request from another agent
+          - button "View Schema" [ref=e1951] [cursor=pointer]:
+            - generic [ref=e1953]: 󰈈
+            - generic [ref=e1954]: View Schema
+        - generic [ref=e1957]:
+          - generic [ref=e1958]:
+            - generic [ref=e1959]:
+              - generic [ref=e1960]: 󰒓
+              - generic [ref=e1961]:
+                - heading "coordination_request" [level=3] [ref=e1962]
+                - generic [ref=e1963]:
+                  - generic [ref=e1965]: uncategorized
+                  - generic [ref=e1967]: enabled
+                  - generic [ref=e1969]: internal
+            - paragraph [ref=e1970]: Request coordination with other agents for collaborative tasks with formal tracking
+          - button "View Schema" [ref=e1972] [cursor=pointer]:
+            - generic [ref=e1974]: 󰈈
+            - generic [ref=e1975]: View Schema
+        - generic [ref=e1978]:
+          - generic [ref=e1979]:
+            - generic [ref=e1980]:
+              - generic [ref=e1981]: 󰒓
+              - generic [ref=e1982]:
+                - heading "coordination_status" [level=3] [ref=e1983]
+                - generic [ref=e1984]:
+                  - generic [ref=e1986]: uncategorized
+                  - generic [ref=e1988]: enabled
+                  - generic [ref=e1990]: internal
+            - paragraph [ref=e1991]: Check the status of a coordination request
+          - button "View Schema" [ref=e1993] [cursor=pointer]:
+            - generic [ref=e1995]: 󰈈
+            - generic [ref=e1996]: View Schema
+        - generic [ref=e1999]:
+          - generic [ref=e2000]:
+            - generic [ref=e2001]:
+              - generic [ref=e2002]: 󰒓
+              - generic [ref=e2003]:
+                - heading "coordination_update" [level=3] [ref=e2004]
+                - generic [ref=e2005]:
+                  - generic [ref=e2007]: uncategorized
+                  - generic [ref=e2009]: enabled
+                  - generic [ref=e2011]: internal
+            - paragraph [ref=e2012]: Update the status or progress of an ongoing coordination
+          - button "View Schema" [ref=e2014] [cursor=pointer]:
+            - generic [ref=e2016]: 󰈈
+            - generic [ref=e2017]: View Schema
+        - generic [ref=e2020]:
+          - generic [ref=e2021]:
+            - generic [ref=e2022]:
+              - generic [ref=e2023]: 󰒓
+              - generic [ref=e2024]:
+                - heading "count-documents" [level=3] [ref=e2025]
+                - generic [ref=e2026]:
+                  - generic [ref=e2028]: uncategorized
+                  - generic [ref=e2030]: enabled
+                  - generic [ref=e2032]: internal
+            - paragraph [ref=e2033]: Count documents with optional filter
+          - button "View Schema" [ref=e2035] [cursor=pointer]:
+            - generic [ref=e2037]: 󰈈
+            - generic [ref=e2038]: View Schema
+        - generic [ref=e2041]:
+          - generic [ref=e2042]:
+            - generic [ref=e2043]:
+              - generic [ref=e2044]: 󰒓
+              - generic [ref=e2045]:
+                - heading "count-documents" [level=3] [ref=e2046]
+                - generic [ref=e2047]:
+                  - generic [ref=e2049]: uncategorized
+                  - generic [ref=e2051]: enabled
+                  - generic [ref=e2053]: internal
+            - paragraph [ref=e2054]: Count documents with optional filter
+            - generic [ref=e2055]:
+              - generic [ref=e2056]: "Source:"
+              - generic [ref=e2058]: external
+          - button "View Schema" [ref=e2060] [cursor=pointer]:
+            - generic [ref=e2062]: 󰈈
+            - generic [ref=e2063]: View Schema
+        - generic [ref=e2066]:
+          - generic [ref=e2067]:
+            - generic [ref=e2068]:
+              - generic [ref=e2069]: 󰒓
+              - generic [ref=e2070]:
+                - heading "create_backup" [level=3] [ref=e2071]
+                - generic [ref=e2072]:
+                  - generic [ref=e2074]: uncategorized
+                  - generic [ref=e2076]: enabled
+                  - generic [ref=e2078]: internal
+            - paragraph [ref=e2079]: Create a backup of the current state before making changes
+          - button "View Schema" [ref=e2081] [cursor=pointer]:
+            - generic [ref=e2083]: 󰈈
+            - generic [ref=e2084]: View Schema
+        - generic [ref=e2087]:
+          - generic [ref=e2088]:
+            - generic [ref=e2089]:
+              - generic [ref=e2090]: 󰒓
+              - generic [ref=e2091]:
+                - heading "create_directory" [level=3] [ref=e2092]
+                - generic [ref=e2093]:
+                  - generic [ref=e2095]: uncategorized
+                  - generic [ref=e2097]: enabled
+                  - generic [ref=e2099]: internal
+            - paragraph [ref=e2100]: Create a new directory or ensure a directory exists. Can create multiple nested directories in one operation. If the directory already exists, this operation will succeed silently. Perfect for setting up directory structures for projects or ensuring required paths exist. Only works within allowed directories.
+          - button "View Schema" [ref=e2102] [cursor=pointer]:
+            - generic [ref=e2104]: 󰈈
+            - generic [ref=e2105]: View Schema
+        - generic [ref=e2108]:
+          - generic [ref=e2109]:
+            - generic [ref=e2110]:
+              - generic [ref=e2111]: 󰒓
+              - generic [ref=e2112]:
+                - heading "create_directory" [level=3] [ref=e2113]
+                - generic [ref=e2114]:
+                  - generic [ref=e2116]: uncategorized
+                  - generic [ref=e2118]: enabled
+                  - generic [ref=e2120]: internal
+            - paragraph [ref=e2121]: Create a new directory or ensure a directory exists. Can create multiple nested directories in one operation. If the directory already exists, this operation will succeed silently. Perfect for setting up directory structures for projects or ensuring required paths exist. Only works within allowed directories.
+            - generic [ref=e2122]:
+              - generic [ref=e2123]: "Source:"
+              - generic [ref=e2125]: external
+          - button "View Schema" [ref=e2127] [cursor=pointer]:
+            - generic [ref=e2129]: 󰈈
+            - generic [ref=e2130]: View Schema
+        - generic [ref=e2133]:
+          - generic [ref=e2134]:
+            - generic [ref=e2135]:
+              - generic [ref=e2136]: 󰒓
+              - generic [ref=e2137]:
+                - heading "create_entities" [level=3] [ref=e2138]
+                - generic [ref=e2139]:
+                  - generic [ref=e2141]: uncategorized
+                  - generic [ref=e2143]: enabled
+                  - generic [ref=e2145]: internal
+            - paragraph [ref=e2146]: Create multiple new entities in the knowledge graph
+          - button "View Schema" [ref=e2148] [cursor=pointer]:
+            - generic [ref=e2150]: 󰈈
+            - generic [ref=e2151]: View Schema
+        - generic [ref=e2154]:
+          - generic [ref=e2155]:
+            - generic [ref=e2156]:
+              - generic [ref=e2157]: 󰒓
+              - generic [ref=e2158]:
+                - heading "create_entities" [level=3] [ref=e2159]
+                - generic [ref=e2160]:
+                  - generic [ref=e2162]: uncategorized
+                  - generic [ref=e2164]: enabled
+                  - generic [ref=e2166]: internal
+            - paragraph [ref=e2167]: Create multiple new entities in the knowledge graph
+            - generic [ref=e2168]:
+              - generic [ref=e2169]: "Source:"
+              - generic [ref=e2171]: external
+          - button "View Schema" [ref=e2173] [cursor=pointer]:
+            - generic [ref=e2175]: 󰈈
+            - generic [ref=e2176]: View Schema
+        - generic [ref=e2179]:
+          - generic [ref=e2180]:
+            - generic [ref=e2181]:
+              - generic [ref=e2182]: 󰒓
+              - generic [ref=e2183]:
+                - heading "create_feature_branch" [level=3] [ref=e2184]
+                - generic [ref=e2185]:
+                  - generic [ref=e2187]: uncategorized
+                  - generic [ref=e2189]: enabled
+                  - generic [ref=e2191]: internal
+            - paragraph [ref=e2192]: Create a new feature branch to isolate experimental changes
+          - button "View Schema" [ref=e2194] [cursor=pointer]:
+            - generic [ref=e2196]: 󰈈
+            - generic [ref=e2197]: View Schema
+        - generic [ref=e2200]:
+          - generic [ref=e2201]:
+            - generic [ref=e2202]:
+              - generic [ref=e2203]: 󰒓
+              - generic [ref=e2204]:
+                - heading "create_relations" [level=3] [ref=e2205]
+                - generic [ref=e2206]:
+                  - generic [ref=e2208]: uncategorized
+                  - generic [ref=e2210]: enabled
+                  - generic [ref=e2212]: internal
+            - paragraph [ref=e2213]: Create multiple new relations between entities in the knowledge graph. Relations should be in active voice
+          - button "View Schema" [ref=e2215] [cursor=pointer]:
+            - generic [ref=e2217]: 󰈈
+            - generic [ref=e2218]: View Schema
+        - generic [ref=e2221]:
+          - generic [ref=e2222]:
+            - generic [ref=e2223]:
+              - generic [ref=e2224]: 󰒓
+              - generic [ref=e2225]:
+                - heading "create_relations" [level=3] [ref=e2226]
+                - generic [ref=e2227]:
+                  - generic [ref=e2229]: uncategorized
+                  - generic [ref=e2231]: enabled
+                  - generic [ref=e2233]: internal
+            - paragraph [ref=e2234]: Create multiple new relations between entities in the knowledge graph. Relations should be in active voice
+            - generic [ref=e2235]:
+              - generic [ref=e2236]: "Source:"
+              - generic [ref=e2238]: external
+          - button "View Schema" [ref=e2240] [cursor=pointer]:
+            - generic [ref=e2242]: 󰈈
+            - generic [ref=e2243]: View Schema
+        - generic [ref=e2246]:
+          - generic [ref=e2247]:
+            - generic [ref=e2248]:
+              - generic [ref=e2249]: 󰒓
+              - generic [ref=e2250]:
+                - heading "create-collection" [level=3] [ref=e2251]
+                - generic [ref=e2252]:
+                  - generic [ref=e2254]: uncategorized
+                  - generic [ref=e2256]: enabled
+                  - generic [ref=e2258]: internal
+            - paragraph [ref=e2259]: Create a new collection with options
+          - button "View Schema" [ref=e2261] [cursor=pointer]:
+            - generic [ref=e2263]: 󰈈
+            - generic [ref=e2264]: View Schema
+        - generic [ref=e2267]:
+          - generic [ref=e2268]:
+            - generic [ref=e2269]:
+              - generic [ref=e2270]: 󰒓
+              - generic [ref=e2271]:
+                - heading "create-collection" [level=3] [ref=e2272]
+                - generic [ref=e2273]:
+                  - generic [ref=e2275]: uncategorized
+                  - generic [ref=e2277]: enabled
+                  - generic [ref=e2279]: internal
+            - paragraph [ref=e2280]: Create a new collection with options
+            - generic [ref=e2281]:
+              - generic [ref=e2282]: "Source:"
+              - generic [ref=e2284]: external
+          - button "View Schema" [ref=e2286] [cursor=pointer]:
+            - generic [ref=e2288]: 󰈈
+            - generic [ref=e2289]: View Schema
+        - generic [ref=e2292]:
+          - generic [ref=e2293]:
+            - generic [ref=e2294]:
+              - generic [ref=e2295]: 󰒓
+              - generic [ref=e2296]:
+                - heading "create-database" [level=3] [ref=e2297]
+                - generic [ref=e2298]:
+                  - generic [ref=e2300]: uncategorized
+                  - generic [ref=e2302]: enabled
+                  - generic [ref=e2304]: internal
+            - paragraph [ref=e2305]: Create a new MongoDB database with option to switch
+          - button "View Schema" [ref=e2307] [cursor=pointer]:
+            - generic [ref=e2309]: 󰈈
+            - generic [ref=e2310]: View Schema
+        - generic [ref=e2313]:
+          - generic [ref=e2314]:
+            - generic [ref=e2315]:
+              - generic [ref=e2316]: 󰒓
+              - generic [ref=e2317]:
+                - heading "create-database" [level=3] [ref=e2318]
+                - generic [ref=e2319]:
+                  - generic [ref=e2321]: uncategorized
+                  - generic [ref=e2323]: enabled
+                  - generic [ref=e2325]: internal
+            - paragraph [ref=e2326]: Create a new MongoDB database with option to switch
+            - generic [ref=e2327]:
+              - generic [ref=e2328]: "Source:"
+              - generic [ref=e2330]: external
+          - button "View Schema" [ref=e2332] [cursor=pointer]:
+            - generic [ref=e2334]: 󰈈
+            - generic [ref=e2335]: View Schema
+        - generic [ref=e2338]:
+          - generic [ref=e2339]:
+            - generic [ref=e2340]:
+              - generic [ref=e2341]: 󰒓
+              - generic [ref=e2342]:
+                - heading "create-index" [level=3] [ref=e2343]
+                - generic [ref=e2344]:
+                  - generic [ref=e2346]: uncategorized
+                  - generic [ref=e2348]: enabled
+                  - generic [ref=e2350]: internal
+            - paragraph [ref=e2351]: Create new index on collection
+          - button "View Schema" [ref=e2353] [cursor=pointer]:
+            - generic [ref=e2355]: 󰈈
+            - generic [ref=e2356]: View Schema
+        - generic [ref=e2359]:
+          - generic [ref=e2360]:
+            - generic [ref=e2361]:
+              - generic [ref=e2362]: 󰒓
+              - generic [ref=e2363]:
+                - heading "create-index" [level=3] [ref=e2364]
+                - generic [ref=e2365]:
+                  - generic [ref=e2367]: uncategorized
+                  - generic [ref=e2369]: enabled
+                  - generic [ref=e2371]: internal
+            - paragraph [ref=e2372]: Create new index on collection
+            - generic [ref=e2373]:
+              - generic [ref=e2374]: "Source:"
+              - generic [ref=e2376]: external
+          - button "View Schema" [ref=e2378] [cursor=pointer]:
+            - generic [ref=e2380]: 󰈈
+            - generic [ref=e2381]: View Schema
+        - generic [ref=e2384]:
+          - generic [ref=e2385]:
+            - generic [ref=e2386]:
+              - generic [ref=e2387]: 󰒓
+              - generic [ref=e2388]:
+                - heading "create-timeseries" [level=3] [ref=e2389]
+                - generic [ref=e2390]:
+                  - generic [ref=e2392]: uncategorized
+                  - generic [ref=e2394]: enabled
+                  - generic [ref=e2396]: internal
+            - paragraph [ref=e2397]: Create a time series collection for temporal data
+          - button "View Schema" [ref=e2399] [cursor=pointer]:
+            - generic [ref=e2401]: 󰈈
+            - generic [ref=e2402]: View Schema
+        - generic [ref=e2405]:
+          - generic [ref=e2406]:
+            - generic [ref=e2407]:
+              - generic [ref=e2408]: 󰒓
+              - generic [ref=e2409]:
+                - heading "create-timeseries" [level=3] [ref=e2410]
+                - generic [ref=e2411]:
+                  - generic [ref=e2413]: uncategorized
+                  - generic [ref=e2415]: enabled
+                  - generic [ref=e2417]: internal
+            - paragraph [ref=e2418]: Create a time series collection for temporal data
+            - generic [ref=e2419]:
+              - generic [ref=e2420]: "Source:"
+              - generic [ref=e2422]: external
+          - button "View Schema" [ref=e2424] [cursor=pointer]:
+            - generic [ref=e2426]: 󰈈
+            - generic [ref=e2427]: View Schema
+        - generic [ref=e2430]:
+          - generic [ref=e2431]:
+            - generic [ref=e2432]:
+              - generic [ref=e2433]: 󰒓
+              - generic [ref=e2434]:
+                - heading "create-user" [level=3] [ref=e2435]
+                - generic [ref=e2436]:
+                  - generic [ref=e2438]: uncategorized
+                  - generic [ref=e2440]: enabled
+                  - generic [ref=e2442]: internal
+            - paragraph [ref=e2443]: Create a new database user
+          - button "View Schema" [ref=e2445] [cursor=pointer]:
+            - generic [ref=e2447]: 󰈈
+            - generic [ref=e2448]: View Schema
+        - generic [ref=e2451]:
+          - generic [ref=e2452]:
+            - generic [ref=e2453]:
+              - generic [ref=e2454]: 󰒓
+              - generic [ref=e2455]:
+                - heading "create-user" [level=3] [ref=e2456]
+                - generic [ref=e2457]:
+                  - generic [ref=e2459]: uncategorized
+                  - generic [ref=e2461]: enabled
+                  - generic [ref=e2463]: internal
+            - paragraph [ref=e2464]: Create a new database user
+            - generic [ref=e2465]:
+              - generic [ref=e2466]: "Source:"
+              - generic [ref=e2468]: external
+          - button "View Schema" [ref=e2470] [cursor=pointer]:
+            - generic [ref=e2472]: 󰈈
+            - generic [ref=e2473]: View Schema
+        - generic [ref=e2476]:
+          - generic [ref=e2477]:
+            - generic [ref=e2478]:
+              - generic [ref=e2479]: 󰒓
+              - generic [ref=e2480]:
+                - heading "current-database" [level=3] [ref=e2481]
+                - generic [ref=e2482]:
+                  - generic [ref=e2484]: uncategorized
+                  - generic [ref=e2486]: enabled
+                  - generic [ref=e2488]: internal
+            - paragraph [ref=e2489]: Get the name of the current database
+          - button "View Schema" [ref=e2491] [cursor=pointer]:
+            - generic [ref=e2493]: 󰈈
+            - generic [ref=e2494]: View Schema
+        - generic [ref=e2497]:
+          - generic [ref=e2498]:
+            - generic [ref=e2499]:
+              - generic [ref=e2500]: 󰒓
+              - generic [ref=e2501]:
+                - heading "current-database" [level=3] [ref=e2502]
+                - generic [ref=e2503]:
+                  - generic [ref=e2505]: uncategorized
+                  - generic [ref=e2507]: enabled
+                  - generic [ref=e2509]: internal
+            - paragraph [ref=e2510]: Get the name of the current database
+            - generic [ref=e2511]:
+              - generic [ref=e2512]: "Source:"
+              - generic [ref=e2514]: external
+          - button "View Schema" [ref=e2516] [cursor=pointer]:
+            - generic [ref=e2518]: 󰈈
+            - generic [ref=e2519]: View Schema
+        - generic [ref=e2522]:
+          - generic [ref=e2523]:
+            - generic [ref=e2524]:
+              - generic [ref=e2525]: 󰒓
+              - generic [ref=e2526]:
+                - heading "dag_get_blocking_tasks" [level=3] [ref=e2527]
+                - generic [ref=e2528]:
+                  - generic [ref=e2530]: uncategorized
+                  - generic [ref=e2532]: enabled
+                  - generic [ref=e2534]: internal
+            - paragraph [ref=e2535]: Get the list of tasks that are blocking a specific task. These are incomplete dependencies that must be completed first.
+          - button "View Schema" [ref=e2537] [cursor=pointer]:
+            - generic [ref=e2539]: 󰈈
+            - generic [ref=e2540]: View Schema
+        - generic [ref=e2543]:
+          - generic [ref=e2544]:
+            - generic [ref=e2545]:
+              - generic [ref=e2546]: 󰒓
+              - generic [ref=e2547]:
+                - heading "dag_get_critical_path" [level=3] [ref=e2548]
+                - generic [ref=e2549]:
+                  - generic [ref=e2551]: uncategorized
+                  - generic [ref=e2553]: enabled
+                  - generic [ref=e2555]: internal
+            - paragraph [ref=e2556]: Get the critical path (longest dependency chain) in the DAG. This represents the minimum time to complete all tasks if executed optimally.
+          - button "View Schema" [ref=e2558] [cursor=pointer]:
+            - generic [ref=e2560]: 󰈈
+            - generic [ref=e2561]: View Schema
+        - generic [ref=e2564]:
+          - generic [ref=e2565]:
+            - generic [ref=e2566]:
+              - generic [ref=e2567]: 󰒓
+              - generic [ref=e2568]:
+                - heading "dag_get_execution_order" [level=3] [ref=e2569]
+                - generic [ref=e2570]:
+                  - generic [ref=e2572]: uncategorized
+                  - generic [ref=e2574]: enabled
+                  - generic [ref=e2576]: internal
+            - paragraph [ref=e2577]: Get tasks in topologically sorted execution order. Tasks are ordered so that all dependencies come before their dependents.
+          - button "View Schema" [ref=e2579] [cursor=pointer]:
+            - generic [ref=e2581]: 󰈈
+            - generic [ref=e2582]: View Schema
+        - generic [ref=e2585]:
+          - generic [ref=e2586]:
+            - generic [ref=e2587]:
+              - generic [ref=e2588]: 󰒓
+              - generic [ref=e2589]:
+                - heading "dag_get_parallel_groups" [level=3] [ref=e2590]
+                - generic [ref=e2591]:
+                  - generic [ref=e2593]: uncategorized
+                  - generic [ref=e2595]: enabled
+                  - generic [ref=e2597]: internal
+            - paragraph [ref=e2598]: Get groups of tasks that can be executed in parallel. Tasks in the same group have no dependencies on each other.
+          - button "View Schema" [ref=e2600] [cursor=pointer]:
+            - generic [ref=e2602]: 󰈈
+            - generic [ref=e2603]: View Schema
+        - generic [ref=e2606]:
+          - generic [ref=e2607]:
+            - generic [ref=e2608]:
+              - generic [ref=e2609]: 󰒓
+              - generic [ref=e2610]:
+                - heading "dag_get_ready_tasks" [level=3] [ref=e2611]
+                - generic [ref=e2612]:
+                  - generic [ref=e2614]: uncategorized
+                  - generic [ref=e2616]: enabled
+                  - generic [ref=e2618]: internal
+            - paragraph [ref=e2619]: Get tasks that have all dependencies satisfied and are ready to execute. Returns task IDs in order of availability.
+          - button "View Schema" [ref=e2621] [cursor=pointer]:
+            - generic [ref=e2623]: 󰈈
+            - generic [ref=e2624]: View Schema
+        - generic [ref=e2627]:
+          - generic [ref=e2628]:
+            - generic [ref=e2629]:
+              - generic [ref=e2630]: 󰒓
+              - generic [ref=e2631]:
+                - heading "dag_get_stats" [level=3] [ref=e2632]
+                - generic [ref=e2633]:
+                  - generic [ref=e2635]: uncategorized
+                  - generic [ref=e2637]: enabled
+                  - generic [ref=e2639]: internal
+            - paragraph [ref=e2640]: Get statistics about the task DAG including node count, edge count, and task state distribution.
+          - button "View Schema" [ref=e2642] [cursor=pointer]:
+            - generic [ref=e2644]: 󰈈
+            - generic [ref=e2645]: View Schema
+        - generic [ref=e2648]:
+          - generic [ref=e2649]:
+            - generic [ref=e2650]:
+              - generic [ref=e2651]: 󰒓
+              - generic [ref=e2652]:
+                - heading "dag_validate_dependency" [level=3] [ref=e2653]
+                - generic [ref=e2654]:
+                  - generic [ref=e2656]: uncategorized
+                  - generic [ref=e2658]: enabled
+                  - generic [ref=e2660]: internal
+            - paragraph [ref=e2661]: Check if adding a dependency between two tasks would create a cycle. Use this before adding dependencies to prevent invalid DAG states.
+          - button "View Schema" [ref=e2663] [cursor=pointer]:
+            - generic [ref=e2665]: 󰈈
+            - generic [ref=e2666]: View Schema
+        - generic [ref=e2669]:
+          - generic [ref=e2670]:
+            - generic [ref=e2671]:
+              - generic [ref=e2672]: 󰒓
+              - generic [ref=e2673]:
+                - heading "datetime_arithmetic" [level=3] [ref=e2674]
+                - generic [ref=e2675]:
+                  - generic [ref=e2677]: uncategorized
+                  - generic [ref=e2679]: enabled
+                  - generic [ref=e2681]: internal
+            - paragraph [ref=e2682]: Add or subtract time from a date. Supports years, months, weeks, days, hours, minutes, and seconds.
+          - button "View Schema" [ref=e2684] [cursor=pointer]:
+            - generic [ref=e2686]: 󰈈
+            - generic [ref=e2687]: View Schema
+        - generic [ref=e2690]:
+          - generic [ref=e2691]:
+            - generic [ref=e2692]:
+              - generic [ref=e2693]: 󰒓
+              - generic [ref=e2694]:
+                - heading "datetime_convert" [level=3] [ref=e2695]
+                - generic [ref=e2696]:
+                  - generic [ref=e2698]: uncategorized
+                  - generic [ref=e2700]: enabled
+                  - generic [ref=e2702]: internal
+            - paragraph [ref=e2703]: Convert a date/time from one timezone to another. Accepts ISO strings, timestamps, or date strings.
+          - button "View Schema" [ref=e2705] [cursor=pointer]:
+            - generic [ref=e2707]: 󰈈
+            - generic [ref=e2708]: View Schema
+        - generic [ref=e2711]:
+          - generic [ref=e2712]:
+            - generic [ref=e2713]:
+              - generic [ref=e2714]: 󰒓
+              - generic [ref=e2715]:
+                - heading "datetime_format" [level=3] [ref=e2716]
+                - generic [ref=e2717]:
+                  - generic [ref=e2719]: uncategorized
+                  - generic [ref=e2721]: enabled
+                  - generic [ref=e2723]: internal
+            - paragraph [ref=e2724]: Format a date/time in various readable formats. Supports different locales and styles.
+          - button "View Schema" [ref=e2726] [cursor=pointer]:
+            - generic [ref=e2728]: 󰈈
+            - generic [ref=e2729]: View Schema
+        - generic [ref=e2732]:
+          - generic [ref=e2733]:
+            - generic [ref=e2734]:
+              - generic [ref=e2735]: 󰒓
+              - generic [ref=e2736]:
+                - heading "datetime_now" [level=3] [ref=e2737]
+                - generic [ref=e2738]:
+                  - generic [ref=e2740]: uncategorized
+                  - generic [ref=e2742]: enabled
+                  - generic [ref=e2744]: internal
+            - paragraph [ref=e2745]: Get the current date and time. Returns timestamp, ISO string, and human-readable formats with timezone information.
+          - button "View Schema" [ref=e2747] [cursor=pointer]:
+            - generic [ref=e2749]: 󰈈
+            - generic [ref=e2750]: View Schema
+        - generic [ref=e2753]:
+          - generic [ref=e2754]:
+            - generic [ref=e2755]:
+              - generic [ref=e2756]: 󰒓
+              - generic [ref=e2757]:
+                - heading "delete_entities" [level=3] [ref=e2758]
+                - generic [ref=e2759]:
+                  - generic [ref=e2761]: uncategorized
+                  - generic [ref=e2763]: enabled
+                  - generic [ref=e2765]: internal
+            - paragraph [ref=e2766]: Delete multiple entities and their associated relations from the knowledge graph
+          - button "View Schema" [ref=e2768] [cursor=pointer]:
+            - generic [ref=e2770]: 󰈈
+            - generic [ref=e2771]: View Schema
+        - generic [ref=e2774]:
+          - generic [ref=e2775]:
+            - generic [ref=e2776]:
+              - generic [ref=e2777]: 󰒓
+              - generic [ref=e2778]:
+                - heading "delete_entities" [level=3] [ref=e2779]
+                - generic [ref=e2780]:
+                  - generic [ref=e2782]: uncategorized
+                  - generic [ref=e2784]: enabled
+                  - generic [ref=e2786]: internal
+            - paragraph [ref=e2787]: Delete multiple entities and their associated relations from the knowledge graph
+            - generic [ref=e2788]:
+              - generic [ref=e2789]: "Source:"
+              - generic [ref=e2791]: external
+          - button "View Schema" [ref=e2793] [cursor=pointer]:
+            - generic [ref=e2795]: 󰈈
+            - generic [ref=e2796]: View Schema
+        - generic [ref=e2799]:
+          - generic [ref=e2800]:
+            - generic [ref=e2801]:
+              - generic [ref=e2802]: 󰒓
+              - generic [ref=e2803]:
+                - heading "delete_observations" [level=3] [ref=e2804]
+                - generic [ref=e2805]:
+                  - generic [ref=e2807]: uncategorized
+                  - generic [ref=e2809]: enabled
+                  - generic [ref=e2811]: internal
+            - paragraph [ref=e2812]: Delete specific observations from entities in the knowledge graph
+          - button "View Schema" [ref=e2814] [cursor=pointer]:
+            - generic [ref=e2816]: 󰈈
+            - generic [ref=e2817]: View Schema
+        - generic [ref=e2820]:
+          - generic [ref=e2821]:
+            - generic [ref=e2822]:
+              - generic [ref=e2823]: 󰒓
+              - generic [ref=e2824]:
+                - heading "delete_observations" [level=3] [ref=e2825]
+                - generic [ref=e2826]:
+                  - generic [ref=e2828]: uncategorized
+                  - generic [ref=e2830]: enabled
+                  - generic [ref=e2832]: internal
+            - paragraph [ref=e2833]: Delete specific observations from entities in the knowledge graph
+            - generic [ref=e2834]:
+              - generic [ref=e2835]: "Source:"
+              - generic [ref=e2837]: external
+          - button "View Schema" [ref=e2839] [cursor=pointer]:
+            - generic [ref=e2841]: 󰈈
+            - generic [ref=e2842]: View Schema
+        - generic [ref=e2845]:
+          - generic [ref=e2846]:
+            - generic [ref=e2847]:
+              - generic [ref=e2848]: 󰒓
+              - generic [ref=e2849]:
+                - heading "delete_relations" [level=3] [ref=e2850]
+                - generic [ref=e2851]:
+                  - generic [ref=e2853]: uncategorized
+                  - generic [ref=e2855]: enabled
+                  - generic [ref=e2857]: internal
+            - paragraph [ref=e2858]: Delete multiple relations from the knowledge graph
+          - button "View Schema" [ref=e2860] [cursor=pointer]:
+            - generic [ref=e2862]: 󰈈
+            - generic [ref=e2863]: View Schema
+        - generic [ref=e2866]:
+          - generic [ref=e2867]:
+            - generic [ref=e2868]:
+              - generic [ref=e2869]: 󰒓
+              - generic [ref=e2870]:
+                - heading "delete_relations" [level=3] [ref=e2871]
+                - generic [ref=e2872]:
+                  - generic [ref=e2874]: uncategorized
+                  - generic [ref=e2876]: enabled
+                  - generic [ref=e2878]: internal
+            - paragraph [ref=e2879]: Delete multiple relations from the knowledge graph
+            - generic [ref=e2880]:
+              - generic [ref=e2881]: "Source:"
+              - generic [ref=e2883]: external
+          - button "View Schema" [ref=e2885] [cursor=pointer]:
+            - generic [ref=e2887]: 󰈈
+            - generic [ref=e2888]: View Schema
+        - generic [ref=e2891]:
+          - generic [ref=e2892]:
+            - generic [ref=e2893]:
+              - generic [ref=e2894]: 󰒓
+              - generic [ref=e2895]:
+                - heading "delete-document" [level=3] [ref=e2896]
+                - generic [ref=e2897]:
+                  - generic [ref=e2899]: uncategorized
+                  - generic [ref=e2901]: enabled
+                  - generic [ref=e2903]: internal
+            - paragraph [ref=e2904]: Delete document(s) (requires confirmation)
+          - button "View Schema" [ref=e2906] [cursor=pointer]:
+            - generic [ref=e2908]: 󰈈
+            - generic [ref=e2909]: View Schema
+        - generic [ref=e2912]:
+          - generic [ref=e2913]:
+            - generic [ref=e2914]:
+              - generic [ref=e2915]: 󰒓
+              - generic [ref=e2916]:
+                - heading "delete-document" [level=3] [ref=e2917]
+                - generic [ref=e2918]:
+                  - generic [ref=e2920]: uncategorized
+                  - generic [ref=e2922]: enabled
+                  - generic [ref=e2924]: internal
+            - paragraph [ref=e2925]: Delete document(s) (requires confirmation)
+            - generic [ref=e2926]:
+              - generic [ref=e2927]: "Source:"
+              - generic [ref=e2929]: external
+          - button "View Schema" [ref=e2931] [cursor=pointer]:
+            - generic [ref=e2933]: 󰈈
+            - generic [ref=e2934]: View Schema
+        - generic [ref=e2937]:
+          - generic [ref=e2938]:
+            - generic [ref=e2939]:
+              - generic [ref=e2940]: 󰒓
+              - generic [ref=e2941]:
+                - heading "detect_anomalies" [level=3] [ref=e2942]
+                - generic [ref=e2943]:
+                  - generic [ref=e2945]: uncategorized
+                  - generic [ref=e2947]: enabled
+                  - generic [ref=e2949]: internal
+            - paragraph [ref=e2950]: Detect anomalies in tool parameters, agent behavior, performance, and usage patterns. Returns scored anomalies with severity levels and suggested actions. Use to identify unusual patterns before or after tool execution.
+          - button "View Schema" [ref=e2952] [cursor=pointer]:
+            - generic [ref=e2954]: 󰈈
+            - generic [ref=e2955]: View Schema
+        - generic [ref=e2958]:
+          - generic [ref=e2959]:
+            - generic [ref=e2960]:
+              - generic [ref=e2961]: 󰒓
+              - generic [ref=e2962]:
+                - heading "directory_tree" [level=3] [ref=e2963]
+                - generic [ref=e2964]:
+                  - generic [ref=e2966]: uncategorized
+                  - generic [ref=e2968]: enabled
+                  - generic [ref=e2970]: internal
+            - paragraph [ref=e2971]: Get a recursive tree view of files and directories as a JSON structure. Each entry includes 'name', 'type' (file/directory), and 'children' for directories. Files have no children array, while directories always have a children array (which may be empty). The output is formatted with 2-space indentation for readability. Only works within allowed directories.
+          - button "View Schema" [ref=e2973] [cursor=pointer]:
+            - generic [ref=e2975]: 󰈈
+            - generic [ref=e2976]: View Schema
+        - generic [ref=e2979]:
+          - generic [ref=e2980]:
+            - generic [ref=e2981]:
+              - generic [ref=e2982]: 󰒓
+              - generic [ref=e2983]:
+                - heading "directory_tree" [level=3] [ref=e2984]
+                - generic [ref=e2985]:
+                  - generic [ref=e2987]: uncategorized
+                  - generic [ref=e2989]: enabled
+                  - generic [ref=e2991]: internal
+            - paragraph [ref=e2992]: Get a recursive tree view of files and directories as a JSON structure. Each entry includes 'name', 'type' (file/directory), and 'children' for directories. Files have no children array, while directories always have a children array (which may be empty). The output is formatted with 2-space indentation for readability. Only works within allowed directories.
+            - generic [ref=e2993]:
+              - generic [ref=e2994]: "Source:"
+              - generic [ref=e2996]: external
+          - button "View Schema" [ref=e2998] [cursor=pointer]:
+            - generic [ref=e3000]: 󰈈
+            - generic [ref=e3001]: View Schema
+        - generic [ref=e3004]:
+          - generic [ref=e3005]:
+            - generic [ref=e3006]:
+              - generic [ref=e3007]: 󰒓
+              - generic [ref=e3008]:
+                - heading "distinct-values" [level=3] [ref=e3009]
+                - generic [ref=e3010]:
+                  - generic [ref=e3012]: uncategorized
+                  - generic [ref=e3014]: enabled
+                  - generic [ref=e3016]: internal
+            - paragraph [ref=e3017]: Get unique values for a field
+          - button "View Schema" [ref=e3019] [cursor=pointer]:
+            - generic [ref=e3021]: 󰈈
+            - generic [ref=e3022]: View Schema
+        - generic [ref=e3025]:
+          - generic [ref=e3026]:
+            - generic [ref=e3027]:
+              - generic [ref=e3028]: 󰒓
+              - generic [ref=e3029]:
+                - heading "distinct-values" [level=3] [ref=e3030]
+                - generic [ref=e3031]:
+                  - generic [ref=e3033]: uncategorized
+                  - generic [ref=e3035]: enabled
+                  - generic [ref=e3037]: internal
+            - paragraph [ref=e3038]: Get unique values for a field
+            - generic [ref=e3039]:
+              - generic [ref=e3040]: "Source:"
+              - generic [ref=e3042]: external
+          - button "View Schema" [ref=e3044] [cursor=pointer]:
+            - generic [ref=e3046]: 󰈈
+            - generic [ref=e3047]: View Schema
+        - generic [ref=e3050]:
+          - generic [ref=e3051]:
+            - generic [ref=e3052]:
+              - generic [ref=e3053]: 󰒓
+              - generic [ref=e3054]:
+                - heading "div" [level=3] [ref=e3055]
+                - generic [ref=e3056]:
+                  - generic [ref=e3058]: uncategorized
+                  - generic [ref=e3060]: enabled
+                  - generic [ref=e3062]: internal
+            - paragraph [ref=e3063]: Divide two numbers
+          - button "View Schema" [ref=e3065] [cursor=pointer]:
+            - generic [ref=e3067]: 󰈈
+            - generic [ref=e3068]: View Schema
+        - generic [ref=e3071]:
+          - generic [ref=e3072]:
+            - generic [ref=e3073]:
+              - generic [ref=e3074]: 󰒓
+              - generic [ref=e3075]:
+                - heading "div" [level=3] [ref=e3076]
+                - generic [ref=e3077]:
+                  - generic [ref=e3079]: uncategorized
+                  - generic [ref=e3081]: enabled
+                  - generic [ref=e3083]: internal
+            - paragraph [ref=e3084]: Divide two numbers
+            - generic [ref=e3085]:
+              - generic [ref=e3086]: "Source:"
+              - generic [ref=e3088]: external
+          - button "View Schema" [ref=e3090] [cursor=pointer]:
+            - generic [ref=e3092]: 󰈈
+            - generic [ref=e3093]: View Schema
+        - generic [ref=e3096]:
+          - generic [ref=e3097]:
+            - generic [ref=e3098]:
+              - generic [ref=e3099]: 󰒓
+              - generic [ref=e3100]:
+                - heading "drop-collection" [level=3] [ref=e3101]
+                - generic [ref=e3102]:
+                  - generic [ref=e3104]: uncategorized
+                  - generic [ref=e3106]: enabled
+                  - generic [ref=e3108]: internal
+            - paragraph [ref=e3109]: Drop a collection (requires confirmation)
+          - button "View Schema" [ref=e3111] [cursor=pointer]:
+            - generic [ref=e3113]: 󰈈
+            - generic [ref=e3114]: View Schema
+        - generic [ref=e3117]:
+          - generic [ref=e3118]:
+            - generic [ref=e3119]:
+              - generic [ref=e3120]: 󰒓
+              - generic [ref=e3121]:
+                - heading "drop-collection" [level=3] [ref=e3122]
+                - generic [ref=e3123]:
+                  - generic [ref=e3125]: uncategorized
+                  - generic [ref=e3127]: enabled
+                  - generic [ref=e3129]: internal
+            - paragraph [ref=e3130]: Drop a collection (requires confirmation)
+            - generic [ref=e3131]:
+              - generic [ref=e3132]: "Source:"
+              - generic [ref=e3134]: external
+          - button "View Schema" [ref=e3136] [cursor=pointer]:
+            - generic [ref=e3138]: 󰈈
+            - generic [ref=e3139]: View Schema
+        - generic [ref=e3142]:
+          - generic [ref=e3143]:
+            - generic [ref=e3144]:
+              - generic [ref=e3145]: 󰒓
+              - generic [ref=e3146]:
+                - heading "drop-database" [level=3] [ref=e3147]
+                - generic [ref=e3148]:
+                  - generic [ref=e3150]: uncategorized
+                  - generic [ref=e3152]: enabled
+                  - generic [ref=e3154]: internal
+            - paragraph [ref=e3155]: Drop a database (requires confirmation)
+          - button "View Schema" [ref=e3157] [cursor=pointer]:
+            - generic [ref=e3159]: 󰈈
+            - generic [ref=e3160]: View Schema
+        - generic [ref=e3163]:
+          - generic [ref=e3164]:
+            - generic [ref=e3165]:
+              - generic [ref=e3166]: 󰒓
+              - generic [ref=e3167]:
+                - heading "drop-database" [level=3] [ref=e3168]
+                - generic [ref=e3169]:
+                  - generic [ref=e3171]: uncategorized
+                  - generic [ref=e3173]: enabled
+                  - generic [ref=e3175]: internal
+            - paragraph [ref=e3176]: Drop a database (requires confirmation)
+            - generic [ref=e3177]:
+              - generic [ref=e3178]: "Source:"
+              - generic [ref=e3180]: external
+          - button "View Schema" [ref=e3182] [cursor=pointer]:
+            - generic [ref=e3184]: 󰈈
+            - generic [ref=e3185]: View Schema
+        - generic [ref=e3188]:
+          - generic [ref=e3189]:
+            - generic [ref=e3190]:
+              - generic [ref=e3191]: 󰒓
+              - generic [ref=e3192]:
+                - heading "drop-index" [level=3] [ref=e3193]
+                - generic [ref=e3194]:
+                  - generic [ref=e3196]: uncategorized
+                  - generic [ref=e3198]: enabled
+                  - generic [ref=e3200]: internal
+            - paragraph [ref=e3201]: Drop an existing index from a collection
+          - button "View Schema" [ref=e3203] [cursor=pointer]:
+            - generic [ref=e3205]: 󰈈
+            - generic [ref=e3206]: View Schema
+        - generic [ref=e3209]:
+          - generic [ref=e3210]:
+            - generic [ref=e3211]:
+              - generic [ref=e3212]: 󰒓
+              - generic [ref=e3213]:
+                - heading "drop-index" [level=3] [ref=e3214]
+                - generic [ref=e3215]:
+                  - generic [ref=e3217]: uncategorized
+                  - generic [ref=e3219]: enabled
+                  - generic [ref=e3221]: internal
+            - paragraph [ref=e3222]: Drop an existing index from a collection
+            - generic [ref=e3223]:
+              - generic [ref=e3224]: "Source:"
+              - generic [ref=e3226]: external
+          - button "View Schema" [ref=e3228] [cursor=pointer]:
+            - generic [ref=e3230]: 󰈈
+            - generic [ref=e3231]: View Schema
+        - generic [ref=e3234]:
+          - generic [ref=e3235]:
+            - generic [ref=e3236]:
+              - generic [ref=e3237]: 󰒓
+              - generic [ref=e3238]:
+                - heading "drop-user" [level=3] [ref=e3239]
+                - generic [ref=e3240]:
+                  - generic [ref=e3242]: uncategorized
+                  - generic [ref=e3244]: enabled
+                  - generic [ref=e3246]: internal
+            - paragraph [ref=e3247]: Drop an existing database user
+          - button "View Schema" [ref=e3249] [cursor=pointer]:
+            - generic [ref=e3251]: 󰈈
+            - generic [ref=e3252]: View Schema
+        - generic [ref=e3255]:
+          - generic [ref=e3256]:
+            - generic [ref=e3257]:
+              - generic [ref=e3258]: 󰒓
+              - generic [ref=e3259]:
+                - heading "drop-user" [level=3] [ref=e3260]
+                - generic [ref=e3261]:
+                  - generic [ref=e3263]: uncategorized
+                  - generic [ref=e3265]: enabled
+                  - generic [ref=e3267]: internal
+            - paragraph [ref=e3268]: Drop an existing database user
+            - generic [ref=e3269]:
+              - generic [ref=e3270]: "Source:"
+              - generic [ref=e3272]: external
+          - button "View Schema" [ref=e3274] [cursor=pointer]:
+            - generic [ref=e3276]: 󰈈
+            - generic [ref=e3277]: View Schema
+        - generic [ref=e3280]:
+          - generic [ref=e3281]:
+            - generic [ref=e3282]:
+              - generic [ref=e3283]: 󰒓
+              - generic [ref=e3284]:
+                - heading "edit_file" [level=3] [ref=e3285]
+                - generic [ref=e3286]:
+                  - generic [ref=e3288]: uncategorized
+                  - generic [ref=e3290]: enabled
+                  - generic [ref=e3292]: internal
+            - paragraph [ref=e3293]: Make line-based edits to a text file. Each edit replaces exact line sequences with new content. Returns a git-style diff showing the changes made. Only works within allowed directories.
+          - button "View Schema" [ref=e3295] [cursor=pointer]:
+            - generic [ref=e3297]: 󰈈
+            - generic [ref=e3298]: View Schema
+        - generic [ref=e3301]:
+          - generic [ref=e3302]:
+            - generic [ref=e3303]:
+              - generic [ref=e3304]: 󰒓
+              - generic [ref=e3305]:
+                - heading "edit_file" [level=3] [ref=e3306]
+                - generic [ref=e3307]:
+                  - generic [ref=e3309]: uncategorized
+                  - generic [ref=e3311]: enabled
+                  - generic [ref=e3313]: internal
+            - paragraph [ref=e3314]: Make line-based edits to a text file. Each edit replaces exact line sequences with new content. Returns a git-style diff showing the changes made. Only works within allowed directories.
+            - generic [ref=e3315]:
+              - generic [ref=e3316]: "Source:"
+              - generic [ref=e3318]: external
+          - button "View Schema" [ref=e3320] [cursor=pointer]:
+            - generic [ref=e3322]: 󰈈
+            - generic [ref=e3323]: View Schema
+        - generic [ref=e3326]:
+          - generic [ref=e3327]:
+            - generic [ref=e3328]:
+              - generic [ref=e3329]: 󰒓
+              - generic [ref=e3330]:
+                - heading "error_diagnose" [level=3] [ref=e3331]
+                - generic [ref=e3332]:
+                  - generic [ref=e3334]: uncategorized
+                  - generic [ref=e3336]: enabled
+                  - generic [ref=e3338]: internal
+            - paragraph [ref=e3339]: Analyzes failed tool calls and execution errors to provide diagnostic information and suggested fixes.
+          - button "View Schema" [ref=e3341] [cursor=pointer]:
+            - generic [ref=e3343]: 󰈈
+            - generic [ref=e3344]: View Schema
+        - generic [ref=e3347]:
+          - generic [ref=e3348]:
+            - generic [ref=e3349]:
+              - generic [ref=e3350]: 󰒓
+              - generic [ref=e3351]:
+                - heading "explain-query" [level=3] [ref=e3352]
+                - generic [ref=e3353]:
+                  - generic [ref=e3355]: uncategorized
+                  - generic [ref=e3357]: enabled
+                  - generic [ref=e3359]: internal
+            - paragraph [ref=e3360]: Analyze query performance
+          - button "View Schema" [ref=e3362] [cursor=pointer]:
+            - generic [ref=e3364]: 󰈈
+            - generic [ref=e3365]: View Schema
+        - generic [ref=e3368]:
+          - generic [ref=e3369]:
+            - generic [ref=e3370]:
+              - generic [ref=e3371]: 󰒓
+              - generic [ref=e3372]:
+                - heading "explain-query" [level=3] [ref=e3373]
+                - generic [ref=e3374]:
+                  - generic [ref=e3376]: uncategorized
+                  - generic [ref=e3378]: enabled
+                  - generic [ref=e3380]: internal
+            - paragraph [ref=e3381]: Analyze query performance
+            - generic [ref=e3382]:
+              - generic [ref=e3383]: "Source:"
+              - generic [ref=e3385]: external
+          - button "View Schema" [ref=e3387] [cursor=pointer]:
+            - generic [ref=e3389]: 󰈈
+            - generic [ref=e3390]: View Schema
+        - generic [ref=e3393]:
+          - generic [ref=e3394]:
+            - generic [ref=e3395]:
+              - generic [ref=e3396]: 󰒓
+              - generic [ref=e3397]:
+                - heading "export-data" [level=3] [ref=e3398]
+                - generic [ref=e3399]:
+                  - generic [ref=e3401]: uncategorized
+                  - generic [ref=e3403]: enabled
+                  - generic [ref=e3405]: internal
+            - paragraph [ref=e3406]: Export query results to formatted JSON or CSV
+          - button "View Schema" [ref=e3408] [cursor=pointer]:
+            - generic [ref=e3410]: 󰈈
+            - generic [ref=e3411]: View Schema
+        - generic [ref=e3414]:
+          - generic [ref=e3415]:
+            - generic [ref=e3416]:
+              - generic [ref=e3417]: 󰒓
+              - generic [ref=e3418]:
+                - heading "export-data" [level=3] [ref=e3419]
+                - generic [ref=e3420]:
+                  - generic [ref=e3422]: uncategorized
+                  - generic [ref=e3424]: enabled
+                  - generic [ref=e3426]: internal
+            - paragraph [ref=e3427]: Export query results to formatted JSON or CSV
+            - generic [ref=e3428]:
+              - generic [ref=e3429]: "Source:"
+              - generic [ref=e3431]: external
+          - button "View Schema" [ref=e3433] [cursor=pointer]:
+            - generic [ref=e3435]: 󰈈
+            - generic [ref=e3436]: View Schema
+        - generic [ref=e3439]:
+          - generic [ref=e3440]:
+            - generic [ref=e3441]:
+              - generic [ref=e3442]: 󰒓
+              - generic [ref=e3443]:
+                - heading "filesystem_list" [level=3] [ref=e3444]
+                - generic [ref=e3445]:
+                  - generic [ref=e3447]: uncategorized
+                  - generic [ref=e3449]: enabled
+                  - generic [ref=e3451]: internal
+            - paragraph [ref=e3452]: List directory contents with filtering and metadata
+          - button "View Schema" [ref=e3454] [cursor=pointer]:
+            - generic [ref=e3456]: 󰈈
+            - generic [ref=e3457]: View Schema
+        - generic [ref=e3460]:
+          - generic [ref=e3461]:
+            - generic [ref=e3462]:
+              - generic [ref=e3463]: 󰒓
+              - generic [ref=e3464]:
+                - heading "filesystem_read" [level=3] [ref=e3465]
+                - generic [ref=e3466]:
+                  - generic [ref=e3468]: uncategorized
+                  - generic [ref=e3470]: enabled
+                  - generic [ref=e3472]: internal
+            - paragraph [ref=e3473]: Read file contents with encoding options and safety checks
+          - button "View Schema" [ref=e3475] [cursor=pointer]:
+            - generic [ref=e3477]: 󰈈
+            - generic [ref=e3478]: View Schema
+        - generic [ref=e3481]:
+          - generic [ref=e3482]:
+            - generic [ref=e3483]:
+              - generic [ref=e3484]: 󰒓
+              - generic [ref=e3485]:
+                - heading "filesystem_write" [level=3] [ref=e3486]
+                - generic [ref=e3487]:
+                  - generic [ref=e3489]: uncategorized
+                  - generic [ref=e3491]: enabled
+                  - generic [ref=e3493]: internal
+            - paragraph [ref=e3494]: Write content to files with safety checks and backup options
+          - button "View Schema" [ref=e3496] [cursor=pointer]:
+            - generic [ref=e3498]: 󰈈
+            - generic [ref=e3499]: View Schema
+        - generic [ref=e3502]:
+          - generic [ref=e3503]:
+            - generic [ref=e3504]:
+              - generic [ref=e3505]: 󰒓
+              - generic [ref=e3506]:
+                - heading "find_functions" [level=3] [ref=e3507]
+                - generic [ref=e3508]:
+                  - generic [ref=e3510]: uncategorized
+                  - generic [ref=e3512]: enabled
+                  - generic [ref=e3514]: internal
+            - paragraph [ref=e3515]: Find function definitions and their signatures across the codebase
+          - button "View Schema" [ref=e3517] [cursor=pointer]:
+            - generic [ref=e3519]: 󰈈
+            - generic [ref=e3520]: View Schema
+        - generic [ref=e3523]:
+          - generic [ref=e3524]:
+            - generic [ref=e3525]:
+              - generic [ref=e3526]: 󰒓
+              - generic [ref=e3527]:
+                - heading "find-documents" [level=3] [ref=e3528]
+                - generic [ref=e3529]:
+                  - generic [ref=e3531]: uncategorized
+                  - generic [ref=e3533]: enabled
+                  - generic [ref=e3535]: internal
+            - paragraph [ref=e3536]: Run queries with filters and projections
+          - button "View Schema" [ref=e3538] [cursor=pointer]:
+            - generic [ref=e3540]: 󰈈
+            - generic [ref=e3541]: View Schema
+        - generic [ref=e3544]:
+          - generic [ref=e3545]:
+            - generic [ref=e3546]:
+              - generic [ref=e3547]: 󰒓
+              - generic [ref=e3548]:
+                - heading "find-documents" [level=3] [ref=e3549]
+                - generic [ref=e3550]:
+                  - generic [ref=e3552]: uncategorized
+                  - generic [ref=e3554]: enabled
+                  - generic [ref=e3556]: internal
+            - paragraph [ref=e3557]: Run queries with filters and projections
+            - generic [ref=e3558]:
+              - generic [ref=e3559]: "Source:"
+              - generic [ref=e3561]: external
+          - button "View Schema" [ref=e3563] [cursor=pointer]:
+            - generic [ref=e3565]: 󰈈
+            - generic [ref=e3566]: View Schema
+        - generic [ref=e3569]:
+          - generic [ref=e3570]:
+            - generic [ref=e3571]:
+              - generic [ref=e3572]: 󰒓
+              - generic [ref=e3573]:
+                - heading "fs_list" [level=3] [ref=e3574]
+                - generic [ref=e3575]:
+                  - generic [ref=e3577]: uncategorized
+                  - generic [ref=e3579]: enabled
+                  - generic [ref=e3581]: internal
+            - paragraph [ref=e3582]: List directory contents with filtering and metadata
+          - button "View Schema" [ref=e3584] [cursor=pointer]:
+            - generic [ref=e3586]: 󰈈
+            - generic [ref=e3587]: View Schema
+        - generic [ref=e3590]:
+          - generic [ref=e3591]:
+            - generic [ref=e3592]:
+              - generic [ref=e3593]: 󰒓
+              - generic [ref=e3594]:
+                - heading "fs_read" [level=3] [ref=e3595]
+                - generic [ref=e3596]:
+                  - generic [ref=e3598]: uncategorized
+                  - generic [ref=e3600]: enabled
+                  - generic [ref=e3602]: internal
+            - paragraph [ref=e3603]: Read file contents with encoding options and safety checks
+          - button "View Schema" [ref=e3605] [cursor=pointer]:
+            - generic [ref=e3607]: 󰈈
+            - generic [ref=e3608]: View Schema
+        - generic [ref=e3611]:
+          - generic [ref=e3612]:
+            - generic [ref=e3613]:
+              - generic [ref=e3614]: 󰒓
+              - generic [ref=e3615]:
+                - heading "fs_write" [level=3] [ref=e3616]
+                - generic [ref=e3617]:
+                  - generic [ref=e3619]: uncategorized
+                  - generic [ref=e3621]: enabled
+                  - generic [ref=e3623]: internal
+            - paragraph [ref=e3624]: Write content to files with safety checks and backup options
+          - button "View Schema" [ref=e3626] [cursor=pointer]:
+            - generic [ref=e3628]: 󰈈
+            - generic [ref=e3629]: View Schema
+        - generic [ref=e3632]:
+          - generic [ref=e3633]:
+            - generic [ref=e3634]:
+              - generic [ref=e3635]: 󰒓
+              - generic [ref=e3636]:
+                - heading "generate-schema-validator" [level=3] [ref=e3637]
+                - generic [ref=e3638]:
+                  - generic [ref=e3640]: uncategorized
+                  - generic [ref=e3642]: enabled
+                  - generic [ref=e3644]: internal
+            - paragraph [ref=e3645]: Generate a JSON Schema validator for a collection
+          - button "View Schema" [ref=e3647] [cursor=pointer]:
+            - generic [ref=e3649]: 󰈈
+            - generic [ref=e3650]: View Schema
+        - generic [ref=e3653]:
+          - generic [ref=e3654]:
+            - generic [ref=e3655]:
+              - generic [ref=e3656]: 󰒓
+              - generic [ref=e3657]:
+                - heading "generate-schema-validator" [level=3] [ref=e3658]
+                - generic [ref=e3659]:
+                  - generic [ref=e3661]: uncategorized
+                  - generic [ref=e3663]: enabled
+                  - generic [ref=e3665]: internal
+            - paragraph [ref=e3666]: Generate a JSON Schema validator for a collection
+            - generic [ref=e3667]:
+              - generic [ref=e3668]: "Source:"
+              - generic [ref=e3670]: external
+          - button "View Schema" [ref=e3672] [cursor=pointer]:
+            - generic [ref=e3674]: 󰈈
+            - generic [ref=e3675]: View Schema
+        - generic [ref=e3678]:
+          - generic [ref=e3679]:
+            - generic [ref=e3680]:
+              - generic [ref=e3681]: 󰒓
+              - generic [ref=e3682]:
+                - heading "geo-query" [level=3] [ref=e3683]
+                - generic [ref=e3684]:
+                  - generic [ref=e3686]: uncategorized
+                  - generic [ref=e3688]: enabled
+                  - generic [ref=e3690]: internal
+            - paragraph [ref=e3691]: Run geospatial queries with various operators
+          - button "View Schema" [ref=e3693] [cursor=pointer]:
+            - generic [ref=e3695]: 󰈈
+            - generic [ref=e3696]: View Schema
+        - generic [ref=e3699]:
+          - generic [ref=e3700]:
+            - generic [ref=e3701]:
+              - generic [ref=e3702]: 󰒓
+              - generic [ref=e3703]:
+                - heading "geo-query" [level=3] [ref=e3704]
+                - generic [ref=e3705]:
+                  - generic [ref=e3707]: uncategorized
+                  - generic [ref=e3709]: enabled
+                  - generic [ref=e3711]: internal
+            - paragraph [ref=e3712]: Run geospatial queries with various operators
+            - generic [ref=e3713]:
+              - generic [ref=e3714]: "Source:"
+              - generic [ref=e3716]: external
+          - button "View Schema" [ref=e3718] [cursor=pointer]:
+            - generic [ref=e3720]: 󰈈
+            - generic [ref=e3721]: View Schema
+        - generic [ref=e3724]:
+          - generic [ref=e3725]:
+            - generic [ref=e3726]:
+              - generic [ref=e3727]: 󰒓
+              - generic [ref=e3728]:
+                - heading "get_available_models" [level=3] [ref=e3729]
+                - generic [ref=e3730]:
+                  - generic [ref=e3732]: uncategorized
+                  - generic [ref=e3734]: enabled
+                  - generic [ref=e3736]: internal
+            - paragraph [ref=e3737]: Get list of available models with their capabilities and cost tiers. Use this to understand what models are available and their characteristics before requesting a model change.
+          - button "View Schema" [ref=e3739] [cursor=pointer]:
+            - generic [ref=e3741]: 󰈈
+            - generic [ref=e3742]: View Schema
+        - generic [ref=e3745]:
+          - generic [ref=e3746]:
+            - generic [ref=e3747]:
+              - generic [ref=e3748]: 󰒓
+              - generic [ref=e3749]:
+                - heading "get_current_params" [level=3] [ref=e3750]
+                - generic [ref=e3751]:
+                  - generic [ref=e3753]: uncategorized
+                  - generic [ref=e3755]: enabled
+                  - generic [ref=e3757]: internal
+            - paragraph [ref=e3758]: Get the current resolved inference parameters for a specific ORPAR phase. Use this to understand your current configuration before deciding whether to request parameter changes. Returns the effective parameters after applying all configuration hierarchy overrides.
+          - button "View Schema" [ref=e3760] [cursor=pointer]:
+            - generic [ref=e3762]: 󰈈
+            - generic [ref=e3763]: View Schema
+        - generic [ref=e3766]:
+          - generic [ref=e3767]:
+            - generic [ref=e3768]:
+              - generic [ref=e3769]: 󰒓
+              - generic [ref=e3770]:
+                - heading "get_file_info" [level=3] [ref=e3771]
+                - generic [ref=e3772]:
+                  - generic [ref=e3774]: uncategorized
+                  - generic [ref=e3776]: enabled
+                  - generic [ref=e3778]: internal
+            - paragraph [ref=e3779]: Retrieve detailed metadata about a file or directory. Returns comprehensive information including size, creation time, last modified time, permissions, and type. This tool is perfect for understanding file characteristics without reading the actual content. Only works within allowed directories.
+          - button "View Schema" [ref=e3781] [cursor=pointer]:
+            - generic [ref=e3783]: 󰈈
+            - generic [ref=e3784]: View Schema
+        - generic [ref=e3787]:
+          - generic [ref=e3788]:
+            - generic [ref=e3789]:
+              - generic [ref=e3790]: 󰒓
+              - generic [ref=e3791]:
+                - heading "get_file_info" [level=3] [ref=e3792]
+                - generic [ref=e3793]:
+                  - generic [ref=e3795]: uncategorized
+                  - generic [ref=e3797]: enabled
+                  - generic [ref=e3799]: internal
+            - paragraph [ref=e3800]: Retrieve detailed metadata about a file or directory. Returns comprehensive information including size, creation time, last modified time, permissions, and type. This tool is perfect for understanding file characteristics without reading the actual content. Only works within allowed directories.
+            - generic [ref=e3801]:
+              - generic [ref=e3802]: "Source:"
+              - generic [ref=e3804]: external
+          - button "View Schema" [ref=e3806] [cursor=pointer]:
+            - generic [ref=e3808]: 󰈈
+            - generic [ref=e3809]: View Schema
+        - generic [ref=e3812]:
+          - generic [ref=e3813]:
+            - generic [ref=e3814]:
+              - generic [ref=e3815]: 󰒓
+              - generic [ref=e3816]:
+                - heading "get_node" [level=3] [ref=e3817]
+                - generic [ref=e3818]:
+                  - generic [ref=e3820]: uncategorized
+                  - generic [ref=e3822]: enabled
+                  - generic [ref=e3824]: internal
+            - paragraph [ref=e3825]: "Get node info with progressive detail levels and multiple modes. Detail: minimal (~200 tokens), standard (~1-2K, default), full (~3-8K). Modes: info (default), docs (markdown documentation), search_properties (find properties), versions/compare/breaking/migrations (version info). Use format='docs' for readable documentation, mode='search_properties' with propertyQuery for finding specific fields."
+          - button "View Schema" [ref=e3827] [cursor=pointer]:
+            - generic [ref=e3829]: 󰈈
+            - generic [ref=e3830]: View Schema
+        - generic [ref=e3833]:
+          - generic [ref=e3834]:
+            - generic [ref=e3835]:
+              - generic [ref=e3836]: 󰒓
+              - generic [ref=e3837]:
+                - heading "get_node" [level=3] [ref=e3838]
+                - generic [ref=e3839]:
+                  - generic [ref=e3841]: uncategorized
+                  - generic [ref=e3843]: enabled
+                  - generic [ref=e3845]: internal
+            - paragraph [ref=e3846]: "Get node info with progressive detail levels and multiple modes. Detail: minimal (~200 tokens), standard (~1-2K, default), full (~3-8K). Modes: info (default), docs (markdown documentation), search_properties (find properties), versions/compare/breaking/migrations (version info). Use format='docs' for readable documentation, mode='search_properties' with propertyQuery for finding specific fields."
+            - generic [ref=e3847]:
+              - generic [ref=e3848]: "Source:"
+              - generic [ref=e3850]: external
+          - button "View Schema" [ref=e3852] [cursor=pointer]:
+            - generic [ref=e3854]: 󰈈
+            - generic [ref=e3855]: View Schema
+        - generic [ref=e3858]:
+          - generic [ref=e3859]:
+            - generic [ref=e3860]:
+              - generic [ref=e3861]: 󰒓
+              - generic [ref=e3862]:
+                - heading "get_parameter_cost_analytics" [level=3] [ref=e3863]
+                - generic [ref=e3864]:
+                  - generic [ref=e3866]: uncategorized
+                  - generic [ref=e3868]: enabled
+                  - generic [ref=e3870]: internal
+            - paragraph [ref=e3871]: Get cost analytics for inference parameter usage. Provides insights into cost patterns by phase, model usage distribution, and potential cost optimization opportunities.
+          - button "View Schema" [ref=e3873] [cursor=pointer]:
+            - generic [ref=e3875]: 󰈈
+            - generic [ref=e3876]: View Schema
+        - generic [ref=e3879]:
+          - generic [ref=e3880]:
+            - generic [ref=e3881]:
+              - generic [ref=e3882]: 󰒓
+              - generic [ref=e3883]:
+                - heading "get_parameter_status" [level=3] [ref=e3884]
+                - generic [ref=e3885]:
+                  - generic [ref=e3887]: uncategorized
+                  - generic [ref=e3889]: enabled
+                  - generic [ref=e3891]: internal
+            - paragraph [ref=e3892]: Get status of active parameter overrides and request tracking. Use this to understand your current parameter override state and rate limit status before making additional parameter change requests.
+          - button "View Schema" [ref=e3894] [cursor=pointer]:
+            - generic [ref=e3896]: 󰈈
+            - generic [ref=e3897]: View Schema
+        - generic [ref=e3900]:
+          - generic [ref=e3901]:
+            - generic [ref=e3902]:
+              - generic [ref=e3903]: 󰒓
+              - generic [ref=e3904]:
+                - heading "get_template" [level=3] [ref=e3905]
+                - generic [ref=e3906]:
+                  - generic [ref=e3908]: uncategorized
+                  - generic [ref=e3910]: enabled
+                  - generic [ref=e3912]: internal
+            - paragraph [ref=e3913]: "Get template by ID. Use mode to control response size: nodes_only (minimal), structure (nodes+connections), full (complete workflow)."
+          - button "View Schema" [ref=e3915] [cursor=pointer]:
+            - generic [ref=e3917]: 󰈈
+            - generic [ref=e3918]: View Schema
+        - generic [ref=e3921]:
+          - generic [ref=e3922]:
+            - generic [ref=e3923]:
+              - generic [ref=e3924]: 󰒓
+              - generic [ref=e3925]:
+                - heading "get_template" [level=3] [ref=e3926]
+                - generic [ref=e3927]:
+                  - generic [ref=e3929]: uncategorized
+                  - generic [ref=e3931]: enabled
+                  - generic [ref=e3933]: internal
+            - paragraph [ref=e3934]: "Get template by ID. Use mode to control response size: nodes_only (minimal), structure (nodes+connections), full (complete workflow)."
+            - generic [ref=e3935]:
+              - generic [ref=e3936]: "Source:"
+              - generic [ref=e3938]: external
+          - button "View Schema" [ref=e3940] [cursor=pointer]:
+            - generic [ref=e3942]: 󰈈
+            - generic [ref=e3943]: View Schema
+        - generic [ref=e3946]:
+          - generic [ref=e3947]:
+            - generic [ref=e3948]:
+              - generic [ref=e3949]: 󰒓
+              - generic [ref=e3950]:
+                - heading "get-stats" [level=3] [ref=e3951]
+                - generic [ref=e3952]:
+                  - generic [ref=e3954]: uncategorized
+                  - generic [ref=e3956]: enabled
+                  - generic [ref=e3958]: internal
+            - paragraph [ref=e3959]: Get database or collection statistics
+          - button "View Schema" [ref=e3961] [cursor=pointer]:
+            - generic [ref=e3963]: 󰈈
+            - generic [ref=e3964]: View Schema
+        - generic [ref=e3967]:
+          - generic [ref=e3968]:
+            - generic [ref=e3969]:
+              - generic [ref=e3970]: 󰒓
+              - generic [ref=e3971]:
+                - heading "get-stats" [level=3] [ref=e3972]
+                - generic [ref=e3973]:
+                  - generic [ref=e3975]: uncategorized
+                  - generic [ref=e3977]: enabled
+                  - generic [ref=e3979]: internal
+            - paragraph [ref=e3980]: Get database or collection statistics
+            - generic [ref=e3981]:
+              - generic [ref=e3982]: "Source:"
+              - generic [ref=e3984]: external
+          - button "View Schema" [ref=e3986] [cursor=pointer]:
+            - generic [ref=e3988]: 󰈈
+            - generic [ref=e3989]: View Schema
+        - generic [ref=e3992]:
+          - generic [ref=e3993]:
+            - generic [ref=e3994]:
+              - generic [ref=e3995]: 󰒓
+              - generic [ref=e3996]:
+                - heading "git_add" [level=3] [ref=e3997]
+                - generic [ref=e3998]:
+                  - generic [ref=e4000]: uncategorized
+                  - generic [ref=e4002]: enabled
+                  - generic [ref=e4004]: internal
+            - paragraph [ref=e4005]: Stage files for commit
+          - button "View Schema" [ref=e4007] [cursor=pointer]:
+            - generic [ref=e4009]: 󰈈
+            - generic [ref=e4010]: View Schema
+        - generic [ref=e4013]:
+          - generic [ref=e4014]:
+            - generic [ref=e4015]:
+              - generic [ref=e4016]: 󰒓
+              - generic [ref=e4017]:
+                - heading "git_branch" [level=3] [ref=e4018]
+                - generic [ref=e4019]:
+                  - generic [ref=e4021]: uncategorized
+                  - generic [ref=e4023]: enabled
+                  - generic [ref=e4025]: internal
+            - paragraph [ref=e4026]: List, create, or delete branches
+          - button "View Schema" [ref=e4028] [cursor=pointer]:
+            - generic [ref=e4030]: 󰈈
+            - generic [ref=e4031]: View Schema
+        - generic [ref=e4034]:
+          - generic [ref=e4035]:
+            - generic [ref=e4036]:
+              - generic [ref=e4037]: 󰒓
+              - generic [ref=e4038]:
+                - heading "git_commit" [level=3] [ref=e4039]
+                - generic [ref=e4040]:
+                  - generic [ref=e4042]: uncategorized
+                  - generic [ref=e4044]: enabled
+                  - generic [ref=e4046]: internal
+            - paragraph [ref=e4047]: Create a git commit with a message
+          - button "View Schema" [ref=e4049] [cursor=pointer]:
+            - generic [ref=e4051]: 󰈈
+            - generic [ref=e4052]: View Schema
+        - generic [ref=e4055]:
+          - generic [ref=e4056]:
+            - generic [ref=e4057]:
+              - generic [ref=e4058]: 󰒓
+              - generic [ref=e4059]:
+                - heading "git_diff" [level=3] [ref=e4060]
+                - generic [ref=e4061]:
+                  - generic [ref=e4063]: uncategorized
+                  - generic [ref=e4065]: enabled
+                  - generic [ref=e4067]: internal
+            - paragraph [ref=e4068]: Show differences between commits, commit and working tree, etc
+          - button "View Schema" [ref=e4070] [cursor=pointer]:
+            - generic [ref=e4072]: 󰈈
+            - generic [ref=e4073]: View Schema
+        - generic [ref=e4076]:
+          - generic [ref=e4077]:
+            - generic [ref=e4078]:
+              - generic [ref=e4079]: 󰒓
+              - generic [ref=e4080]:
+                - heading "git_log" [level=3] [ref=e4081]
+                - generic [ref=e4082]:
+                  - generic [ref=e4084]: uncategorized
+                  - generic [ref=e4086]: enabled
+                  - generic [ref=e4088]: internal
+            - paragraph [ref=e4089]: Show commit logs
+          - button "View Schema" [ref=e4091] [cursor=pointer]:
+            - generic [ref=e4093]: 󰈈
+            - generic [ref=e4094]: View Schema
+        - generic [ref=e4097]:
+          - generic [ref=e4098]:
+            - generic [ref=e4099]:
+              - generic [ref=e4100]: 󰒓
+              - generic [ref=e4101]:
+                - heading "git_pull" [level=3] [ref=e4102]
+                - generic [ref=e4103]:
+                  - generic [ref=e4105]: uncategorized
+                  - generic [ref=e4107]: enabled
+                  - generic [ref=e4109]: internal
+            - paragraph [ref=e4110]: Pull changes from remote repository
+          - button "View Schema" [ref=e4112] [cursor=pointer]:
+            - generic [ref=e4114]: 󰈈
+            - generic [ref=e4115]: View Schema
+        - generic [ref=e4118]:
+          - generic [ref=e4119]:
+            - generic [ref=e4120]:
+              - generic [ref=e4121]: 󰒓
+              - generic [ref=e4122]:
+                - heading "git_push" [level=3] [ref=e4123]
+                - generic [ref=e4124]:
+                  - generic [ref=e4126]: uncategorized
+                  - generic [ref=e4128]: enabled
+                  - generic [ref=e4130]: internal
+            - paragraph [ref=e4131]: Push commits to remote repository
+          - button "View Schema" [ref=e4133] [cursor=pointer]:
+            - generic [ref=e4135]: 󰈈
+            - generic [ref=e4136]: View Schema
+        - generic [ref=e4139]:
+          - generic [ref=e4140]:
+            - generic [ref=e4141]:
+              - generic [ref=e4142]: 󰒓
+              - generic [ref=e4143]:
+                - heading "git_status" [level=3] [ref=e4144]
+                - generic [ref=e4145]:
+                  - generic [ref=e4147]: uncategorized
+                  - generic [ref=e4149]: enabled
+                  - generic [ref=e4151]: internal
+            - paragraph [ref=e4152]: Get git repository status including staged, modified, and untracked files
+          - button "View Schema" [ref=e4154] [cursor=pointer]:
+            - generic [ref=e4156]: 󰈈
+            - generic [ref=e4157]: View Schema
+        - generic [ref=e4160]:
+          - generic [ref=e4161]:
+            - generic [ref=e4162]:
+              - generic [ref=e4163]: 󰒓
+              - generic [ref=e4164]:
+                - heading "gridfs-operation" [level=3] [ref=e4165]
+                - generic [ref=e4166]:
+                  - generic [ref=e4168]: uncategorized
+                  - generic [ref=e4170]: enabled
+                  - generic [ref=e4172]: internal
+            - paragraph [ref=e4173]: Manage large files with GridFS
+          - button "View Schema" [ref=e4175] [cursor=pointer]:
+            - generic [ref=e4177]: 󰈈
+            - generic [ref=e4178]: View Schema
+        - generic [ref=e4181]:
+          - generic [ref=e4182]:
+            - generic [ref=e4183]:
+              - generic [ref=e4184]: 󰒓
+              - generic [ref=e4185]:
+                - heading "gridfs-operation" [level=3] [ref=e4186]
+                - generic [ref=e4187]:
+                  - generic [ref=e4189]: uncategorized
+                  - generic [ref=e4191]: enabled
+                  - generic [ref=e4193]: internal
+            - paragraph [ref=e4194]: Manage large files with GridFS
+            - generic [ref=e4195]:
+              - generic [ref=e4196]: "Source:"
+              - generic [ref=e4198]: external
+          - button "View Schema" [ref=e4200] [cursor=pointer]:
+            - generic [ref=e4202]: 󰈈
+            - generic [ref=e4203]: View Schema
+        - generic [ref=e4206]:
+          - generic [ref=e4207]:
+            - generic [ref=e4208]:
+              - generic [ref=e4209]: 󰒓
+              - generic [ref=e4210]:
+                - heading "insert-document" [level=3] [ref=e4211]
+                - generic [ref=e4212]:
+                  - generic [ref=e4214]: uncategorized
+                  - generic [ref=e4216]: enabled
+                  - generic [ref=e4218]: internal
+            - paragraph [ref=e4219]: Insert one or multiple documents into a collection
+          - button "View Schema" [ref=e4221] [cursor=pointer]:
+            - generic [ref=e4223]: 󰈈
+            - generic [ref=e4224]: View Schema
+        - generic [ref=e4227]:
+          - generic [ref=e4228]:
+            - generic [ref=e4229]:
+              - generic [ref=e4230]: 󰒓
+              - generic [ref=e4231]:
+                - heading "insert-document" [level=3] [ref=e4232]
+                - generic [ref=e4233]:
+                  - generic [ref=e4235]: uncategorized
+                  - generic [ref=e4237]: enabled
+                  - generic [ref=e4239]: internal
+            - paragraph [ref=e4240]: Insert one or multiple documents into a collection
+            - generic [ref=e4241]:
+              - generic [ref=e4242]: "Source:"
+              - generic [ref=e4244]: external
+          - button "View Schema" [ref=e4246] [cursor=pointer]:
+            - generic [ref=e4248]: 󰈈
+            - generic [ref=e4249]: View Schema
+        - generic [ref=e4252]:
+          - generic [ref=e4253]:
+            - generic [ref=e4254]:
+              - generic [ref=e4255]: 󰒓
+              - generic [ref=e4256]:
+                - heading "json_append" [level=3] [ref=e4257]
+                - generic [ref=e4258]:
+                  - generic [ref=e4260]: uncategorized
+                  - generic [ref=e4262]: enabled
+                  - generic [ref=e4264]: internal
+            - paragraph [ref=e4265]: Append an entry to a JSON file containing an array or object with an array property. Atomic operation with backup support.
+          - button "View Schema" [ref=e4267] [cursor=pointer]:
+            - generic [ref=e4269]: 󰈈
+            - generic [ref=e4270]: View Schema
+        - generic [ref=e4273]:
+          - generic [ref=e4274]:
+            - generic [ref=e4275]:
+              - generic [ref=e4276]: 󰒓
+              - generic [ref=e4277]:
+                - heading "json_read" [level=3] [ref=e4278]
+                - generic [ref=e4279]:
+                  - generic [ref=e4281]: uncategorized
+                  - generic [ref=e4283]: enabled
+                  - generic [ref=e4285]: internal
+            - paragraph [ref=e4286]: Read and parse a JSON file with optional JSON path filtering
+          - button "View Schema" [ref=e4288] [cursor=pointer]:
+            - generic [ref=e4290]: 󰈈
+            - generic [ref=e4291]: View Schema
+        - generic [ref=e4294]:
+          - generic [ref=e4295]:
+            - generic [ref=e4296]:
+              - generic [ref=e4297]: 󰒓
+              - generic [ref=e4298]:
+                - heading "kg_create_entity" [level=3] [ref=e4299]
+                - generic [ref=e4300]:
+                  - generic [ref=e4302]: uncategorized
+                  - generic [ref=e4304]: enabled
+                  - generic [ref=e4306]: internal
+            - paragraph [ref=e4307]: Create a new entity in the Knowledge Graph. Use this to manually add entities discovered during tasks.
+          - button "View Schema" [ref=e4309] [cursor=pointer]:
+            - generic [ref=e4311]: 󰈈
+            - generic [ref=e4312]: View Schema
+        - generic [ref=e4315]:
+          - generic [ref=e4316]:
+            - generic [ref=e4317]:
+              - generic [ref=e4318]: 󰒓
+              - generic [ref=e4319]:
+                - heading "kg_create_relationship" [level=3] [ref=e4320]
+                - generic [ref=e4321]:
+                  - generic [ref=e4323]: uncategorized
+                  - generic [ref=e4325]: enabled
+                  - generic [ref=e4327]: internal
+            - paragraph [ref=e4328]: Create a relationship between two entities in the Knowledge Graph.
+          - button "View Schema" [ref=e4330] [cursor=pointer]:
+            - generic [ref=e4332]: 󰈈
+            - generic [ref=e4333]: View Schema
+        - generic [ref=e4336]:
+          - generic [ref=e4337]:
+            - generic [ref=e4338]:
+              - generic [ref=e4339]: 󰒓
+              - generic [ref=e4340]:
+                - heading "kg_extract_from_memory" [level=3] [ref=e4341]
+                - generic [ref=e4342]:
+                  - generic [ref=e4344]: uncategorized
+                  - generic [ref=e4346]: enabled
+                  - generic [ref=e4348]: internal
+            - paragraph [ref=e4349]: Extract entities and relationships from a stored memory. Links extracted entities to the memory for future retrieval.
+          - button "View Schema" [ref=e4351] [cursor=pointer]:
+            - generic [ref=e4353]: 󰈈
+            - generic [ref=e4354]: View Schema
+        - generic [ref=e4357]:
+          - generic [ref=e4358]:
+            - generic [ref=e4359]:
+              - generic [ref=e4360]: 󰒓
+              - generic [ref=e4361]:
+                - heading "kg_extract_from_text" [level=3] [ref=e4362]
+                - generic [ref=e4363]:
+                  - generic [ref=e4365]: uncategorized
+                  - generic [ref=e4367]: enabled
+                  - generic [ref=e4369]: internal
+            - paragraph [ref=e4370]: Extract entities and relationships from arbitrary text using rule-based extraction. Useful for populating the Knowledge Graph from documents or messages.
+          - button "View Schema" [ref=e4372] [cursor=pointer]:
+            - generic [ref=e4374]: 󰈈
+            - generic [ref=e4375]: View Schema
+        - generic [ref=e4378]:
+          - generic [ref=e4379]:
+            - generic [ref=e4380]:
+              - generic [ref=e4381]: 󰒓
+              - generic [ref=e4382]:
+                - heading "kg_find_duplicates" [level=3] [ref=e4383]
+                - generic [ref=e4384]:
+                  - generic [ref=e4386]: uncategorized
+                  - generic [ref=e4388]: enabled
+                  - generic [ref=e4390]: internal
+            - paragraph [ref=e4391]: Find entities that may be duplicates based on name similarity. Useful for graph maintenance and deduplication.
+          - button "View Schema" [ref=e4393] [cursor=pointer]:
+            - generic [ref=e4395]: 󰈈
+            - generic [ref=e4396]: View Schema
+        - generic [ref=e4399]:
+          - generic [ref=e4400]:
+            - generic [ref=e4401]:
+              - generic [ref=e4402]: 󰒓
+              - generic [ref=e4403]:
+                - heading "kg_find_entity" [level=3] [ref=e4404]
+                - generic [ref=e4405]:
+                  - generic [ref=e4407]: uncategorized
+                  - generic [ref=e4409]: enabled
+                  - generic [ref=e4411]: internal
+            - paragraph [ref=e4412]: Find entities by name or alias in the Knowledge Graph. Supports exact or partial matching.
+          - button "View Schema" [ref=e4414] [cursor=pointer]:
+            - generic [ref=e4416]: 󰈈
+            - generic [ref=e4417]: View Schema
+        - generic [ref=e4420]:
+          - generic [ref=e4421]:
+            - generic [ref=e4422]:
+              - generic [ref=e4423]: 󰒓
+              - generic [ref=e4424]:
+                - heading "kg_find_path" [level=3] [ref=e4425]
+                - generic [ref=e4426]:
+                  - generic [ref=e4428]: uncategorized
+                  - generic [ref=e4430]: enabled
+                  - generic [ref=e4432]: internal
+            - paragraph [ref=e4433]: Find the shortest path between two entities in the Knowledge Graph. Returns the sequence of entities and relationships connecting them.
+          - button "View Schema" [ref=e4435] [cursor=pointer]:
+            - generic [ref=e4437]: 󰈈
+            - generic [ref=e4438]: View Schema
+        - generic [ref=e4441]:
+          - generic [ref=e4442]:
+            - generic [ref=e4443]:
+              - generic [ref=e4444]: 󰒓
+              - generic [ref=e4445]:
+                - heading "kg_get_context" [level=3] [ref=e4446]
+                - generic [ref=e4447]:
+                  - generic [ref=e4449]: uncategorized
+                  - generic [ref=e4451]: enabled
+                  - generic [ref=e4453]: internal
+            - paragraph [ref=e4454]: Get relevant graph context for a task or query. Returns entities, relationships, and high-utility entities based on keywords.
+          - button "View Schema" [ref=e4456] [cursor=pointer]:
+            - generic [ref=e4458]: 󰈈
+            - generic [ref=e4459]: View Schema
+        - generic [ref=e4462]:
+          - generic [ref=e4463]:
+            - generic [ref=e4464]:
+              - generic [ref=e4465]: 󰒓
+              - generic [ref=e4466]:
+                - heading "kg_get_entity" [level=3] [ref=e4467]
+                - generic [ref=e4468]:
+                  - generic [ref=e4470]: uncategorized
+                  - generic [ref=e4472]: enabled
+                  - generic [ref=e4474]: internal
+            - paragraph [ref=e4475]: Get a specific entity from the Knowledge Graph by its ID. Returns entity details including type, name, aliases, description, and utility metrics (Q-value).
+          - button "View Schema" [ref=e4477] [cursor=pointer]:
+            - generic [ref=e4479]: 󰈈
+            - generic [ref=e4480]: View Schema
+        - generic [ref=e4483]:
+          - generic [ref=e4484]:
+            - generic [ref=e4485]:
+              - generic [ref=e4486]: 󰒓
+              - generic [ref=e4487]:
+                - heading "kg_get_high_utility_entities" [level=3] [ref=e4488]
+                - generic [ref=e4489]:
+                  - generic [ref=e4491]: uncategorized
+                  - generic [ref=e4493]: enabled
+                  - generic [ref=e4495]: internal
+            - paragraph [ref=e4496]: Get entities with the highest Q-values (utility scores) in the channel. These are entities that have been most useful in past tasks.
+          - button "View Schema" [ref=e4498] [cursor=pointer]:
+            - generic [ref=e4500]: 󰈈
+            - generic [ref=e4501]: View Schema
+        - generic [ref=e4504]:
+          - generic [ref=e4505]:
+            - generic [ref=e4506]:
+              - generic [ref=e4507]: 󰒓
+              - generic [ref=e4508]:
+                - heading "kg_get_neighbors" [level=3] [ref=e4509]
+                - generic [ref=e4510]:
+                  - generic [ref=e4512]: uncategorized
+                  - generic [ref=e4514]: enabled
+                  - generic [ref=e4516]: internal
+            - paragraph [ref=e4517]: Get entities connected to a specific entity. Returns neighboring entities and the relationships between them.
+          - button "View Schema" [ref=e4519] [cursor=pointer]:
+            - generic [ref=e4521]: 󰈈
+            - generic [ref=e4522]: View Schema
+        - generic [ref=e4525]:
+          - generic [ref=e4526]:
+            - generic [ref=e4527]:
+              - generic [ref=e4528]: 󰒓
+              - generic [ref=e4529]:
+                - heading "kg_get_phase_context" [level=3] [ref=e4530]
+                - generic [ref=e4531]:
+                  - generic [ref=e4533]: uncategorized
+                  - generic [ref=e4535]: enabled
+                  - generic [ref=e4537]: internal
+            - paragraph [ref=e4538]: Get Knowledge Graph context optimized for a specific ORPAR phase. Returns phase-appropriate entities, relationships, and insights.
+          - button "View Schema" [ref=e4540] [cursor=pointer]:
+            - generic [ref=e4542]: 󰈈
+            - generic [ref=e4543]: View Schema
+        - generic [ref=e4546]:
+          - generic [ref=e4547]:
+            - generic [ref=e4548]:
+              - generic [ref=e4549]: 󰒓
+              - generic [ref=e4550]:
+                - heading "kg_merge_entities" [level=3] [ref=e4551]
+                - generic [ref=e4552]:
+                  - generic [ref=e4554]: uncategorized
+                  - generic [ref=e4556]: enabled
+                  - generic [ref=e4558]: internal
+            - paragraph [ref=e4559]: Merge multiple entities into a single target entity. Relationships from source entities are transferred to the target.
+          - button "View Schema" [ref=e4561] [cursor=pointer]:
+            - generic [ref=e4563]: 󰈈
+            - generic [ref=e4564]: View Schema
+        - generic [ref=e4567]:
+          - generic [ref=e4568]:
+            - generic [ref=e4569]:
+              - generic [ref=e4570]: 󰒓
+              - generic [ref=e4571]:
+                - heading "list_allowed_directories" [level=3] [ref=e4572]
+                - generic [ref=e4573]:
+                  - generic [ref=e4575]: uncategorized
+                  - generic [ref=e4577]: enabled
+                  - generic [ref=e4579]: internal
+            - paragraph [ref=e4580]: Returns the list of directories that this server is allowed to access. Subdirectories within these allowed directories are also accessible. Use this to understand which directories and their nested paths are available before trying to access files.
+          - button "View Schema" [ref=e4582] [cursor=pointer]:
+            - generic [ref=e4584]: 󰈈
+            - generic [ref=e4585]: View Schema
+        - generic [ref=e4588]:
+          - generic [ref=e4589]:
+            - generic [ref=e4590]:
+              - generic [ref=e4591]: 󰒓
+              - generic [ref=e4592]:
+                - heading "list_allowed_directories" [level=3] [ref=e4593]
+                - generic [ref=e4594]:
+                  - generic [ref=e4596]: uncategorized
+                  - generic [ref=e4598]: enabled
+                  - generic [ref=e4600]: internal
+            - paragraph [ref=e4601]: Returns the list of directories that this server is allowed to access. Subdirectories within these allowed directories are also accessible. Use this to understand which directories and their nested paths are available before trying to access files.
+            - generic [ref=e4602]:
+              - generic [ref=e4603]: "Source:"
+              - generic [ref=e4605]: external
+          - button "View Schema" [ref=e4607] [cursor=pointer]:
+            - generic [ref=e4609]: 󰈈
+            - generic [ref=e4610]: View Schema
+        - generic [ref=e4613]:
+          - generic [ref=e4614]:
+            - generic [ref=e4615]:
+              - generic [ref=e4616]: 󰒓
+              - generic [ref=e4617]:
+                - heading "list_directory" [level=3] [ref=e4618]
+                - generic [ref=e4619]:
+                  - generic [ref=e4621]: uncategorized
+                  - generic [ref=e4623]: enabled
+                  - generic [ref=e4625]: internal
+            - paragraph [ref=e4626]: Get a detailed listing of all files and directories in a specified path. Results clearly distinguish between files and directories with [FILE] and [DIR] prefixes. This tool is essential for understanding directory structure and finding specific files within a directory. Only works within allowed directories.
+          - button "View Schema" [ref=e4628] [cursor=pointer]:
+            - generic [ref=e4630]: 󰈈
+            - generic [ref=e4631]: View Schema
+        - generic [ref=e4634]:
+          - generic [ref=e4635]:
+            - generic [ref=e4636]:
+              - generic [ref=e4637]: 󰒓
+              - generic [ref=e4638]:
+                - heading "list_directory" [level=3] [ref=e4639]
+                - generic [ref=e4640]:
+                  - generic [ref=e4642]: uncategorized
+                  - generic [ref=e4644]: enabled
+                  - generic [ref=e4646]: internal
+            - paragraph [ref=e4647]: Get a detailed listing of all files and directories in a specified path. Results clearly distinguish between files and directories with [FILE] and [DIR] prefixes. This tool is essential for understanding directory structure and finding specific files within a directory. Only works within allowed directories.
+            - generic [ref=e4648]:
+              - generic [ref=e4649]: "Source:"
+              - generic [ref=e4651]: external
+          - button "View Schema" [ref=e4653] [cursor=pointer]:
+            - generic [ref=e4655]: 󰈈
+            - generic [ref=e4656]: View Schema
+        - generic [ref=e4659]:
+          - generic [ref=e4660]:
+            - generic [ref=e4661]:
+              - generic [ref=e4662]: 󰒓
+              - generic [ref=e4663]:
+                - heading "list_directory_with_sizes" [level=3] [ref=e4664]
+                - generic [ref=e4665]:
+                  - generic [ref=e4667]: uncategorized
+                  - generic [ref=e4669]: enabled
+                  - generic [ref=e4671]: internal
+            - paragraph [ref=e4672]: Get a detailed listing of all files and directories in a specified path, including sizes. Results clearly distinguish between files and directories with [FILE] and [DIR] prefixes. This tool is useful for understanding directory structure and finding specific files within a directory. Only works within allowed directories.
+          - button "View Schema" [ref=e4674] [cursor=pointer]:
+            - generic [ref=e4676]: 󰈈
+            - generic [ref=e4677]: View Schema
+        - generic [ref=e4680]:
+          - generic [ref=e4681]:
+            - generic [ref=e4682]:
+              - generic [ref=e4683]: 󰒓
+              - generic [ref=e4684]:
+                - heading "list_directory_with_sizes" [level=3] [ref=e4685]
+                - generic [ref=e4686]:
+                  - generic [ref=e4688]: uncategorized
+                  - generic [ref=e4690]: enabled
+                  - generic [ref=e4692]: internal
+            - paragraph [ref=e4693]: Get a detailed listing of all files and directories in a specified path, including sizes. Results clearly distinguish between files and directories with [FILE] and [DIR] prefixes. This tool is useful for understanding directory structure and finding specific files within a directory. Only works within allowed directories.
+            - generic [ref=e4694]:
+              - generic [ref=e4695]: "Source:"
+              - generic [ref=e4697]: external
+          - button "View Schema" [ref=e4699] [cursor=pointer]:
+            - generic [ref=e4701]: 󰈈
+            - generic [ref=e4702]: View Schema
+        - generic [ref=e4705]:
+          - generic [ref=e4706]:
+            - generic [ref=e4707]:
+              - generic [ref=e4708]: 󰒓
+              - generic [ref=e4709]:
+                - heading "list-collections" [level=3] [ref=e4710]
+                - generic [ref=e4711]:
+                  - generic [ref=e4713]: uncategorized
+                  - generic [ref=e4715]: enabled
+                  - generic [ref=e4717]: internal
+            - paragraph [ref=e4718]: List collections in the current database
+          - button "View Schema" [ref=e4720] [cursor=pointer]:
+            - generic [ref=e4722]: 󰈈
+            - generic [ref=e4723]: View Schema
+        - generic [ref=e4726]:
+          - generic [ref=e4727]:
+            - generic [ref=e4728]:
+              - generic [ref=e4729]: 󰒓
+              - generic [ref=e4730]:
+                - heading "list-collections" [level=3] [ref=e4731]
+                - generic [ref=e4732]:
+                  - generic [ref=e4734]: uncategorized
+                  - generic [ref=e4736]: enabled
+                  - generic [ref=e4738]: internal
+            - paragraph [ref=e4739]: List collections in the current database
+            - generic [ref=e4740]:
+              - generic [ref=e4741]: "Source:"
+              - generic [ref=e4743]: external
+          - button "View Schema" [ref=e4745] [cursor=pointer]:
+            - generic [ref=e4747]: 󰈈
+            - generic [ref=e4748]: View Schema
+        - generic [ref=e4751]:
+          - generic [ref=e4752]:
+            - generic [ref=e4753]:
+              - generic [ref=e4754]: 󰒓
+              - generic [ref=e4755]:
+                - heading "list-connections" [level=3] [ref=e4756]
+                - generic [ref=e4757]:
+                  - generic [ref=e4759]: uncategorized
+                  - generic [ref=e4761]: enabled
+                  - generic [ref=e4763]: internal
+            - paragraph [ref=e4764]: List all configured MongoDB connection aliases
+          - button "View Schema" [ref=e4766] [cursor=pointer]:
+            - generic [ref=e4768]: 󰈈
+            - generic [ref=e4769]: View Schema
+        - generic [ref=e4772]:
+          - generic [ref=e4773]:
+            - generic [ref=e4774]:
+              - generic [ref=e4775]: 󰒓
+              - generic [ref=e4776]:
+                - heading "list-connections" [level=3] [ref=e4777]
+                - generic [ref=e4778]:
+                  - generic [ref=e4780]: uncategorized
+                  - generic [ref=e4782]: enabled
+                  - generic [ref=e4784]: internal
+            - paragraph [ref=e4785]: List all configured MongoDB connection aliases
+            - generic [ref=e4786]:
+              - generic [ref=e4787]: "Source:"
+              - generic [ref=e4789]: external
+          - button "View Schema" [ref=e4791] [cursor=pointer]:
+            - generic [ref=e4793]: 󰈈
+            - generic [ref=e4794]: View Schema
+        - generic [ref=e4797]:
+          - generic [ref=e4798]:
+            - generic [ref=e4799]:
+              - generic [ref=e4800]: 󰒓
+              - generic [ref=e4801]:
+                - heading "list-databases" [level=3] [ref=e4802]
+                - generic [ref=e4803]:
+                  - generic [ref=e4805]: uncategorized
+                  - generic [ref=e4807]: enabled
+                  - generic [ref=e4809]: internal
+            - paragraph [ref=e4810]: List all accessible MongoDB databases
+          - button "View Schema" [ref=e4812] [cursor=pointer]:
+            - generic [ref=e4814]: 󰈈
+            - generic [ref=e4815]: View Schema
+        - generic [ref=e4818]:
+          - generic [ref=e4819]:
+            - generic [ref=e4820]:
+              - generic [ref=e4821]: 󰒓
+              - generic [ref=e4822]:
+                - heading "list-databases" [level=3] [ref=e4823]
+                - generic [ref=e4824]:
+                  - generic [ref=e4826]: uncategorized
+                  - generic [ref=e4828]: enabled
+                  - generic [ref=e4830]: internal
+            - paragraph [ref=e4831]: List all accessible MongoDB databases
+            - generic [ref=e4832]:
+              - generic [ref=e4833]: "Source:"
+              - generic [ref=e4835]: external
+          - button "View Schema" [ref=e4837] [cursor=pointer]:
+            - generic [ref=e4839]: 󰈈
+            - generic [ref=e4840]: View Schema
+        - generic [ref=e4843]:
+          - generic [ref=e4844]:
+            - generic [ref=e4845]:
+              - generic [ref=e4846]: 󰒓
+              - generic [ref=e4847]:
+                - heading "memory_inject_reward" [level=3] [ref=e4848]
+                - generic [ref=e4849]:
+                  - generic [ref=e4851]: uncategorized
+                  - generic [ref=e4853]: enabled
+                  - generic [ref=e4855]: internal
+            - paragraph [ref=e4856]: Manually inject a reward signal for a specific memory. Use this to provide explicit feedback about a memory's usefulness. Positive rewards increase Q-value, negative rewards decrease it.
+          - button "View Schema" [ref=e4858] [cursor=pointer]:
+            - generic [ref=e4860]: 󰈈
+            - generic [ref=e4861]: View Schema
+        - generic [ref=e4864]:
+          - generic [ref=e4865]:
+            - generic [ref=e4866]:
+              - generic [ref=e4867]: 󰒓
+              - generic [ref=e4868]:
+                - heading "memory_qvalue_analytics" [level=3] [ref=e4869]
+                - generic [ref=e4870]:
+                  - generic [ref=e4872]: uncategorized
+                  - generic [ref=e4874]: enabled
+                  - generic [ref=e4876]: internal
+            - paragraph [ref=e4877]: View Q-value analytics for the Memory Utility Learning System (MULS). Shows distribution statistics, top-performing memories, convergence metrics, and reward history. Use this to understand which memories are most useful for task completion.
+          - button "View Schema" [ref=e4879] [cursor=pointer]:
+            - generic [ref=e4881]: 󰈈
+            - generic [ref=e4882]: View Schema
+        - generic [ref=e4885]:
+          - generic [ref=e4886]:
+            - generic [ref=e4887]:
+              - generic [ref=e4888]: 󰒓
+              - generic [ref=e4889]:
+                - heading "memory_retrieve" [level=3] [ref=e4890]
+                - generic [ref=e4891]:
+                  - generic [ref=e4893]: uncategorized
+                  - generic [ref=e4895]: enabled
+                  - generic [ref=e4897]: internal
+            - paragraph [ref=e4898]: Retrieve stored data with fallback options
+          - button "View Schema" [ref=e4900] [cursor=pointer]:
+            - generic [ref=e4902]: 󰈈
+            - generic [ref=e4903]: View Schema
+        - generic [ref=e4906]:
+          - generic [ref=e4907]:
+            - generic [ref=e4908]:
+              - generic [ref=e4909]: 󰒓
+              - generic [ref=e4910]:
+                - heading "memory_search_actions" [level=3] [ref=e4911]
+                - generic [ref=e4912]:
+                  - generic [ref=e4914]: uncategorized
+                  - generic [ref=e4916]: enabled
+                  - generic [ref=e4918]: internal
+            - paragraph [ref=e4919]: "Search your tool usage history semantically. Find when you performed specific actions or used particular tools. Example: \"When did I last send a message to AgentB?\" or \"How many times did I use the calculation tools?\""
+          - button "View Schema" [ref=e4921] [cursor=pointer]:
+            - generic [ref=e4923]: 󰈈
+            - generic [ref=e4924]: View Schema
+        - generic [ref=e4927]:
+          - generic [ref=e4928]:
+            - generic [ref=e4929]:
+              - generic [ref=e4930]: 󰒓
+              - generic [ref=e4931]:
+                - heading "memory_search_conversations" [level=3] [ref=e4932]
+                - generic [ref=e4933]:
+                  - generic [ref=e4935]: uncategorized
+                  - generic [ref=e4937]: enabled
+                  - generic [ref=e4939]: internal
+            - paragraph [ref=e4940]: Search your entire conversation history using semantic search. Find relevant past discussions even if they happened hundreds of messages ago. Use this when you need to recall "that time we talked about X".
+          - button "View Schema" [ref=e4942] [cursor=pointer]:
+            - generic [ref=e4944]: 󰈈
+            - generic [ref=e4945]: View Schema
+        - generic [ref=e4948]:
+          - generic [ref=e4949]:
+            - generic [ref=e4950]:
+              - generic [ref=e4951]: 󰒓
+              - generic [ref=e4952]:
+                - heading "memory_search_patterns" [level=3] [ref=e4953]
+                - generic [ref=e4954]:
+                  - generic [ref=e4956]: uncategorized
+                  - generic [ref=e4958]: enabled
+                  - generic [ref=e4960]: internal
+            - paragraph [ref=e4961]: Discover successful workflow patterns from across the entire system. Find proven approaches that worked well in similar situations, even from other channels. Use this to learn from collective experience.
+          - button "View Schema" [ref=e4963] [cursor=pointer]:
+            - generic [ref=e4965]: 󰈈
+            - generic [ref=e4966]: View Schema
+        - generic [ref=e4969]:
+          - generic [ref=e4970]:
+            - generic [ref=e4971]:
+              - generic [ref=e4972]: 󰒓
+              - generic [ref=e4973]:
+                - heading "memory_store" [level=3] [ref=e4974]
+                - generic [ref=e4975]:
+                  - generic [ref=e4977]: uncategorized
+                  - generic [ref=e4979]: enabled
+                  - generic [ref=e4981]: internal
+            - paragraph [ref=e4982]: Store key-value data with expiration and metadata
+          - button "View Schema" [ref=e4984] [cursor=pointer]:
+            - generic [ref=e4986]: 󰈈
+            - generic [ref=e4987]: View Schema
+        - generic [ref=e4990]:
+          - generic [ref=e4991]:
+            - generic [ref=e4992]:
+              - generic [ref=e4993]: 󰒓
+              - generic [ref=e4994]:
+                - heading "memory_utility_config" [level=3] [ref=e4995]
+                - generic [ref=e4996]:
+                  - generic [ref=e4998]: uncategorized
+                  - generic [ref=e5000]: enabled
+                  - generic [ref=e5002]: internal
+            - paragraph [ref=e5003]: Get or set Memory Utility Learning System (MULS) configuration. Configure lambda values for balancing similarity vs utility scoring, learning rate for Q-value updates, and phase-specific lambda values for ORPAR phases.
+          - button "View Schema" [ref=e5005] [cursor=pointer]:
+            - generic [ref=e5007]: 󰈈
+            - generic [ref=e5008]: View Schema
+        - generic [ref=e5011]:
+          - generic [ref=e5012]:
+            - generic [ref=e5013]:
+              - generic [ref=e5014]: 󰒓
+              - generic [ref=e5015]:
+                - heading "messaging_broadcast" [level=3] [ref=e5016]
+                - generic [ref=e5017]:
+                  - generic [ref=e5019]: uncategorized
+                  - generic [ref=e5021]: enabled
+                  - generic [ref=e5023]: internal
+            - paragraph [ref=e5024]: Broadcast a message to multiple agents or an entire channel
+          - button "View Schema" [ref=e5026] [cursor=pointer]:
+            - generic [ref=e5028]: 󰈈
+            - generic [ref=e5029]: View Schema
+        - generic [ref=e5032]:
+          - generic [ref=e5033]:
+            - generic [ref=e5034]:
+              - generic [ref=e5035]: 󰒓
+              - generic [ref=e5036]:
+                - heading "messaging_coordinate" [level=3] [ref=e5037]
+                - generic [ref=e5038]:
+                  - generic [ref=e5040]: uncategorized
+                  - generic [ref=e5042]: enabled
+                  - generic [ref=e5044]: internal
+            - paragraph [ref=e5045]: Request coordination with other agents for collaborative tasks
+          - button "View Schema" [ref=e5047] [cursor=pointer]:
+            - generic [ref=e5049]: 󰈈
+            - generic [ref=e5050]: View Schema
+        - generic [ref=e5053]:
+          - generic [ref=e5054]:
+            - generic [ref=e5055]:
+              - generic [ref=e5056]: 󰒓
+              - generic [ref=e5057]:
+                - heading "messaging_discover" [level=3] [ref=e5058]
+                - generic [ref=e5059]:
+                  - generic [ref=e5061]: uncategorized
+                  - generic [ref=e5063]: enabled
+                  - generic [ref=e5065]: internal
+            - paragraph [ref=e5066]: Discover available agents and their capabilities
+          - button "View Schema" [ref=e5068] [cursor=pointer]:
+            - generic [ref=e5070]: 󰈈
+            - generic [ref=e5071]: View Schema
+        - generic [ref=e5074]:
+          - generic [ref=e5075]:
+            - generic [ref=e5076]:
+              - generic [ref=e5077]: 󰒓
+              - generic [ref=e5078]:
+                - heading "messaging_send" [level=3] [ref=e5079]
+                - generic [ref=e5080]:
+                  - generic [ref=e5082]: uncategorized
+                  - generic [ref=e5084]: enabled
+                  - generic [ref=e5086]: internal
+            - paragraph [ref=e5087]: Send a direct message from one agent to another with optional metadata
+          - button "View Schema" [ref=e5089] [cursor=pointer]:
+            - generic [ref=e5091]: 󰈈
+            - generic [ref=e5092]: View Schema
+        - generic [ref=e5095]:
+          - generic [ref=e5096]:
+            - generic [ref=e5097]:
+              - generic [ref=e5098]: 󰒓
+              - generic [ref=e5099]:
+                - heading "mod" [level=3] [ref=e5100]
+                - generic [ref=e5101]:
+                  - generic [ref=e5103]: uncategorized
+                  - generic [ref=e5105]: enabled
+                  - generic [ref=e5107]: internal
+            - paragraph [ref=e5108]: Mod two numbers
+          - button "View Schema" [ref=e5110] [cursor=pointer]:
+            - generic [ref=e5112]: 󰈈
+            - generic [ref=e5113]: View Schema
+        - generic [ref=e5116]:
+          - generic [ref=e5117]:
+            - generic [ref=e5118]:
+              - generic [ref=e5119]: 󰒓
+              - generic [ref=e5120]:
+                - heading "mod" [level=3] [ref=e5121]
+                - generic [ref=e5122]:
+                  - generic [ref=e5124]: uncategorized
+                  - generic [ref=e5126]: enabled
+                  - generic [ref=e5128]: internal
+            - paragraph [ref=e5129]: Mod two numbers
+            - generic [ref=e5130]:
+              - generic [ref=e5131]: "Source:"
+              - generic [ref=e5133]: external
+          - button "View Schema" [ref=e5135] [cursor=pointer]:
+            - generic [ref=e5137]: 󰈈
+            - generic [ref=e5138]: View Schema
+        - generic [ref=e5141]:
+          - generic [ref=e5142]:
+            - generic [ref=e5143]:
+              - generic [ref=e5144]: 󰒓
+              - generic [ref=e5145]:
+                - heading "model_metadata" [level=3] [ref=e5146]
+                - generic [ref=e5147]:
+                  - generic [ref=e5149]: uncategorized
+                  - generic [ref=e5151]: enabled
+                  - generic [ref=e5153]: internal
+            - paragraph [ref=e5154]: Get metadata for all registered ML models including model type, training status, accuracy, last training time, and training data size. Use to inspect ML model health and training progress.
+          - button "View Schema" [ref=e5156] [cursor=pointer]:
+            - generic [ref=e5158]: 󰈈
+            - generic [ref=e5159]: View Schema
+        - generic [ref=e5162]:
+          - generic [ref=e5163]:
+            - generic [ref=e5164]:
+              - generic [ref=e5165]: 󰒓
+              - generic [ref=e5166]:
+                - heading "move_file" [level=3] [ref=e5167]
+                - generic [ref=e5168]:
+                  - generic [ref=e5170]: uncategorized
+                  - generic [ref=e5172]: enabled
+                  - generic [ref=e5174]: internal
+            - paragraph [ref=e5175]: Move or rename files and directories. Can move files between directories and rename them in a single operation. If the destination exists, the operation will fail. Works across different directories and can be used for simple renaming within the same directory. Both source and destination must be within allowed directories.
+          - button "View Schema" [ref=e5177] [cursor=pointer]:
+            - generic [ref=e5179]: 󰈈
+            - generic [ref=e5180]: View Schema
+        - generic [ref=e5183]:
+          - generic [ref=e5184]:
+            - generic [ref=e5185]:
+              - generic [ref=e5186]: 󰒓
+              - generic [ref=e5187]:
+                - heading "move_file" [level=3] [ref=e5188]
+                - generic [ref=e5189]:
+                  - generic [ref=e5191]: uncategorized
+                  - generic [ref=e5193]: enabled
+                  - generic [ref=e5195]: internal
+            - paragraph [ref=e5196]: Move or rename files and directories. Can move files between directories and rename them in a single operation. If the destination exists, the operation will fail. Works across different directories and can be used for simple renaming within the same directory. Both source and destination must be within allowed directories.
+            - generic [ref=e5197]:
+              - generic [ref=e5198]: "Source:"
+              - generic [ref=e5200]: external
+          - button "View Schema" [ref=e5202] [cursor=pointer]:
+            - generic [ref=e5204]: 󰈈
+            - generic [ref=e5205]: View Schema
+        - generic [ref=e5208]:
+          - generic [ref=e5209]:
+            - generic [ref=e5210]:
+              - generic [ref=e5211]: 󰒓
+              - generic [ref=e5212]:
+                - heading "mul" [level=3] [ref=e5213]
+                - generic [ref=e5214]:
+                  - generic [ref=e5216]: uncategorized
+                  - generic [ref=e5218]: enabled
+                  - generic [ref=e5220]: internal
+            - paragraph [ref=e5221]: Multiply two numbers
+          - button "View Schema" [ref=e5223] [cursor=pointer]:
+            - generic [ref=e5225]: 󰈈
+            - generic [ref=e5226]: View Schema
+        - generic [ref=e5229]:
+          - generic [ref=e5230]:
+            - generic [ref=e5231]:
+              - generic [ref=e5232]: 󰒓
+              - generic [ref=e5233]:
+                - heading "mul" [level=3] [ref=e5234]
+                - generic [ref=e5235]:
+                  - generic [ref=e5237]: uncategorized
+                  - generic [ref=e5239]: enabled
+                  - generic [ref=e5241]: internal
+            - paragraph [ref=e5242]: Multiply two numbers
+            - generic [ref=e5243]:
+              - generic [ref=e5244]: "Source:"
+              - generic [ref=e5246]: external
+          - button "View Schema" [ref=e5248] [cursor=pointer]:
+            - generic [ref=e5250]: 󰈈
+            - generic [ref=e5251]: View Schema
+        - generic [ref=e5254]:
+          - generic [ref=e5255]:
+            - generic [ref=e5256]:
+              - generic [ref=e5257]: 󰒓
+              - generic [ref=e5258]:
+                - heading "n8n_autofix_workflow" [level=3] [ref=e5259]
+                - generic [ref=e5260]:
+                  - generic [ref=e5262]: uncategorized
+                  - generic [ref=e5264]: enabled
+                  - generic [ref=e5266]: internal
+            - paragraph [ref=e5267]: Automatically fix common workflow validation errors. Preview fixes or apply them. Fixes expression format, typeVersion, error output config, webhook paths.
+          - button "View Schema" [ref=e5269] [cursor=pointer]:
+            - generic [ref=e5271]: 󰈈
+            - generic [ref=e5272]: View Schema
+        - generic [ref=e5275]:
+          - generic [ref=e5276]:
+            - generic [ref=e5277]:
+              - generic [ref=e5278]: 󰒓
+              - generic [ref=e5279]:
+                - heading "n8n_autofix_workflow" [level=3] [ref=e5280]
+                - generic [ref=e5281]:
+                  - generic [ref=e5283]: uncategorized
+                  - generic [ref=e5285]: enabled
+                  - generic [ref=e5287]: internal
+            - paragraph [ref=e5288]: Automatically fix common workflow validation errors. Preview fixes or apply them. Fixes expression format, typeVersion, error output config, webhook paths.
+            - generic [ref=e5289]:
+              - generic [ref=e5290]: "Source:"
+              - generic [ref=e5292]: external
+          - button "View Schema" [ref=e5294] [cursor=pointer]:
+            - generic [ref=e5296]: 󰈈
+            - generic [ref=e5297]: View Schema
+        - generic [ref=e5300]:
+          - generic [ref=e5301]:
+            - generic [ref=e5302]:
+              - generic [ref=e5303]: 󰒓
+              - generic [ref=e5304]:
+                - heading "n8n_create_workflow" [level=3] [ref=e5305]
+                - generic [ref=e5306]:
+                  - generic [ref=e5308]: uncategorized
+                  - generic [ref=e5310]: enabled
+                  - generic [ref=e5312]: internal
+            - paragraph [ref=e5313]: "Create workflow. Requires: name, nodes[], connections{}. Created inactive. Returns workflow with ID."
+          - button "View Schema" [ref=e5315] [cursor=pointer]:
+            - generic [ref=e5317]: 󰈈
+            - generic [ref=e5318]: View Schema
+        - generic [ref=e5321]:
+          - generic [ref=e5322]:
+            - generic [ref=e5323]:
+              - generic [ref=e5324]: 󰒓
+              - generic [ref=e5325]:
+                - heading "n8n_create_workflow" [level=3] [ref=e5326]
+                - generic [ref=e5327]:
+                  - generic [ref=e5329]: uncategorized
+                  - generic [ref=e5331]: enabled
+                  - generic [ref=e5333]: internal
+            - paragraph [ref=e5334]: "Create workflow. Requires: name, nodes[], connections{}. Created inactive. Returns workflow with ID."
+            - generic [ref=e5335]:
+              - generic [ref=e5336]: "Source:"
+              - generic [ref=e5338]: external
+          - button "View Schema" [ref=e5340] [cursor=pointer]:
+            - generic [ref=e5342]: 󰈈
+            - generic [ref=e5343]: View Schema
+        - generic [ref=e5346]:
+          - generic [ref=e5347]:
+            - generic [ref=e5348]:
+              - generic [ref=e5349]: 󰒓
+              - generic [ref=e5350]:
+                - heading "n8n_delete_workflow" [level=3] [ref=e5351]
+                - generic [ref=e5352]:
+                  - generic [ref=e5354]: uncategorized
+                  - generic [ref=e5356]: enabled
+                  - generic [ref=e5358]: internal
+            - paragraph [ref=e5359]: Permanently delete a workflow. This action cannot be undone.
+          - button "View Schema" [ref=e5361] [cursor=pointer]:
+            - generic [ref=e5363]: 󰈈
+            - generic [ref=e5364]: View Schema
+        - generic [ref=e5367]:
+          - generic [ref=e5368]:
+            - generic [ref=e5369]:
+              - generic [ref=e5370]: 󰒓
+              - generic [ref=e5371]:
+                - heading "n8n_delete_workflow" [level=3] [ref=e5372]
+                - generic [ref=e5373]:
+                  - generic [ref=e5375]: uncategorized
+                  - generic [ref=e5377]: enabled
+                  - generic [ref=e5379]: internal
+            - paragraph [ref=e5380]: Permanently delete a workflow. This action cannot be undone.
+            - generic [ref=e5381]:
+              - generic [ref=e5382]: "Source:"
+              - generic [ref=e5384]: external
+          - button "View Schema" [ref=e5386] [cursor=pointer]:
+            - generic [ref=e5388]: 󰈈
+            - generic [ref=e5389]: View Schema
+        - generic [ref=e5392]:
+          - generic [ref=e5393]:
+            - generic [ref=e5394]:
+              - generic [ref=e5395]: 󰒓
+              - generic [ref=e5396]:
+                - heading "n8n_deploy_template" [level=3] [ref=e5397]
+                - generic [ref=e5398]:
+                  - generic [ref=e5400]: uncategorized
+                  - generic [ref=e5402]: enabled
+                  - generic [ref=e5404]: internal
+            - paragraph [ref=e5405]: Deploy a workflow template from n8n.io directly to your n8n instance. Deploys first, then auto-fixes common issues (expression format, typeVersions). Returns workflow ID, required credentials, and fixes applied.
+          - button "View Schema" [ref=e5407] [cursor=pointer]:
+            - generic [ref=e5409]: 󰈈
+            - generic [ref=e5410]: View Schema
+        - generic [ref=e5413]:
+          - generic [ref=e5414]:
+            - generic [ref=e5415]:
+              - generic [ref=e5416]: 󰒓
+              - generic [ref=e5417]:
+                - heading "n8n_deploy_template" [level=3] [ref=e5418]
+                - generic [ref=e5419]:
+                  - generic [ref=e5421]: uncategorized
+                  - generic [ref=e5423]: enabled
+                  - generic [ref=e5425]: internal
+            - paragraph [ref=e5426]: Deploy a workflow template from n8n.io directly to your n8n instance. Deploys first, then auto-fixes common issues (expression format, typeVersions). Returns workflow ID, required credentials, and fixes applied.
+            - generic [ref=e5427]:
+              - generic [ref=e5428]: "Source:"
+              - generic [ref=e5430]: external
+          - button "View Schema" [ref=e5432] [cursor=pointer]:
+            - generic [ref=e5434]: 󰈈
+            - generic [ref=e5435]: View Schema
+        - generic [ref=e5438]:
+          - generic [ref=e5439]:
+            - generic [ref=e5440]:
+              - generic [ref=e5441]: 󰒓
+              - generic [ref=e5442]:
+                - heading "n8n_executions" [level=3] [ref=e5443]
+                - generic [ref=e5444]:
+                  - generic [ref=e5446]: uncategorized
+                  - generic [ref=e5448]: enabled
+                  - generic [ref=e5450]: internal
+            - paragraph [ref=e5451]: "Manage workflow executions: get details, list, or delete. Use action='get' with id for execution details, action='list' for listing executions, action='delete' to remove execution record."
+          - button "View Schema" [ref=e5453] [cursor=pointer]:
+            - generic [ref=e5455]: 󰈈
+            - generic [ref=e5456]: View Schema
+        - generic [ref=e5459]:
+          - generic [ref=e5460]:
+            - generic [ref=e5461]:
+              - generic [ref=e5462]: 󰒓
+              - generic [ref=e5463]:
+                - heading "n8n_executions" [level=3] [ref=e5464]
+                - generic [ref=e5465]:
+                  - generic [ref=e5467]: uncategorized
+                  - generic [ref=e5469]: enabled
+                  - generic [ref=e5471]: internal
+            - paragraph [ref=e5472]: "Manage workflow executions: get details, list, or delete. Use action='get' with id for execution details, action='list' for listing executions, action='delete' to remove execution record."
+            - generic [ref=e5473]:
+              - generic [ref=e5474]: "Source:"
+              - generic [ref=e5476]: external
+          - button "View Schema" [ref=e5478] [cursor=pointer]:
+            - generic [ref=e5480]: 󰈈
+            - generic [ref=e5481]: View Schema
+        - generic [ref=e5484]:
+          - generic [ref=e5485]:
+            - generic [ref=e5486]:
+              - generic [ref=e5487]: 󰒓
+              - generic [ref=e5488]:
+                - heading "n8n_get_workflow" [level=3] [ref=e5489]
+                - generic [ref=e5490]:
+                  - generic [ref=e5492]: uncategorized
+                  - generic [ref=e5494]: enabled
+                  - generic [ref=e5496]: internal
+            - paragraph [ref=e5497]: Get workflow by ID with different detail levels. Use mode='full' for complete workflow, 'details' for metadata+stats, 'structure' for nodes/connections only, 'minimal' for id/name/active/tags.
+          - button "View Schema" [ref=e5499] [cursor=pointer]:
+            - generic [ref=e5501]: 󰈈
+            - generic [ref=e5502]: View Schema
+        - generic [ref=e5505]:
+          - generic [ref=e5506]:
+            - generic [ref=e5507]:
+              - generic [ref=e5508]: 󰒓
+              - generic [ref=e5509]:
+                - heading "n8n_get_workflow" [level=3] [ref=e5510]
+                - generic [ref=e5511]:
+                  - generic [ref=e5513]: uncategorized
+                  - generic [ref=e5515]: enabled
+                  - generic [ref=e5517]: internal
+            - paragraph [ref=e5518]: Get workflow by ID with different detail levels. Use mode='full' for complete workflow, 'details' for metadata+stats, 'structure' for nodes/connections only, 'minimal' for id/name/active/tags.
+            - generic [ref=e5519]:
+              - generic [ref=e5520]: "Source:"
+              - generic [ref=e5522]: external
+          - button "View Schema" [ref=e5524] [cursor=pointer]:
+            - generic [ref=e5526]: 󰈈
+            - generic [ref=e5527]: View Schema
+        - generic [ref=e5530]:
+          - generic [ref=e5531]:
+            - generic [ref=e5532]:
+              - generic [ref=e5533]: 󰒓
+              - generic [ref=e5534]:
+                - heading "n8n_health_check" [level=3] [ref=e5535]
+                - generic [ref=e5536]:
+                  - generic [ref=e5538]: uncategorized
+                  - generic [ref=e5540]: enabled
+                  - generic [ref=e5542]: internal
+            - paragraph [ref=e5543]: Check n8n instance health and API connectivity. Use mode='diagnostic' for detailed troubleshooting with env vars and tool status.
+          - button "View Schema" [ref=e5545] [cursor=pointer]:
+            - generic [ref=e5547]: 󰈈
+            - generic [ref=e5548]: View Schema
+        - generic [ref=e5551]:
+          - generic [ref=e5552]:
+            - generic [ref=e5553]:
+              - generic [ref=e5554]: 󰒓
+              - generic [ref=e5555]:
+                - heading "n8n_health_check" [level=3] [ref=e5556]
+                - generic [ref=e5557]:
+                  - generic [ref=e5559]: uncategorized
+                  - generic [ref=e5561]: enabled
+                  - generic [ref=e5563]: internal
+            - paragraph [ref=e5564]: Check n8n instance health and API connectivity. Use mode='diagnostic' for detailed troubleshooting with env vars and tool status.
+            - generic [ref=e5565]:
+              - generic [ref=e5566]: "Source:"
+              - generic [ref=e5568]: external
+          - button "View Schema" [ref=e5570] [cursor=pointer]:
+            - generic [ref=e5572]: 󰈈
+            - generic [ref=e5573]: View Schema
+        - generic [ref=e5576]:
+          - generic [ref=e5577]:
+            - generic [ref=e5578]:
+              - generic [ref=e5579]: 󰒓
+              - generic [ref=e5580]:
+                - heading "n8n_list_workflows" [level=3] [ref=e5581]
+                - generic [ref=e5582]:
+                  - generic [ref=e5584]: uncategorized
+                  - generic [ref=e5586]: enabled
+                  - generic [ref=e5588]: internal
+            - paragraph [ref=e5589]: List workflows (minimal metadata only). Returns id/name/active/dates/tags. Check hasMore/nextCursor for pagination.
+          - button "View Schema" [ref=e5591] [cursor=pointer]:
+            - generic [ref=e5593]: 󰈈
+            - generic [ref=e5594]: View Schema
+        - generic [ref=e5597]:
+          - generic [ref=e5598]:
+            - generic [ref=e5599]:
+              - generic [ref=e5600]: 󰒓
+              - generic [ref=e5601]:
+                - heading "n8n_list_workflows" [level=3] [ref=e5602]
+                - generic [ref=e5603]:
+                  - generic [ref=e5605]: uncategorized
+                  - generic [ref=e5607]: enabled
+                  - generic [ref=e5609]: internal
+            - paragraph [ref=e5610]: List workflows (minimal metadata only). Returns id/name/active/dates/tags. Check hasMore/nextCursor for pagination.
+            - generic [ref=e5611]:
+              - generic [ref=e5612]: "Source:"
+              - generic [ref=e5614]: external
+          - button "View Schema" [ref=e5616] [cursor=pointer]:
+            - generic [ref=e5618]: 󰈈
+            - generic [ref=e5619]: View Schema
+        - generic [ref=e5622]:
+          - generic [ref=e5623]:
+            - generic [ref=e5624]:
+              - generic [ref=e5625]: 󰒓
+              - generic [ref=e5626]:
+                - heading "n8n_test_workflow" [level=3] [ref=e5627]
+                - generic [ref=e5628]:
+                  - generic [ref=e5630]: uncategorized
+                  - generic [ref=e5632]: enabled
+                  - generic [ref=e5634]: internal
+            - paragraph [ref=e5635]: "Test/trigger workflow execution. Auto-detects trigger type (webhook/form/chat). Supports: webhook (HTTP), form (fields), chat (message). Note: Only workflows with these trigger types can be executed externally."
+          - button "View Schema" [ref=e5637] [cursor=pointer]:
+            - generic [ref=e5639]: 󰈈
+            - generic [ref=e5640]: View Schema
+        - generic [ref=e5643]:
+          - generic [ref=e5644]:
+            - generic [ref=e5645]:
+              - generic [ref=e5646]: 󰒓
+              - generic [ref=e5647]:
+                - heading "n8n_test_workflow" [level=3] [ref=e5648]
+                - generic [ref=e5649]:
+                  - generic [ref=e5651]: uncategorized
+                  - generic [ref=e5653]: enabled
+                  - generic [ref=e5655]: internal
+            - paragraph [ref=e5656]: "Test/trigger workflow execution. Auto-detects trigger type (webhook/form/chat). Supports: webhook (HTTP), form (fields), chat (message). Note: Only workflows with these trigger types can be executed externally."
+            - generic [ref=e5657]:
+              - generic [ref=e5658]: "Source:"
+              - generic [ref=e5660]: external
+          - button "View Schema" [ref=e5662] [cursor=pointer]:
+            - generic [ref=e5664]: 󰈈
+            - generic [ref=e5665]: View Schema
+        - generic [ref=e5668]:
+          - generic [ref=e5669]:
+            - generic [ref=e5670]:
+              - generic [ref=e5671]: 󰒓
+              - generic [ref=e5672]:
+                - heading "n8n_update_full_workflow" [level=3] [ref=e5673]
+                - generic [ref=e5674]:
+                  - generic [ref=e5676]: uncategorized
+                  - generic [ref=e5678]: enabled
+                  - generic [ref=e5680]: internal
+            - paragraph [ref=e5681]: "Full workflow update. Requires complete nodes[] and connections{}. For incremental use n8n_update_partial_workflow."
+          - button "View Schema" [ref=e5683] [cursor=pointer]:
+            - generic [ref=e5685]: 󰈈
+            - generic [ref=e5686]: View Schema
+        - generic [ref=e5689]:
+          - generic [ref=e5690]:
+            - generic [ref=e5691]:
+              - generic [ref=e5692]: 󰒓
+              - generic [ref=e5693]:
+                - heading "n8n_update_full_workflow" [level=3] [ref=e5694]
+                - generic [ref=e5695]:
+                  - generic [ref=e5697]: uncategorized
+                  - generic [ref=e5699]: enabled
+                  - generic [ref=e5701]: internal
+            - paragraph [ref=e5702]: "Full workflow update. Requires complete nodes[] and connections{}. For incremental use n8n_update_partial_workflow."
+            - generic [ref=e5703]:
+              - generic [ref=e5704]: "Source:"
+              - generic [ref=e5706]: external
+          - button "View Schema" [ref=e5708] [cursor=pointer]:
+            - generic [ref=e5710]: 󰈈
+            - generic [ref=e5711]: View Schema
+        - generic [ref=e5714]:
+          - generic [ref=e5715]:
+            - generic [ref=e5716]:
+              - generic [ref=e5717]: 󰒓
+              - generic [ref=e5718]:
+                - heading "n8n_update_partial_workflow" [level=3] [ref=e5719]
+                - generic [ref=e5720]:
+                  - generic [ref=e5722]: uncategorized
+                  - generic [ref=e5724]: enabled
+                  - generic [ref=e5726]: internal
+            - paragraph [ref=e5727]: "Update workflow incrementally with diff operations. Types: addNode, removeNode, updateNode, moveNode, enable/disableNode, addConnection, removeConnection, updateSettings, updateName, add/removeTag. See tools_documentation(\"n8n_update_partial_workflow\", \"full\") for details."
+          - button "View Schema" [ref=e5729] [cursor=pointer]:
+            - generic [ref=e5731]: 󰈈
+            - generic [ref=e5732]: View Schema
+        - generic [ref=e5735]:
+          - generic [ref=e5736]:
+            - generic [ref=e5737]:
+              - generic [ref=e5738]: 󰒓
+              - generic [ref=e5739]:
+                - heading "n8n_update_partial_workflow" [level=3] [ref=e5740]
+                - generic [ref=e5741]:
+                  - generic [ref=e5743]: uncategorized
+                  - generic [ref=e5745]: enabled
+                  - generic [ref=e5747]: internal
+            - paragraph [ref=e5748]: "Update workflow incrementally with diff operations. Types: addNode, removeNode, updateNode, moveNode, enable/disableNode, addConnection, removeConnection, updateSettings, updateName, add/removeTag. See tools_documentation(\"n8n_update_partial_workflow\", \"full\") for details."
+            - generic [ref=e5749]:
+              - generic [ref=e5750]: "Source:"
+              - generic [ref=e5752]: external
+          - button "View Schema" [ref=e5754] [cursor=pointer]:
+            - generic [ref=e5756]: 󰈈
+            - generic [ref=e5757]: View Schema
+        - generic [ref=e5760]:
+          - generic [ref=e5761]:
+            - generic [ref=e5762]:
+              - generic [ref=e5763]: 󰒓
+              - generic [ref=e5764]:
+                - heading "n8n_validate_workflow" [level=3] [ref=e5765]
+                - generic [ref=e5766]:
+                  - generic [ref=e5768]: uncategorized
+                  - generic [ref=e5770]: enabled
+                  - generic [ref=e5772]: internal
+            - paragraph [ref=e5773]: Validate workflow by ID. Checks nodes, connections, expressions. Returns errors/warnings/suggestions.
+          - button "View Schema" [ref=e5775] [cursor=pointer]:
+            - generic [ref=e5777]: 󰈈
+            - generic [ref=e5778]: View Schema
+        - generic [ref=e5781]:
+          - generic [ref=e5782]:
+            - generic [ref=e5783]:
+              - generic [ref=e5784]: 󰒓
+              - generic [ref=e5785]:
+                - heading "n8n_validate_workflow" [level=3] [ref=e5786]
+                - generic [ref=e5787]:
+                  - generic [ref=e5789]: uncategorized
+                  - generic [ref=e5791]: enabled
+                  - generic [ref=e5793]: internal
+            - paragraph [ref=e5794]: Validate workflow by ID. Checks nodes, connections, expressions. Returns errors/warnings/suggestions.
+            - generic [ref=e5795]:
+              - generic [ref=e5796]: "Source:"
+              - generic [ref=e5798]: external
+          - button "View Schema" [ref=e5800] [cursor=pointer]:
+            - generic [ref=e5802]: 󰈈
+            - generic [ref=e5803]: View Schema
+        - generic [ref=e5806]:
+          - generic [ref=e5807]:
+            - generic [ref=e5808]:
+              - generic [ref=e5809]: 󰒓
+              - generic [ref=e5810]:
+                - heading "n8n_workflow_versions" [level=3] [ref=e5811]
+                - generic [ref=e5812]:
+                  - generic [ref=e5814]: uncategorized
+                  - generic [ref=e5816]: enabled
+                  - generic [ref=e5818]: internal
+            - paragraph [ref=e5819]: "Manage workflow version history, rollback, and cleanup. Six modes: - list: Show version history for a workflow - get: Get details of specific version - rollback: Restore workflow to previous version (creates backup first) - delete: Delete specific version or all versions for a workflow - prune: Manually trigger pruning to keep N most recent versions - truncate: Delete ALL versions for ALL workflows (requires confirmation)"
+          - button "View Schema" [ref=e5821] [cursor=pointer]:
+            - generic [ref=e5823]: 󰈈
+            - generic [ref=e5824]: View Schema
+        - generic [ref=e5827]:
+          - generic [ref=e5828]:
+            - generic [ref=e5829]:
+              - generic [ref=e5830]: 󰒓
+              - generic [ref=e5831]:
+                - heading "n8n_workflow_versions" [level=3] [ref=e5832]
+                - generic [ref=e5833]:
+                  - generic [ref=e5835]: uncategorized
+                  - generic [ref=e5837]: enabled
+                  - generic [ref=e5839]: internal
+            - paragraph [ref=e5840]: "Manage workflow version history, rollback, and cleanup. Six modes: - list: Show version history for a workflow - get: Get details of specific version - rollback: Restore workflow to previous version (creates backup first) - delete: Delete specific version or all versions for a workflow - prune: Manually trigger pruning to keep N most recent versions - truncate: Delete ALL versions for ALL workflows (requires confirmation)"
+            - generic [ref=e5841]:
+              - generic [ref=e5842]: "Source:"
+              - generic [ref=e5844]: external
+          - button "View Schema" [ref=e5846] [cursor=pointer]:
+            - generic [ref=e5848]: 󰈈
+            - generic [ref=e5849]: View Schema
+        - generic [ref=e5852]:
+          - generic [ref=e5853]:
+            - generic [ref=e5854]:
+              - generic [ref=e5855]: 󰒓
+              - generic [ref=e5856]:
+                - heading "no_further_action" [level=3] [ref=e5857]
+                - generic [ref=e5858]:
+                  - generic [ref=e5860]: uncategorized
+                  - generic [ref=e5862]: enabled
+                  - generic [ref=e5864]: internal
+            - paragraph [ref=e5865]: Signal that you do not want to take any further action after completing a tool - ends your turn gracefully
+          - button "View Schema" [ref=e5867] [cursor=pointer]:
+            - generic [ref=e5869]: 󰈈
+            - generic [ref=e5870]: View Schema
+        - generic [ref=e5873]:
+          - generic [ref=e5874]:
+            - generic [ref=e5875]:
+              - generic [ref=e5876]: 󰒓
+              - generic [ref=e5877]:
+                - heading "open_nodes" [level=3] [ref=e5878]
+                - generic [ref=e5879]:
+                  - generic [ref=e5881]: uncategorized
+                  - generic [ref=e5883]: enabled
+                  - generic [ref=e5885]: internal
+            - paragraph [ref=e5886]: Open specific nodes in the knowledge graph by their names
+          - button "View Schema" [ref=e5888] [cursor=pointer]:
+            - generic [ref=e5890]: 󰈈
+            - generic [ref=e5891]: View Schema
+        - generic [ref=e5894]:
+          - generic [ref=e5895]:
+            - generic [ref=e5896]:
+              - generic [ref=e5897]: 󰒓
+              - generic [ref=e5898]:
+                - heading "open_nodes" [level=3] [ref=e5899]
+                - generic [ref=e5900]:
+                  - generic [ref=e5902]: uncategorized
+                  - generic [ref=e5904]: enabled
+                  - generic [ref=e5906]: internal
+            - paragraph [ref=e5907]: Open specific nodes in the knowledge graph by their names
+            - generic [ref=e5908]:
+              - generic [ref=e5909]: "Source:"
+              - generic [ref=e5911]: external
+          - button "View Schema" [ref=e5913] [cursor=pointer]:
+            - generic [ref=e5915]: 󰈈
+            - generic [ref=e5916]: View Schema
+        - generic [ref=e5919]:
+          - generic [ref=e5920]:
+            - generic [ref=e5921]:
+              - generic [ref=e5922]: 󰒓
+              - generic [ref=e5923]:
+                - heading "orpar_act" [level=3] [ref=e5924]
+                - generic [ref=e5925]:
+                  - generic [ref=e5927]: uncategorized
+                  - generic [ref=e5929]: enabled
+                  - generic [ref=e5931]: internal
+            - paragraph [ref=e5932]: "Record that you are executing an action. This is the fourth phase of the ORPAR cognitive cycle. Use this tool to record: - What action you are taking/took - The tool being used - The actual outcome You MUST call orpar_plan first. After acting, call orpar_reflect. Note: Call this AFTER executing your planned action tool."
+          - button "View Schema" [ref=e5934] [cursor=pointer]:
+            - generic [ref=e5936]: 󰈈
+            - generic [ref=e5937]: View Schema
+        - generic [ref=e5940]:
+          - generic [ref=e5941]:
+            - generic [ref=e5942]:
+              - generic [ref=e5943]: 󰒓
+              - generic [ref=e5944]:
+                - heading "orpar_observe" [level=3] [ref=e5945]
+                - generic [ref=e5946]:
+                  - generic [ref=e5948]: uncategorized
+                  - generic [ref=e5950]: enabled
+                  - generic [ref=e5952]: internal
+            - paragraph [ref=e5953]: "Document your observations about the current situation. This is the first phase of the ORPAR cognitive cycle. Use this tool to record: - What you see/perceive in the current state - Relevant information from the environment - Key facts that will inform your reasoning You MUST call this tool before reasoning. After observing, call orpar_reason."
+          - button "View Schema" [ref=e5955] [cursor=pointer]:
+            - generic [ref=e5957]: 󰈈
+            - generic [ref=e5958]: View Schema
+        - generic [ref=e5961]:
+          - generic [ref=e5962]:
+            - generic [ref=e5963]:
+              - generic [ref=e5964]: 󰒓
+              - generic [ref=e5965]:
+                - heading "orpar_plan" [level=3] [ref=e5966]
+                - generic [ref=e5967]:
+                  - generic [ref=e5969]: uncategorized
+                  - generic [ref=e5971]: enabled
+                  - generic [ref=e5973]: internal
+            - paragraph [ref=e5974]: "Document your action plan. This is the third phase of the ORPAR cognitive cycle. Use this tool to record: - What actions you will take - The expected outcomes - Contingency considerations You MUST call orpar_reason first. After planning, call orpar_act."
+          - button "View Schema" [ref=e5976] [cursor=pointer]:
+            - generic [ref=e5978]: 󰈈
+            - generic [ref=e5979]: View Schema
+        - generic [ref=e5982]:
+          - generic [ref=e5983]:
+            - generic [ref=e5984]:
+              - generic [ref=e5985]: 󰒓
+              - generic [ref=e5986]:
+                - heading "orpar_reason" [level=3] [ref=e5987]
+                - generic [ref=e5988]:
+                  - generic [ref=e5990]: uncategorized
+                  - generic [ref=e5992]: enabled
+                  - generic [ref=e5994]: internal
+            - paragraph [ref=e5995]: "Document your reasoning and analysis. This is the second phase of the ORPAR cognitive cycle. Use this tool to record: - Analysis of your observations - Patterns you've identified - Hypotheses and conclusions - Considerations for planning You MUST call orpar_observe first. After reasoning, call orpar_plan."
+          - button "View Schema" [ref=e5997] [cursor=pointer]:
+            - generic [ref=e5999]: 󰈈
+            - generic [ref=e6000]: View Schema
+        - generic [ref=e6003]:
+          - generic [ref=e6004]:
+            - generic [ref=e6005]:
+              - generic [ref=e6006]: 󰒓
+              - generic [ref=e6007]:
+                - heading "orpar_reflect" [level=3] [ref=e6008]
+                - generic [ref=e6009]:
+                  - generic [ref=e6011]: uncategorized
+                  - generic [ref=e6013]: enabled
+                  - generic [ref=e6015]: internal
+            - paragraph [ref=e6016]: "Document your reflection on what happened. This is the fifth and final phase of the ORPAR cognitive cycle. Use this tool to record: - What you learned from the action - Whether expectations were met - What to do differently next time - Insights for future cycles You MUST call orpar_act first. After reflecting, start a new cycle with orpar_observe."
+          - button "View Schema" [ref=e6018] [cursor=pointer]:
+            - generic [ref=e6020]: 󰈈
+            - generic [ref=e6021]: View Schema
+        - generic [ref=e6024]:
+          - generic [ref=e6025]:
+            - generic [ref=e6026]:
+              - generic [ref=e6027]: 󰒓
+              - generic [ref=e6028]:
+                - heading "orpar_status" [level=3] [ref=e6029]
+                - generic [ref=e6030]:
+                  - generic [ref=e6032]: uncategorized
+                  - generic [ref=e6034]: enabled
+                  - generic [ref=e6036]: internal
+            - paragraph [ref=e6037]: Get the current ORPAR cycle status for this agent. Useful to check where you are in the cognitive cycle.
+          - button "View Schema" [ref=e6039] [cursor=pointer]:
+            - generic [ref=e6041]: 󰈈
+            - generic [ref=e6042]: View Schema
+        - generic [ref=e6045]:
+          - generic [ref=e6046]:
+            - generic [ref=e6047]:
+              - generic [ref=e6048]: 󰒓
+              - generic [ref=e6049]:
+                - heading "performance_benchmark" [level=3] [ref=e6050]
+                - generic [ref=e6051]:
+                  - generic [ref=e6053]: uncategorized
+                  - generic [ref=e6055]: enabled
+                  - generic [ref=e6057]: internal
+            - paragraph [ref=e6058]: Run performance benchmarks to ensure changes don't degrade performance
+          - button "View Schema" [ref=e6060] [cursor=pointer]:
+            - generic [ref=e6062]: 󰈈
+            - generic [ref=e6063]: View Schema
+        - generic [ref=e6066]:
+          - generic [ref=e6067]:
+            - generic [ref=e6068]:
+              - generic [ref=e6069]: 󰒓
+              - generic [ref=e6070]:
+                - heading "planning_create" [level=3] [ref=e6071]
+                - generic [ref=e6072]:
+                  - generic [ref=e6074]: uncategorized
+                  - generic [ref=e6076]: enabled
+                  - generic [ref=e6078]: internal
+            - paragraph [ref=e6079]: Create a structured plan with multiple items/steps for organizing complex work
+          - button "View Schema" [ref=e6081] [cursor=pointer]:
+            - generic [ref=e6083]: 󰈈
+            - generic [ref=e6084]: View Schema
+        - generic [ref=e6087]:
+          - generic [ref=e6088]:
+            - generic [ref=e6089]:
+              - generic [ref=e6090]: 󰒓
+              - generic [ref=e6091]:
+                - heading "planning_share" [level=3] [ref=e6092]
+                - generic [ref=e6093]:
+                  - generic [ref=e6095]: uncategorized
+                  - generic [ref=e6097]: enabled
+                  - generic [ref=e6099]: internal
+            - paragraph [ref=e6100]: Share a plan with specific agents or broadcast to all agents in the channel
+          - button "View Schema" [ref=e6102] [cursor=pointer]:
+            - generic [ref=e6104]: 󰈈
+            - generic [ref=e6105]: View Schema
+        - generic [ref=e6108]:
+          - generic [ref=e6109]:
+            - generic [ref=e6110]:
+              - generic [ref=e6111]: 󰒓
+              - generic [ref=e6112]:
+                - heading "planning_update_item" [level=3] [ref=e6113]
+                - generic [ref=e6114]:
+                  - generic [ref=e6116]: uncategorized
+                  - generic [ref=e6118]: enabled
+                  - generic [ref=e6120]: internal
+            - paragraph [ref=e6121]: Update the status or details of a specific plan item
+          - button "View Schema" [ref=e6123] [cursor=pointer]:
+            - generic [ref=e6125]: 󰈈
+            - generic [ref=e6126]: View Schema
+        - generic [ref=e6129]:
+          - generic [ref=e6130]:
+            - generic [ref=e6131]:
+              - generic [ref=e6132]: 󰒓
+              - generic [ref=e6133]:
+                - heading "planning_view" [level=3] [ref=e6134]
+                - generic [ref=e6135]:
+                  - generic [ref=e6137]: uncategorized
+                  - generic [ref=e6139]: enabled
+                  - generic [ref=e6141]: internal
+            - paragraph [ref=e6142]: View a plan and the current status of all its items
+          - button "View Schema" [ref=e6144] [cursor=pointer]:
+            - generic [ref=e6146]: 󰈈
+            - generic [ref=e6147]: View Schema
+        - generic [ref=e6150]:
+          - generic [ref=e6151]:
+            - generic [ref=e6152]:
+              - generic [ref=e6153]: 󰒓
+              - generic [ref=e6154]:
+                - heading "predict_errors" [level=3] [ref=e6155]
+                - generic [ref=e6156]:
+                  - generic [ref=e6158]: uncategorized
+                  - generic [ref=e6160]: enabled
+                  - generic [ref=e6162]: internal
+            - paragraph [ref=e6163]: Predict the probability of errors for a tool call using ML models. Returns error probability, confidence, model type (neural network vs heuristic), and an explanation of risk factors. Use before executing high-risk tool calls.
+          - button "View Schema" [ref=e6165] [cursor=pointer]:
+            - generic [ref=e6167]: 󰈈
+            - generic [ref=e6168]: View Schema
+        - generic [ref=e6171]:
+          - generic [ref=e6172]:
+            - generic [ref=e6173]:
+              - generic [ref=e6174]: 󰒓
+              - generic [ref=e6175]:
+                - heading "proactive_suggestions" [level=3] [ref=e6176]
+                - generic [ref=e6177]:
+                  - generic [ref=e6179]: uncategorized
+                  - generic [ref=e6181]: enabled
+                  - generic [ref=e6183]: internal
+            - paragraph [ref=e6184]: Get proactive suggestions for improving tool usage, parameter choices, timing, and strategy. Analyzes current context, recent tool history, and error patterns to provide actionable recommendations.
+          - button "View Schema" [ref=e6186] [cursor=pointer]:
+            - generic [ref=e6188]: 󰈈
+            - generic [ref=e6189]: View Schema
+        - generic [ref=e6192]:
+          - generic [ref=e6193]:
+            - generic [ref=e6194]:
+              - generic [ref=e6195]: 󰒓
+              - generic [ref=e6196]:
+                - heading "prompt_optimize" [level=3] [ref=e6197]
+                - generic [ref=e6198]:
+                  - generic [ref=e6200]: uncategorized
+                  - generic [ref=e6202]: enabled
+                  - generic [ref=e6204]: internal
+            - paragraph [ref=e6205]: Analyzes and optimizes prompts for better LLM performance, clarity, and effectiveness.
+          - button "View Schema" [ref=e6207] [cursor=pointer]:
+            - generic [ref=e6209]: 󰈈
+            - generic [ref=e6210]: View Schema
+        - generic [ref=e6213]:
+          - generic [ref=e6214]:
+            - generic [ref=e6215]:
+              - generic [ref=e6216]: 󰒓
+              - generic [ref=e6217]:
+                - heading "read_file" [level=3] [ref=e6218]
+                - generic [ref=e6219]:
+                  - generic [ref=e6221]: uncategorized
+                  - generic [ref=e6223]: enabled
+                  - generic [ref=e6225]: internal
+            - paragraph [ref=e6226]: "Read the complete contents of a file as text. DEPRECATED: Use read_text_file instead."
+          - button "View Schema" [ref=e6228] [cursor=pointer]:
+            - generic [ref=e6230]: 󰈈
+            - generic [ref=e6231]: View Schema
+        - generic [ref=e6234]:
+          - generic [ref=e6235]:
+            - generic [ref=e6236]:
+              - generic [ref=e6237]: 󰒓
+              - generic [ref=e6238]:
+                - heading "read_file" [level=3] [ref=e6239]
+                - generic [ref=e6240]:
+                  - generic [ref=e6242]: uncategorized
+                  - generic [ref=e6244]: enabled
+                  - generic [ref=e6246]: internal
+            - paragraph [ref=e6247]: "Read the complete contents of a file as text. DEPRECATED: Use read_text_file instead."
+            - generic [ref=e6248]:
+              - generic [ref=e6249]: "Source:"
+              - generic [ref=e6251]: external
+          - button "View Schema" [ref=e6253] [cursor=pointer]:
+            - generic [ref=e6255]: 󰈈
+            - generic [ref=e6256]: View Schema
+        - generic [ref=e6259]:
+          - generic [ref=e6260]:
+            - generic [ref=e6261]:
+              - generic [ref=e6262]: 󰒓
+              - generic [ref=e6263]:
+                - heading "read_graph" [level=3] [ref=e6264]
+                - generic [ref=e6265]:
+                  - generic [ref=e6267]: uncategorized
+                  - generic [ref=e6269]: enabled
+                  - generic [ref=e6271]: internal
+            - paragraph [ref=e6272]: Read the entire knowledge graph
+          - button "View Schema" [ref=e6274] [cursor=pointer]:
+            - generic [ref=e6276]: 󰈈
+            - generic [ref=e6277]: View Schema
+        - generic [ref=e6280]:
+          - generic [ref=e6281]:
+            - generic [ref=e6282]:
+              - generic [ref=e6283]: 󰒓
+              - generic [ref=e6284]:
+                - heading "read_graph" [level=3] [ref=e6285]
+                - generic [ref=e6286]:
+                  - generic [ref=e6288]: uncategorized
+                  - generic [ref=e6290]: enabled
+                  - generic [ref=e6292]: internal
+            - paragraph [ref=e6293]: Read the entire knowledge graph
+            - generic [ref=e6294]:
+              - generic [ref=e6295]: "Source:"
+              - generic [ref=e6297]: external
+          - button "View Schema" [ref=e6299] [cursor=pointer]:
+            - generic [ref=e6301]: 󰈈
+            - generic [ref=e6302]: View Schema
+        - generic [ref=e6305]:
+          - generic [ref=e6306]:
+            - generic [ref=e6307]:
+              - generic [ref=e6308]: 󰒓
+              - generic [ref=e6309]:
+                - heading "read_media_file" [level=3] [ref=e6310]
+                - generic [ref=e6311]:
+                  - generic [ref=e6313]: uncategorized
+                  - generic [ref=e6315]: enabled
+                  - generic [ref=e6317]: internal
+            - paragraph [ref=e6318]: Read an image or audio file. Returns the base64 encoded data and MIME type. Only works within allowed directories.
+          - button "View Schema" [ref=e6320] [cursor=pointer]:
+            - generic [ref=e6322]: 󰈈
+            - generic [ref=e6323]: View Schema
+        - generic [ref=e6326]:
+          - generic [ref=e6327]:
+            - generic [ref=e6328]:
+              - generic [ref=e6329]: 󰒓
+              - generic [ref=e6330]:
+                - heading "read_media_file" [level=3] [ref=e6331]
+                - generic [ref=e6332]:
+                  - generic [ref=e6334]: uncategorized
+                  - generic [ref=e6336]: enabled
+                  - generic [ref=e6338]: internal
+            - paragraph [ref=e6339]: Read an image or audio file. Returns the base64 encoded data and MIME type. Only works within allowed directories.
+            - generic [ref=e6340]:
+              - generic [ref=e6341]: "Source:"
+              - generic [ref=e6343]: external
+          - button "View Schema" [ref=e6345] [cursor=pointer]:
+            - generic [ref=e6347]: 󰈈
+            - generic [ref=e6348]: View Schema
+        - generic [ref=e6351]:
+          - generic [ref=e6352]:
+            - generic [ref=e6353]:
+              - generic [ref=e6354]: 󰒓
+              - generic [ref=e6355]:
+                - heading "read_multiple_files" [level=3] [ref=e6356]
+                - generic [ref=e6357]:
+                  - generic [ref=e6359]: uncategorized
+                  - generic [ref=e6361]: enabled
+                  - generic [ref=e6363]: internal
+            - paragraph [ref=e6364]: Read the contents of multiple files simultaneously. This is more efficient than reading files one by one when you need to analyze or compare multiple files. Each file's content is returned with its path as a reference. Failed reads for individual files won't stop the entire operation. Only works within allowed directories.
+          - button "View Schema" [ref=e6366] [cursor=pointer]:
+            - generic [ref=e6368]: 󰈈
+            - generic [ref=e6369]: View Schema
+        - generic [ref=e6372]:
+          - generic [ref=e6373]:
+            - generic [ref=e6374]:
+              - generic [ref=e6375]: 󰒓
+              - generic [ref=e6376]:
+                - heading "read_multiple_files" [level=3] [ref=e6377]
+                - generic [ref=e6378]:
+                  - generic [ref=e6380]: uncategorized
+                  - generic [ref=e6382]: enabled
+                  - generic [ref=e6384]: internal
+            - paragraph [ref=e6385]: Read the contents of multiple files simultaneously. This is more efficient than reading files one by one when you need to analyze or compare multiple files. Each file's content is returned with its path as a reference. Failed reads for individual files won't stop the entire operation. Only works within allowed directories.
+            - generic [ref=e6386]:
+              - generic [ref=e6387]: "Source:"
+              - generic [ref=e6389]: external
+          - button "View Schema" [ref=e6391] [cursor=pointer]:
+            - generic [ref=e6393]: 󰈈
+            - generic [ref=e6394]: View Schema
+        - generic [ref=e6397]:
+          - generic [ref=e6398]:
+            - generic [ref=e6399]:
+              - generic [ref=e6400]: 󰒓
+              - generic [ref=e6401]:
+                - heading "read_text_file" [level=3] [ref=e6402]
+                - generic [ref=e6403]:
+                  - generic [ref=e6405]: uncategorized
+                  - generic [ref=e6407]: enabled
+                  - generic [ref=e6409]: internal
+            - paragraph [ref=e6410]: Read the complete contents of a file from the file system as text. Handles various text encodings and provides detailed error messages if the file cannot be read. Use this tool when you need to examine the contents of a single file. Use the 'head' parameter to read only the first N lines of a file, or the 'tail' parameter to read only the last N lines of a file. Operates on the file as text regardless of extension. Only works within allowed directories.
+          - button "View Schema" [ref=e6412] [cursor=pointer]:
+            - generic [ref=e6414]: 󰈈
+            - generic [ref=e6415]: View Schema
+        - generic [ref=e6418]:
+          - generic [ref=e6419]:
+            - generic [ref=e6420]:
+              - generic [ref=e6421]: 󰒓
+              - generic [ref=e6422]:
+                - heading "read_text_file" [level=3] [ref=e6423]
+                - generic [ref=e6424]:
+                  - generic [ref=e6426]: uncategorized
+                  - generic [ref=e6428]: enabled
+                  - generic [ref=e6430]: internal
+            - paragraph [ref=e6431]: Read the complete contents of a file from the file system as text. Handles various text encodings and provides detailed error messages if the file cannot be read. Use this tool when you need to examine the contents of a single file. Use the 'head' parameter to read only the first N lines of a file, or the 'tail' parameter to read only the last N lines of a file. Operates on the file as text regardless of extension. Only works within allowed directories.
+            - generic [ref=e6432]:
+              - generic [ref=e6433]: "Source:"
+              - generic [ref=e6435]: external
+          - button "View Schema" [ref=e6437] [cursor=pointer]:
+            - generic [ref=e6439]: 󰈈
+            - generic [ref=e6440]: View Schema
+        - generic [ref=e6443]:
+          - generic [ref=e6444]:
+            - generic [ref=e6445]:
+              - generic [ref=e6446]: 󰒓
+              - generic [ref=e6447]:
+                - heading "rename-collection" [level=3] [ref=e6448]
+                - generic [ref=e6449]:
+                  - generic [ref=e6451]: uncategorized
+                  - generic [ref=e6453]: enabled
+                  - generic [ref=e6455]: internal
+            - paragraph [ref=e6456]: Rename an existing collection
+          - button "View Schema" [ref=e6458] [cursor=pointer]:
+            - generic [ref=e6460]: 󰈈
+            - generic [ref=e6461]: View Schema
+        - generic [ref=e6464]:
+          - generic [ref=e6465]:
+            - generic [ref=e6466]:
+              - generic [ref=e6467]: 󰒓
+              - generic [ref=e6468]:
+                - heading "rename-collection" [level=3] [ref=e6469]
+                - generic [ref=e6470]:
+                  - generic [ref=e6472]: uncategorized
+                  - generic [ref=e6474]: enabled
+                  - generic [ref=e6476]: internal
+            - paragraph [ref=e6477]: Rename an existing collection
+            - generic [ref=e6478]:
+              - generic [ref=e6479]: "Source:"
+              - generic [ref=e6481]: external
+          - button "View Schema" [ref=e6483] [cursor=pointer]:
+            - generic [ref=e6485]: 󰈈
+            - generic [ref=e6486]: View Schema
+        - generic [ref=e6489]:
+          - generic [ref=e6490]:
+            - generic [ref=e6491]:
+              - generic [ref=e6492]: 󰒓
+              - generic [ref=e6493]:
+                - heading "request_inference_params" [level=3] [ref=e6494]
+                - generic [ref=e6495]:
+                  - generic [ref=e6497]: uncategorized
+                  - generic [ref=e6499]: enabled
+                  - generic [ref=e6501]: internal
+            - paragraph [ref=e6502]: "Request inference parameter modifications for improved task performance. Use this tool when you recognize that your current LLM configuration is insufficient for the task at hand. Examples of when to use: - Complex reasoning task needs more reasoning tokens - Precision task needs lower temperature - Creative task needs higher temperature - Resource-intensive task needs a more capable model The system will evaluate your request against governance constraints (budget limits, rate limits, permissions) and return the approved parameters."
+          - button "View Schema" [ref=e6504] [cursor=pointer]:
+            - generic [ref=e6506]: 󰈈
+            - generic [ref=e6507]: View Schema
+        - generic [ref=e6510]:
+          - generic [ref=e6511]:
+            - generic [ref=e6512]:
+              - generic [ref=e6513]: 󰒓
+              - generic [ref=e6514]:
+                - heading "reset_inference_params" [level=3] [ref=e6515]
+                - generic [ref=e6516]:
+                  - generic [ref=e6518]: uncategorized
+                  - generic [ref=e6520]: enabled
+                  - generic [ref=e6522]: internal
+            - paragraph [ref=e6523]: "Reset inference parameters to defaults. Use this to revert any active parameter overrides and return to the default configuration for your agent/channel. This is useful when: - You want to start fresh with default parameters - A previous override is no longer appropriate - You need to clear session or task-specific overrides"
+          - button "View Schema" [ref=e6525] [cursor=pointer]:
+            - generic [ref=e6527]: 󰈈
+            - generic [ref=e6528]: View Schema
+        - generic [ref=e6531]:
+          - generic [ref=e6532]:
+            - generic [ref=e6533]:
+              - generic [ref=e6534]: 󰒓
+              - generic [ref=e6535]:
+                - heading "rollback_changes" [level=3] [ref=e6536]
+                - generic [ref=e6537]:
+                  - generic [ref=e6539]: uncategorized
+                  - generic [ref=e6541]: enabled
+                  - generic [ref=e6543]: internal
+            - paragraph [ref=e6544]: Rollback changes to a previous safe state
+          - button "View Schema" [ref=e6546] [cursor=pointer]:
+            - generic [ref=e6548]: 󰈈
+            - generic [ref=e6549]: View Schema
+        - generic [ref=e6552]:
+          - generic [ref=e6553]:
+            - generic [ref=e6554]:
+              - generic [ref=e6555]: 󰒓
+              - generic [ref=e6556]:
+                - heading "run_full_test_suite" [level=3] [ref=e6557]
+                - generic [ref=e6558]:
+                  - generic [ref=e6560]: uncategorized
+                  - generic [ref=e6562]: enabled
+                  - generic [ref=e6564]: internal
+            - paragraph [ref=e6565]: Run the complete test suite to validate changes
+          - button "View Schema" [ref=e6567] [cursor=pointer]:
+            - generic [ref=e6569]: 󰈈
+            - generic [ref=e6570]: View Schema
+        - generic [ref=e6573]:
+          - generic [ref=e6574]:
+            - generic [ref=e6575]:
+              - generic [ref=e6576]: 󰒓
+              - generic [ref=e6577]:
+                - heading "search_files" [level=3] [ref=e6578]
+                - generic [ref=e6579]:
+                  - generic [ref=e6581]: uncategorized
+                  - generic [ref=e6583]: enabled
+                  - generic [ref=e6585]: internal
+            - paragraph [ref=e6586]: Recursively search for files and directories matching a pattern. The patterns should be glob-style patterns that match paths relative to the working directory. Use pattern like '*.ext' to match files in current directory, and '**/*.ext' to match files in all subdirectories. Returns full paths to all matching items. Great for finding files when you don't know their exact location. Only searches within allowed directories.
+          - button "View Schema" [ref=e6588] [cursor=pointer]:
+            - generic [ref=e6590]: 󰈈
+            - generic [ref=e6591]: View Schema
+        - generic [ref=e6594]:
+          - generic [ref=e6595]:
+            - generic [ref=e6596]:
+              - generic [ref=e6597]: 󰒓
+              - generic [ref=e6598]:
+                - heading "search_files" [level=3] [ref=e6599]
+                - generic [ref=e6600]:
+                  - generic [ref=e6602]: uncategorized
+                  - generic [ref=e6604]: enabled
+                  - generic [ref=e6606]: internal
+            - paragraph [ref=e6607]: Recursively search for files and directories matching a pattern. The patterns should be glob-style patterns that match paths relative to the working directory. Use pattern like '*.ext' to match files in current directory, and '**/*.ext' to match files in all subdirectories. Returns full paths to all matching items. Great for finding files when you don't know their exact location. Only searches within allowed directories.
+            - generic [ref=e6608]:
+              - generic [ref=e6609]: "Source:"
+              - generic [ref=e6611]: external
+          - button "View Schema" [ref=e6613] [cursor=pointer]:
+            - generic [ref=e6615]: 󰈈
+            - generic [ref=e6616]: View Schema
+        - generic [ref=e6619]:
+          - generic [ref=e6620]:
+            - generic [ref=e6621]:
+              - generic [ref=e6622]: 󰒓
+              - generic [ref=e6623]:
+                - heading "search_nodes" [level=3] [ref=e6624]
+                - generic [ref=e6625]:
+                  - generic [ref=e6627]: uncategorized
+                  - generic [ref=e6629]: enabled
+                  - generic [ref=e6631]: internal
+            - paragraph [ref=e6632]: Search for nodes in the knowledge graph based on a query
+          - button "View Schema" [ref=e6634] [cursor=pointer]:
+            - generic [ref=e6636]: 󰈈
+            - generic [ref=e6637]: View Schema
+        - generic [ref=e6640]:
+          - generic [ref=e6641]:
+            - generic [ref=e6642]:
+              - generic [ref=e6643]: 󰒓
+              - generic [ref=e6644]:
+                - heading "search_nodes" [level=3] [ref=e6645]
+                - generic [ref=e6646]:
+                  - generic [ref=e6648]: uncategorized
+                  - generic [ref=e6650]: enabled
+                  - generic [ref=e6652]: internal
+            - paragraph [ref=e6653]: "Search n8n nodes by keyword with optional real-world examples. Pass query as string. Example: query=\"webhook\" or query=\"database\". Returns max 20 results. Use includeExamples=true to get top 2 template configs per node."
+          - button "View Schema" [ref=e6655] [cursor=pointer]:
+            - generic [ref=e6657]: 󰈈
+            - generic [ref=e6658]: View Schema
+        - generic [ref=e6661]:
+          - generic [ref=e6662]:
+            - generic [ref=e6663]:
+              - generic [ref=e6664]: 󰒓
+              - generic [ref=e6665]:
+                - heading "search_nodes" [level=3] [ref=e6666]
+                - generic [ref=e6667]:
+                  - generic [ref=e6669]: uncategorized
+                  - generic [ref=e6671]: enabled
+                  - generic [ref=e6673]: internal
+            - paragraph [ref=e6674]: Search for nodes in the knowledge graph based on a query
+            - generic [ref=e6675]:
+              - generic [ref=e6676]: "Source:"
+              - generic [ref=e6678]: external
+          - button "View Schema" [ref=e6680] [cursor=pointer]:
+            - generic [ref=e6682]: 󰈈
+            - generic [ref=e6683]: View Schema
+        - generic [ref=e6686]:
+          - generic [ref=e6687]:
+            - generic [ref=e6688]:
+              - generic [ref=e6689]: 󰒓
+              - generic [ref=e6690]:
+                - heading "search_nodes" [level=3] [ref=e6691]
+                - generic [ref=e6692]:
+                  - generic [ref=e6694]: uncategorized
+                  - generic [ref=e6696]: enabled
+                  - generic [ref=e6698]: internal
+            - paragraph [ref=e6699]: "Search n8n nodes by keyword with optional real-world examples. Pass query as string. Example: query=\"webhook\" or query=\"database\". Returns max 20 results. Use includeExamples=true to get top 2 template configs per node."
+            - generic [ref=e6700]:
+              - generic [ref=e6701]: "Source:"
+              - generic [ref=e6703]: external
+          - button "View Schema" [ref=e6705] [cursor=pointer]:
+            - generic [ref=e6707]: 󰈈
+            - generic [ref=e6708]: View Schema
+        - generic [ref=e6711]:
+          - generic [ref=e6712]:
+            - generic [ref=e6713]:
+              - generic [ref=e6714]: 󰒓
+              - generic [ref=e6715]:
+                - heading "search_templates" [level=3] [ref=e6716]
+                - generic [ref=e6717]:
+                  - generic [ref=e6719]: uncategorized
+                  - generic [ref=e6721]: enabled
+                  - generic [ref=e6723]: internal
+            - paragraph [ref=e6724]: Search templates with multiple modes. Use searchMode='keyword' for text search, 'by_nodes' to find templates using specific nodes, 'by_task' for curated task-based templates, 'by_metadata' for filtering by complexity/setup time/services.
+          - button "View Schema" [ref=e6726] [cursor=pointer]:
+            - generic [ref=e6728]: 󰈈
+            - generic [ref=e6729]: View Schema
+        - generic [ref=e6732]:
+          - generic [ref=e6733]:
+            - generic [ref=e6734]:
+              - generic [ref=e6735]: 󰒓
+              - generic [ref=e6736]:
+                - heading "search_templates" [level=3] [ref=e6737]
+                - generic [ref=e6738]:
+                  - generic [ref=e6740]: uncategorized
+                  - generic [ref=e6742]: enabled
+                  - generic [ref=e6744]: internal
+            - paragraph [ref=e6745]: Search templates with multiple modes. Use searchMode='keyword' for text search, 'by_nodes' to find templates using specific nodes, 'by_task' for curated task-based templates, 'by_metadata' for filtering by complexity/setup time/services.
+            - generic [ref=e6746]:
+              - generic [ref=e6747]: "Source:"
+              - generic [ref=e6749]: external
+          - button "View Schema" [ref=e6751] [cursor=pointer]:
+            - generic [ref=e6753]: 󰈈
+            - generic [ref=e6754]: View Schema
+        - generic [ref=e6757]:
+          - generic [ref=e6758]:
+            - generic [ref=e6759]:
+              - generic [ref=e6760]: 󰒓
+              - generic [ref=e6761]:
+                - heading "sequentialthinking" [level=3] [ref=e6762]
+                - generic [ref=e6763]:
+                  - generic [ref=e6765]: uncategorized
+                  - generic [ref=e6767]: enabled
+                  - generic [ref=e6769]: internal
+            - paragraph [ref=e6770]: "A detailed tool for dynamic and reflective problem-solving through thoughts. This tool helps analyze problems through a flexible thinking process that can adapt and evolve. Each thought can build on, question, or revise previous insights as understanding deepens. When to use this tool: - Breaking down complex problems into steps - Planning and design with room for revision - Analysis that might need course correction - Problems where the full scope might not be clear initially - Problems that require a multi-step solution - Tasks that need to maintain context over multiple steps - Situations where irrelevant information needs to be filtered out Key features: - You can adjust total_thoughts up or down as you progress - You can question or revise previous thoughts - You can add more thoughts even after reaching what seemed like the end - You can express uncertainty and explore alternative approaches - Not every thought needs to build linearly - you can branch or backtrack - Generates a solution hypothesis - Verifies the hypothesis based on the Chain of Thought steps - Repeats the process until satisfied - Provides a correct answer Parameters explained: - thought: Your current thinking step, which can include: * Regular analytical steps * Revisions of previous thoughts * Questions about previous decisions * Realizations about needing more analysis * Changes in approach * Hypothesis generation * Hypothesis verification - nextThoughtNeeded: True if you need more thinking, even if at what seemed like the end - thoughtNumber: Current number in sequence (can go beyond initial total if needed) - totalThoughts: Current estimate of thoughts needed (can be adjusted up/down) - isRevision: A boolean indicating if this thought revises previous thinking - revisesThought: If is_revision is true, which thought number is being reconsidered - branchFromThought: If branching, which thought number is the branching point - branchId: Identifier for the current branch (if any) - needsMoreThoughts: If reaching end but realizing more thoughts needed You should: 1. Start with an initial estimate of needed thoughts, but be ready to adjust 2. Feel free to question or revise previous thoughts 3. Don't hesitate to add more thoughts if needed, even at the \"end\" 4. Express uncertainty when present 5. Mark thoughts that revise previous thinking or branch into new paths 6. Ignore information that is irrelevant to the current step 7. Generate a solution hypothesis when appropriate 8. Verify the hypothesis based on the Chain of Thought steps 9. Repeat the process until satisfied with the solution 10. Provide a single, ideally correct answer as the final output 11. Only set nextThoughtNeeded to false when truly done and a satisfactory answer is reached"
+          - button "View Schema" [ref=e6772] [cursor=pointer]:
+            - generic [ref=e6774]: 󰈈
+            - generic [ref=e6775]: View Schema
+        - generic [ref=e6778]:
+          - generic [ref=e6779]:
+            - generic [ref=e6780]:
+              - generic [ref=e6781]: 󰒓
+              - generic [ref=e6782]:
+                - heading "sequentialthinking" [level=3] [ref=e6783]
+                - generic [ref=e6784]:
+                  - generic [ref=e6786]: uncategorized
+                  - generic [ref=e6788]: enabled
+                  - generic [ref=e6790]: internal
+            - paragraph [ref=e6791]: "A detailed tool for dynamic and reflective problem-solving through thoughts. This tool helps analyze problems through a flexible thinking process that can adapt and evolve. Each thought can build on, question, or revise previous insights as understanding deepens. When to use this tool: - Breaking down complex problems into steps - Planning and design with room for revision - Analysis that might need course correction - Problems where the full scope might not be clear initially - Problems that require a multi-step solution - Tasks that need to maintain context over multiple steps - Situations where irrelevant information needs to be filtered out Key features: - You can adjust total_thoughts up or down as you progress - You can question or revise previous thoughts - You can add more thoughts even after reaching what seemed like the end - You can express uncertainty and explore alternative approaches - Not every thought needs to build linearly - you can branch or backtrack - Generates a solution hypothesis - Verifies the hypothesis based on the Chain of Thought steps - Repeats the process until satisfied - Provides a correct answer Parameters explained: - thought: Your current thinking step, which can include: * Regular analytical steps * Revisions of previous thoughts * Questions about previous decisions * Realizations about needing more analysis * Changes in approach * Hypothesis generation * Hypothesis verification - nextThoughtNeeded: True if you need more thinking, even if at what seemed like the end - thoughtNumber: Current number in sequence (can go beyond initial total if needed) - totalThoughts: Current estimate of thoughts needed (can be adjusted up/down) - isRevision: A boolean indicating if this thought revises previous thinking - revisesThought: If is_revision is true, which thought number is being reconsidered - branchFromThought: If branching, which thought number is the branching point - branchId: Identifier for the current branch (if any) - needsMoreThoughts: If reaching end but realizing more thoughts needed You should: 1. Start with an initial estimate of needed thoughts, but be ready to adjust 2. Feel free to question or revise previous thoughts 3. Don't hesitate to add more thoughts if needed, even at the \"end\" 4. Express uncertainty when present 5. Mark thoughts that revise previous thinking or branch into new paths 6. Ignore information that is irrelevant to the current step 7. Generate a solution hypothesis when appropriate 8. Verify the hypothesis based on the Chain of Thought steps 9. Repeat the process until satisfied with the solution 10. Provide a single, ideally correct answer as the final output 11. Only set nextThoughtNeeded to false when truly done and a satisfactory answer is reached"
+            - generic [ref=e6792]:
+              - generic [ref=e6793]: "Source:"
+              - generic [ref=e6795]: external
+          - button "View Schema" [ref=e6797] [cursor=pointer]:
+            - generic [ref=e6799]: 󰈈
+            - generic [ref=e6800]: View Schema
+        - generic [ref=e6803]:
+          - generic [ref=e6804]:
+            - generic [ref=e6805]:
+              - generic [ref=e6806]: 󰒓
+              - generic [ref=e6807]:
+                - heading "shard-status" [level=3] [ref=e6808]
+                - generic [ref=e6809]:
+                  - generic [ref=e6811]: uncategorized
+                  - generic [ref=e6813]: enabled
+                  - generic [ref=e6815]: internal
+            - paragraph [ref=e6816]: Get sharding status for database or collections
+          - button "View Schema" [ref=e6818] [cursor=pointer]:
+            - generic [ref=e6820]: 󰈈
+            - generic [ref=e6821]: View Schema
+        - generic [ref=e6824]:
+          - generic [ref=e6825]:
+            - generic [ref=e6826]:
+              - generic [ref=e6827]: 󰒓
+              - generic [ref=e6828]:
+                - heading "shard-status" [level=3] [ref=e6829]
+                - generic [ref=e6830]:
+                  - generic [ref=e6832]: uncategorized
+                  - generic [ref=e6834]: enabled
+                  - generic [ref=e6836]: internal
+            - paragraph [ref=e6837]: Get sharding status for database or collections
+            - generic [ref=e6838]:
+              - generic [ref=e6839]: "Source:"
+              - generic [ref=e6841]: external
+          - button "View Schema" [ref=e6843] [cursor=pointer]:
+            - generic [ref=e6845]: 󰈈
+            - generic [ref=e6846]: View Schema
+        - generic [ref=e6849]:
+          - generic [ref=e6850]:
+            - generic [ref=e6851]:
+              - generic [ref=e6852]: 󰒓
+              - generic [ref=e6853]:
+                - heading "shell_exec" [level=3] [ref=e6854]
+                - generic [ref=e6855]:
+                  - generic [ref=e6857]: uncategorized
+                  - generic [ref=e6859]: enabled
+                  - generic [ref=e6861]: internal
+            - paragraph [ref=e6862]: Execute shell commands with output capture and safety controls
+          - button "View Schema" [ref=e6864] [cursor=pointer]:
+            - generic [ref=e6866]: 󰈈
+            - generic [ref=e6867]: View Schema
+        - generic [ref=e6870]:
+          - generic [ref=e6871]:
+            - generic [ref=e6872]:
+              - generic [ref=e6873]: 󰒓
+              - generic [ref=e6874]:
+                - heading "shell_execute" [level=3] [ref=e6875]
+                - generic [ref=e6876]:
+                  - generic [ref=e6878]: uncategorized
+                  - generic [ref=e6880]: enabled
+                  - generic [ref=e6882]: internal
+            - paragraph [ref=e6883]: Execute shell commands with output capture and safety controls
+          - button "View Schema" [ref=e6885] [cursor=pointer]:
+            - generic [ref=e6887]: 󰈈
+            - generic [ref=e6888]: View Schema
+        - generic [ref=e6891]:
+          - generic [ref=e6892]:
+            - generic [ref=e6893]:
+              - generic [ref=e6894]: 󰒓
+              - generic [ref=e6895]:
+                - heading "sqrt" [level=3] [ref=e6896]
+                - generic [ref=e6897]:
+                  - generic [ref=e6899]: uncategorized
+                  - generic [ref=e6901]: enabled
+                  - generic [ref=e6903]: internal
+            - paragraph [ref=e6904]: Square root of a number
+          - button "View Schema" [ref=e6906] [cursor=pointer]:
+            - generic [ref=e6908]: 󰈈
+            - generic [ref=e6909]: View Schema
+        - generic [ref=e6912]:
+          - generic [ref=e6913]:
+            - generic [ref=e6914]:
+              - generic [ref=e6915]: 󰒓
+              - generic [ref=e6916]:
+                - heading "sqrt" [level=3] [ref=e6917]
+                - generic [ref=e6918]:
+                  - generic [ref=e6920]: uncategorized
+                  - generic [ref=e6922]: enabled
+                  - generic [ref=e6924]: internal
+            - paragraph [ref=e6925]: Square root of a number
+            - generic [ref=e6926]:
+              - generic [ref=e6927]: "Source:"
+              - generic [ref=e6929]: external
+          - button "View Schema" [ref=e6931] [cursor=pointer]:
+            - generic [ref=e6933]: 󰈈
+            - generic [ref=e6934]: View Schema
+        - generic [ref=e6937]:
+          - generic [ref=e6938]:
+            - generic [ref=e6939]:
+              - generic [ref=e6940]: 󰒓
+              - generic [ref=e6941]:
+                - heading "sub" [level=3] [ref=e6942]
+                - generic [ref=e6943]:
+                  - generic [ref=e6945]: uncategorized
+                  - generic [ref=e6947]: enabled
+                  - generic [ref=e6949]: internal
+            - paragraph [ref=e6950]: Subtract two numbers
+          - button "View Schema" [ref=e6952] [cursor=pointer]:
+            - generic [ref=e6954]: 󰈈
+            - generic [ref=e6955]: View Schema
+        - generic [ref=e6958]:
+          - generic [ref=e6959]:
+            - generic [ref=e6960]:
+              - generic [ref=e6961]: 󰒓
+              - generic [ref=e6962]:
+                - heading "sub" [level=3] [ref=e6963]
+                - generic [ref=e6964]:
+                  - generic [ref=e6966]: uncategorized
+                  - generic [ref=e6968]: enabled
+                  - generic [ref=e6970]: internal
+            - paragraph [ref=e6971]: Subtract two numbers
+            - generic [ref=e6972]:
+              - generic [ref=e6973]: "Source:"
+              - generic [ref=e6975]: external
+          - button "View Schema" [ref=e6977] [cursor=pointer]:
+            - generic [ref=e6979]: 󰈈
+            - generic [ref=e6980]: View Schema
+        - generic [ref=e6983]:
+          - generic [ref=e6984]:
+            - generic [ref=e6985]:
+              - generic [ref=e6986]: 󰒓
+              - generic [ref=e6987]:
+                - heading "suggest_refactoring" [level=3] [ref=e6988]
+                - generic [ref=e6989]:
+                  - generic [ref=e6991]: uncategorized
+                  - generic [ref=e6993]: enabled
+                  - generic [ref=e6995]: internal
+            - paragraph [ref=e6996]: Analyze code and suggest refactoring opportunities
+          - button "View Schema" [ref=e6998] [cursor=pointer]:
+            - generic [ref=e7000]: 󰈈
+            - generic [ref=e7001]: View Schema
+        - generic [ref=e7004]:
+          - generic [ref=e7005]:
+            - generic [ref=e7006]:
+              - generic [ref=e7007]: 󰒓
+              - generic [ref=e7008]:
+                - heading "task_complete" [level=3] [ref=e7009]
+                - generic [ref=e7010]:
+                  - generic [ref=e7012]: uncategorized
+                  - generic [ref=e7014]: enabled
+                  - generic [ref=e7016]: internal
+            - paragraph [ref=e7017]: Signal that an assigned task has been completed successfully. This notifies the task management system that work is finished and provides completion details.
+          - button "View Schema" [ref=e7019] [cursor=pointer]:
+            - generic [ref=e7021]: 󰈈
+            - generic [ref=e7022]: View Schema
+        - generic [ref=e7025]:
+          - generic [ref=e7026]:
+            - generic [ref=e7027]:
+              - generic [ref=e7028]: 󰒓
+              - generic [ref=e7029]:
+                - heading "task_complete_bridge" [level=3] [ref=e7030]
+                - generic [ref=e7031]:
+                  - generic [ref=e7033]: uncategorized
+                  - generic [ref=e7035]: enabled
+                  - generic [ref=e7037]: internal
+            - paragraph [ref=e7038]: Complete a task through the task management system (alternative to task_complete)
+          - button "View Schema" [ref=e7040] [cursor=pointer]:
+            - generic [ref=e7042]: 󰈈
+            - generic [ref=e7043]: View Schema
+        - generic [ref=e7046]:
+          - generic [ref=e7047]:
+            - generic [ref=e7048]:
+              - generic [ref=e7049]: 󰒓
+              - generic [ref=e7050]:
+                - heading "task_create" [level=3] [ref=e7051]
+                - generic [ref=e7052]:
+                  - generic [ref=e7054]: uncategorized
+                  - generic [ref=e7056]: enabled
+                  - generic [ref=e7058]: internal
+            - paragraph [ref=e7059]: Create a new task in the MXF task management system
+          - button "View Schema" [ref=e7061] [cursor=pointer]:
+            - generic [ref=e7063]: 󰈈
+            - generic [ref=e7064]: View Schema
+        - generic [ref=e7067]:
+          - generic [ref=e7068]:
+            - generic [ref=e7069]:
+              - generic [ref=e7070]: 󰒓
+              - generic [ref=e7071]:
+                - heading "task_create_custom_completion" [level=3] [ref=e7072]
+                - generic [ref=e7073]:
+                  - generic [ref=e7075]: uncategorized
+                  - generic [ref=e7077]: enabled
+                  - generic [ref=e7079]: internal
+            - paragraph [ref=e7080]: Create a task with custom completion criteria (SystemLLM evaluation, output-based, time-based, etc.)
+          - button "View Schema" [ref=e7082] [cursor=pointer]:
+            - generic [ref=e7084]: 󰈈
+            - generic [ref=e7085]: View Schema
+        - generic [ref=e7088]:
+          - generic [ref=e7089]:
+            - generic [ref=e7090]:
+              - generic [ref=e7091]: 󰒓
+              - generic [ref=e7092]:
+                - heading "task_create_with_plan" [level=3] [ref=e7093]
+                - generic [ref=e7094]:
+                  - generic [ref=e7096]: uncategorized
+                  - generic [ref=e7098]: enabled
+                  - generic [ref=e7100]: internal
+            - paragraph [ref=e7101]: Create a task with built-in completion criteria based on a plan. The task will automatically complete when plan steps are done.
+          - button "View Schema" [ref=e7103] [cursor=pointer]:
+            - generic [ref=e7105]: 󰈈
+            - generic [ref=e7106]: View Schema
+        - generic [ref=e7109]:
+          - generic [ref=e7110]:
+            - generic [ref=e7111]:
+              - generic [ref=e7112]: 󰒓
+              - generic [ref=e7113]:
+                - heading "task_effectiveness_analytics" [level=3] [ref=e7114]
+                - generic [ref=e7115]:
+                  - generic [ref=e7117]: uncategorized
+                  - generic [ref=e7119]: enabled
+                  - generic [ref=e7121]: internal
+            - paragraph [ref=e7122]: Get effectiveness analytics for completed tasks in a time period
+          - button "View Schema" [ref=e7124] [cursor=pointer]:
+            - generic [ref=e7126]: 󰈈
+            - generic [ref=e7127]: View Schema
+        - generic [ref=e7130]:
+          - generic [ref=e7131]:
+            - generic [ref=e7132]:
+              - generic [ref=e7133]: 󰒓
+              - generic [ref=e7134]:
+                - heading "task_effectiveness_compare" [level=3] [ref=e7135]
+                - generic [ref=e7136]:
+                  - generic [ref=e7138]: uncategorized
+                  - generic [ref=e7140]: enabled
+                  - generic [ref=e7142]: internal
+            - paragraph [ref=e7143]: Compare current task performance with previous similar tasks
+          - button "View Schema" [ref=e7145] [cursor=pointer]:
+            - generic [ref=e7147]: 󰈈
+            - generic [ref=e7148]: View Schema
+        - generic [ref=e7151]:
+          - generic [ref=e7152]:
+            - generic [ref=e7153]:
+              - generic [ref=e7154]: 󰒓
+              - generic [ref=e7155]:
+                - heading "task_effectiveness_complete" [level=3] [ref=e7156]
+                - generic [ref=e7157]:
+                  - generic [ref=e7159]: uncategorized
+                  - generic [ref=e7161]: enabled
+                  - generic [ref=e7163]: internal
+            - paragraph [ref=e7164]: Complete task tracking and get effectiveness summary with comparisons
+          - button "View Schema" [ref=e7166] [cursor=pointer]:
+            - generic [ref=e7168]: 󰈈
+            - generic [ref=e7169]: View Schema
+        - generic [ref=e7172]:
+          - generic [ref=e7173]:
+            - generic [ref=e7174]:
+              - generic [ref=e7175]: 󰒓
+              - generic [ref=e7176]:
+                - heading "task_effectiveness_event" [level=3] [ref=e7177]
+                - generic [ref=e7178]:
+                  - generic [ref=e7180]: uncategorized
+                  - generic [ref=e7182]: enabled
+                  - generic [ref=e7184]: internal
+            - paragraph [ref=e7185]: Record a significant event during task execution (tool use, milestone, error, etc.)
+          - button "View Schema" [ref=e7187] [cursor=pointer]:
+            - generic [ref=e7189]: 󰈈
+            - generic [ref=e7190]: View Schema
+        - generic [ref=e7193]:
+          - generic [ref=e7194]:
+            - generic [ref=e7195]:
+              - generic [ref=e7196]: 󰒓
+              - generic [ref=e7197]:
+                - heading "task_effectiveness_quality" [level=3] [ref=e7198]
+                - generic [ref=e7199]:
+                  - generic [ref=e7201]: uncategorized
+                  - generic [ref=e7203]: enabled
+                  - generic [ref=e7205]: internal
+            - paragraph [ref=e7206]: Update quality metrics for the current task (completeness, iterations, custom metrics)
+          - button "View Schema" [ref=e7208] [cursor=pointer]:
+            - generic [ref=e7210]: 󰈈
+            - generic [ref=e7211]: View Schema
+        - generic [ref=e7214]:
+          - generic [ref=e7215]:
+            - generic [ref=e7216]:
+              - generic [ref=e7217]: 󰒓
+              - generic [ref=e7218]:
+                - heading "task_effectiveness_start" [level=3] [ref=e7219]
+                - generic [ref=e7220]:
+                  - generic [ref=e7222]: uncategorized
+                  - generic [ref=e7224]: enabled
+                  - generic [ref=e7226]: internal
+            - paragraph [ref=e7227]: Start tracking effectiveness metrics for a new task
+          - button "View Schema" [ref=e7229] [cursor=pointer]:
+            - generic [ref=e7231]: 󰈈
+            - generic [ref=e7232]: View Schema
+        - generic [ref=e7235]:
+          - generic [ref=e7236]:
+            - generic [ref=e7237]:
+              - generic [ref=e7238]: 󰒓
+              - generic [ref=e7239]:
+                - heading "task_link_to_plan" [level=3] [ref=e7240]
+                - generic [ref=e7241]:
+                  - generic [ref=e7243]: uncategorized
+                  - generic [ref=e7245]: enabled
+                  - generic [ref=e7247]: internal
+            - paragraph [ref=e7248]: Link an existing task to a plan for automatic completion monitoring
+          - button "View Schema" [ref=e7250] [cursor=pointer]:
+            - generic [ref=e7252]: 󰈈
+            - generic [ref=e7253]: View Schema
+        - generic [ref=e7256]:
+          - generic [ref=e7257]:
+            - generic [ref=e7258]:
+              - generic [ref=e7259]: 󰒓
+              - generic [ref=e7260]:
+                - heading "task_monitoring_status" [level=3] [ref=e7261]
+                - generic [ref=e7262]:
+                  - generic [ref=e7264]: uncategorized
+                  - generic [ref=e7266]: enabled
+                  - generic [ref=e7268]: internal
+            - paragraph [ref=e7269]: Get the current monitoring status and progress of a task
+          - button "View Schema" [ref=e7271] [cursor=pointer]:
+            - generic [ref=e7273]: 󰈈
+            - generic [ref=e7274]: View Schema
+        - generic [ref=e7277]:
+          - generic [ref=e7278]:
+            - generic [ref=e7279]:
+              - generic [ref=e7280]: 󰒓
+              - generic [ref=e7281]:
+                - heading "task_query" [level=3] [ref=e7282]
+                - generic [ref=e7283]:
+                  - generic [ref=e7285]: uncategorized
+                  - generic [ref=e7287]: enabled
+                  - generic [ref=e7289]: internal
+            - paragraph [ref=e7290]: Query and retrieve tasks from the task management system
+          - button "View Schema" [ref=e7292] [cursor=pointer]:
+            - generic [ref=e7294]: 󰈈
+            - generic [ref=e7295]: View Schema
+        - generic [ref=e7298]:
+          - generic [ref=e7299]:
+            - generic [ref=e7300]:
+              - generic [ref=e7301]: 󰒓
+              - generic [ref=e7302]:
+                - heading "task_status" [level=3] [ref=e7303]
+                - generic [ref=e7304]:
+                  - generic [ref=e7306]: uncategorized
+                  - generic [ref=e7308]: enabled
+                  - generic [ref=e7310]: internal
+            - paragraph [ref=e7311]: Get detailed status and information about a specific task
+          - button "View Schema" [ref=e7313] [cursor=pointer]:
+            - generic [ref=e7315]: 󰈈
+            - generic [ref=e7316]: View Schema
+        - generic [ref=e7319]:
+          - generic [ref=e7320]:
+            - generic [ref=e7321]:
+              - generic [ref=e7322]: 󰒓
+              - generic [ref=e7323]:
+                - heading "task_update" [level=3] [ref=e7324]
+                - generic [ref=e7325]:
+                  - generic [ref=e7327]: uncategorized
+                  - generic [ref=e7329]: enabled
+                  - generic [ref=e7331]: internal
+            - paragraph [ref=e7332]: Update an existing task in the task management system
+          - button "View Schema" [ref=e7334] [cursor=pointer]:
+            - generic [ref=e7336]: 󰈈
+            - generic [ref=e7337]: View Schema
+        - generic [ref=e7340]:
+          - generic [ref=e7341]:
+            - generic [ref=e7342]:
+              - generic [ref=e7343]: 󰒓
+              - generic [ref=e7344]:
+                - heading "test_jest" [level=3] [ref=e7345]
+                - generic [ref=e7346]:
+                  - generic [ref=e7348]: uncategorized
+                  - generic [ref=e7350]: enabled
+                  - generic [ref=e7352]: internal
+            - paragraph [ref=e7353]: Run Jest tests with comprehensive options
+          - button "View Schema" [ref=e7355] [cursor=pointer]:
+            - generic [ref=e7357]: 󰈈
+            - generic [ref=e7358]: View Schema
+        - generic [ref=e7361]:
+          - generic [ref=e7362]:
+            - generic [ref=e7363]:
+              - generic [ref=e7364]: 󰒓
+              - generic [ref=e7365]:
+                - heading "test_mocha" [level=3] [ref=e7366]
+                - generic [ref=e7367]:
+                  - generic [ref=e7369]: uncategorized
+                  - generic [ref=e7371]: enabled
+                  - generic [ref=e7373]: internal
+            - paragraph [ref=e7374]: Run Mocha tests with comprehensive options
+          - button "View Schema" [ref=e7376] [cursor=pointer]:
+            - generic [ref=e7378]: 󰈈
+            - generic [ref=e7379]: View Schema
+        - generic [ref=e7382]:
+          - generic [ref=e7383]:
+            - generic [ref=e7384]:
+              - generic [ref=e7385]: 󰒓
+              - generic [ref=e7386]:
+                - heading "test_runner" [level=3] [ref=e7387]
+                - generic [ref=e7388]:
+                  - generic [ref=e7390]: uncategorized
+                  - generic [ref=e7392]: enabled
+                  - generic [ref=e7394]: internal
+            - paragraph [ref=e7395]: Universal test runner that detects and runs the appropriate test framework
+          - button "View Schema" [ref=e7397] [cursor=pointer]:
+            - generic [ref=e7399]: 󰈈
+            - generic [ref=e7400]: View Schema
+        - generic [ref=e7403]:
+          - generic [ref=e7404]:
+            - generic [ref=e7405]:
+              - generic [ref=e7406]: 󰒓
+              - generic [ref=e7407]:
+                - heading "test_tool" [level=3] [ref=e7408]
+                - generic [ref=e7409]:
+                  - generic [ref=e7411]: uncategorized
+                  - generic [ref=e7413]: enabled
+                  - generic [ref=e7415]: internal
+            - paragraph [ref=e7416]: A test tool for MCP integration
+          - button "View Schema" [ref=e7418] [cursor=pointer]:
+            - generic [ref=e7420]: 󰈈
+            - generic [ref=e7421]: View Schema
+        - generic [ref=e7424]:
+          - generic [ref=e7425]:
+            - generic [ref=e7426]:
+              - generic [ref=e7427]: 󰒓
+              - generic [ref=e7428]:
+                - heading "test_vitest" [level=3] [ref=e7429]
+                - generic [ref=e7430]:
+                  - generic [ref=e7432]: uncategorized
+                  - generic [ref=e7434]: enabled
+                  - generic [ref=e7436]: internal
+            - paragraph [ref=e7437]: Run Vitest tests with comprehensive options
+          - button "View Schema" [ref=e7439] [cursor=pointer]:
+            - generic [ref=e7441]: 󰈈
+            - generic [ref=e7442]: View Schema
+        - generic [ref=e7445]:
+          - generic [ref=e7446]:
+            - generic [ref=e7447]:
+              - generic [ref=e7448]: 󰒓
+              - generic [ref=e7449]:
+                - heading "test-tool-1749436114086" [level=3] [ref=e7450]
+                - generic [ref=e7451]:
+                  - generic [ref=e7453]: uncategorized
+                  - generic [ref=e7455]: enabled
+                  - generic [ref=e7457]: internal
+            - paragraph [ref=e7458]: A test tool created by the API test
+          - button "View Schema" [ref=e7460] [cursor=pointer]:
+            - generic [ref=e7462]: 󰈈
+            - generic [ref=e7463]: View Schema
+        - generic [ref=e7466]:
+          - generic [ref=e7467]:
+            - generic [ref=e7468]:
+              - generic [ref=e7469]: 󰒓
+              - generic [ref=e7470]:
+                - heading "text-search" [level=3] [ref=e7471]
+                - generic [ref=e7472]:
+                  - generic [ref=e7474]: uncategorized
+                  - generic [ref=e7476]: enabled
+                  - generic [ref=e7478]: internal
+            - paragraph [ref=e7479]: Perform full-text search across text-indexed fields
+          - button "View Schema" [ref=e7481] [cursor=pointer]:
+            - generic [ref=e7483]: 󰈈
+            - generic [ref=e7484]: View Schema
+        - generic [ref=e7487]:
+          - generic [ref=e7488]:
+            - generic [ref=e7489]:
+              - generic [ref=e7490]: 󰒓
+              - generic [ref=e7491]:
+                - heading "text-search" [level=3] [ref=e7492]
+                - generic [ref=e7493]:
+                  - generic [ref=e7495]: uncategorized
+                  - generic [ref=e7497]: enabled
+                  - generic [ref=e7499]: internal
+            - paragraph [ref=e7500]: Perform full-text search across text-indexed fields
+            - generic [ref=e7501]:
+              - generic [ref=e7502]: "Source:"
+              - generic [ref=e7504]: external
+          - button "View Schema" [ref=e7506] [cursor=pointer]:
+            - generic [ref=e7508]: 󰈈
+            - generic [ref=e7509]: View Schema
+        - generic [ref=e7512]:
+          - generic [ref=e7513]:
+            - generic [ref=e7514]:
+              - generic [ref=e7515]: 󰒓
+              - generic [ref=e7516]:
+                - heading "tool_help" [level=3] [ref=e7517]
+                - generic [ref=e7518]:
+                  - generic [ref=e7520]: uncategorized
+                  - generic [ref=e7522]: enabled
+                  - generic [ref=e7524]: internal
+            - paragraph [ref=e7525]: Get detailed documentation, schema, and examples for how to use a specific tool
+          - button "View Schema" [ref=e7527] [cursor=pointer]:
+            - generic [ref=e7529]: 󰈈
+            - generic [ref=e7530]: View Schema
+        - generic [ref=e7533]:
+          - generic [ref=e7534]:
+            - generic [ref=e7535]:
+              - generic [ref=e7536]: 󰒓
+              - generic [ref=e7537]:
+                - heading "tool_quick_reference" [level=3] [ref=e7538]
+                - generic [ref=e7539]:
+                  - generic [ref=e7541]: uncategorized
+                  - generic [ref=e7543]: enabled
+                  - generic [ref=e7545]: internal
+            - paragraph [ref=e7546]: Get a quick reference guide showing all available tools and their basic usage
+          - button "View Schema" [ref=e7548] [cursor=pointer]:
+            - generic [ref=e7550]: 󰈈
+            - generic [ref=e7551]: View Schema
+        - generic [ref=e7554]:
+          - generic [ref=e7555]:
+            - generic [ref=e7556]:
+              - generic [ref=e7557]: 󰒓
+              - generic [ref=e7558]:
+                - heading "tool_validate" [level=3] [ref=e7559]
+                - generic [ref=e7560]:
+                  - generic [ref=e7562]: uncategorized
+                  - generic [ref=e7564]: enabled
+                  - generic [ref=e7566]: internal
+            - paragraph [ref=e7567]: Validate a tool call format and parameters before execution
+          - button "View Schema" [ref=e7569] [cursor=pointer]:
+            - generic [ref=e7571]: 󰈈
+            - generic [ref=e7572]: View Schema
+        - generic [ref=e7575]:
+          - generic [ref=e7576]:
+            - generic [ref=e7577]:
+              - generic [ref=e7578]: 󰒓
+              - generic [ref=e7579]:
+                - heading "tool_validation_tips" [level=3] [ref=e7580]
+                - generic [ref=e7581]:
+                  - generic [ref=e7583]: uncategorized
+                  - generic [ref=e7585]: enabled
+                  - generic [ref=e7587]: internal
+            - paragraph [ref=e7588]: Get tips and best practices for making successful tool calls
+          - button "View Schema" [ref=e7590] [cursor=pointer]:
+            - generic [ref=e7592]: 󰈈
+            - generic [ref=e7593]: View Schema
+        - generic [ref=e7596]:
+          - generic [ref=e7597]:
+            - generic [ref=e7598]:
+              - generic [ref=e7599]: 󰒓
+              - generic [ref=e7600]:
+                - heading "tools_compare" [level=3] [ref=e7601]
+                - generic [ref=e7602]:
+                  - generic [ref=e7604]: uncategorized
+                  - generic [ref=e7606]: enabled
+                  - generic [ref=e7608]: internal
+            - paragraph [ref=e7609]: Compare multiple tools side-by-side and suggest alternatives based on functionality, performance, and use cases.
+          - button "View Schema" [ref=e7611] [cursor=pointer]:
+            - generic [ref=e7613]: 󰈈
+            - generic [ref=e7614]: View Schema
+        - generic [ref=e7617]:
+          - generic [ref=e7618]:
+            - generic [ref=e7619]:
+              - generic [ref=e7620]: 󰒓
+              - generic [ref=e7621]:
+                - heading "tools_discover" [level=3] [ref=e7622]
+                - generic [ref=e7623]:
+                  - generic [ref=e7625]: uncategorized
+                  - generic [ref=e7627]: enabled
+                  - generic [ref=e7629]: internal
+            - paragraph [ref=e7630]: Discover and explore available MCP tools with interactive filtering by category, source, and other criteria. Returns exact tool information without AI interpretation.
+          - button "View Schema" [ref=e7632] [cursor=pointer]:
+            - generic [ref=e7634]: 󰈈
+            - generic [ref=e7635]: View Schema
+        - generic [ref=e7638]:
+          - generic [ref=e7639]:
+            - generic [ref=e7640]:
+              - generic [ref=e7641]: 󰒓
+              - generic [ref=e7642]:
+                - heading "tools_documentation" [level=3] [ref=e7643]
+                - generic [ref=e7644]:
+                  - generic [ref=e7646]: uncategorized
+                  - generic [ref=e7648]: enabled
+                  - generic [ref=e7650]: internal
+            - paragraph [ref=e7651]: Get documentation for n8n MCP tools. Call without parameters for quick start guide. Use topic parameter to get documentation for specific tools. Use depth='full' for comprehensive documentation.
+          - button "View Schema" [ref=e7653] [cursor=pointer]:
+            - generic [ref=e7655]: 󰈈
+            - generic [ref=e7656]: View Schema
+        - generic [ref=e7659]:
+          - generic [ref=e7660]:
+            - generic [ref=e7661]:
+              - generic [ref=e7662]: 󰒓
+              - generic [ref=e7663]:
+                - heading "tools_documentation" [level=3] [ref=e7664]
+                - generic [ref=e7665]:
+                  - generic [ref=e7667]: uncategorized
+                  - generic [ref=e7669]: enabled
+                  - generic [ref=e7671]: internal
+            - paragraph [ref=e7672]: Get documentation for n8n MCP tools. Call without parameters for quick start guide. Use topic parameter to get documentation for specific tools. Use depth='full' for comprehensive documentation.
+            - generic [ref=e7673]:
+              - generic [ref=e7674]: "Source:"
+              - generic [ref=e7676]: external
+          - button "View Schema" [ref=e7678] [cursor=pointer]:
+            - generic [ref=e7680]: 󰈈
+            - generic [ref=e7681]: View Schema
+        - generic [ref=e7684]:
+          - generic [ref=e7685]:
+            - generic [ref=e7686]:
+              - generic [ref=e7687]: 󰒓
+              - generic [ref=e7688]:
+                - heading "tools_recommend" [level=3] [ref=e7689]
+                - generic [ref=e7690]:
+                  - generic [ref=e7692]: uncategorized
+                  - generic [ref=e7694]: enabled
+                  - generic [ref=e7696]: internal
+            - paragraph [ref=e7697]: Get intelligent tool recommendations based on agent intent and task context
+          - button "View Schema" [ref=e7699] [cursor=pointer]:
+            - generic [ref=e7701]: 󰈈
+            - generic [ref=e7702]: View Schema
+        - generic [ref=e7705]:
+          - generic [ref=e7706]:
+            - generic [ref=e7707]:
+              - generic [ref=e7708]: 󰒓
+              - generic [ref=e7709]:
+                - heading "tools_recommend_on_error" [level=3] [ref=e7710]
+                - generic [ref=e7711]:
+                  - generic [ref=e7713]: uncategorized
+                  - generic [ref=e7715]: enabled
+                  - generic [ref=e7717]: internal
+            - paragraph [ref=e7718]: Get intelligent tool recommendations specifically triggered by validation failures or execution errors. Provides alternative tools, parameter corrections, and prevention strategies.
+          - button "View Schema" [ref=e7720] [cursor=pointer]:
+            - generic [ref=e7722]: 󰈈
+            - generic [ref=e7723]: View Schema
+        - generic [ref=e7726]:
+          - generic [ref=e7727]:
+            - generic [ref=e7728]:
+              - generic [ref=e7729]: 󰒓
+              - generic [ref=e7730]:
+                - heading "tools_validate" [level=3] [ref=e7731]
+                - generic [ref=e7732]:
+                  - generic [ref=e7734]: uncategorized
+                  - generic [ref=e7736]: enabled
+                  - generic [ref=e7738]: internal
+            - paragraph [ref=e7739]: Validates that specified tools are available and properly configured before attempting to use them. Helps prevent execution errors by checking tool availability.
+          - button "View Schema" [ref=e7741] [cursor=pointer]:
+            - generic [ref=e7743]: 󰈈
+            - generic [ref=e7744]: View Schema
+        - generic [ref=e7747]:
+          - generic [ref=e7748]:
+            - generic [ref=e7749]:
+              - generic [ref=e7750]: 󰒓
+              - generic [ref=e7751]:
+                - heading "trace_dependencies" [level=3] [ref=e7752]
+                - generic [ref=e7753]:
+                  - generic [ref=e7755]: uncategorized
+                  - generic [ref=e7757]: enabled
+                  - generic [ref=e7759]: internal
+            - paragraph [ref=e7760]: Trace dependencies and imports for impact analysis
+          - button "View Schema" [ref=e7762] [cursor=pointer]:
+            - generic [ref=e7764]: 󰈈
+            - generic [ref=e7765]: View Schema
+        - generic [ref=e7768]:
+          - generic [ref=e7769]:
+            - generic [ref=e7770]:
+              - generic [ref=e7771]: 󰒓
+              - generic [ref=e7772]:
+                - heading "transaction" [level=3] [ref=e7773]
+                - generic [ref=e7774]:
+                  - generic [ref=e7776]: uncategorized
+                  - generic [ref=e7778]: enabled
+                  - generic [ref=e7780]: internal
+            - paragraph [ref=e7781]: Execute multiple operations in a single transaction
+          - button "View Schema" [ref=e7783] [cursor=pointer]:
+            - generic [ref=e7785]: 󰈈
+            - generic [ref=e7786]: View Schema
+        - generic [ref=e7789]:
+          - generic [ref=e7790]:
+            - generic [ref=e7791]:
+              - generic [ref=e7792]: 󰒓
+              - generic [ref=e7793]:
+                - heading "transaction" [level=3] [ref=e7794]
+                - generic [ref=e7795]:
+                  - generic [ref=e7797]: uncategorized
+                  - generic [ref=e7799]: enabled
+                  - generic [ref=e7801]: internal
+            - paragraph [ref=e7802]: Execute multiple operations in a single transaction
+            - generic [ref=e7803]:
+              - generic [ref=e7804]: "Source:"
+              - generic [ref=e7806]: external
+          - button "View Schema" [ref=e7808] [cursor=pointer]:
+            - generic [ref=e7810]: 󰈈
+            - generic [ref=e7811]: View Schema
+        - generic [ref=e7814]:
+          - generic [ref=e7815]:
+            - generic [ref=e7816]:
+              - generic [ref=e7817]: 󰒓
+              - generic [ref=e7818]:
+                - heading "typescript_build" [level=3] [ref=e7819]
+                - generic [ref=e7820]:
+                  - generic [ref=e7822]: uncategorized
+                  - generic [ref=e7824]: enabled
+                  - generic [ref=e7826]: internal
+            - paragraph [ref=e7827]: Build TypeScript project and emit JavaScript files
+          - button "View Schema" [ref=e7829] [cursor=pointer]:
+            - generic [ref=e7831]: 󰈈
+            - generic [ref=e7832]: View Schema
+        - generic [ref=e7835]:
+          - generic [ref=e7836]:
+            - generic [ref=e7837]:
+              - generic [ref=e7838]: 󰒓
+              - generic [ref=e7839]:
+                - heading "typescript_check" [level=3] [ref=e7840]
+                - generic [ref=e7841]:
+                  - generic [ref=e7843]: uncategorized
+                  - generic [ref=e7845]: enabled
+                  - generic [ref=e7847]: internal
+            - paragraph [ref=e7848]: Type-check TypeScript files and report diagnostics
+          - button "View Schema" [ref=e7850] [cursor=pointer]:
+            - generic [ref=e7852]: 󰈈
+            - generic [ref=e7853]: View Schema
+        - generic [ref=e7856]:
+          - generic [ref=e7857]:
+            - generic [ref=e7858]:
+              - generic [ref=e7859]: 󰒓
+              - generic [ref=e7860]:
+                - heading "typescript_format" [level=3] [ref=e7861]
+                - generic [ref=e7862]:
+                  - generic [ref=e7864]: uncategorized
+                  - generic [ref=e7866]: enabled
+                  - generic [ref=e7868]: internal
+            - paragraph [ref=e7869]: Format TypeScript files using prettier or similar formatter
+          - button "View Schema" [ref=e7871] [cursor=pointer]:
+            - generic [ref=e7873]: 󰈈
+            - generic [ref=e7874]: View Schema
+        - generic [ref=e7877]:
+          - generic [ref=e7878]:
+            - generic [ref=e7879]:
+              - generic [ref=e7880]: 󰒓
+              - generic [ref=e7881]:
+                - heading "typescript_lint" [level=3] [ref=e7882]
+                - generic [ref=e7883]:
+                  - generic [ref=e7885]: uncategorized
+                  - generic [ref=e7887]: enabled
+                  - generic [ref=e7889]: internal
+            - paragraph [ref=e7890]: Lint TypeScript files using ESLint
+          - button "View Schema" [ref=e7892] [cursor=pointer]:
+            - generic [ref=e7894]: 󰈈
+            - generic [ref=e7895]: View Schema
+        - generic [ref=e7898]:
+          - generic [ref=e7899]:
+            - generic [ref=e7900]:
+              - generic [ref=e7901]: 󰒓
+              - generic [ref=e7902]:
+                - heading "typescript_test" [level=3] [ref=e7903]
+                - generic [ref=e7904]:
+                  - generic [ref=e7906]: uncategorized
+                  - generic [ref=e7908]: enabled
+                  - generic [ref=e7910]: internal
+            - paragraph [ref=e7911]: Run TypeScript tests using Jest or other test runners
+          - button "View Schema" [ref=e7913] [cursor=pointer]:
+            - generic [ref=e7915]: 󰈈
+            - generic [ref=e7916]: View Schema
+        - generic [ref=e7919]:
+          - generic [ref=e7920]:
+            - generic [ref=e7921]:
+              - generic [ref=e7922]: 󰒓
+              - generic [ref=e7923]:
+                - heading "update-document" [level=3] [ref=e7924]
+                - generic [ref=e7925]:
+                  - generic [ref=e7927]: uncategorized
+                  - generic [ref=e7929]: enabled
+                  - generic [ref=e7931]: internal
+            - paragraph [ref=e7932]: Update specific documents in a collection
+          - button "View Schema" [ref=e7934] [cursor=pointer]:
+            - generic [ref=e7936]: 󰈈
+            - generic [ref=e7937]: View Schema
+        - generic [ref=e7940]:
+          - generic [ref=e7941]:
+            - generic [ref=e7942]:
+              - generic [ref=e7943]: 󰒓
+              - generic [ref=e7944]:
+                - heading "update-document" [level=3] [ref=e7945]
+                - generic [ref=e7946]:
+                  - generic [ref=e7948]: uncategorized
+                  - generic [ref=e7950]: enabled
+                  - generic [ref=e7952]: internal
+            - paragraph [ref=e7953]: Update specific documents in a collection
+            - generic [ref=e7954]:
+              - generic [ref=e7955]: "Source:"
+              - generic [ref=e7957]: external
+          - button "View Schema" [ref=e7959] [cursor=pointer]:
+            - generic [ref=e7961]: 󰈈
+            - generic [ref=e7962]: View Schema
+        - generic [ref=e7965]:
+          - generic [ref=e7966]:
+            - generic [ref=e7967]:
+              - generic [ref=e7968]: 󰒓
+              - generic [ref=e7969]:
+                - heading "use-database" [level=3] [ref=e7970]
+                - generic [ref=e7971]:
+                  - generic [ref=e7973]: uncategorized
+                  - generic [ref=e7975]: enabled
+                  - generic [ref=e7977]: internal
+            - paragraph [ref=e7978]: Switch to a specific database
+          - button "View Schema" [ref=e7980] [cursor=pointer]:
+            - generic [ref=e7982]: 󰈈
+            - generic [ref=e7983]: View Schema
+        - generic [ref=e7986]:
+          - generic [ref=e7987]:
+            - generic [ref=e7988]:
+              - generic [ref=e7989]: 󰒓
+              - generic [ref=e7990]:
+                - heading "use-database" [level=3] [ref=e7991]
+                - generic [ref=e7992]:
+                  - generic [ref=e7994]: uncategorized
+                  - generic [ref=e7996]: enabled
+                  - generic [ref=e7998]: internal
+            - paragraph [ref=e7999]: Switch to a specific database
+            - generic [ref=e8000]:
+              - generic [ref=e8001]: "Source:"
+              - generic [ref=e8003]: external
+          - button "View Schema" [ref=e8005] [cursor=pointer]:
+            - generic [ref=e8007]: 󰈈
+            - generic [ref=e8008]: View Schema
+        - generic [ref=e8011]:
+          - generic [ref=e8012]:
+            - generic [ref=e8013]:
+              - generic [ref=e8014]: 󰒓
+              - generic [ref=e8015]:
+                - heading "validate_architecture" [level=3] [ref=e8016]
+                - generic [ref=e8017]:
+                  - generic [ref=e8019]: uncategorized
+                  - generic [ref=e8021]: enabled
+                  - generic [ref=e8023]: internal
+            - paragraph [ref=e8024]: Validate code changes against architectural principles and patterns
+          - button "View Schema" [ref=e8026] [cursor=pointer]:
+            - generic [ref=e8028]: 󰈈
+            - generic [ref=e8029]: View Schema
+        - generic [ref=e8032]:
+          - generic [ref=e8033]:
+            - generic [ref=e8034]:
+              - generic [ref=e8035]: 󰒓
+              - generic [ref=e8036]:
+                - heading "validate_next_action" [level=3] [ref=e8037]
+                - generic [ref=e8038]:
+                  - generic [ref=e8040]: uncategorized
+                  - generic [ref=e8042]: enabled
+                  - generic [ref=e8044]: internal
+            - paragraph [ref=e8045]: Validate your next intended action and get approved tools to prevent redundant calls
+          - button "View Schema" [ref=e8047] [cursor=pointer]:
+            - generic [ref=e8049]: 󰈈
+            - generic [ref=e8050]: View Schema
+        - generic [ref=e8053]:
+          - generic [ref=e8054]:
+            - generic [ref=e8055]:
+              - generic [ref=e8056]: 󰒓
+              - generic [ref=e8057]:
+                - heading "validate_node" [level=3] [ref=e8058]
+                - generic [ref=e8059]:
+                  - generic [ref=e8061]: uncategorized
+                  - generic [ref=e8063]: enabled
+                  - generic [ref=e8065]: internal
+            - paragraph [ref=e8066]: "Validate n8n node configuration. Use mode='full' for comprehensive validation with errors/warnings/suggestions, mode='minimal' for quick required fields check. Example: nodeType=\"nodes-base.slack\", config={resource:\"channel\",operation:\"create\"}"
+          - button "View Schema" [ref=e8068] [cursor=pointer]:
+            - generic [ref=e8070]: 󰈈
+            - generic [ref=e8071]: View Schema
+        - generic [ref=e8074]:
+          - generic [ref=e8075]:
+            - generic [ref=e8076]:
+              - generic [ref=e8077]: 󰒓
+              - generic [ref=e8078]:
+                - heading "validate_node" [level=3] [ref=e8079]
+                - generic [ref=e8080]:
+                  - generic [ref=e8082]: uncategorized
+                  - generic [ref=e8084]: enabled
+                  - generic [ref=e8086]: internal
+            - paragraph [ref=e8087]: "Validate n8n node configuration. Use mode='full' for comprehensive validation with errors/warnings/suggestions, mode='minimal' for quick required fields check. Example: nodeType=\"nodes-base.slack\", config={resource:\"channel\",operation:\"create\"}"
+            - generic [ref=e8088]:
+              - generic [ref=e8089]: "Source:"
+              - generic [ref=e8091]: external
+          - button "View Schema" [ref=e8093] [cursor=pointer]:
+            - generic [ref=e8095]: 󰈈
+            - generic [ref=e8096]: View Schema
+        - generic [ref=e8099]:
+          - generic [ref=e8100]:
+            - generic [ref=e8101]:
+              - generic [ref=e8102]: 󰒓
+              - generic [ref=e8103]:
+                - heading "validate_workflow" [level=3] [ref=e8104]
+                - generic [ref=e8105]:
+                  - generic [ref=e8107]: uncategorized
+                  - generic [ref=e8109]: enabled
+                  - generic [ref=e8111]: internal
+            - paragraph [ref=e8112]: "Full workflow validation: structure, connections, expressions, AI tools. Returns errors/warnings/fixes. Essential before deploy."
+          - button "View Schema" [ref=e8114] [cursor=pointer]:
+            - generic [ref=e8116]: 󰈈
+            - generic [ref=e8117]: View Schema
+        - generic [ref=e8120]:
+          - generic [ref=e8121]:
+            - generic [ref=e8122]:
+              - generic [ref=e8123]: 󰒓
+              - generic [ref=e8124]:
+                - heading "validate_workflow" [level=3] [ref=e8125]
+                - generic [ref=e8126]:
+                  - generic [ref=e8128]: uncategorized
+                  - generic [ref=e8130]: enabled
+                  - generic [ref=e8132]: internal
+            - paragraph [ref=e8133]: "Full workflow validation: structure, connections, expressions, AI tools. Returns errors/warnings/fixes. Essential before deploy."
+            - generic [ref=e8134]:
+              - generic [ref=e8135]: "Source:"
+              - generic [ref=e8137]: external
+          - button "View Schema" [ref=e8139] [cursor=pointer]:
+            - generic [ref=e8141]: 󰈈
+            - generic [ref=e8142]: View Schema
+        - generic [ref=e8145]:
+          - generic [ref=e8146]:
+            - generic [ref=e8147]:
+              - generic [ref=e8148]: 󰒓
+              - generic [ref=e8149]:
+                - heading "validate-collection" [level=3] [ref=e8150]
+                - generic [ref=e8151]:
+                  - generic [ref=e8153]: uncategorized
+                  - generic [ref=e8155]: enabled
+                  - generic [ref=e8157]: internal
+            - paragraph [ref=e8158]: Run validation on a collection to check for inconsistencies
+          - button "View Schema" [ref=e8160] [cursor=pointer]:
+            - generic [ref=e8162]: 󰈈
+            - generic [ref=e8163]: View Schema
+        - generic [ref=e8166]:
+          - generic [ref=e8167]:
+            - generic [ref=e8168]:
+              - generic [ref=e8169]: 󰒓
+              - generic [ref=e8170]:
+                - heading "validate-collection" [level=3] [ref=e8171]
+                - generic [ref=e8172]:
+                  - generic [ref=e8174]: uncategorized
+                  - generic [ref=e8176]: enabled
+                  - generic [ref=e8178]: internal
+            - paragraph [ref=e8179]: Run validation on a collection to check for inconsistencies
+            - generic [ref=e8180]:
+              - generic [ref=e8181]: "Source:"
+              - generic [ref=e8183]: external
+          - button "View Schema" [ref=e8185] [cursor=pointer]:
+            - generic [ref=e8187]: 󰈈
+            - generic [ref=e8188]: View Schema
+        - generic [ref=e8191]:
+          - generic [ref=e8192]:
+            - generic [ref=e8193]:
+              - generic [ref=e8194]: 󰒓
+              - generic [ref=e8195]:
+                - heading "watch-changes" [level=3] [ref=e8196]
+                - generic [ref=e8197]:
+                  - generic [ref=e8199]: uncategorized
+                  - generic [ref=e8201]: enabled
+                  - generic [ref=e8203]: internal
+            - paragraph [ref=e8204]: Watch for changes in a collection using change streams
+          - button "View Schema" [ref=e8206] [cursor=pointer]:
+            - generic [ref=e8208]: 󰈈
+            - generic [ref=e8209]: View Schema
+        - generic [ref=e8212]:
+          - generic [ref=e8213]:
+            - generic [ref=e8214]:
+              - generic [ref=e8215]: 󰒓
+              - generic [ref=e8216]:
+                - heading "watch-changes" [level=3] [ref=e8217]
+                - generic [ref=e8218]:
+                  - generic [ref=e8220]: uncategorized
+                  - generic [ref=e8222]: enabled
+                  - generic [ref=e8224]: internal
+            - paragraph [ref=e8225]: Watch for changes in a collection using change streams
+            - generic [ref=e8226]:
+              - generic [ref=e8227]: "Source:"
+              - generic [ref=e8229]: external
+          - button "View Schema" [ref=e8231] [cursor=pointer]:
+            - generic [ref=e8233]: 󰈈
+            - generic [ref=e8234]: View Schema
+        - generic [ref=e8237]:
+          - generic [ref=e8238]:
+            - generic [ref=e8239]:
+              - generic [ref=e8240]: 󰒓
+              - generic [ref=e8241]:
+                - heading "web_bulk_extract" [level=3] [ref=e8242]
+                - generic [ref=e8243]:
+                  - generic [ref=e8245]: uncategorized
+                  - generic [ref=e8247]: enabled
+                  - generic [ref=e8249]: internal
+            - paragraph [ref=e8250]: Extract content from multiple URLs simultaneously
+          - button "View Schema" [ref=e8252] [cursor=pointer]:
+            - generic [ref=e8254]: 󰈈
+            - generic [ref=e8255]: View Schema
+        - generic [ref=e8258]:
+          - generic [ref=e8259]:
+            - generic [ref=e8260]:
+              - generic [ref=e8261]: 󰒓
+              - generic [ref=e8262]:
+                - heading "web_navigate" [level=3] [ref=e8263]
+                - generic [ref=e8264]:
+                  - generic [ref=e8266]: uncategorized
+                  - generic [ref=e8268]: enabled
+                  - generic [ref=e8270]: internal
+            - paragraph [ref=e8271]: Navigate to a URL and extract content with optional screenshot capture
+          - button "View Schema" [ref=e8273] [cursor=pointer]:
+            - generic [ref=e8275]: 󰈈
+            - generic [ref=e8276]: View Schema
+        - generic [ref=e8279]:
+          - generic [ref=e8280]:
+            - generic [ref=e8281]:
+              - generic [ref=e8282]: 󰒓
+              - generic [ref=e8283]:
+                - heading "web_screenshot" [level=3] [ref=e8284]
+                - generic [ref=e8285]:
+                  - generic [ref=e8287]: uncategorized
+                  - generic [ref=e8289]: enabled
+                  - generic [ref=e8291]: internal
+            - paragraph [ref=e8292]: Capture screenshots of web pages
+          - button "View Schema" [ref=e8294] [cursor=pointer]:
+            - generic [ref=e8296]: 󰈈
+            - generic [ref=e8297]: View Schema
+        - generic [ref=e8300]:
+          - generic [ref=e8301]:
+            - generic [ref=e8302]:
+              - generic [ref=e8303]: 󰒓
+              - generic [ref=e8304]:
+                - heading "web_search" [level=3] [ref=e8305]
+                - generic [ref=e8306]:
+                  - generic [ref=e8308]: uncategorized
+                  - generic [ref=e8310]: enabled
+                  - generic [ref=e8312]: internal
+            - paragraph [ref=e8313]: Perform web searches with optional content extraction and structured output
+          - button "View Schema" [ref=e8315] [cursor=pointer]:
+            - generic [ref=e8317]: 󰈈
+            - generic [ref=e8318]: View Schema
+        - generic [ref=e8321]:
+          - generic [ref=e8322]:
+            - generic [ref=e8323]:
+              - generic [ref=e8324]: 󰒓
+              - generic [ref=e8325]:
+                - heading "workflow_plan" [level=3] [ref=e8326]
+                - generic [ref=e8327]:
+                  - generic [ref=e8329]: uncategorized
+                  - generic [ref=e8331]: enabled
+                  - generic [ref=e8333]: internal
+            - paragraph [ref=e8334]: Plans multi-step workflows using available tools, considering dependencies and optimal execution order.
+          - button "View Schema" [ref=e8336] [cursor=pointer]:
+            - generic [ref=e8338]: 󰈈
+            - generic [ref=e8339]: View Schema
+        - generic [ref=e8342]:
+          - generic [ref=e8343]:
+            - generic [ref=e8344]:
+              - generic [ref=e8345]: 󰒓
+              - generic [ref=e8346]:
+                - heading "write_file" [level=3] [ref=e8347]
+                - generic [ref=e8348]:
+                  - generic [ref=e8350]: uncategorized
+                  - generic [ref=e8352]: enabled
+                  - generic [ref=e8354]: internal
+            - paragraph [ref=e8355]: Create a new file or completely overwrite an existing file with new content. Use with caution as it will overwrite existing files without warning. Handles text content with proper encoding. Only works within allowed directories.
+          - button "View Schema" [ref=e8357] [cursor=pointer]:
+            - generic [ref=e8359]: 󰈈
+            - generic [ref=e8360]: View Schema
+        - generic [ref=e8363]:
+          - generic [ref=e8364]:
+            - generic [ref=e8365]:
+              - generic [ref=e8366]: 󰒓
+              - generic [ref=e8367]:
+                - heading "write_file" [level=3] [ref=e8368]
+                - generic [ref=e8369]:
+                  - generic [ref=e8371]: uncategorized
+                  - generic [ref=e8373]: enabled
+                  - generic [ref=e8375]: internal
+            - paragraph [ref=e8376]: Create a new file or completely overwrite an existing file with new content. Use with caution as it will overwrite existing files without warning. Handles text content with proper encoding. Only works within allowed directories.
+            - generic [ref=e8377]:
+              - generic [ref=e8378]: "Source:"
+              - generic [ref=e8380]: external
+          - button "View Schema" [ref=e8382] [cursor=pointer]:
+            - generic [ref=e8384]: 󰈈
+            - generic [ref=e8385]: View Schema
