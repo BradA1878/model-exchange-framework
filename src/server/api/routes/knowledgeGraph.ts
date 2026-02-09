@@ -184,7 +184,7 @@ router.get('/entities/:entityId', async (req: Request, res: Response) => {
                 $or: [
                     { _id: { $in: Array.from(relatedEntityIds).map(id => {
                         try { return new mongoose.Types.ObjectId(id); } catch { return null; }
-                    }).filter(Boolean) } },
+                    }).filter((id): id is mongoose.Types.ObjectId => id !== null) } },
                     { id: { $in: Array.from(relatedEntityIds) } }
                 ]
             })
@@ -323,7 +323,7 @@ router.get('/graph', async (req: Request, res: Response) => {
                     $or: [
                         { _id: { $in: centerIds.map(id => {
                             try { return new mongoose.Types.ObjectId(id); } catch { return null; }
-                        }).filter(Boolean) } },
+                        }).filter((id): id is mongoose.Types.ObjectId => id !== null) } },
                         { id: { $in: centerIds } }
                     ]
                 })
@@ -355,7 +355,7 @@ router.get('/graph', async (req: Request, res: Response) => {
                     $or: [
                         { _id: { $in: Array.from(connectedIds).map(id => {
                             try { return new mongoose.Types.ObjectId(id); } catch { return null; }
-                        }).filter(Boolean) } },
+                        }).filter((id): id is mongoose.Types.ObjectId => id !== null) } },
                         { id: { $in: Array.from(connectedIds) } }
                     ]
                 })

@@ -680,16 +680,17 @@ export const updateChannelMemory = async (req: Request, res: Response): Promise<
         }
         
         if (req.body.customData) {
-            channel.sharedMemory.customData = {
+            const mergedData: Record<string, any> = {
                 ...channel.sharedMemory.customData || {},
                 ...req.body.customData
             };
             // Remove keys explicitly set to null (used for deletion)
-            for (const key of Object.keys(channel.sharedMemory.customData)) {
-                if (channel.sharedMemory.customData[key] === null) {
-                    delete channel.sharedMemory.customData[key];
+            for (const key of Object.keys(mergedData)) {
+                if (mergedData[key] === null) {
+                    delete mergedData[key];
                 }
             }
+            channel.sharedMemory.customData = mergedData;
         }
         
         // Handle conversation history (append if provided)
