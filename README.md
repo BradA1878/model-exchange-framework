@@ -546,6 +546,11 @@ cp .env.example .env
 # Build the project
 bun run build
 
+# If you don't already have MongoDB running, install and run it
+brew tap mongodb/brew
+brew install mongodb/brew/mongodb-community@8.0
+brew services start mongodb-community@8.0
+
 # Start development server
 bun run start:dev
 ```
