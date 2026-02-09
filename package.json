@@ -1,6 +1,6 @@
 {
   "name": "model-exchange-framework",
-  "version": "1.5.1",
+  "version": "1.5.2",
   "description": "Model Exchange Framework (MXF): Multi-agent AI orchestration framework with advanced optimization",
   "private": true,
   "scripts": {

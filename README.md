@@ -4,7 +4,7 @@ Author: [Brad Anderson](brada1878@gmail.com)
 Copyright 2024-2026 Brad Anderson
 
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](http://www.apache.org/licenses/LICENSE-2.0)
-[![Version](https://img.shields.io/badge/version-1.5.0-blue.svg)](https://github.com/BradA1878/model-exchange-framework)
+[![Version](https://img.shields.io/badge/version-1.5.2-blue.svg)](https://github.com/BradA1878/model-exchange-framework)
 [![Bun](https://img.shields.io/badge/Bun-1.1+-green.svg)](https://bun.sh/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.0+-blue.svg)](https://www.typescriptlang.org/)
 
@@ -468,7 +468,7 @@ MXF provides comprehensive REST APIs for complete framework management:
 
 **Option B: Local Development**
 - **Bun 1.1+** (primary runtime and package manager)
-- **MongoDB** (local or cloud instance)
+- **Docker 24.0+** and **Docker Compose 2.0+** (for infrastructure services: MongoDB, Meilisearch, Redis)
 - **LLM Provider API Key** (optional, for LLM-powered agents) - Choose from:
   - [OpenRouter](https://openrouter.ai/) - Access to 200+ models
   - [OpenAI](https://platform.openai.com/) - GPT models
@@ -477,6 +477,8 @@ MXF provides comprehensive REST APIs for complete framework management:
   - [xAI](https://x.ai/) - Grok models
   - Azure OpenAI - Enterprise GPT
   - [Ollama](https://ollama.ai/) - Local models (no API key needed)
+
+> **Note:** Even for local development, Docker is required to run the infrastructure services (MongoDB, Meilisearch, Redis). Only the MXF server itself runs directly via Bun.
 
 ### Installation
 
@@ -546,11 +548,23 @@ cp .env.example .env
 # Build the project
 bun run build
 
-# Start development server
+# Start infrastructure services (MongoDB, Meilisearch, Redis via Docker)
+bun run docker:infra:up
+
+# Start development server with hot reload
 bun run start:dev
 ```
 
-> **Note:** MXF uses Bun for both package management and server execution.
+> **Recommended:** Use `bun run dev` as an all-in-one command that runs unit tests, starts infrastructure containers, and launches the dev server with hot reload.
+
+> **Note:** MXF uses Bun for both package management and server execution. Infrastructure services (MongoDB, Meilisearch, Redis) run via Docker — make sure Docker is running before starting the server.
+
+**Infrastructure commands:**
+| Command | Description |
+|---------|-------------|
+| `bun run docker:infra:up` | Start MongoDB, Meilisearch, and Redis containers |
+| `bun run docker:infra:down` | Stop infrastructure containers |
+| `bun run dev` | Run tests + start infrastructure + start dev server |
 
 ### 🖥️ **Dashboard Interface**
 
@@ -559,6 +573,9 @@ bun run start:dev
 MXF includes a modern Vue 3 dashboard for managing channels, agents, analytics, and more:
 
 ```bash
+# Ensure infrastructure is running (MongoDB, Meilisearch, Redis)
+bun run docker:infra:up
+
 # Start the MXF server (port 3001)
 bun run start:dev
 
@@ -929,14 +946,21 @@ src/
 ### Development Workflow
 
 ```bash
-# Start development server with hot reload
-bun run start:dev
+# Recommended: all-in-one dev command (tests + infrastructure + server)
+bun run dev
+
+# Or start individually:
+bun run docker:infra:up   # Start infrastructure (MongoDB, Meilisearch, Redis)
+bun run start:dev         # Start dev server with hot reload
 
 # Build for production
 bun run build
 
 # Clean build artifacts
 bun run clean
+
+# Stop infrastructure when done
+bun run docker:infra:down
 ```
 
 ### Creating Custom Tools
