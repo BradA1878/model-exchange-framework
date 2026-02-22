@@ -62,6 +62,7 @@ import { MemoryUtilityTools } from './MemoryUtilityTools';
 import { dagTools } from './DagTools';
 import { knowledgeGraphTools } from './KnowledgeGraphTools';
 import { predictiveTools } from './PredictiveTools';
+import { userInputTools } from './UserInputTools';
 
 /**
  * All available MXF MCP tools organized by category
@@ -143,7 +144,10 @@ export const mxfMcpTools = {
     knowledgeGraph: knowledgeGraphTools,
 
     // Predictive analytics tools (ML error prediction, anomaly detection, risk scoring)
-    predictive: predictiveTools
+    predictive: predictiveTools,
+
+    // User input tools for prompting users during agent execution
+    userInput: userInputTools
 };
 
 /**
@@ -178,7 +182,8 @@ export const allMxfMcpTools = [
     ...MemoryUtilityTools,
     ...dagTools,
     ...knowledgeGraphTools,
-    ...predictiveTools
+    ...predictiveTools,
+    ...userInputTools
 ];
 
 /**
@@ -230,7 +235,7 @@ export const getMxfMcpToolNames = () => {
 export const mxfMcpToolMetadata = {
     version: '1.0.0',
     description: 'MXF-specific MCP tools for enhanced agent capabilities',
-    categories: ['communication', 'coordination', 'controlLoop', 'infrastructure', 'contextMemory', 'actionValidation', 'meta', 'web', 'git', 'typescript', 'taskBridge', 'test', 'codeAnalysis', 'safety', 'planning', 'effectiveness', 'analytics', 'dateTime', 'memoryUtility', 'dag', 'knowledgeGraph', 'predictive'],
+    categories: ['communication', 'coordination', 'controlLoop', 'infrastructure', 'contextMemory', 'actionValidation', 'meta', 'web', 'git', 'typescript', 'taskBridge', 'test', 'codeAnalysis', 'safety', 'planning', 'effectiveness', 'analytics', 'dateTime', 'memoryUtility', 'dag', 'knowledgeGraph', 'predictive', 'userInput'],
     totalTools: allMxfMcpTools.length,
     capabilities: [
         'agent-to-agent messaging',
@@ -315,12 +320,14 @@ export const mxfMcpToolMetadata = {
         'parameter anomaly detection',
         'proactive optimization suggestions',
         'operation risk scoring',
-        'ML model metadata inspection'
+        'ML model metadata inspection',
+        'user input prompting and collection',
+        'blocking and async user input modes'
     ]
 };
 
 // Re-export individual tool arrays for selective imports
-export { agentCommunicationTools, coordinationTools, controlLoopTools, infrastructureTools, contextMemoryTools, MemorySearchTools, actionValidationTools, metaTools, webTools, gitTools, typescriptTools, taskBridgeTools, testTools, codeAnalysisTools, safetyTools, planningTools, effectivenessTools, taskPlanningTools, analyticsTools, dateTimeTools, inferenceParameterTools, MemoryUtilityTools, dagTools, knowledgeGraphTools, predictiveTools };
+export { agentCommunicationTools, coordinationTools, controlLoopTools, infrastructureTools, contextMemoryTools, MemorySearchTools, actionValidationTools, metaTools, webTools, gitTools, typescriptTools, taskBridgeTools, testTools, codeAnalysisTools, safetyTools, planningTools, effectivenessTools, taskPlanningTools, analyticsTools, dateTimeTools, inferenceParameterTools, MemoryUtilityTools, dagTools, knowledgeGraphTools, predictiveTools, userInputTools };
 
 // Re-export individual tools for direct imports
 export {
@@ -502,3 +509,10 @@ export {
     calculate_risk,
     model_metadata
 } from './PredictiveTools';
+
+export {
+    // User Input Tools
+    userInputTool,
+    requestUserInputTool,
+    getUserInputResponseTool
+} from './UserInputTools';

@@ -1,0 +1,154 @@
+# Model Exchange Framework (MXF)
+
+> MXF is a multi-agent AI orchestration framework built with TypeScript, Bun, Socket.IO, and MongoDB. It provides real-time WebSocket communication, 100+ MCP tools, an ORPAR cognitive control loop, multi-scope memory with semantic search, task DAG workflows, knowledge graphs, and optional TensorFlow.js integration for on-device ML. Agents connect via the TypeScript SDK and collaborate through channels with AES-256-GCM encrypted messaging.
+
+## Getting Started
+
+- [Getting Started Guide](getting-started.md): Installation, first agent, multi-agent systems
+- [Deployment Guide](deployment.md): Docker Compose stack deployment with MongoDB, Meilisearch, Redis
+- [Glossary](glossary.md): Key terms and definitions
+- [Troubleshooting](troubleshooting.md): Common issues, debug mode, logging
+- [Use Cases](use-cases.md): Real-world application scenarios
+
+## SDK Reference
+
+- [SDK Overview](sdk/index.md): TypeScript SDK entry point — MxfClient, MxfAgent, event handlers, managers
+- [Authentication](sdk/authentication.md): Domain keys, access tokens, agent key generation
+- [Configuration Manager](sdk/config-manager.md): Feature toggles, LLM model selection, agent types
+- [SDK Managers](sdk/managers.md): MCP, Memory, Prompt, and Task manager classes
+- [SDK Handlers](sdk/handlers.md): Control loop, tool, messaging, and task handlers
+- [Event System](sdk/events.md): Event-driven architecture and event categories
+- [MCP Integration](sdk/mcp.md): Tool execution and external MCP server registration
+- [External MCP Servers](sdk/external-mcp-servers.md): Registering external MCP servers (global and channel-scoped)
+- [Core Interfaces](sdk/interfaces.md): TypeScript type definitions
+- [MXP Configuration](sdk/mxp-config.md): MXP protocol optimization settings
+- [Code Examples](sdk/examples.md): Practical SDK usage patterns
+
+## SDK Examples
+
+- [Basic Examples](sdk/examples-basic.md): Simple agent setup and messaging
+- [Multi-Agent Examples](sdk/examples-multi-agent.md): Multiple agents collaborating
+- [Task Examples](sdk/examples-tasks.md): Task creation, assignment, completion
+- [Memory Examples](sdk/examples-memory.md): Agent, channel, and relationship memory
+- [Event Examples](sdk/examples-events.md): Event handling patterns
+- [Code Execution Examples](sdk/examples-code-execution.md): Sandboxed code execution
+- [Complete Examples](sdk/examples-complete.md): Full end-to-end scenarios
+
+## SDK Prompt Examples
+
+- [System Prompt Example](sdk/system-prompt-example.md): Base system prompt structure
+- [System Prompt — Standard](sdk/system-prompt-example-standard.md): Standard agent system prompt
+- [System Prompt — MXP](sdk/system-prompt-example-mxp.md): MXP-optimized system prompt
+- [Agent Config Prompt](sdk/agent-config-prompt-example.md): Agent personality and behavior configuration
+- [Task Prompt](sdk/task-prompt-example.md): Task prompt formatting
+- [Conversation Prompt](sdk/conversation-prompt-example.md): Conversation context assembly
+
+## API Reference
+
+- [API Overview](api/index.md): REST and WebSocket API reference with authentication
+- [Channels API](api/channels.md): Channel CRUD and management
+- [Agents API](api/agents.md): Agent registration, configuration, monitoring
+- [Tasks API](api/tasks.md): Task creation, assignment, tracking
+- [Memory API](api/memory.md): Multi-scope memory persistence
+- [Authentication API](api/auth.md): JWT and API key authentication
+- [WebSocket Events](api/websocket.md): Socket.IO event reference
+- [Control Loop API](api/control-loop.md): ORPAR cycle management
+- [MCP API](api/mcp.md): Model Context Protocol tool execution
+- [Prompt Assembly](api/prompt-assembly.md): ORPAR phase-aware prompt construction
+- [DAG Tools API](api/dag-tools.md): Task DAG workflow tools
+- [Knowledge Graph Tools API](api/knowledge-graph-tools.md): KG entity and relationship tools
+- [Config API](api/config.md): System configuration
+- [Users API](api/users.md): User account management
+- [Dashboard API](api/dashboard.md): Dashboard-specific endpoints
+- [Analytics API](api/analytics.md): Performance metrics
+- [Proactive Validation API](api/proactive-validation.md): Pre-execution validation
+- [Auto-Correction API](api/auto-correction.md): Intelligent parameter correction
+- [Validation Analytics API](api/validation-analytics.md): Validation performance metrics
+
+## Core Architecture
+
+- [Architecture Overview](mxf/index.md): Modular service-oriented architecture
+- [System Overview](mxf/system-overview.md): High-level system design
+- [Architecture Diagram](mxf/architecture-diagram.md): Visual system representation
+- [Key Concepts](mxf/key-concepts.md): Agents, channels, tasks, memory, ORPAR, MCP
+- [Data Flow](mxf/data-flow.md): How data moves through the system
+- [Server Services](mxf/server-services.md): Core, AI, task, MCP, and pattern services
+- [Security](mxf/security.md): Four security levels, authentication, AES-256-GCM encryption
+- [Extensibility](mxf/extensibility.md): Plugin and extension development
+- [Development Lifecycle](mxf/development-lifecycle.md): From development to deployment
+- [Tool Reference](mxf/tool-reference.md): Complete guide to 100+ built-in MCP tools
+- [Database Abstraction](mxf/database-abstraction.md): Swappable database backends
+- [Server CLI](mxf/server-cli.md): Server command-line interface
+
+## ORPAR & Memory Systems
+
+- [ORPAR Control Loop](mxf/orpar.md): Observation, Reasoning, Planning, Action, Reflection cycle
+- [Memory Utility Learning (MULS)](mxf/memory-utility-learning.md): Q-value weighted retrieval with phase-specific lambdas
+- [ORPAR-Memory Integration](mxf/orpar-memory-integration.md): Phase-to-strata routing, surprise-driven re-observation
+- [Nested Learning](mxf/nested-learning.md): Multi-timescale memory consolidation
+- [Meilisearch Integration](meilisearch-integration.md): Semantic search setup and configuration
+
+## Advanced Systems
+
+- [Task DAG & Knowledge Graph](features/dag-knowledge-graph.md): DAG workflows and KG operations
+- [Code Execution](mxf/code-execution.md): Secure Docker-sandboxed execution
+- [Workflow System](mxf/workflow-system.md): Sequential, parallel, and loop workflow patterns
+- [LSP Integration](mxf/lsp-integration.md): Language Server Protocol bridge for code intelligence
+- [P2P Foundation](mxf/p2p-foundation.md): Decentralized agent coordination
+- [System LLM](mxf/system-llm.md): AI-powered task assignment and reasoning
+- [Validation System](mxf/validation-system.md): Proactive validation and error prevention
+- [Agentic Model Guide](mxf/agentic-model-guide.md): Guide for building agentic models
+
+## Optimization & Protocol
+
+- [MXP Protocol](mxf/mxp-protocol.md): Token and bandwidth optimization protocol
+- [MXP Technical Specification](mxf/mxp-technical-specification.md): Detailed MXP architecture
+- [MXP Enterprise Guide](mxf/mxp-enterprise.md): Enterprise deployment and ROI tracking
+- [MXP Monitoring](mxf/mxp-monitoring.md): Production monitoring and analytics
+- [MXP Troubleshooting](mxf/mxp-troubleshooting.md): Diagnostic and resolution guide
+- [Dynamic Inference Parameters](mxf/dynamic-inference-parameters.md): Complexity-based model selection
+- [TOON Optimization](mxf/toon-optimization.md): Token-optimized encoding
+- [Prompt Auto-Compaction](mxf/prompt-auto-compaction.md): Automatic prompt compression
+- [MCP Prompts](mxf/mcp-prompts.md): MCP prompt template system
+
+## Analytics
+
+- [Analytics Overview](analytics/index.md): Agent performance, task effectiveness, system health
+- [Task Effectiveness](analytics/task-effectiveness.md): Universal task tracking and ROI calculation
+- [Validation Analytics](analytics/validation-analytics.md): ML-based error prediction metrics
+- [MCP Tool Analytics](analytics/mcp-tools.md): Tool usage and performance metrics
+- [Code Execution Analytics](analytics/code-execution.md): Sandboxed execution metrics
+
+## Dashboard
+
+- [Dashboard Overview](dashboard/index.md): Vue 3 + Vuetify web interface (in development)
+- [Agents View](dashboard/agents.md): Agent management UI
+- [Channels View](dashboard/channels.md): Channel management UI
+- [Tasks View](dashboard/tasks.md): Task management UI
+- [Memory View](dashboard/memory.md): Memory browser UI
+- [Analytics View](dashboard/analytics.md): Performance dashboards
+- [MXP Monitoring View](dashboard/mxp-monitoring.md): Protocol monitoring UI
+
+## Optional
+
+- [Task & Prompt Best Practices](task-prompt-best-practices.md): Guidelines for effective task and prompt design
+- [First Contact Demo](examples/first-contact.md): Six-agent first contact scenario
+- [Fog of War Demo](examples/fog-of-war.md): Strategy game with eight agents
+- [Interview Scheduling Demo](examples/interview-scheduling.md): Interview coordination
+- [Twenty Questions Demo](examples/twenty-questions.md): Interactive game with web UI
+- [Channel MCP Demo](examples/channel-mcp.md): Channel-scoped MCP server registration
+- [External MCP Demo](examples/external-mcp.md): External MCP server integration
+- [Code Execution Demo](examples/code-execution.md): Docker-sandboxed code execution
+- [Memory Strata Demo](examples/memory-strata.md): Multi-level memory system
+- [MULS Demo](examples/muls.md): Memory Utility Learning System
+- [ORPAR Memory Demo](examples/orpar-memory.md): ORPAR-memory integration
+- [Nested Learning Demo](examples/nested-learning.md): Multi-timescale learning
+- [Workflow Patterns Demo](examples/workflow-patterns.md): Sequential, parallel, loop patterns
+- [LSP Code Intelligence Demo](examples/lsp-code-intelligence.md): Language Server Protocol
+- [P2P Task Negotiation Demo](examples/p2p-task-negotiation.md): Decentralized task negotiation
+- [Toon Optimization Demo](examples/toon-optimization.md): Token-optimized encoding
+- [Prompt Compaction Demo](examples/prompt-compaction.md): Automatic prompt compression
+- [Inference Params Demo](examples/inference-params.md): Dynamic inference parameters
+- [MCP Prompts Demo](examples/mcp-prompts.md): MCP prompt templates
+- [Go Fish Demo](examples/go-fish.md): Card game demo
+- [Tic Tac Toe Demo](examples/tic-tac-toe.md): Classic game demo

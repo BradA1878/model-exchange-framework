@@ -142,6 +142,16 @@ export const PUBLIC_CHANNEL_EVENTS = [
 ] as const;
 
 /**
+ * Public User Input Events - User input prompting and collection
+ */
+export const PUBLIC_USER_INPUT_EVENTS = [
+    Events.UserInput.REQUEST,
+    Events.UserInput.RESPONSE,
+    Events.UserInput.CANCELLED,
+    Events.UserInput.TIMEOUT,
+] as const;
+
+/**
  * Public Meilisearch Events - Semantic search operations
  */
 export const PUBLIC_MEILISEARCH_EVENTS = [
@@ -163,6 +173,7 @@ export const PUBLIC_EVENTS = [
     ...PUBLIC_CONTROL_LOOP_EVENTS,
     ...PUBLIC_ORPAR_EVENTS,
     ...PUBLIC_CHANNEL_EVENTS,
+    ...PUBLIC_USER_INPUT_EVENTS,
     ...PUBLIC_MEILISEARCH_EVENTS,
 ] as const;
 
@@ -196,6 +207,7 @@ export const getEventCategory = (eventName: PublicEventName): string => {
     if (PUBLIC_CONTROL_LOOP_EVENTS.includes(eventName as any)) return 'controlLoop';
     if (PUBLIC_ORPAR_EVENTS.includes(eventName as any)) return 'orpar';
     if (PUBLIC_CHANNEL_EVENTS.includes(eventName as any)) return 'channel';
+    if (PUBLIC_USER_INPUT_EVENTS.includes(eventName as any)) return 'userInput';
     if (PUBLIC_MEILISEARCH_EVENTS.includes(eventName as any)) return 'meilisearch';
     return 'unknown';
 };

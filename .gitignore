@@ -75,6 +75,7 @@ credentials*.json
 mxf-trial-distribution.zip
 
 # Private/internal files and directories
+projects/
 docs/tmp/
 dist-sdk/
 .windsurf/

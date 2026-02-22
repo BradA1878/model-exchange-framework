@@ -131,6 +131,7 @@ export class MxfAgent extends MxfClient {
     private disableToolGatekeeping: boolean = false;
     private activeControlLoopId: string | null = null;
     private taskCompleted: boolean = false; // Prevent further LLM calls after task completion
+    private isGenerating: boolean = false; // Concurrency guard — prevents concurrent generateResponse calls
     private taskAssignedHandler: ((data: any) => void) | null = null; // Store handler for cleanup
     
     // Circuit breaker pattern for detecting stuck behavior
@@ -442,7 +443,17 @@ export class MxfAgent extends MxfClient {
         if (this.taskCompleted && !taskPrompt) {
             return 'Task already completed - agent is idle';
         }
-        
+
+        // Concurrency guard: prevent multiple generateResponse calls from running simultaneously.
+        // Events (agent messages, channel messages, system events) can trigger generateResponse
+        // while a task-driven loop is already active, leading to duplicate tool calls.
+        if (this.isGenerating) {
+            this.modelLogger.debug('⏳ generateResponse already in progress — skipping concurrent invocation');
+            return 'Response generation already in progress';
+        }
+        this.isGenerating = true;
+
+        try {
         const maxIterations = this.modelConfig.maxIterations ?? 10;
         
         // Notify aggregator that agent is starting to process
@@ -917,6 +928,9 @@ export class MxfAgent extends MxfClient {
         const finalMessages = this.memoryManager.getConversationHistory();
         const lastAssistantMessage = [...finalMessages].reverse().find(msg => msg.role === 'assistant');
         return lastAssistantMessage?.content || 'Task completed successfully.';
+        } finally {
+            this.isGenerating = false;
+        }
     }
 
     /**
@@ -927,12 +941,12 @@ export class MxfAgent extends MxfClient {
         // This prevents OpenRouter/Bedrock errors about missing tool results
         const allToolResults: McpToolResultContent[] = [];
         let anyTaskComplete = false;
-        
+
         // CRITICAL: Collect feedback messages to add AFTER all tool results
         // Adding user messages between tool_calls and tool results breaks conversation structure
         // Required order: assistant(tool_calls) → tool → tool → ... → user (feedback)
         const deferredFeedbackMessages: Array<{role: string; content: string; metadata?: Record<string, any>}> = [];
-        
+
         for (const toolCall of toolCalls) {
             // Skip remaining tools if task was canceled mid-execution
             if (!this.taskExecutionManager.hasActiveTask()) {

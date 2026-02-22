@@ -61,6 +61,13 @@ import {
     MemoryWarningEventData,
     MemoryStatsEventData,
 } from '../events/event-definitions/TensorFlowEvents';
+import {
+    UserInputEvents,
+    UserInputRequestData,
+    UserInputResponseData,
+    UserInputCancelledData,
+    UserInputTimeoutData,
+} from '../events/event-definitions/UserInputEvents';
 
 // Create logger instance for event payload schema
 const logger = new Logger('warn', 'EventPayloadSchema', 'server');
@@ -3954,6 +3961,139 @@ export function createTfMemoryStatsPayload(
         agentId,
         channelId,
         data,
+        options
+    );
+}
+
+// --- User Input Event Data & Helpers ---
+
+/**
+ * Payload type for user input request events (server → client)
+ */
+export type UserInputRequestEventPayload = BaseEventPayload<UserInputRequestData>;
+
+/**
+ * Payload type for user input response events (client → server)
+ */
+export type UserInputResponseEventPayload = BaseEventPayload<UserInputResponseData>;
+
+/**
+ * Payload type for user input cancelled events (server → client)
+ */
+export type UserInputCancelledEventPayload = BaseEventPayload<UserInputCancelledData>;
+
+/**
+ * Payload type for user input timeout events (server → client)
+ */
+export type UserInputTimeoutEventPayload = BaseEventPayload<UserInputTimeoutData>;
+
+/**
+ * Creates a UserInputRequestEventPayload for prompting a user for input.
+ *
+ * @param agentId - Agent that initiated the request
+ * @param channelId - Channel context for the request
+ * @param requestData - The full user input request definition
+ * @param options - Optional base event payload options
+ * @returns A UserInputRequestEventPayload
+ */
+export function createUserInputRequestPayload(
+    agentId: AgentId,
+    channelId: ChannelId,
+    requestData: UserInputRequestData,
+    options: { source?: string; eventId?: string; timestamp?: number; } = {}
+): UserInputRequestEventPayload {
+    const validator = createStrictValidator('UserInputRequestPayload');
+    validator.assertIsNonEmptyString(requestData.requestId, 'requestId is required');
+    validator.assertIsNonEmptyString(requestData.title, 'title is required');
+    validator.assertIsNonEmptyString(requestData.inputType, 'inputType is required');
+
+    return createBaseEventPayload<UserInputRequestData>(
+        UserInputEvents.REQUEST,
+        agentId,
+        channelId,
+        requestData,
+        options
+    );
+}
+
+/**
+ * Creates a UserInputResponseEventPayload for a user's response to an input request.
+ *
+ * @param agentId - Agent context for the response
+ * @param channelId - Channel context for the response
+ * @param responseData - The user's response data
+ * @param options - Optional base event payload options
+ * @returns A UserInputResponseEventPayload
+ */
+export function createUserInputResponsePayload(
+    agentId: AgentId,
+    channelId: ChannelId,
+    responseData: UserInputResponseData,
+    options: { source?: string; eventId?: string; timestamp?: number; } = {}
+): UserInputResponseEventPayload {
+    const validator = createStrictValidator('UserInputResponsePayload');
+    validator.assertIsNonEmptyString(responseData.requestId, 'requestId is required');
+
+    return createBaseEventPayload<UserInputResponseData>(
+        UserInputEvents.RESPONSE,
+        agentId,
+        channelId,
+        responseData,
+        options
+    );
+}
+
+/**
+ * Creates a UserInputCancelledEventPayload for notifying clients that a request was cancelled.
+ *
+ * @param agentId - Agent that initiated the original request
+ * @param channelId - Channel context for the request
+ * @param cancelledData - The cancellation details
+ * @param options - Optional base event payload options
+ * @returns A UserInputCancelledEventPayload
+ */
+export function createUserInputCancelledPayload(
+    agentId: AgentId,
+    channelId: ChannelId | string,
+    cancelledData: UserInputCancelledData,
+    options: { source?: string; eventId?: string; timestamp?: number; } = {}
+): UserInputCancelledEventPayload {
+    const validator = createStrictValidator('UserInputCancelledPayload');
+    validator.assertIsNonEmptyString(cancelledData.requestId, 'requestId is required');
+    validator.assertIsNonEmptyString(cancelledData.reason, 'reason is required');
+
+    return createBaseEventPayload<UserInputCancelledData>(
+        UserInputEvents.CANCELLED,
+        agentId,
+        channelId as ChannelId,
+        cancelledData,
+        options
+    );
+}
+
+/**
+ * Creates a UserInputTimeoutEventPayload for notifying clients that a request timed out.
+ *
+ * @param agentId - Agent that initiated the original request
+ * @param channelId - Channel context for the request
+ * @param timeoutData - The timeout details
+ * @param options - Optional base event payload options
+ * @returns A UserInputTimeoutEventPayload
+ */
+export function createUserInputTimeoutPayload(
+    agentId: AgentId,
+    channelId: ChannelId | string,
+    timeoutData: UserInputTimeoutData,
+    options: { source?: string; eventId?: string; timestamp?: number; } = {}
+): UserInputTimeoutEventPayload {
+    const validator = createStrictValidator('UserInputTimeoutPayload');
+    validator.assertIsNonEmptyString(timeoutData.requestId, 'requestId is required');
+
+    return createBaseEventPayload<UserInputTimeoutData>(
+        UserInputEvents.TIMEOUT,
+        agentId,
+        channelId as ChannelId,
+        timeoutData,
         options
     );
 }

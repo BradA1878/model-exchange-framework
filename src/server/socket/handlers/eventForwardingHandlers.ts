@@ -35,12 +35,14 @@ import {
 } from '../../../shared/events/EventNames';
 import { clearAgentOrparState } from '../../../shared/protocols/mcp/tools/OrparTools';
 import { TaskEvents } from '../../../shared/events/event-definitions/TaskEvents';
+import { UserInputEvents } from '../../../shared/events/event-definitions/UserInputEvents';
+import { UserInputRequestManager } from '../../../shared/services/UserInputRequestManager';
 import { createStrictValidator } from '../../../shared/utils/validation';
 import { logger , Logger } from '../../../shared/utils/Logger';
 import { EventBus } from '../../../shared/events/EventBus';
 import { v4 as uuidv4 } from 'uuid'; 
-import { 
-    BaseEventPayload, 
+import {
+    BaseEventPayload,
     createBaseEventPayload,
     createAgentEventPayload,
     createChannelEventPayload,
@@ -51,11 +53,13 @@ import {
     createMcpToolRegisterPayload,
     createMcpResourceGetPayload,
     createMcpResourceListPayload,
+    createUserInputResponsePayload,
     AgentEventData,
     ChannelEventData,
     TaskEventData,
     ConnectionEventData
-} from '../../../shared/schemas/EventPayloadSchema'; 
+} from '../../../shared/schemas/EventPayloadSchema';
+import { AgentId, ChannelId } from '../../../shared/types/ChannelContext'; 
 import { ChannelActionType } from '../../../shared/events/event-definitions/ChannelEvents';
 import { MxpMiddleware } from '../../../shared/middleware/MxpMiddleware';
 import { isMxpMessage } from '../../../shared/schemas/MxpProtocolSchemas';
@@ -653,17 +657,22 @@ export const setupEventBusToSocketForwarding = (socketService: ISocketService): 
             try {
                 const disconnectedAgentId = payload.agentId;
                 const channelId = payload.channelId;
-                
+
                 if (!disconnectedAgentId) {
                     moduleLogger.warn(`Missing agentId in DISCONNECTED event`);
                     return;
                 }
-                
+
                 if (!channelId) {
                     moduleLogger.warn(`Missing channelId in DISCONNECTED event`);
                     return;
                 }
-                
+
+                // Cancel any pending user input requests for the disconnected agent
+                // to avoid blocking promises hanging until the cleanup TTL fires
+                const manager = UserInputRequestManager.getInstance();
+                manager.cancelRequestsForAgent(disconnectedAgentId);
+
                 // Broadcast to all OTHER agents in the channel (excluding the disconnected one)
                 forwardEventToChannel(socketService, Events.Agent.DISCONNECTED, payload, channelId, disconnectedAgentId);
             } catch (error) {
@@ -811,6 +820,69 @@ export const setupEventBusToSocketForwarding = (socketService: ISocketService): 
             });
         });
         
+        // Handle user input events - Forward request/cancelled/timeout to channel,
+        // and route responses back to UserInputRequestManager to resolve pending Promises
+        EventBus.server.on(UserInputEvents.REQUEST, (payload) => {
+            try {
+                const channelId = payload.channelId;
+                if (!channelId) {
+                    moduleLogger.warn('Missing channelId in user_input:request event');
+                    return;
+                }
+                // Broadcast request to all clients in the channel so any client can render the prompt
+                forwardEventToChannel(socketService, UserInputEvents.REQUEST, payload, channelId);
+            } catch (error) {
+                moduleLogger.error(`Error forwarding user_input:request: ${error}`);
+            }
+        });
+
+        EventBus.server.on(UserInputEvents.CANCELLED, (payload) => {
+            try {
+                const channelId = payload.channelId;
+                if (!channelId) {
+                    moduleLogger.warn('Missing channelId in user_input:cancelled event');
+                    return;
+                }
+                forwardEventToChannel(socketService, UserInputEvents.CANCELLED, payload, channelId);
+            } catch (error) {
+                moduleLogger.error(`Error forwarding user_input:cancelled: ${error}`);
+            }
+        });
+
+        EventBus.server.on(UserInputEvents.TIMEOUT, (payload) => {
+            try {
+                const channelId = payload.channelId;
+                if (!channelId) {
+                    moduleLogger.warn('Missing channelId in user_input:timeout event');
+                    return;
+                }
+                forwardEventToChannel(socketService, UserInputEvents.TIMEOUT, payload, channelId);
+            } catch (error) {
+                moduleLogger.error(`Error forwarding user_input:timeout: ${error}`);
+            }
+        });
+
+        // Handle user input responses — route to UserInputRequestManager to resolve the blocking tool call
+        EventBus.server.on(UserInputEvents.RESPONSE, (payload) => {
+            try {
+                // All events use BaseEventPayload<T> wrapping — .data is always the source of truth
+                if (!payload.data) {
+                    moduleLogger.warn('Malformed user_input:response event: missing payload.data');
+                    return;
+                }
+                const responseData = payload.data;
+                if (!responseData.requestId) {
+                    moduleLogger.warn('Missing requestId in user_input:response event');
+                    return;
+                }
+
+                const manager = UserInputRequestManager.getInstance();
+                manager.submitResponse(responseData.requestId, responseData.value);
+            } catch (error) {
+                moduleLogger.error(`Error processing user_input:response: ${error}`);
+            }
+        });
+
         // Handle task events - Forward to assigned agents and channels
         const taskEventProcessingKeys = new Set<string>();
         
@@ -1045,6 +1117,33 @@ export const setupSocketToEventBusForwarding = (
                     moduleLogger.error(`Error processing task ${eventName}: ${error}`);
                 }
             });
+        });
+
+        // Forward User Input RESPONSE events only (client → server direction).
+        // Only RESPONSE is accepted from clients — REQUEST, CANCELLED, and TIMEOUT are
+        // server→client events. Accepting them from clients would let any connected client
+        // forge fake prompts or silently cancel pending requests.
+        // Always reconstruct the payload using the authenticated socket-context agentId/channelId
+        // to prevent clients from forging identity claims.
+        socket.on(UserInputEvents.RESPONSE, (payload) => {
+            try {
+                // Extract raw response data — use .data if structured, otherwise treat as raw
+                const rawData = (payload.data && payload.eventType) ? payload.data : payload;
+
+                const structuredPayload = createUserInputResponsePayload(
+                    agentId as AgentId,
+                    channelId as ChannelId,
+                    {
+                        requestId: rawData.requestId,
+                        value: rawData.value,
+                        respondedBy: agentId,
+                        timestamp: Date.now(),
+                    }
+                );
+                EventBus.server.emit(UserInputEvents.RESPONSE, structuredPayload);
+            } catch (error) {
+                moduleLogger.error(`Error processing user input response event: ${error}`);
+            }
         });
 
         // NOTE: MCP events are handled by setupMcpSocketToEventBusForwarding() - do not duplicate here

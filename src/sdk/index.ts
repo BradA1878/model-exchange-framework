@@ -61,6 +61,9 @@
  *     llmProvider: 'openrouter',
  *     defaultModel: 'anthropic/claude-3.5-sonnet'
  * });
+ * ```
+ */
+
 /**
  * Events namespace - Use with agent.on() for event listening
  * 
@@ -157,6 +160,7 @@ export type { ChannelConfig } from '../shared/interfaces/ChannelConfig';
  * Task interfaces
  */
 export type { SimpleTaskRequest, SimpleTaskResponse, TaskRequestHandler } from '../shared/interfaces/TaskInterfaces';
+
 /**
  * LLM Provider types
  */
@@ -271,4 +275,34 @@ export { SecurityLevel } from '../shared/types/MxpTypes';
  * ```
  */
 export type { PublicEventName } from '../shared/events/PublicEvents';
+
+/**
+ * User Input types for handling user input requests from agents.
+ *
+ * Use these types when implementing a handler for agent.onUserInput().
+ *
+ * @example
+ * ```typescript
+ * import type { UserInputHandler, UserInputRequestData, UserInputResponseValue } from '@mxf/sdk';
+ *
+ * const handler: UserInputHandler = async (request: UserInputRequestData): Promise<UserInputResponseValue> => {
+ *     // Render prompt based on request.inputType and return the user's answer
+ * };
+ *
+ * agent.onUserInput(handler);
+ * ```
+ */
+export type { UserInputHandler } from './handlers/UserInputHandlers';
+export type {
+    UserInputRequestData,
+    UserInputResponseValue,
+    UserInputType,
+    UserInputUrgency,
+    UserInputTheme,
+    InputConfig,
+    TextInputConfig,
+    SelectInputConfig,
+    MultiSelectInputConfig,
+    ConfirmInputConfig,
+} from '../shared/events/event-definitions/UserInputEvents';
 

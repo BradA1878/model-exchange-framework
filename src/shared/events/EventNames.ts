@@ -200,6 +200,11 @@ import type { TensorFlowPayloads } from './event-definitions/TensorFlowEvents';
 export { TensorFlowEvents };
 export type { TensorFlowPayloads };
 
+import { UserInputEvents } from './event-definitions/UserInputEvents';
+import type { UserInputPayloads } from './event-definitions/UserInputEvents';
+export { UserInputEvents };
+export type { UserInputPayloads };
+
 /**
  * Socket Authentication Events
  * Used for socket authentication success/failure communication
@@ -241,6 +246,7 @@ export namespace Events {
     export const Dag = DagEvents;
     export const KnowledgeGraph = KnowledgeGraphEvents;
     export const TensorFlow = TensorFlowEvents;
+    export const UserInput = UserInputEvents;
 }
 
 /**
@@ -272,7 +278,8 @@ export type EventMap =
     OrparMemoryPayloads &
     DagPayloads &
     KnowledgeGraphPayloads &
-    TensorFlowPayloads;
+    TensorFlowPayloads &
+    UserInputPayloads;
 
 /**
  * Event name type - any valid event name

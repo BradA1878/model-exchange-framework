@@ -46,6 +46,7 @@ import { MemoryHandlers } from './handlers/MemoryHandlers';
 import { MessageHandlers } from './handlers/MessageHandlers';
 import { IAgentMemory, IChannelMemory, IRelationshipMemory, MemoryScope } from '../shared/types/MemoryTypes';
 import { TaskHandlers } from './handlers/TaskHandlers';
+import { UserInputHandlers, UserInputHandler } from './handlers/UserInputHandlers';
 import { MxfToolService, IToolService, ClientTool } from './services/MxfToolService';
 
 /**
@@ -106,6 +107,9 @@ export class MxfClient {
 
     // Task handlers
     protected taskHandlers: TaskHandlers | null = null;
+
+    // User input handlers
+    protected userInputHandlers: UserInputHandlers | null = null;
 
     // Tool service for loading tools via socket events
     protected toolService: MxfToolService | null = null;
@@ -259,7 +263,10 @@ export class MxfClient {
         if (!config.disableTaskHandling) {
             this.taskHandlers = new TaskHandlers(this.channelId, this.agentId);
         }
-        
+
+        // User input handlers are created lazily on first onUserInput() call —
+        // not all agents need to handle user input prompts
+
         // Initialize tool service
         this.toolService = new MxfToolService(this.agentId, this.channelId);
         
@@ -372,6 +379,7 @@ export class MxfClient {
         this.mcpResourceHandlers?.cleanup();
         this.controlLoopHandlers?.cleanup();
         this.taskHandlers?.cleanup();
+        this.userInputHandlers?.cleanup();
         this.memoryHandlers?.cleanup();
         this.toolService?.cleanup();
 
@@ -446,8 +454,50 @@ export class MxfClient {
     }
 
     /**
+     * Register a handler for user input requests.
+     * When an agent calls the user_input tool, this handler is invoked
+     * to render the prompt and collect the user's response.
+     *
+     * @param handler - Callback that receives the request and returns the user's response
+     * @public
+     *
+     * @example
+     * ```typescript
+     * client.onUserInput(async (request) => {
+     *     if (request.inputType === 'confirm') {
+     *         const answer = await confirm({ message: request.title });
+     *         return answer;
+     *     }
+     *     if (request.inputType === 'select') {
+     *         const answer = await select({
+     *             message: request.title,
+     *             choices: request.inputConfig.options
+     *         });
+     *         return answer;
+     *     }
+     *     // text input
+     *     const answer = await input({ message: request.title });
+     *     return answer;
+     * });
+     * ```
+     */
+    public onUserInput(handler: UserInputHandler): void {
+        if (!this.channelId) {
+            throw new Error('Cannot register user input handler: agent has no channelId configured');
+        }
+        // Lazily create and initialize on first call.
+        // Safe to call before socket connects — EventBus subscriptions are decoupled
+        // from socket state and will receive events once the connection is established.
+        if (!this.userInputHandlers) {
+            this.userInputHandlers = new UserInputHandlers(this.channelId, this.agentId);
+            this.userInputHandlers.initialize();
+        }
+        this.userInputHandlers.setUserInputHandler(handler);
+    }
+
+    /**
      * Send a task request to another agent
-     * 
+     *
      * @param toAgentId The ID of the agent to send the task to
      * @param task The task description
      * @returns Promise resolving to the task ID
@@ -737,6 +787,7 @@ export class MxfClient {
         
         this.controlLoopHandlers?.initialize();
         this.taskHandlers?.initialize();
+        // userInputHandlers initialized lazily in onUserInput()
         
     }
     

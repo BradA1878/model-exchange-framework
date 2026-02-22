@@ -163,6 +163,15 @@ export const TASK_PLANNING_TOOLS = {
 } as const;
 
 /**
+ * User Input Tools - Prompt users for input during agent execution
+ */
+export const USER_INPUT_TOOLS = {
+    USER_INPUT: 'user_input',
+    REQUEST_USER_INPUT: 'request_user_input',
+    GET_USER_INPUT_RESPONSE: 'get_user_input_response',
+} as const;
+
+/**
  * Web Tools - Web search, navigation, and content extraction
  */
 export const WEB_TOOLS = {
@@ -282,7 +291,8 @@ export const ALL_INTERNAL_TOOLS = {
     ...INFERENCE_PARAMETER_TOOLS,
     ...WEB_TOOLS,
     ...PLANNING_TOOLS,
-    ...TASK_PLANNING_TOOLS
+    ...TASK_PLANNING_TOOLS,
+    ...USER_INPUT_TOOLS
 } as const;
 
 /**
@@ -338,7 +348,8 @@ export const TOOL_CATEGORIES = {
     VERSION_CONTROL: 'version_control',
     WEB_REQUEST: 'web_request',
     WEB: 'web',
-    AUTOMATION: 'automation'
+    AUTOMATION: 'automation',
+    USER_INPUT: 'user_input'
 } as const;
 
 // =============================================================================
@@ -359,6 +370,7 @@ export type InferenceParameterToolName = typeof INFERENCE_PARAMETER_TOOLS[keyof 
 export type WebToolName = typeof WEB_TOOLS[keyof typeof WEB_TOOLS];
 export type PlanningToolName = typeof PLANNING_TOOLS[keyof typeof PLANNING_TOOLS];
 export type TaskPlanningToolName = typeof TASK_PLANNING_TOOLS[keyof typeof TASK_PLANNING_TOOLS];
+export type UserInputToolName = typeof USER_INPUT_TOOLS[keyof typeof USER_INPUT_TOOLS];
 
 export type CalculatorToolName = typeof CALCULATOR_TOOLS[keyof typeof CALCULATOR_TOOLS];
 export type SequentialThinkingToolName = typeof SEQUENTIAL_THINKING_TOOLS[keyof typeof SEQUENTIAL_THINKING_TOOLS];
@@ -434,6 +446,9 @@ export const getToolCategory = (toolName: string): ToolCategory | null => {
     }
     if (Object.values(MEMORY_SERVER_TOOLS).includes(toolName as MemoryServerToolName)) {
         return TOOL_CATEGORIES.MEMORY;
+    }
+    if (Object.values(USER_INPUT_TOOLS).includes(toolName as UserInputToolName)) {
+        return TOOL_CATEGORIES.USER_INPUT;
     }
     return null;
 };

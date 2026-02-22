@@ -36,6 +36,8 @@
     "demo:kg": "NODE_ENV=test bun run examples/kg-demo/kg-demo.ts",
     "demo:tensorflow": "NODE_ENV=test TENSORFLOW_ENABLED=true bun run examples/tensorflow-demo/tensorflow-demo.ts",
     "demo:twenty-questions": "NODE_ENV=test TENSORFLOW_ENABLED=true bun run examples/twenty-questions/connect-agents.ts & PID=$!; cd examples/twenty-questions/client && npx vite --port 3007; kill $PID 2>/dev/null; wait $PID 2>/dev/null; lsof -ti:3006 | xargs kill -9 2>/dev/null",
+    "demo:book-editor": "NODE_ENV=test bun run examples/book-editor-demo/connect-agents.ts",
+    "demo:user-input": "NODE_ENV=test bun run examples/user-input-demo/user-input-demo.ts",
     "test": "jest --config tests/jest.config.ts tests/integration",
     "test:integration": "jest --config tests/jest.config.ts tests/integration",
     "test:integration:manual": "jest --config tests/jest.config.ts tests/integration",
