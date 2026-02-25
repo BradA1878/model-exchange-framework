@@ -54,7 +54,7 @@
     "sdk:cli": "bun run src/sdk/cli/mxf-cli.ts",
     "server:cli": "bun run src/server/cli/server-cli.ts",
     "mxp:generate-key": "bun run src/server/cli/generate-mxp-key.ts",
-    "dev": "bun run test:unit && bun run docker:infra:up && bun --watch src/server/index.ts",
+    "dev": "bun run docker:infra:up && bun --watch src/server/index.ts",
     "prod": "bun run docker:infra:up && bun run dist/server/index.js",
     "dev:all": "docker-compose up -d",
     "docker:up": "docker-compose up -d",
