@@ -458,10 +458,12 @@ export class ExternalMcpServerManager extends EventEmitter {
                 stdio: ['pipe', 'pipe', 'pipe']
             });
 
-            // Store process reference
+            // Store process reference — PID is assigned by the OS immediately but the
+            // process may not have started yet. The 'spawn' event in setupProcessEventHandlers
+            // confirms the process actually started; the 'error' event handles spawn failures.
             serverData.process = childProcess;
             status.pid = childProcess.pid;
-            logger.info(`[START_SERVER] Process spawned with PID ${childProcess.pid}`);
+            logger.info(`[START_SERVER] Process created with PID ${childProcess.pid}, awaiting spawn confirmation...`);
 
             // Set up process event handlers
             this.setupProcessEventHandlers(serverId, childProcess);
@@ -713,13 +715,16 @@ export class ExternalMcpServerManager extends EventEmitter {
             });
         }
 
-        // Handle stderr for error logging
+        // Handle stderr — log non-warning output for debugging spawn failures
         if (process.stderr) {
             process.stderr.on('data', (data) => {
-                const errorOutput = data.toString();
+                const errorOutput = data.toString().trim();
                 // Filter out harmless Node.js experimental warnings from npm
                 if (errorOutput.includes('ExperimentalWarning')) {
                     return; // Ignore npm's CommonJS/ES Module warnings
+                }
+                if (errorOutput) {
+                    logger.debug(`[MCP-STDERR] ${serverId}: ${errorOutput}`);
                 }
             });
         }
@@ -740,7 +745,10 @@ export class ExternalMcpServerManager extends EventEmitter {
             // Initialize MCP connection first, then discover tools
             logger.info(`[SPAWN] Will initialize MCP connection for ${serverId} in 2 seconds...`);
             setTimeout(() => {
-                this.initializeMcpConnection(serverId);
+                this.initializeMcpConnection(serverId).catch((err) => {
+                    logger.error(`[MCP] Failed to initialize connection to ${serverId}: ${err.message}`);
+                    this.handleServerError(serverId, `MCP initialization failed: ${err.message}`);
+                });
             }, 2000); // Wait 2 seconds for server to fully start
         });
     }
