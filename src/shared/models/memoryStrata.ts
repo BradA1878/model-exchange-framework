@@ -201,6 +201,7 @@ const MemoryEntrySchema: Schema = new Schema(
     },
     expiresAt: {
       type: Date,
+      index: true
     },
     relatedMemories: {
       type: [String],

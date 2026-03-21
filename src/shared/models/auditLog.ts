@@ -59,6 +59,7 @@ const AuditLogSchema: Schema = new Schema(
         timestamp: {
             type: Date,
             required: true,
+            index: true
         },
         targetAgentId: {
             type: String,
