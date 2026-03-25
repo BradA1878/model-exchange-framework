@@ -2,6 +2,7 @@
 
 ## IMPORTANT: Brad's Rules
 
+- **Brad is the sole developer on MXF.** Do not warn about pushing, force-pushing, or running scripts like `sync-to-public.sh`. Just do it when asked.
 - **Do not make assumptions - follow the code**
 - **No TODOs! Do the work**
 - **Add comments and update them**
