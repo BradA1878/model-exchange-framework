@@ -122,9 +122,9 @@ function resetSingleton(): void {
 
 /**
  * Get a fresh PredictiveAnalyticsService instance.
- * Because the constructor calls initializeModels(), setupEventListeners(),
- * and conditionally initializeTfAnomalyAutoencoder(), we get the service
- * in a clean state.
+ * The constructor calls initializeModels() and setupEventListeners().
+ * TF.js model initialization requires an explicit call to
+ * initializeTensorFlowModels() (deferred until after MxfMLService is ready).
  */
 function getService(): PredictiveAnalyticsService {
     return PredictiveAnalyticsService.getInstance();
@@ -190,9 +190,8 @@ describe('PredictiveAnalyticsService — Anomaly Autoencoder (Phase 3)', () => {
 
         it('should register the autoencoder model with correct config', async () => {
             service = getService();
-            // The constructor calls initializeTfAnomalyAutoencoder() asynchronously.
-            // We need to wait for it to settle.
-            await flushPromises();
+            // initializeTensorFlowModels() must be called explicitly (deferred from constructor)
+            await service.initializeTensorFlowModels();
 
             expect(mockRegisterModel).toHaveBeenCalledWith(
                 expect.objectContaining({
@@ -218,7 +217,7 @@ describe('PredictiveAnalyticsService — Anomaly Autoencoder (Phase 3)', () => {
 
         it('should call buildSequentialModel with the autoencoder model ID', async () => {
             service = getService();
-            await flushPromises();
+            await service.initializeTensorFlowModels();
 
             expect(mockBuildSequentialModel).toHaveBeenCalledWith(
                 'anomaly_autoencoder',
@@ -228,7 +227,7 @@ describe('PredictiveAnalyticsService — Anomaly Autoencoder (Phase 3)', () => {
 
         it('should attempt to load a pre-trained model from storage', async () => {
             service = getService();
-            await flushPromises();
+            await service.initializeTensorFlowModels();
 
             expect(mockLoadModel).toHaveBeenCalledWith('anomaly_autoencoder');
         });
@@ -240,7 +239,7 @@ describe('PredictiveAnalyticsService — Anomaly Autoencoder (Phase 3)', () => {
             });
 
             service = getService();
-            await flushPromises();
+            await service.initializeTensorFlowModels();
 
             expect((service as any).tfAnomalyAutoencoderReady).toBe(true);
         });
@@ -256,7 +255,7 @@ describe('PredictiveAnalyticsService — Anomaly Autoencoder (Phase 3)', () => {
 
         it('should schedule retrain when autoTrainEnabled is true', async () => {
             service = getService();
-            await flushPromises();
+            await service.initializeTensorFlowModels();
 
             // scheduleRetrain should be called for the anomaly_autoencoder model
             expect(mockScheduleRetrain).toHaveBeenCalledWith(
@@ -269,7 +268,7 @@ describe('PredictiveAnalyticsService — Anomaly Autoencoder (Phase 3)', () => {
             mockIsEnabled.mockReturnValue(false);
 
             service = getService();
-            await flushPromises();
+            await service.initializeTensorFlowModels();
 
             // registerModel should not be called for the autoencoder
             const autoencoderCalls = mockRegisterModel.mock.calls.filter(

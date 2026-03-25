@@ -574,8 +574,11 @@ export class OpenRouterMcpClient extends BaseMcpClient {
         // Enable reasoning tokens if requested
         if (options?.reasoning?.enabled === true) {
             requestBody.reasoning = {
-                effort: options.reasoning.effort || 'medium',
-                ...(options.reasoning.maxTokens && { max_tokens: options.reasoning.maxTokens }),
+                // effort and maxTokens are mutually exclusive per OpenRouter API
+                ...(options.reasoning.maxTokens
+                    ? { max_tokens: options.reasoning.maxTokens }
+                    : { effort: options.reasoning.effort || 'medium' }
+                ),
                 ...(options.reasoning.exclude !== undefined && { exclude: options.reasoning.exclude })
             };
         }
@@ -991,8 +994,11 @@ export class OpenRouterMcpClient extends BaseMcpClient {
             // OpenRouter expects { effort, max_tokens?, exclude? } — no 'enabled' field
             if (options?.reasoning?.enabled === true) {
                 requestBody.reasoning = {
-                    effort: options.reasoning.effort || 'medium',
-                    ...(options.reasoning.maxTokens && { max_tokens: options.reasoning.maxTokens }),
+                    // effort and maxTokens are mutually exclusive per OpenRouter API
+                    ...(options.reasoning.maxTokens
+                        ? { max_tokens: options.reasoning.maxTokens }
+                        : { effort: options.reasoning.effort || 'medium' }
+                    ),
                     ...(options.reasoning.exclude !== undefined && { exclude: options.reasoning.exclude })
                 };
             }
