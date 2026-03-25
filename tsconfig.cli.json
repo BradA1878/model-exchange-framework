@@ -1,0 +1,17 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "jsxImportSource": "react",
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "noEmit": true
+  },
+  "include": [
+    "src/cli/tui/**/*",
+    "src/cli/services/**/*",
+    "src/cli/utils/**/*",
+    "src/sdk/**/*",
+    "src/shared/**/*"
+  ]
+}

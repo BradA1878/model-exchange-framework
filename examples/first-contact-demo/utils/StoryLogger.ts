@@ -16,7 +16,7 @@
  * @author Brad Anderson <BradA1878@pm.me>
  */
 
-const chalk = require('chalk');
+import chalk from 'chalk';
 
 /**
  * Cinematic story logger for dramatic agent demos

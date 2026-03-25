@@ -177,6 +177,36 @@ export interface LlmReasoningToolsSynthesizedEventData {
 export type LlmReasoningToolsSynthesizedEventPayload = BaseEventPayload<LlmReasoningToolsSynthesizedEventData>;
 
 /**
+ * Data for LLM streaming chunk events — partial tokens emitted during streaming responses.
+ * Used by the TUI ThinkingIndicator to show live output preview.
+ */
+export interface LlmStreamChunkEventData {
+    /** The partial text content received in this chunk */
+    chunk: string;
+    /** When this chunk was received */
+    timestamp: number;
+}
+export type LlmStreamChunkEventPayload = BaseEventPayload<LlmStreamChunkEventData>;
+
+/**
+ * Data for LLM usage events — captures token counts for cost tracking.
+ * Emitted after each LLM response alongside LLM_RESPONSE.
+ */
+export interface LlmUsageEventData {
+    /** Model that generated the response */
+    model: string;
+    /** Number of input (prompt) tokens consumed */
+    inputTokens: number;
+    /** Number of output (completion) tokens generated */
+    outputTokens: number;
+    /** Total tokens consumed (input + output) */
+    totalTokens: number;
+    /** When the usage was recorded */
+    timestamp: number;
+}
+export type LlmUsageEventPayload = BaseEventPayload<LlmUsageEventData>;
+
+/**
  * Interface for agent registration events
  */
 export interface AgentRegistrationEventData {
@@ -492,6 +522,18 @@ export type McpToolCallEventPayload = BaseEventPayload<McpToolEventData & { call
 export type McpToolResultEventPayload = BaseEventPayload<McpToolEventData & { callId: string; result: any }>;
 export type McpToolErrorEventPayload = BaseEventPayload<McpToolEventData & { callId: string; error: any }>;
 
+// Client-side tool execution payload types
+export interface McpToolCallCompletedLocalData {
+    callId: string;
+    toolName: string;
+    input: any;
+    result: any;
+    durationMs: number;
+    source: 'internal' | 'external-mcp';
+    executedOn: 'client';
+}
+export type McpToolCallCompletedLocalEventPayload = BaseEventPayload<McpToolCallCompletedLocalData>;
+
 export interface McpResourceEventData {
     resourceUri: string;
     resourceType?: string;
@@ -762,6 +804,52 @@ export function createLlmReasoningToolsSynthesizedEventPayload(
     validator.assertIsArray(synthesizedData.toolIntentions, 'Tool intentions must be an array');
     
     return createBaseEventPayload<LlmReasoningToolsSynthesizedEventData>(eventType, agentId, channelId, synthesizedData, options);
+}
+
+/**
+ * Creates an LLM Stream Chunk EventPayload for live TUI preview.
+ * Emitted during streaming LLM responses as partial tokens arrive.
+ *
+ * @param eventType - The event type (e.g., AgentEvents.LLM_STREAM_CHUNK).
+ * @param agentId - The Agent ID that is streaming.
+ * @param channelId - The Channel ID context for this streaming event.
+ * @param chunkData - The partial chunk data.
+ * @param options - Optional base event payload options.
+ * @returns An LlmStreamChunkEventPayload.
+ */
+export function createLlmStreamChunkEventPayload(
+    eventType: EventName | string,
+    agentId: AgentId,
+    channelId: ChannelId,
+    chunkData: LlmStreamChunkEventData,
+    options: { source?: string; eventId?: string; timestamp?: number; } = {}
+): LlmStreamChunkEventPayload {
+    return createBaseEventPayload<LlmStreamChunkEventData>(eventType, agentId, channelId, chunkData, options);
+}
+
+/**
+ * Creates an LLM Usage EventPayload for token cost tracking.
+ * Emitted after each LLM response to track input/output token consumption.
+ *
+ * @param eventType - The event type (e.g., AgentEvents.LLM_USAGE).
+ * @param agentId - The Agent ID that consumed the tokens.
+ * @param channelId - The Channel ID context for this usage event.
+ * @param usageData - Token usage data from the LLM response.
+ * @param options - Optional base event payload options.
+ * @returns An LlmUsageEventPayload.
+ */
+export function createLlmUsageEventPayload(
+    eventType: EventName | string,
+    agentId: AgentId,
+    channelId: ChannelId,
+    usageData: LlmUsageEventData,
+    options: { source?: string; eventId?: string; timestamp?: number; } = {}
+): LlmUsageEventPayload {
+    const validator = createStrictValidator('createLlmUsageEventPayload');
+    validator.assertIsObject(usageData, 'usageData');
+    validator.assertIsNonEmptyString(usageData.model, 'usageData.model');
+
+    return createBaseEventPayload<LlmUsageEventData>(eventType, agentId, channelId, usageData, options);
 }
 
 /**
@@ -1579,6 +1667,79 @@ export const createMcpToolErrorPayload = (
     channelId: ChannelId,
     data: McpToolEventData & { callId: string; error: any }
 ): McpToolErrorEventPayload => ({
+    eventId: uuidv4(),
+    eventType,
+    timestamp: Date.now(),
+    agentId,
+    channelId,
+    source: 'SYSTEM',
+    data,
+});
+
+/**
+ * Creates a payload for a client-side tool call event (local observability).
+ */
+export const createMcpToolCallLocalPayload = (
+    eventType: string,
+    agentId: AgentId,
+    channelId: ChannelId,
+    data: McpToolEventData & { callId: string; arguments: any }
+): McpToolCallEventPayload => ({
+    eventId: uuidv4(),
+    eventType,
+    timestamp: Date.now(),
+    agentId,
+    channelId,
+    source: 'SYSTEM',
+    data,
+});
+
+/**
+ * Creates a payload for a client-side tool result event (local observability).
+ */
+export const createMcpToolResultLocalPayload = (
+    eventType: string,
+    agentId: AgentId,
+    channelId: ChannelId,
+    data: McpToolEventData & { callId: string; result: any; durationMs: number }
+): McpToolResultEventPayload => ({
+    eventId: uuidv4(),
+    eventType,
+    timestamp: Date.now(),
+    agentId,
+    channelId,
+    source: 'SYSTEM',
+    data,
+});
+
+/**
+ * Creates a payload for a client-side tool error event (local observability).
+ */
+export const createMcpToolErrorLocalPayload = (
+    eventType: string,
+    agentId: AgentId,
+    channelId: ChannelId,
+    data: McpToolEventData & { callId: string; error: any }
+): McpToolErrorEventPayload => ({
+    eventId: uuidv4(),
+    eventType,
+    timestamp: Date.now(),
+    agentId,
+    channelId,
+    source: 'SYSTEM',
+    data,
+});
+
+/**
+ * Creates a payload for the fire-and-forget notification to server
+ * after a tool has been executed client-side. Used for DB history recording.
+ */
+export const createMcpToolCallCompletedLocalPayload = (
+    eventType: string,
+    agentId: AgentId,
+    channelId: ChannelId,
+    data: McpToolCallCompletedLocalData
+): McpToolCallCompletedLocalEventPayload => ({
     eventId: uuidv4(),
     eventType,
     timestamp: Date.now(),

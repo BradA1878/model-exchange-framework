@@ -30,14 +30,16 @@
 import { Observable } from 'rxjs';
 import { v4 as uuidv4 } from 'uuid';
 import { BaseMcpClient } from './BaseMcpClient';
-import { 
-    McpMessage, 
-    McpTool, 
-    McpApiResponse, 
+import {
+    McpMessage,
+    McpTool,
+    McpApiResponse,
     McpContentType,
     McpRole,
     McpContent,
-    McpTextContent
+    McpTextContent,
+    McpStreamChunk,
+    McpStreamEmission
 } from '../IMcpClient';
 import { AgentContext } from '../../../interfaces/AgentContext';
 import { ConversationMessage } from '../../../interfaces/ConversationMessage';
@@ -370,13 +372,18 @@ export class OpenRouterMcpClient extends BaseMcpClient {
         if (choice.message.tool_calls && choice.message.tool_calls.length > 0) {
             choice.message.tool_calls.forEach(toolCall => {
                 if (toolCall.type === 'function') {
-                    // Handle empty or invalid arguments from OpenRouter
+                    // Parse tool call arguments from OpenRouter response
                     let parsedInput = {};
                     try {
-                        // If arguments is empty string or whitespace, use empty object
                         const args = toolCall.function.arguments?.trim();
-                        parsedInput = args && args.length > 0 ? JSON.parse(args) : {};
+                        if (args && args.length > 0) {
+                            parsedInput = JSON.parse(args);
+                        } else {
+                            this.logger.warn(`⚠️ Tool call ${toolCall.function.name} (${toolCall.id}) has empty arguments string`);
+                        }
                     } catch (error) {
+                        // Log the parse failure — silent {} fallback masks real bugs
+                        this.logger.error(`❌ JSON parse failed for tool ${toolCall.function.name} (${toolCall.id}) arguments: ${(error as Error).message}. Raw args: "${toolCall.function.arguments?.substring(0, 200)}"`);
                         parsedInput = {};
                     }
                     
@@ -434,6 +441,28 @@ export class OpenRouterMcpClient extends BaseMcpClient {
         context: AgentContext,
         options?: Record<string, any>
     ): Observable<McpApiResponse> {
+        // When streaming is requested, return an Observable that emits McpStreamEmission values:
+        // N McpStreamChunk emissions followed by 1 final McpApiResponse, then completes.
+        // The caller can use `'streaming' in emission` to discriminate chunk vs final.
+        if (options?.stream) {
+            this.logger.debug('📡 OpenRouter: stream=true detected, using streaming Observable');
+            return new Observable<McpApiResponse>(subscriber => {
+                this.sendWithContextStreaming(context, options, (chunk: McpStreamChunk) => {
+                    // Emit chunks through the same Observable — consumers must cast to McpStreamEmission
+                    (subscriber as any).next(chunk);
+                })
+                    .then(response => {
+                        this.logger.debug('📡 OpenRouter: streaming complete, emitting final response');
+                        subscriber.next(response);
+                        subscriber.complete();
+                    })
+                    .catch(error => {
+                        this.logger.debug(`📡 OpenRouter: streaming error: ${error?.message}`);
+                        subscriber.error(error);
+                    });
+            });
+        }
+
         return new Observable<McpApiResponse>(subscriber => {
             this.sendWithContextImpl(context, options)
                 .then(response => {
@@ -489,10 +518,274 @@ export class OpenRouterMcpClient extends BaseMcpClient {
             return result.data!;
         });
     }
-    
+
+    /**
+     * Streaming variant of sendWithContextImpl.
+     * Makes the same request but with `stream: true`, parses SSE chunks,
+     * calls onChunk for each partial token, and returns the accumulated final response.
+     *
+     * @param context - Complete agent context from SDK
+     * @param options - Additional options (must include stream: true)
+     * @param onChunk - Callback invoked for each streaming chunk
+     * @returns The final accumulated McpApiResponse
+     */
+    private async sendWithContextStreaming(
+        context: AgentContext,
+        options: Record<string, any>,
+        onChunk: (chunk: McpStreamChunk) => void
+    ): Promise<McpApiResponse> {
+        // Structure and transform messages same as non-streaming path
+        const openRouterMessages = this.structureMessagesFromContext(context);
+        const converter = getMessageConverter('client');
+        const transformedMessages = converter.transform(openRouterMessages, MessageFormat.OPENROUTER);
+
+        return await OpenRouterMcpClient.queueRequest(async () => {
+            return this.executeStreamingRequest(transformedMessages, context.availableTools as any, options, onChunk);
+        });
+    }
+
+    /**
+     * Execute an OpenRouter streaming request via SSE.
+     * Parses `data:` lines from the SSE stream, emits partial chunks via onChunk,
+     * accumulates the full response, and returns a complete McpApiResponse.
+     */
+    private async executeStreamingRequest(
+        openRouterMessages: any[],
+        tools?: McpTool[],
+        options?: Record<string, any>,
+        onChunk?: (chunk: McpStreamChunk) => void
+    ): Promise<McpApiResponse> {
+        // Build request body (same as executeOpenRouterRequestCore but with stream: true)
+        let model = options?.model || this.config.defaultModel || 'openai/gpt-4-turbo';
+        const useExacto = options?.useExactoVariant !== false;
+        model = this.applyExactoVariant(model, useExacto);
+
+        const temperature = options?.temperature || this.config.temperature || 0.7;
+        const maxTokens = options?.maxTokens || this.config.maxTokens || 4096;
+
+        const requestBody: Record<string, any> = {
+            model,
+            messages: openRouterMessages,
+            temperature,
+            max_tokens: maxTokens,
+            stream: true,
+        };
+
+        // Enable reasoning tokens if requested
+        if (options?.reasoning?.enabled === true) {
+            requestBody.reasoning = {
+                effort: options.reasoning.effort || 'medium',
+                ...(options.reasoning.maxTokens && { max_tokens: options.reasoning.maxTokens }),
+                ...(options.reasoning.exclude !== undefined && { exclude: options.reasoning.exclude })
+            };
+        }
+
+        // Add tools if provided
+        const openRouterTools = tools ? this.convertToOpenRouterTools(tools) : undefined;
+        if (openRouterTools && openRouterTools.length > 0) {
+            requestBody.tools = openRouterTools;
+            requestBody.tool_choice = 'auto';
+        }
+
+        // Add provider-specific options
+        if (options?.providerOptions) {
+            Object.assign(requestBody, options.providerOptions);
+        }
+
+        const headers: Record<string, string> = {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${this.config.apiKey}`,
+            'HTTP-Referer': options?.referer || 'http://mxf.dev',
+            'X-Title': options?.title || 'MXF'
+        };
+
+        const response = await fetch(`${this.baseUrl}/chat/completions`, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify(requestBody)
+        });
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            const error = new Error(`OpenRouter API error [${response.status}]: ${errorText}`);
+            (error as any).status = response.status;
+            (error as any).statusCode = response.status;
+            throw error;
+        }
+
+        if (!response.body) {
+            throw new Error('No response body for streaming request');
+        }
+
+        this.logger.debug(`📡 OpenRouter SSE: Response received, status=${response.status}, starting stream parse`);
+
+        // Parse SSE stream and accumulate the full response
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let accumulatedContent = '';
+        let accumulatedReasoning = '';
+        let responseId = '';
+        let responseModel = model;
+        let finishReason: string | null = null;
+        let promptTokens = 0;
+        let completionTokens = 0;
+        let totalTokens = 0;
+        // Accumulated tool_calls built from streaming deltas
+        const toolCallAccumulators: Map<number, { id: string; type: string; functionName: string; functionArgs: string }> = new Map();
+
+        try {
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+
+                buffer += decoder.decode(value, { stream: true });
+
+                // Process complete SSE lines from the buffer
+                const lines = buffer.split('\n');
+                // Keep the last incomplete line in the buffer
+                buffer = lines.pop() || '';
+
+                for (const line of lines) {
+                    const trimmed = line.trim();
+
+                    // Skip empty lines and SSE comments
+                    if (!trimmed || trimmed.startsWith(':')) continue;
+
+                    // Handle the [DONE] signal
+                    if (trimmed === 'data: [DONE]') continue;
+
+                    // Parse data lines
+                    if (trimmed.startsWith('data: ')) {
+                        const jsonStr = trimmed.slice(6);
+                        try {
+                            const chunk = JSON.parse(jsonStr);
+
+                            // Extract response metadata from first chunk
+                            if (chunk.id && !responseId) {
+                                responseId = chunk.id;
+                            }
+                            if (chunk.model) {
+                                responseModel = chunk.model;
+                            }
+
+                            // Extract content delta
+                            const delta = chunk.choices?.[0]?.delta;
+                            const chunkFinishReason = chunk.choices?.[0]?.finish_reason;
+
+                            if (chunkFinishReason) {
+                                finishReason = chunkFinishReason;
+                            }
+
+                            if (delta) {
+                                const contentDelta = delta.content || '';
+
+                                // OpenRouter reasoning can arrive as:
+                                // 1. delta.reasoning (string) — some providers
+                                // 2. delta.reasoning_content (string) — Anthropic alias
+                                // 3. delta.reasoning_details (array of {type, text}) — Anthropic extended thinking
+                                let reasoningDelta = delta.reasoning || delta.reasoning_content || '';
+                                if (!reasoningDelta && delta.reasoning_details && Array.isArray(delta.reasoning_details)) {
+                                    reasoningDelta = delta.reasoning_details
+                                        .filter((d: any) => d.text)
+                                        .map((d: any) => d.text)
+                                        .join('');
+                                }
+
+                                if (contentDelta) {
+                                    accumulatedContent += contentDelta;
+                                    onChunk?.({ streaming: true, content: contentDelta });
+                                }
+                                if (reasoningDelta) {
+                                    accumulatedReasoning += reasoningDelta;
+                                    onChunk?.({ streaming: true, reasoning: reasoningDelta });
+                                }
+
+                                // Accumulate tool_calls from streaming deltas
+                                if (delta.tool_calls && Array.isArray(delta.tool_calls)) {
+                                    for (const tc of delta.tool_calls) {
+                                        const idx = tc.index ?? 0;
+                                        if (!toolCallAccumulators.has(idx)) {
+                                            toolCallAccumulators.set(idx, {
+                                                id: tc.id || '',
+                                                type: tc.type || 'function',
+                                                functionName: tc.function?.name || '',
+                                                functionArgs: tc.function?.arguments || '',
+                                            });
+                                        } else {
+                                            const acc = toolCallAccumulators.get(idx)!;
+                                            if (tc.id) acc.id = tc.id;
+                                            if (tc.function?.name) acc.functionName += tc.function.name;
+                                            if (tc.function?.arguments) acc.functionArgs += tc.function.arguments;
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Extract usage from final chunk (OpenRouter includes it in the last SSE event)
+                            if (chunk.usage) {
+                                promptTokens = chunk.usage.prompt_tokens || 0;
+                                completionTokens = chunk.usage.completion_tokens || 0;
+                                totalTokens = chunk.usage.total_tokens || 0;
+                            }
+                        } catch {
+                            // Skip malformed JSON lines — they occasionally happen in SSE streams
+                            this.logger.debug(`Skipping malformed SSE data line: ${jsonStr.substring(0, 100)}`);
+                        }
+                    }
+                }
+            }
+        } finally {
+            reader.releaseLock();
+        }
+
+        this.logger.debug(`📡 OpenRouter SSE: Stream complete. Content=${accumulatedContent.length}chars, Reasoning=${accumulatedReasoning.length}chars, ToolCalls=${toolCallAccumulators.size}, Finish=${finishReason}`);
+
+        // Build accumulated tool_calls in OpenRouter format for convertToMcpResponse
+        const accumulatedToolCalls = Array.from(toolCallAccumulators.values()).map(tc => ({
+            id: tc.id,
+            type: tc.type as 'function',
+            function: {
+                name: tc.functionName,
+                arguments: tc.functionArgs,
+            }
+        }));
+
+        // Build a synthetic OpenRouterResponse from accumulated data for convertToMcpResponse
+        const syntheticResponse: OpenRouterResponse = {
+            id: responseId || `stream-${Date.now()}`,
+            model: responseModel,
+            created: Math.floor(Date.now() / 1000),
+            object: 'chat.completion',
+            choices: [{
+                index: 0,
+                message: {
+                    role: 'assistant',
+                    content: accumulatedContent,
+                    ...(accumulatedToolCalls.length > 0 ? { tool_calls: accumulatedToolCalls } : {}),
+                },
+                finish_reason: finishReason || 'stop',
+            }],
+            usage: {
+                prompt_tokens: promptTokens,
+                completion_tokens: completionTokens,
+                total_tokens: totalTokens,
+            },
+        };
+
+        const mcpResponse = this.convertToMcpResponse(syntheticResponse);
+
+        // Attach accumulated reasoning if present
+        if (accumulatedReasoning) {
+            mcpResponse.reasoning = accumulatedReasoning;
+        }
+
+        return mcpResponse;
+    }
+
     /**
      * Structure messages from AgentContext for OpenRouter
-     * 
+     *
      * Similar to Azure but applies OpenRouter-specific requirements
      */
     private structureMessagesFromContext(context: AgentContext): any[] {
@@ -694,13 +987,12 @@ export class OpenRouterMcpClient extends BaseMcpClient {
                 max_tokens: maxTokens
             };
             
-            // Enable reasoning tokens for reasoning models (o1, gpt-5, deepseek-reasoner)
-            // Pass through the full reasoning config to OpenRouter
+            // Enable reasoning tokens for models that support extended thinking
+            // OpenRouter expects { effort, max_tokens?, exclude? } — no 'enabled' field
             if (options?.reasoning?.enabled === true) {
                 requestBody.reasoning = {
-                    enabled: true,
                     effort: options.reasoning.effort || 'medium',
-                    ...(options.reasoning.maxTokens && { maxTokens: options.reasoning.maxTokens }),
+                    ...(options.reasoning.maxTokens && { max_tokens: options.reasoning.maxTokens }),
                     ...(options.reasoning.exclude !== undefined && { exclude: options.reasoning.exclude })
                 };
             }

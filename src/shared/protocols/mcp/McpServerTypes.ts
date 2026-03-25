@@ -99,6 +99,8 @@ export interface McpToolDefinition {
     validateInput?: (input: McpToolInput) => boolean | Promise<boolean>;
     /** Optional examples showing how to use the tool */
     examples?: McpToolExample[];
+    /** Where this tool can execute. 'server' (default), 'client', or 'either' (both sides). */
+    executionSide?: 'server' | 'client' | 'either';
 }
 
 /**

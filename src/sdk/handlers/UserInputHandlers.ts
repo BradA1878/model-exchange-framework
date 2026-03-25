@@ -146,8 +146,18 @@ export class UserInputHandlers extends Handler {
                     return;
                 }
 
-                // Deduplicate: the server broadcasts to all sockets in the channel room,
-                // so the same request arrives once per socket. Only process the first arrival.
+                // Only the agent that called user_input should process and respond.
+                // The server broadcasts the REQUEST to all sockets in the channel,
+                // but only the requesting agent needs to render the prompt and emit
+                // RESPONSE. Other agents skip to avoid duplicate responses that
+                // cause "already responded" warnings and potential event delivery issues.
+                const requestingAgentId = payload.agentId;
+                if (requestingAgentId && requestingAgentId !== this.agentId) {
+                    return;
+                }
+
+                // Deduplicate: the same request can arrive multiple times via different
+                // sockets (channel broadcast + direct). Only process the first arrival.
                 if (this.processedRequestIds.has(requestData.requestId)) {
                     return;
                 }

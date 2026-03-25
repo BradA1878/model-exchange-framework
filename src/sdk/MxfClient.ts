@@ -48,6 +48,8 @@ import { IAgentMemory, IChannelMemory, IRelationshipMemory, MemoryScope } from '
 import { TaskHandlers } from './handlers/TaskHandlers';
 import { UserInputHandlers, UserInputHandler } from './handlers/UserInputHandlers';
 import { MxfToolService, IToolService, ClientTool } from './services/MxfToolService';
+import { ClientToolExecutor } from './services/ClientToolExecutor';
+import { ClientExternalMcpManager } from './services/ClientExternalMcpManager';
 
 /**
  * MxfClient class for connecting to the MXF
@@ -114,6 +116,12 @@ export class MxfClient {
     // Tool service for loading tools via socket events
     protected toolService: MxfToolService | null = null;
 
+    // Client-side tool executor for local execution of eligible stateless tools
+    protected clientToolExecutor: ClientToolExecutor | null = null;
+
+    // Client-side external MCP server manager (spawns external MCP servers locally)
+    protected clientExternalMcpManager: ClientExternalMcpManager | null = null;
+
     // Event listener subscriptions for cleanup
     private eventListeners: Map<string, any[]> = new Map();
 
@@ -177,7 +185,11 @@ export class MxfClient {
             reconnectAttempts: config.reconnectAttempts ?? 5,
             reconnectDelay: config.reconnectDelay ?? 5000,
             requestTimeoutMs: config.requestTimeoutMs ?? 30000,
-            logger: this.logger
+            logger: this.logger,
+
+            // Client-side tool execution
+            enableClientToolExecution: config.enableClientToolExecution ?? false,
+            clientExternalMcpServers: config.clientExternalMcpServers,
         };
         
         // Store the configuration - fix the type issue by updating property type in MxfClient class
@@ -269,7 +281,29 @@ export class MxfClient {
 
         // Initialize tool service
         this.toolService = new MxfToolService(this.agentId, this.channelId);
-        
+
+        // Initialize client-side tool executor if enabled
+        if (this.config.enableClientToolExecution) {
+            this.clientToolExecutor = new ClientToolExecutor(
+                this.agentId,
+                this.channelId,
+                this.mxfService,
+                true
+            );
+            // Load eligible internal tools into the client registry
+            this.clientToolExecutor.loadInternalTools();
+
+            // Initialize client-side external MCP servers if configured
+            if (this.config.clientExternalMcpServers && this.config.clientExternalMcpServers.length > 0) {
+                this.clientExternalMcpManager = new ClientExternalMcpManager(
+                    this.agentId,
+                    this.channelId,
+                    this.clientToolExecutor,
+                    this.config.clientExternalMcpServers
+                );
+            }
+        }
+
         // Set up event handlers for agent events
         this.initializeEventHandlers();
     }
@@ -327,7 +361,14 @@ export class MxfClient {
             if (typeof (this as any).performAgentInitialization === 'function') {
                 await (this as any).performAgentInitialization();
             }
-            
+
+            // Step 5: Start client-side external MCP servers (after socket is established)
+            if (this.clientExternalMcpManager) {
+                this.clientExternalMcpManager.start().catch((error: Error) => {
+                    this.logger.warn(`Failed to start client-side external MCP servers: ${error.message}`);
+                });
+            }
+
             // Mark as fully connected
             this.isFullyConnected = true;
 
@@ -382,6 +423,14 @@ export class MxfClient {
         this.userInputHandlers?.cleanup();
         this.memoryHandlers?.cleanup();
         this.toolService?.cleanup();
+        this.clientToolExecutor?.cleanup();
+
+        // Shut down client-side external MCP servers
+        if (this.clientExternalMcpManager) {
+            this.clientExternalMcpManager.cleanup().catch((error: Error) => {
+                this.logger.warn(`Error cleaning up client external MCP servers: ${error.message}`);
+            });
+        }
 
         // Disconnect from the channel service
         this.mxfService?.disconnect();
@@ -1520,11 +1569,17 @@ export class MxfClient {
         }
         const targetChannelId = channelId || this.channelId!;
         // targetChannelId is guaranteed to be valid since this.channelId is validated in constructor
-        
+
+        // Route eligible tools to client-side executor (avoids Socket.IO round-trip)
+        if (this.clientToolExecutor?.canExecuteLocally(toolName)) {
+            return this.clientToolExecutor.executeLocally(toolName, input, targetChannelId);
+        }
+
+        // Server-side execution path (existing behavior)
         if (!this.mcpToolHandlers) {
             throw new Error('MCP tool handlers not initialized');
         }
-        
+
         return this.mcpToolHandlers.callTool(toolName, input, targetChannelId);
     }
     

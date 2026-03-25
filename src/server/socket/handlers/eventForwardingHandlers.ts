@@ -297,15 +297,17 @@ class EventForwardingQueue {
     // Forward event to specific agent
     private forwardToAgent(event: QueuedEvent): void {
         if (!this.socketService) return;
-        
+
         const socket = this.socketService.getSocketByAgentId(event.targetId);
         if (!socket) {
-            // ;
+            // Log when critical events can't be delivered (socket not found)
+            if (event.eventName.includes('tool:result') || event.eventName.includes('tool:error')) {
+                moduleLogger.warn(`[EventQueue] Cannot deliver ${event.eventName} to agent ${event.targetId}: socket not found`);
+            }
             return;
         }
 
         safelyEmitToSocket(socket, event.eventName, event.payload);
-        //// ;
     }
 
     // Forward event to channel
@@ -387,9 +389,10 @@ const getEventPriority = (eventName: string): EventPriority => {
         return EventPriority.CRITICAL;
     }
     
-    // High priority - task management and tool results
-    if (eventName.includes('task:assigned') || eventName.includes('task:completed') || 
-        eventName.includes('mcp:tool:result') || eventName.includes('task:failed')) {
+    // High priority - task management, tool results, and user input (confirmation prompts)
+    if (eventName.includes('task:assigned') || eventName.includes('task:completed') ||
+        eventName.includes('mcp:tool:result') || eventName.includes('task:failed') ||
+        eventName.includes('user_input')) {
         return EventPriority.HIGH;
     }
     
@@ -779,9 +782,12 @@ export const setupEventBusToSocketForwarding = (socketService: ISocketService): 
         ].forEach(eventName => {
             EventBus.server.on(eventName, (payload) => {
                 try {
-                    // Log channel server events for debugging
+                    // Log channel server events and tool result events for debugging
                     if (eventName.includes('channel:server')) {
                         moduleLogger.info(`[MCP-RESPONSE] Forwarding ${eventName} to socket for agent ${payload.agentId}`);
+                    }
+                    if (eventName === Events.Mcp.TOOL_RESULT || eventName === Events.Mcp.TOOL_ERROR) {
+                        moduleLogger.debug(`[MCP-RESULT] Forwarding ${eventName} to agent ${payload.agentId} (callId: ${payload.data?.callId || 'unknown'})`);
                     }
 
                     const validator = createStrictValidator(`EventForwarding:${eventName}`);
@@ -878,6 +884,12 @@ export const setupEventBusToSocketForwarding = (socketService: ISocketService): 
 
                 const manager = UserInputRequestManager.getInstance();
                 manager.submitResponse(responseData.requestId, responseData.value);
+
+                // Forward response to channel so paused agents can resume their work loops
+                const channelId = payload.channelId;
+                if (channelId) {
+                    forwardEventToChannel(socketService, UserInputEvents.RESPONSE, payload, channelId);
+                }
             } catch (error) {
                 moduleLogger.error(`Error processing user_input:response: ${error}`);
             }
@@ -1379,9 +1391,12 @@ export const forwardEventToAgent = (
         // Get the socket for the agent
         const socket = socketService.getSocketByAgentId(agentId);
         
-        // Skip if agent has no socket - don't show a warning as this is a normal case
-        // during disconnect sequences
+        // Skip if agent has no socket — log a warning for critical events (tool results)
+        // since these are required for agent loop progress. Silence for normal disconnect sequences.
         if (!socket) {
+            if (eventName.includes('tool:result') || eventName.includes('tool:error')) {
+                moduleLogger.warn(`[forwardEventToAgent] Cannot deliver ${eventName} to agent ${agentId}: socket not found (queue disabled)`);
+            }
             return;
         }
         

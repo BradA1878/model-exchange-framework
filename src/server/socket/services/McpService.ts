@@ -244,27 +244,34 @@ export class McpService {
         let allTools: SocketMcpTool[] = [];
 
         if (hybridRegistry) {
-            // Get tools from hybrid registry (includes external tools)
-            const hybridTools = hybridRegistry.getAllToolsSnapshot();
-            // ;
+            // When channelId is provided, use getToolsForChannel() to get only
+            // global tools + channel-scoped tools for that specific channel.
+            // This prevents cross-channel tool duplication (e.g., two channels
+            // both registering fetch_weather would cause duplicate function errors
+            // from LLM providers like Gemini).
+            const hybridTools = filter?.channelId
+                ? hybridRegistry.getToolsForChannel(filter.channelId)
+                : hybridRegistry.getAllToolsSnapshot();
 
-            // Convert hybrid tools to socket format
+            // Convert hybrid tools to socket format, preserving scope metadata
             allTools = hybridTools.map((tool: any) => ({
                 name: tool.name,
                 description: tool.description,
                 inputSchema: tool.inputSchema || {},
                 enabled: tool.enabled !== false,
                 providerId: tool.source || 'internal',
-                channelId: 'global', // External tools are globally available
+                channelId: tool.scope === 'channel' ? (tool.scopeId || 'global') : 'global',
                 parameters: tool.inputSchema,
                 metadata: {
                     category: tool.category,
                     source: tool.source,
-                    isExternal: tool.isExternal
+                    isExternal: tool.isExternal,
+                    scope: tool.scope,
+                    scopeId: tool.scopeId
                 }
             }));
         } else {
-            // Fallback to database tools only
+            // Database-only path (hybrid registry not yet available)
             this.logger.warn('Hybrid registry not available, using database tools only');
             allTools = Array.from(this.tools.values());
         }
@@ -274,14 +281,13 @@ export class McpService {
             if (filter.name) {
                 allTools = allTools.filter(tool => tool.name.includes(filter.name!));
             }
-            if (filter.channelId) {
-                // Global-scoped tools (internal or external) are available to all channels
-                // 'global' = hybrid registry tools, 'system' = database tools (fallback)
-                allTools = allTools.filter(tool => 
-                    tool.metadata?.isExternal ||  // External tools are global
-                    tool.channelId === 'global' ||  // Hybrid registry internal tools
-                    tool.channelId === 'system' ||  // Database system tools (fallback path)
-                    tool.channelId === filter.channelId  // Channel-specific tools
+            if (filter.channelId && !hybridRegistry) {
+                // Database-only fallback: filter by channelId when hybrid registry is unavailable.
+                // When hybrid registry IS available, getToolsForChannel() already handles scoping.
+                allTools = allTools.filter(tool =>
+                    tool.channelId === 'global' ||
+                    tool.channelId === 'system' ||
+                    tool.channelId === filter.channelId
                 );
             }
         }
@@ -416,19 +422,21 @@ export class McpService {
         if (hybridRegistry) {
             const hybridTool = hybridRegistry.findTool(name);
             if (hybridTool) {
-                // Convert to socket format
+                // Convert to socket format, preserving scope metadata
                 return {
                     name: hybridTool.name,
                     description: hybridTool.description,
                     inputSchema: hybridTool.inputSchema || {},
                     enabled: hybridTool.enabled !== false,
                     providerId: hybridTool.source || 'internal',
-                    channelId: 'global',
+                    channelId: hybridTool.scope === 'channel' ? (hybridTool.scopeId || 'global') : 'global',
                     parameters: hybridTool.inputSchema,
                     metadata: {
                         category: hybridTool.category,
                         source: hybridTool.source,
-                        isExternal: hybridTool.isExternal
+                        isExternal: hybridTool.isExternal,
+                        scope: hybridTool.scope,
+                        scopeId: hybridTool.scopeId
                     }
                 };
             }

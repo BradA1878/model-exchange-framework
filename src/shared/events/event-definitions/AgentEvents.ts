@@ -92,6 +92,8 @@ export const AgentEvents = {
     LLM_REASONING: 'agent:llm_reasoning', // Agent LLM reasoning tokens for transparency
     LLM_REASONING_PARSED: 'agent:llm_reasoning:parsed', // Reasoning text parsed for tool intentions
     LLM_REASONING_TOOLS_SYNTHESIZED: 'agent:llm_reasoning:tools_synthesized', // Tool calls synthesized from reasoning
+    LLM_USAGE: 'agent:llm_usage', // Agent LLM token usage for cost tracking
+    LLM_STREAM_CHUNK: 'agent:llm_stream_chunk', // Partial streaming token chunk from LLM for live TUI preview
     
     // Task management events
     TASK_ASSIGNED: 'agent:task_assigned', // Agent has been assigned a task
@@ -142,6 +144,8 @@ export interface AgentPayloads {
     'agent:error': { agentId: string, error: string };
     'agent:message': AgentMessageEvent;
     'agent:llm_response': { agentId: string, response: string, timestamp: number };
+    'agent:llm_stream_chunk': { agentId: string, chunk: string, timestamp: number };
+    'agent:llm_usage': { agentId: string, model: string, inputTokens: number, outputTokens: number, totalTokens: number, timestamp: number };
     'agent:llm_reasoning:parsed': { agentId: string, toolIntentions: any[], parseMethod: string, timestamp: number };
     'agent:llm_reasoning:tools_synthesized': { agentId: string, toolCalls: any[], timestamp: number };
     

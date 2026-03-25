@@ -245,8 +245,12 @@ export class ReasoningToolParser {
     }
 
     /**
-     * Parse tool calls by detecting tool name mentions in reasoning
-     * Searches for actual tool names from available tools list
+     * Parse tool calls by detecting tool name mentions in reasoning.
+     * Searches for actual tool names from available tools list.
+     *
+     * Only synthesizes tool calls when arguments can be extracted for tools
+     * that have required parameters — synthesizing empty {} for tools like
+     * code_execute (requires `code`) causes validation failures and retry loops.
      */
     private parseToolNameMentions(
         reasoningText: string,
@@ -255,33 +259,44 @@ export class ReasoningToolParser {
         try {
             const toolIntentions: ToolIntention[] = [];
             const lowerText = reasoningText.toLowerCase();
-            
+
             // Pattern: Look for mentions of "use <tool_name>" or "call <tool_name>"
             const actionPattern = /(?:use|call|execute|invoke)\s+(\w+)/gi;
             const matches = lowerText.matchAll(actionPattern);
-            
+
             // Build set of available tool names (lowercase) for O(1) lookup
             const toolNameMap = new Map(availableTools.map(t => [t.name.toLowerCase(), t]));
-            
+
             // Check each match against available tools
             for (const match of matches) {
                 const mentionedName = match[1].toLowerCase();
-                
+
                 if (toolNameMap.has(mentionedName) && toolIntentions.length < this.config.maxToolsPerParse) {
                     const tool = toolNameMap.get(mentionedName)!;
-                    
+
                     // Don't duplicate
                     if (!toolIntentions.some(t => t.toolName === tool.name)) {
+                        // Try to extract arguments from surrounding reasoning text
+                        const extractedArgs = this.extractArgsFromText(reasoningText, tool);
+                        const requiredParams = tool.input_schema?.required || [];
+
+                        // Skip tools with required params if we couldn't extract any args —
+                        // synthesizing {} will always fail validation and cause retry loops
+                        if (requiredParams.length > 0 && Object.keys(extractedArgs).length === 0) {
+                            this.logger.debug(`⏭️ Skipping heuristic synthesis of ${tool.name}: has ${requiredParams.length} required params but no args extracted`);
+                            continue;
+                        }
+
                         toolIntentions.push({
                             toolName: tool.name,
-                            arguments: {},
+                            arguments: extractedArgs,
                             confidence: 0.75,
                             reasoning: `Tool name mentioned: "${match[0]}"`
                         });
                     }
                 }
             }
-            
+
             // Also check for direct tool name mentions (not after action verbs)
             for (const tool of availableTools) {
                 const toolNamePattern = new RegExp(`\\b${tool.name}\\b`, 'i');
@@ -289,9 +304,18 @@ export class ReasoningToolParser {
                     // Don't duplicate
                     if (!toolIntentions.some(t => t.toolName === tool.name)) {
                         if (toolIntentions.length < this.config.maxToolsPerParse) {
+                            const extractedArgs = this.extractArgsFromText(reasoningText, tool);
+                            const requiredParams = tool.input_schema?.required || [];
+
+                            // Skip tools with required params if we couldn't extract args
+                            if (requiredParams.length > 0 && Object.keys(extractedArgs).length === 0) {
+                                this.logger.debug(`⏭️ Skipping heuristic synthesis of ${tool.name}: has ${requiredParams.length} required params but no args extracted`);
+                                continue;
+                            }
+
                             toolIntentions.push({
                                 toolName: tool.name,
-                                arguments: {},
+                                arguments: extractedArgs,
                                 confidence: 0.65,
                                 reasoning: `Tool name found in reasoning text`
                             });
@@ -299,12 +323,12 @@ export class ReasoningToolParser {
                     }
                 }
             }
-            
+
             // Filter by confidence threshold
             const filteredIntentions = toolIntentions.filter(
                 t => t.confidence >= this.config.confidenceThreshold
             );
-            
+
             if (filteredIntentions.length > 0) {
                 return {
                     toolIntentions: filteredIntentions,
@@ -313,14 +337,14 @@ export class ReasoningToolParser {
                     parseMethod: 'heuristic'
                 };
             }
-            
+
             return {
                 toolIntentions: [],
                 synthesizedToolCalls: [],
                 parseSuccessful: false,
                 parseMethod: 'heuristic'
             };
-            
+
         } catch (error) {
             this.logger.error(`Tool name detection failed: ${error}`);
             return {

@@ -35,7 +35,7 @@ export type McpToolExecutionStatus = 'pending' | 'running' | 'completed' | 'fail
 /**
  * Source type for tool execution
  */
-export type McpToolSource = 'internal' | 'external';
+export type McpToolSource = 'internal' | 'external' | 'client-internal' | 'client-external';
 
 /**
  * MCP Tool Execution interface
@@ -92,7 +92,7 @@ const McpToolExecutionSchema = new Schema<IMcpToolExecution>({
     },
     source: {
         type: String,
-        enum: ['internal', 'external'],
+        enum: ['internal', 'external', 'client-internal', 'client-external'],
         required: true,
         index: true
     },

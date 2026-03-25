@@ -34,8 +34,7 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-// CJS import for chalk (matches StoryLogger.ts pattern)
-const chalk = require('chalk');
+import chalk from 'chalk';
 
 // === DEMO CONFIGURATION ===
 const timestamp = Date.now();

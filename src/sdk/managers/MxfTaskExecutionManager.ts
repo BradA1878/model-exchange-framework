@@ -434,9 +434,8 @@ ${intentGuidance}${planningGuidance}`;
             return `## TOOL DISCOVERY GUIDANCE:
 This task involves mathematical calculations. When using 'tools_recommend' to discover tools:
 
-- Be SPECIFIC about the mathematical operation you need
+- Be specific about the mathematical operation you need
 - Focus on the action (add, multiply, divide) not coordination
-- Example good intents: ${suggestedIntents.map(intent => `"${intent}"`).join(', ')}
 - Avoid vague intents like "coordinate calculation" or "handle math request"`;
         }
         

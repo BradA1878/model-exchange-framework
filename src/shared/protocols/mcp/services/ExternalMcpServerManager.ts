@@ -40,6 +40,7 @@ import {
 } from '../../../schemas/EventPayloadSchema';
 import { AgentId, ChannelId } from '../../../types/ChannelContext';
 import { AutoCorrectionService } from '../../../services/AutoCorrectionService';
+import { IToolEventEmitter } from './IToolEventEmitter';
 
 // Create logger and validator instances
 const logger = new Logger('info', 'ExternalMcpServerManager', 'server');
@@ -138,12 +139,28 @@ export class ExternalMcpServerManager extends EventEmitter {
 
     private autoCorrectionService: AutoCorrectionService;
 
-    constructor() {
+    /** Injectable event emitter — decouples from direct EventBus.server dependency.
+     *  Server-side: uses default ServerToolEventEmitter (wraps EventBus.server).
+     *  Client-side: uses ClientToolEventEmitter (wraps EventBus.client + socketEmit). */
+    private toolEventEmitter: IToolEventEmitter | null = null;
+
+    /**
+     * @param options.toolEventEmitter - Injectable event emitter for decoupling from EventBus.server
+     * @param options.skipServerEventHandlers - Skip setting up EventBus.server listeners (for client-side usage)
+     */
+    constructor(options?: { toolEventEmitter?: IToolEventEmitter; skipServerEventHandlers?: boolean }) {
         super();
         this.autoCorrectionService = AutoCorrectionService.getInstance();
 
+        if (options?.toolEventEmitter) {
+            this.toolEventEmitter = options.toolEventEmitter;
+        }
+
         // Set up event listeners for SDK-initiated server registration
-        this.setupEventHandlers();
+        // Skipped when running client-side (no EventBus.server listeners needed)
+        if (!options?.skipServerEventHandlers) {
+            this.setupEventHandlers();
+        }
     }
 
     /**
@@ -1137,19 +1154,23 @@ export class ExternalMcpServerManager extends EventEmitter {
         const scope = scopeData?.scope || 'global';
         const scopeId = scopeData?.scopeId;
 
-        // Create event payload using EventBus
-        EventBus.server.emit(eventType, createExternalMcpServerEventPayload(
-            eventType,
-            defaultAgentId,
-            defaultChannelId,
-            {
-                serverId: serverId,
-                serverName: config.name,
-                scope: scope,
-                scopeId: scopeId,
-                status: 'running'
-            }
-        ));
+        // Use injectable emitter if available, otherwise direct EventBus.server
+        if (this.toolEventEmitter) {
+            this.toolEventEmitter.emitServerEvent(eventType, serverId, config.name, scope, scopeId, defaultAgentId, defaultChannelId);
+        } else {
+            EventBus.server.emit(eventType, createExternalMcpServerEventPayload(
+                eventType,
+                defaultAgentId,
+                defaultChannelId,
+                {
+                    serverId: serverId,
+                    serverName: config.name,
+                    scope: scope,
+                    scopeId: scopeId,
+                    status: 'running'
+                }
+            ));
+        }
     }
 
     /**
@@ -1162,16 +1183,20 @@ export class ExternalMcpServerManager extends EventEmitter {
         const defaultAgentId = agentId || 'SYSTEM' as AgentId;
         const defaultChannelId = channelId || 'SYSTEM' as ChannelId;
 
-        EventBus.server.emit(McpEvents.EXTERNAL_SERVER_ERROR, createExternalMcpServerErrorEventPayload(
-            McpEvents.EXTERNAL_SERVER_ERROR,
-            defaultAgentId,
-            defaultChannelId,
-            {
-                error,
-                code: 'EXTERNAL_SERVER_ERROR',
-                details: { serverId }
-            }
-        ));
+        if (this.toolEventEmitter) {
+            this.toolEventEmitter.emitServerError(serverId, error, defaultAgentId, defaultChannelId);
+        } else {
+            EventBus.server.emit(McpEvents.EXTERNAL_SERVER_ERROR, createExternalMcpServerErrorEventPayload(
+                McpEvents.EXTERNAL_SERVER_ERROR,
+                defaultAgentId,
+                defaultChannelId,
+                {
+                    error,
+                    code: 'EXTERNAL_SERVER_ERROR',
+                    details: { serverId }
+                }
+            ));
+        }
     }
 
     /**
@@ -1183,17 +1208,21 @@ export class ExternalMcpServerManager extends EventEmitter {
 
         const { config } = serverData;
 
-        EventBus.server.emit(McpEvents.EXTERNAL_SERVER_HEALTH_STATUS, createExternalMcpServerHealthStatusEventPayload(
-            McpEvents.EXTERNAL_SERVER_HEALTH_STATUS,
-            'SYSTEM' as AgentId,
-            'SYSTEM' as ChannelId,
-            {
-                name: config.name,
-                version: config.version,
-                status: healthStatus,
-                description: config.description
-            }
-        ));
+        if (this.toolEventEmitter) {
+            this.toolEventEmitter.emitHealthStatus(serverId, config.name, config.version, healthStatus, config.description);
+        } else {
+            EventBus.server.emit(McpEvents.EXTERNAL_SERVER_HEALTH_STATUS, createExternalMcpServerHealthStatusEventPayload(
+                McpEvents.EXTERNAL_SERVER_HEALTH_STATUS,
+                'SYSTEM' as AgentId,
+                'SYSTEM' as ChannelId,
+                {
+                    name: config.name,
+                    version: config.version,
+                    status: healthStatus,
+                    description: config.description
+                }
+            ));
+        }
     }
 
     /**
@@ -1204,6 +1233,11 @@ export class ExternalMcpServerManager extends EventEmitter {
         if (!serverData) return;
 
         const { config } = serverData;
+
+        if (this.toolEventEmitter) {
+            this.toolEventEmitter.emitToolsDiscovered(serverId, config.name, config.version, tools);
+            return;
+        }
 
         EventBus.server.emit(McpEvents.EXTERNAL_SERVER_TOOLS_DISCOVERED, createExternalMcpServerToolsDiscoveredEventPayload(
             McpEvents.EXTERNAL_SERVER_TOOLS_DISCOVERED,

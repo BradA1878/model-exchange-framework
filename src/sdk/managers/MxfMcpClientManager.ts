@@ -27,7 +27,7 @@
  */
 
 import { Logger } from '../../shared/utils/Logger';
-import { IMcpClient, McpMessage, McpTool, McpApiResponse } from '../../shared/protocols/mcp/IMcpClient';
+import { IMcpClient, McpMessage, McpTool, McpApiResponse, McpStreamChunk } from '../../shared/protocols/mcp/IMcpClient';
 import { AgentContext } from '../../shared/interfaces/AgentContext';
 import { LlmProviderType } from '../../shared/protocols/mcp/LlmProviders';
 import { LlmProviderFactory } from '../../shared/protocols/mcp/LlmProviderFactory';
@@ -194,6 +194,78 @@ export class MxfMcpClientManager {
             return response;
         } catch (error) {
             this.logger.error(`❌ Error sending context-based message: ${error instanceof Error ? error.message : String(error)}`);
+            throw error;
+        }
+    }
+
+    /**
+     * Send message using full agent context with streaming support.
+     * Subscribes to the Observable and forwards partial chunks via the onChunk callback.
+     * Returns the final accumulated McpApiResponse when the stream completes.
+     *
+     * @param context - Complete agent context from SDK
+     * @param options - Additional options (stream: true is set automatically)
+     * @param onChunk - Callback invoked for each streaming token chunk
+     * @returns Promise with the final API response
+     */
+    public async sendWithContextStreaming(
+        context: AgentContext,
+        options: Record<string, any>,
+        onChunk: (chunk: McpStreamChunk) => void
+    ): Promise<McpApiResponse> {
+        await this.ensureInitialized();
+
+        if (!this.mcpClient) {
+            throw new Error('MCP client not available');
+        }
+
+        if (!this.mcpClient.sendWithContext) {
+            throw new Error('MCP client does not support context-based sending');
+        }
+
+        try {
+            // Set stream: true in options so the MCP client returns a streaming Observable
+            const streamOptions = { ...options, stream: true };
+            let finalResponse: McpApiResponse | null = null;
+            let chunkCount = 0;
+
+            this.logger.debug('📡 MxfMcpClientManager: Starting streaming request');
+
+            // Subscribe to the Observable manually — chunks arrive first, final response last
+            await new Promise<void>((resolve, reject) => {
+                this.mcpClient!.sendWithContext!(context, streamOptions).subscribe({
+                    next: (emission: any) => {
+                        if (emission && 'streaming' in emission && emission.streaming === true) {
+                            // This is a McpStreamChunk — forward to callback
+                            chunkCount++;
+                            if (chunkCount <= 3) {
+                                this.logger.debug(`📡 Stream chunk #${chunkCount}: content=${!!emission.content}, reasoning=${!!emission.reasoning}`);
+                            }
+                            onChunk(emission as McpStreamChunk);
+                        } else {
+                            // This is the final McpApiResponse
+                            this.logger.debug(`📡 Final response received after ${chunkCount} chunks`);
+                            finalResponse = emission as McpApiResponse;
+                        }
+                    },
+                    error: (err) => {
+                        this.logger.debug(`📡 Stream error: ${err?.message}`);
+                        reject(err);
+                    },
+                    complete: () => {
+                        this.logger.debug(`📡 Stream complete. Total chunks: ${chunkCount}`);
+                        resolve();
+                    },
+                });
+            });
+
+            if (!finalResponse) {
+                throw new Error('Streaming completed without a final response');
+            }
+
+            return finalResponse;
+        } catch (error) {
+            this.logger.error(`Error in streaming context-based message: ${error instanceof Error ? error.message : String(error)}`);
             throw error;
         }
     }

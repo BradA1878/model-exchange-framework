@@ -37,6 +37,7 @@ import { Channel } from '../../../shared/models/channel';
 import { McpService } from './McpService';
 // Import shared config events (NOT from SDK - that's client-side only)
 import { ConfigEvents, ChannelSystemLlmChangeEvent } from '../../../shared/events/event-definitions/ConfigEvents';
+import { ConfigManager } from '../../../sdk/config/ConfigManager';
 
 /**
  * ChannelService manages channel lifecycle and interactions.
@@ -440,7 +441,15 @@ export class ChannelService extends EventEmitter {
                 const channelDoc = existingChannel as any;
                 const systemLlmEnabled = channelDoc.systemLlmEnabled !== false; // Default to true
                 this.logger.debug(`[LOAD_CHANNEL] Channel ${channelId} systemLlmEnabled=${systemLlmEnabled}`);
-                
+
+                // Sync DB-persisted systemLlmEnabled to ConfigManager in-memory state.
+                // Handles named sessions reconnecting to existing channels.
+                ConfigManager.getInstance().setChannelSystemLlmEnabled(
+                    systemLlmEnabled,
+                    channelId,
+                    systemLlmEnabled ? undefined : 'Channel loaded from DB with systemLlmEnabled=false'
+                );
+
                 // Cache channel allowedTools in McpService for synchronous tool filtering
                 // Note: setChannelAllowedTools is async but we don't await since DB already has the value
                 if (channelDoc.allowedTools && channelDoc.allowedTools.length > 0) {
@@ -507,7 +516,15 @@ export class ChannelService extends EventEmitter {
                         if (!this.channelParticipants.has(channelId)) {
                             this.channelParticipants.set(channelId, new Set(existingChannel.participants));
                         }
-                        
+
+                        // Sync systemLlmEnabled from existing DB document to ConfigManager
+                        const existingSystemLlmEnabled = (existingChannel as any).systemLlmEnabled !== false;
+                        ConfigManager.getInstance().setChannelSystemLlmEnabled(
+                            existingSystemLlmEnabled,
+                            channelId,
+                            existingSystemLlmEnabled ? undefined : 'Channel loaded from DB (dup key recovery) with systemLlmEnabled=false'
+                        );
+
                         return channelObj;
                     }
                 } catch (loadError) {
@@ -539,6 +556,14 @@ export class ChannelService extends EventEmitter {
         // Log systemLlmEnabled setting (stored in MongoDB channel document)
         const systemLlmEnabled = metadata?.systemLlmEnabled !== false; // Default to true
         this.logger.info(`[CREATE_CHANNEL] Channel ${channelId} systemLlmEnabled=${systemLlmEnabled}`);
+
+        // Sync systemLlmEnabled to ConfigManager in-memory state so SystemLlmService guards work.
+        // Without this, ConfigManager.isChannelSystemLlmEnabled() falls through to global default (true).
+        ConfigManager.getInstance().setChannelSystemLlmEnabled(
+            systemLlmEnabled,
+            channelId,
+            systemLlmEnabled ? undefined : 'Channel created with systemLlmEnabled=false'
+        );
 
         this.notifyChannelEvent(Events.Channel.CREATED as EventName, {
             action: 'created', 
@@ -789,6 +814,14 @@ export class ChannelService extends EventEmitter {
                         }
                     };
                     this.channels.set(channelId, channel);
+
+                    // Sync systemLlmEnabled from DB to ConfigManager when loading channel in addParticipant
+                    const participantSystemLlmEnabled = (channelDoc as any).systemLlmEnabled !== false;
+                    ConfigManager.getInstance().setChannelSystemLlmEnabled(
+                        participantSystemLlmEnabled,
+                        channelId,
+                        participantSystemLlmEnabled ? undefined : 'Channel loaded in addParticipant with systemLlmEnabled=false'
+                    );
                 } else {
                     this.logger.error(`Channel ${channelId} does not exist in database.`);
                     return false;

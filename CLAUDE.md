@@ -13,8 +13,8 @@
 - **Do not add smoke and mirrors to the codebase.**
 - **Add validation for fail-fast behavior in the framework and SDK.**
 - **When refactoring please take a clean break approach.**
-- **Do not add unit tests to the codebase unless asked.**
 - **NEVER run the MXF server in a background process.** The server has SystemLLM enabled which uses Claude Opus 4.5 credits - leaving it running burns through OpenRouter budget ($18+ per day). Always let the user start/stop the server in their own terminal.
+- **No dynamic imports for singletons.** Always use static `import` statements for singleton modules. Dynamic `import()` breaks the SDK's singleton patterns and module resolution.
 
 ## Event System Rules
 
@@ -51,6 +51,33 @@ bun run build            # Build
 bun run clean            # Clean artifacts
 bun run rebuild          # Full rebuild
 ```
+
+### MXF CLI
+
+The unified CLI for infrastructure, configuration, task execution, and lifecycle management. Config lives at `~/.mxf/config.json`.
+
+```bash
+bun run mxf                           # Launch interactive TUI session
+bun run mxf install                   # First-time setup: Docker infra, credentials, .env bridge
+bun run mxf install --complete-setup  # Phase B: create user + PAT (requires running server)
+bun run mxf init                      # Configure LLM provider, API key, default model
+bun run mxf run "task"                # One-shot task execution with Planner agent
+bun run mxf run "task" --context path # Include file/directory as context
+bun run mxf run "task" --format json  # Output as JSON (also: text, md)
+bun run mxf run "task" --model <id>   # Override default model
+bun run mxf run "task" --timeout 600  # Set timeout in seconds (default: 300)
+bun run mxf status                    # Show infrastructure, server, and config health
+bun run mxf start                     # Start Docker containers (MongoDB, Meilisearch, Redis)
+bun run mxf stop                      # Stop Docker containers
+bun run mxf config list               # View all config values (secrets masked)
+bun run mxf config get <path>         # Get a specific value (e.g., server.port)
+bun run mxf config set <path> <val>   # Set a value and update .env bridge
+bun run mxf config path               # Show config file path
+```
+
+**Interactive TUI (`bun run mxf`):** Persistent session with Ink-based terminal UI. Supports slash commands (`/help`, `/agents`, `/clear`, `/config`, `/context`, `/model`, `/cost`, `/stop`, `/exit`), shell pass-through (`!command`), and natural language task input. Source: `src/cli/tui/`
+
+CLI source: `src/cli/`
 
 **Runtime:** Bun for package management and server execution. Jest for testing. Dashboard (`dashboard/`) uses npm separately.
 

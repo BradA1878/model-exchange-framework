@@ -45,8 +45,6 @@ const logger = new Logger('info', 'EventBus', 'server');
  * This implementation uses rxjs for event handling and integrates directly with socket.io
  */
 export class EventBusImplementation {
-    private static instance: EventBusImplementation;
-    
     private eventSubject: Subject<EventMessage>;
     private clientEventBus: IClientEventBus | null = null;
     private serverEventBus: IServerEventBus | null = null;

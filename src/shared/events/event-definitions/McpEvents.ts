@@ -68,6 +68,12 @@ export const McpEvents = {
     TOOL_RESULT: 'mcp:tool:result',
     TOOL_ERROR: 'mcp:tool:error',
     TOOL_EXECUTION: 'mcp:tool:execution',
+
+    // Client-side tool execution events (observability and history recording)
+    TOOL_CALL_LOCAL: 'mcp:tool:call:local',
+    TOOL_RESULT_LOCAL: 'mcp:tool:result:local',
+    TOOL_ERROR_LOCAL: 'mcp:tool:error:local',
+    TOOL_CALL_COMPLETED_LOCAL: 'mcp:tool:call:completed:local',
     
     // Tool validation events
     TOOL_VALIDATION_STARTED: 'mcp:tool:validation:started',
@@ -202,6 +208,12 @@ export interface McpPayloads {
     'mcp:tool:result': { requestId: string, result: any, metadata?: Record<string, any> };
     'mcp:tool:error': { requestId: string, error: string, code?: string, details?: Record<string, any> };
     'mcp:tool:execution': { requestId: string, result: any, metadata?: Record<string, any> };
+
+    // Client-side tool execution events
+    'mcp:tool:call:local': { callId: string, toolName: string, arguments: any, agentId?: string, channelId?: string };
+    'mcp:tool:result:local': { callId: string, toolName: string, result: any, durationMs: number };
+    'mcp:tool:error:local': { callId: string, toolName: string, error: string };
+    'mcp:tool:call:completed:local': { callId: string, toolName: string, input: any, result: any, durationMs: number, source: 'internal' | 'external-mcp', executedOn: 'client', agentId?: string, channelId?: string };
     
     // Tool validation events
     'mcp:tool:validation:started': { requestId: string, toolName: string, input: Record<string, any>, validationType: string };

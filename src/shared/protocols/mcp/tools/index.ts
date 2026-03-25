@@ -63,6 +63,7 @@ import { dagTools } from './DagTools';
 import { knowledgeGraphTools } from './KnowledgeGraphTools';
 import { predictiveTools } from './PredictiveTools';
 import { userInputTools } from './UserInputTools';
+import { wolframTools } from './WolframTools';
 
 /**
  * All available MXF MCP tools organized by category
@@ -147,7 +148,10 @@ export const mxfMcpTools = {
     predictive: predictiveTools,
 
     // User input tools for prompting users during agent execution
-    userInput: userInputTools
+    userInput: userInputTools,
+
+    // Wolfram Alpha — symbolic math, numerical computation, curated econ/geo data
+    wolfram: wolframTools
 };
 
 /**
@@ -183,7 +187,8 @@ export const allMxfMcpTools = [
     ...dagTools,
     ...knowledgeGraphTools,
     ...predictiveTools,
-    ...userInputTools
+    ...userInputTools,
+    ...wolframTools
 ];
 
 /**
@@ -225,6 +230,7 @@ export const getMxfMcpToolNames = () => {
         analytics: analyticsTools.map(tool => tool.name),
         dateTime: dateTimeTools.map(tool => tool.name),
         predictive: predictiveTools.map(tool => tool.name),
+        wolfram: wolframTools.map(tool => tool.name),
         all: allMxfMcpTools.map(tool => tool.name)
     };
 };
@@ -327,7 +333,7 @@ export const mxfMcpToolMetadata = {
 };
 
 // Re-export individual tool arrays for selective imports
-export { agentCommunicationTools, coordinationTools, controlLoopTools, infrastructureTools, contextMemoryTools, MemorySearchTools, actionValidationTools, metaTools, webTools, gitTools, typescriptTools, taskBridgeTools, testTools, codeAnalysisTools, safetyTools, planningTools, effectivenessTools, taskPlanningTools, analyticsTools, dateTimeTools, inferenceParameterTools, MemoryUtilityTools, dagTools, knowledgeGraphTools, predictiveTools, userInputTools };
+export { agentCommunicationTools, coordinationTools, controlLoopTools, infrastructureTools, contextMemoryTools, MemorySearchTools, actionValidationTools, metaTools, webTools, gitTools, typescriptTools, taskBridgeTools, testTools, codeAnalysisTools, safetyTools, planningTools, effectivenessTools, taskPlanningTools, analyticsTools, dateTimeTools, inferenceParameterTools, MemoryUtilityTools, dagTools, knowledgeGraphTools, predictiveTools, userInputTools, wolframTools };
 
 // Re-export individual tools for direct imports
 export {
@@ -516,3 +522,9 @@ export {
     requestUserInputTool,
     getUserInputResponseTool
 } from './UserInputTools';
+
+export {
+    // Wolfram Alpha Tools
+    wolframComputeTool,
+    wolframFullTool
+} from './WolframTools';

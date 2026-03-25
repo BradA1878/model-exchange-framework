@@ -128,6 +128,25 @@ export interface McpApiResponse {
 }
 
 /**
+ * Partial streaming chunk emitted during SSE streaming responses.
+ * Discriminated from McpApiResponse by the `streaming` field.
+ */
+export interface McpStreamChunk {
+    /** Always true — discriminator for stream chunks vs. final response */
+    streaming: true;
+    /** Partial text content from this chunk */
+    content?: string;
+    /** Partial reasoning content from this chunk */
+    reasoning?: string;
+}
+
+/**
+ * Union type emitted by streaming Observables: N chunk emissions + 1 final McpApiResponse.
+ * Use `'streaming' in emission` to discriminate between chunks and the final response.
+ */
+export type McpStreamEmission = McpStreamChunk | McpApiResponse;
+
+/**
  * MCP Tool Definition
  */
 export interface McpTool {

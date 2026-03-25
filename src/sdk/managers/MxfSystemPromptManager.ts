@@ -272,54 +272,34 @@ export class MxfSystemPromptManager {
 
 ## IMPORTANT: Task Completion & Tool Execution
 
-**CRITICAL: Tool Execution Sequencing Protocol:**
-- **WAIT for tool result confirmation** before calling additional tools
-- **Only call ONE tool at a time** unless explicitly required
-- **Check tool execution feedback** (✅ success or ❌ error) before proceeding
-- **Avoid redundant tool calls** - if a tool succeeded, don't repeat it
+**Tool Execution Sequencing:**
+- Wait for tool result confirmation before calling additional tools
+- Call one tool at a time unless explicitly required
+- Check tool execution feedback before proceeding
+- Never repeat a tool call that already succeeded
 
 **Tool Execution Flow:**
 1. Call a single tool with proper parameters
-2. **WAIT** for system response: "✅ tool_name completed successfully" or error
+2. Wait for system response confirming success or error
 3. Analyze the result and determine next action
 4. Only then call additional tools if needed
 
-**CONSISTENCY REQUIREMENTS:**
-- **Be consistent in decision-making** - don't hesitate or change approach mid-task
-- **Look for clear completion criteria** before calling task_complete
-- **Make decisive action choices** - avoid redundant discovery calls after finding agents
-- **Don't loop on the same actions** - if messaging_discover found agents, proceed to messaging_send
-- **Complete tasks promptly** when criteria are met - don't delay or second-guess
+**Consistency Requirements:**
+- Be consistent in decision-making — do not hesitate or change approach mid-task
+- Look for clear completion criteria before calling task_complete
+- Make decisive action choices — avoid redundant discovery calls after finding agents
+- Do not loop on the same actions — proceed to the next logical step
+- Complete tasks promptly when criteria are met
 
 **Task Completion Decision Logic:**
-When you have finished your assigned task:
-1. **Check completion criteria**: Has the main objective been achieved?
-   - For messaging tasks: Has the greeting been sent AND reply received?
-   - For discovery tasks: Have the required agents been found?
-   - For coordination tasks: Has the coordination been established?
+1. Check whether the main objective has been achieved
+2. If criteria are met, call task_complete immediately with a clear summary
+3. Be decisive — when your role in the task is finished, signal completion promptly
 
-2. **If criteria are met, call task_complete IMMEDIATELY**:
-   - Don't call additional discovery tools after successful completion
-   - Don't hesitate or seek more information unnecessarily
-   - Call task_complete with a clear, concise summary
-
-3. **Be decisive**: When your role in the task is finished, signal completion promptly
-
-Example task completion:
-\`\`\`json
-{
-  "name": "task_complete", 
-  "arguments": {
-    "summary": "Successfully completed collaborative messaging task. Greeting sent and reply received.",
-    "success": true
-  }
-}
-\`\`\`
-
-**AVOID THESE COMMON MISTAKES:**
-- ❌ Calling messaging_discover repeatedly after finding agents
-- ❌ Hesitating to call task_complete when objectives are clearly met
-- ❌ Getting stuck in analysis loops instead of taking decisive action`;
+**Delegation Completion (orchestrator agents):**
+- If you delegated subtasks to other agents, your task is NOT complete until those subtasks finish
+- Use task_monitoring_status to verify subtask completion before calling task_complete
+- Delegation is the start of your work, not the end`;
     }
 
     /**

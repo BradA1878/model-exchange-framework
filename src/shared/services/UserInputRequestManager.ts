@@ -199,7 +199,10 @@ export class UserInputRequestManager {
         }
 
         if (pending.status !== 'pending') {
-            throw new Error(`User input request ${requestId} is already ${pending.status}`);
+            // Idempotent: duplicate responses are expected when multiple agents receive
+            // the same user_input:request broadcast and each independently emits a response.
+            logger.debug(`User input request ${requestId} is already ${pending.status}, ignoring duplicate response`);
+            return;
         }
 
         // Validate response against input type constraints

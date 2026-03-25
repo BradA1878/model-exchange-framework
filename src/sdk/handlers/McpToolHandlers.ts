@@ -247,12 +247,17 @@ export class McpToolHandlers extends McpHandler {
                     }
                 });
                 
-                // Set up timeout handler (30 seconds for tool calls)
+                // Interactive tools (user_input, request_user_input) block on human
+                // response and can take minutes. Use a 10-minute timeout for these;
+                // standard tools get the default 30-second timeout.
+                const INTERACTIVE_TOOLS = ['user_input', 'request_user_input'];
+                const timeoutMs = INTERACTIVE_TOOLS.includes(name) ? 600_000 : 30_000;
+
                 timeoutId = setTimeout(() => {
                     cleanup();
-                    this.logger.warn(`Tool call timeout for ${name} (${requestId}) after 30 seconds`);
-                    reject(new Error(`Tool call timeout: ${name} did not respond within 30 seconds`));
-                }, 30000);
+                    this.logger.warn(`Tool call timeout for ${name} (${requestId}) after ${timeoutMs / 1000} seconds`);
+                    reject(new Error(`Tool call timeout: ${name} did not respond within ${timeoutMs / 1000} seconds`));
+                }, timeoutMs);
                 
                 // Send tool call request using proper MCP payload helper
                 const mcpDataForCall: McpToolEventData & { callId: string; arguments: any } = {

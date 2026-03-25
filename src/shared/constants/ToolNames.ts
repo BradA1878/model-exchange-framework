@@ -172,6 +172,14 @@ export const USER_INPUT_TOOLS = {
 } as const;
 
 /**
+ * Wolfram Tools - Symbolic math, numerical computation, and curated data via Wolfram Alpha
+ */
+export const WOLFRAM_TOOLS = {
+    WOLFRAM_COMPUTE: 'wolfram_compute',
+    WOLFRAM_FULL: 'wolfram_full'
+} as const;
+
+/**
  * Web Tools - Web search, navigation, and content extraction
  */
 export const WEB_TOOLS = {
@@ -281,6 +289,7 @@ export const FETCH_SERVER_TOOLS = {
  * All Internal MXF Tools
  */
 export const ALL_INTERNAL_TOOLS = {
+    ...WOLFRAM_TOOLS,
     ...COMMUNICATION_TOOLS,
     ...COORDINATION_TOOLS,
     ...CONTROL_LOOP_TOOLS,

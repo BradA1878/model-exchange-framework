@@ -62,16 +62,17 @@ import { AgentContext } from '../shared/interfaces/AgentContext';
 import { IntentFormulationHelper } from './helpers/IntentFormulationHelper';
 
 // Import types
-import { 
-    IMcpClient, 
-    McpMessage, 
-    McpRole, 
+import {
+    IMcpClient,
+    McpMessage,
+    McpRole,
     McpContentType,
     McpToolUseContent,
     McpToolResultContent,
     McpTextContent,
-    McpTool, 
-    McpApiResponse 
+    McpTool,
+    McpApiResponse,
+    McpStreamChunk
 } from '../shared/protocols/mcp/IMcpClient';
 import { McpToolDefinition } from '../shared/protocols/mcp/McpServerTypes';
 
@@ -84,18 +85,23 @@ import {
 } from '../shared/types/ControlLoopTypes';
 import { EventBus } from '../shared/events/EventBus';
 import { Events, ControlLoopEvents, AgentEvents } from '../shared/events/EventNames';
-import { 
-    BaseEventPayload, 
-    ControlLoopEventPayload, 
-    ControlLoopSpecificData, 
-    createBaseEventPayload, 
-    createControlLoopEventPayload, 
-    createLlmReasoningEventPayload, 
+import {
+    BaseEventPayload,
+    ControlLoopEventPayload,
+    ControlLoopSpecificData,
+    createBaseEventPayload,
+    createControlLoopEventPayload,
+    createLlmReasoningEventPayload,
     createLlmReasoningToolsSynthesizedEventPayload,
+    createLlmUsageEventPayload,
+    createLlmStreamChunkEventPayload,
     LlmReasoningEventData,
-    LlmReasoningToolsSynthesizedEventData
+    LlmReasoningToolsSynthesizedEventData,
+    LlmStreamChunkEventData
 } from '../shared/schemas/EventPayloadSchema';
 import { reflectionService } from '../shared/services/ReflectionService';
+import { Subscription } from 'rxjs';
+import { UserInputEvents } from '../shared/events/event-definitions/UserInputEvents';
 
 // Define a minimal ControlLoopStateEnum if needed
 export enum ControlLoopStateEnum {
@@ -133,7 +139,14 @@ export class MxfAgent extends MxfClient {
     private taskCompleted: boolean = false; // Prevent further LLM calls after task completion
     private isGenerating: boolean = false; // Concurrency guard — prevents concurrent generateResponse calls
     private taskAssignedHandler: ((data: any) => void) | null = null; // Store handler for cleanup
-    
+
+    // User input pause gate — blocks the work loop when another agent has a pending user_input request.
+    // The requesting agent's own loop is already blocked inside tool execution.
+    private userInputPausePromise: Promise<void> | null = null;
+    private userInputPauseResolve: (() => void) | null = null;
+    private activeUserInputRequestIds: Set<string> = new Set();
+    private userInputPauseSubscriptions: Subscription[] = [];
+
     // Circuit breaker pattern for detecting stuck behavior
     private recentToolCalls: Array<{toolName: string, timestamp: number, iteration: number, paramsHash: string}> = [];
     private stuckLoopDetections: number = 0;
@@ -318,7 +331,10 @@ export class MxfAgent extends MxfClient {
         
         // Initialize event handlers
         this.eventHandlerService.initializeEventHandlers();
-        
+
+        // Set up user input pause gate so this agent pauses when another agent requests user input
+        this.setupUserInputPauseGate();
+
         // Listen for LLM_REASONING events to store reasoning in memory
         EventBus.client.on(AgentEvents.LLM_REASONING, (payload) => {
             if (payload.agentId === this.agentId) {
@@ -433,6 +449,64 @@ export class MxfAgent extends MxfClient {
     }
 
     /**
+     * Set up subscriptions that pause this agent's work loop when another agent
+     * in the same channel requests user input, and resume when the request is
+     * resolved (responded, cancelled, or timed out).
+     */
+    private setupUserInputPauseGate(): void {
+        // Pause when a user_input request arrives from a different agent in the same channel
+        const requestSub = EventBus.client.on(UserInputEvents.REQUEST, (payload: any) => {
+            const data = payload.data || payload;
+            const requestAgentId = data.agentId || payload.agentId;
+            const requestChannelId = data.channelId || payload.channelId;
+            const requestId = data.requestId;
+
+            // Only pause for requests from OTHER agents on the SAME channel
+            if (!requestId || requestAgentId === this.agentId || requestChannelId !== this.channelId) {
+                return;
+            }
+
+            this.activeUserInputRequestIds.add(requestId);
+            this.modelLogger.debug(`[UserInputPause] Pausing for user input request ${requestId} from agent ${requestAgentId}`);
+
+            // Create a new pause promise if one isn't already active
+            if (!this.userInputPausePromise) {
+                this.userInputPausePromise = new Promise<void>((resolve) => {
+                    this.userInputPauseResolve = resolve;
+                });
+            }
+        });
+
+        // Resume handler — shared for response, cancelled, and timeout events
+        const createResumeSub = (eventName: string) => {
+            return EventBus.client.on(eventName, (payload: any) => {
+                const data = payload.data || payload;
+                const requestId = data.requestId;
+
+                if (!requestId || !this.activeUserInputRequestIds.has(requestId)) {
+                    return;
+                }
+
+                this.activeUserInputRequestIds.delete(requestId);
+                this.modelLogger.debug(`[UserInputPause] User input request ${requestId} resolved (${eventName}), ${this.activeUserInputRequestIds.size} remaining`);
+
+                // Only resolve the pause promise when ALL pending requests are cleared
+                if (this.activeUserInputRequestIds.size === 0 && this.userInputPauseResolve) {
+                    this.userInputPauseResolve();
+                    this.userInputPausePromise = null;
+                    this.userInputPauseResolve = null;
+                }
+            });
+        };
+
+        const responseSub = createResumeSub(UserInputEvents.RESPONSE);
+        const cancelledSub = createResumeSub(UserInputEvents.CANCELLED);
+        const timeoutSub = createResumeSub(UserInputEvents.TIMEOUT);
+
+        this.userInputPauseSubscriptions.push(requestSub, responseSub, cancelledSub, timeoutSub);
+    }
+
+    /**
      * Generate response using the MCP client with tool execution
      */
     private async generateResponse(userMessage?: string, tools?: any[], taskPrompt?: string): Promise<string> {
@@ -483,6 +557,18 @@ export class MxfAgent extends MxfClient {
             if (!this.currentTask) {
                 this.modelLogger.debug('🛑 Task canceled externally - stopping LLM loop');
                 break;
+            }
+
+            // Pause the work loop if another agent is waiting for user input
+            if (this.userInputPausePromise) {
+                this.modelLogger.debug('[UserInputPause] Work loop paused — waiting for user input');
+                await this.userInputPausePromise;
+                this.modelLogger.debug('[UserInputPause] Work loop resumed');
+                // Re-check task cancellation after waking up from pause
+                if (!this.currentTask) {
+                    this.modelLogger.debug('Task canceled while paused for user input');
+                    break;
+                }
             }
 
             // CRITICAL FIX: When phase-gated (allowedTools set), get FRESH tools from server each iteration
@@ -567,14 +653,46 @@ export class MxfAgent extends MxfClient {
                 currentOrparPhase
             );
 
-            // Send using context-based approach
+            // Send using context-based approach — use streaming when available for live TUI feedback
             const mcpOptions: Record<string, any> = {};
             if (this.modelConfig.reasoning?.enabled) {
                 mcpOptions.reasoning = this.modelConfig.reasoning;
             }
-            
-            // Send with context to MCP client
-            const response = await this.mcpClientManager.sendWithContext(agentContext, mcpOptions);
+
+            // Stream chunk handler: emit LLM_STREAM_CHUNK events for live TUI preview
+            const onStreamChunk = (chunk: McpStreamChunk) => {
+                const chunkText = chunk.content || chunk.reasoning || '';
+                if (!chunkText) return;
+                const chunkData: LlmStreamChunkEventData = {
+                    chunk: chunkText,
+                    timestamp: Date.now(),
+                };
+                const chunkPayload = createLlmStreamChunkEventPayload(
+                    AgentEvents.LLM_STREAM_CHUNK,
+                    this.agentId,
+                    this.config.channelId,
+                    chunkData
+                );
+                EventBus.client.emitOn(this.agentId, AgentEvents.LLM_STREAM_CHUNK, chunkPayload);
+            };
+
+            // Use streaming when the client manager supports it (sends stream:true to OpenRouter)
+            let response: McpApiResponse;
+            try {
+                this.modelLogger.debug('📡 Attempting streaming request...');
+                response = await this.mcpClientManager.sendWithContextStreaming(agentContext, mcpOptions, onStreamChunk);
+                this.modelLogger.debug('📡 Streaming request completed successfully');
+            } catch (streamError: any) {
+                // If streaming fails (unsupported model/provider), fall back to non-streaming
+                this.modelLogger.debug(`📡 Streaming failed: ${streamError?.message}`);
+                if (streamError?.message?.includes('Streaming completed without') ||
+                    streamError?.message?.includes('No response body')) {
+                    this.modelLogger.debug('📡 Falling back to non-streaming');
+                    response = await this.mcpClientManager.sendWithContext(agentContext, mcpOptions);
+                } else {
+                    throw streamError;
+                }
+            }
             
             // Handle reasoning tokens if enabled and available  
             const responseWithReasoning = response as any; // Type assertion for reasoning property
@@ -666,6 +784,23 @@ export class MxfAgent extends MxfClient {
 
             // Emit LLM response event for external monitoring
             EventBus.client.emitOn(this.agentId,AgentEvents.LLM_RESPONSE, payload);
+
+            // Emit LLM usage event for token cost tracking
+            if (response.usage) {
+                const usagePayload = createLlmUsageEventPayload(
+                    AgentEvents.LLM_USAGE,
+                    this.agentId,
+                    this.config.channelId,
+                    {
+                        model: response.model,
+                        inputTokens: response.usage.input_tokens,
+                        outputTokens: response.usage.output_tokens,
+                        totalTokens: response.usage.total_tokens,
+                        timestamp: Date.now(),
+                    }
+                );
+                EventBus.client.emitOn(this.agentId, AgentEvents.LLM_USAGE, usagePayload);
+            }
 
             // Handle tool calls first to include them in conversation message
             let toolCalls = response.content.filter((content: any) => content.type === McpContentType.TOOL_USE);
@@ -928,6 +1063,22 @@ export class MxfAgent extends MxfClient {
         const finalMessages = this.memoryManager.getConversationHistory();
         const lastAssistantMessage = [...finalMessages].reverse().find(msg => msg.role === 'assistant');
         return lastAssistantMessage?.content || 'Task completed successfully.';
+        } catch (error) {
+            // Log the error so it's visible when client logging is enabled
+            const errorMsg = error instanceof Error ? error.message : String(error);
+            this.modelLogger.error(`generateResponse failed: ${errorMsg}`);
+
+            // Emit error event so channel monitors and agent.on() listeners can observe the failure.
+            // Without this, errors were silently swallowed because client logging is disabled by default
+            // and TaskHandlers' catch block only logs via Logger (also disabled on client by default).
+            const errorPayload = createBaseEventPayload(
+                AgentEvents.ERROR, this.agentId, this.config.channelId,
+                { message: `generateResponse failed: ${errorMsg}`, phase: 'llm_execution' }
+            );
+            EventBus.client.emitOn(this.agentId, AgentEvents.ERROR, errorPayload);
+
+            // Re-throw so existing error handling (TaskHandlers, MxfTaskExecutionManager) still works
+            throw error;
         } finally {
             this.isGenerating = false;
         }
@@ -1000,6 +1151,32 @@ This iteration has been skipped. Choose a different action or complete the task.
                 };
                 allToolResults.push(errorResult);
                 continue; // Skip to next tool call
+            }
+
+            // Guard: catch tool calls with missing required parameters before sending to server.
+            // The LLM sometimes emits tool_use blocks with empty {} input (especially with
+            // reasoning models). Intercepting here avoids a wasted round-trip and gives the
+            // model a clear self-correction message instead of a verbose schema validation dump.
+            const toolDef = availableTools.find((t: any) => t.name === toolCall.name);
+            const requiredParams: string[] = toolDef?.input_schema?.required || toolDef?.inputSchema?.required || [];
+            const inputKeys = Object.keys(toolCall.input || {});
+            const missingRequired = requiredParams.filter(p => !inputKeys.includes(p));
+
+            if (missingRequired.length > 0 && inputKeys.length === 0) {
+                this.modelLogger.warn(
+                    `⚠️ Blocked ${toolCall.name}: empty input but requires [${missingRequired.join(', ')}]`
+                );
+
+                const errorResult: McpToolResultContent = {
+                    type: McpContentType.TOOL_RESULT,
+                    tool_use_id: toolCall.id,
+                    content: {
+                        type: McpContentType.TEXT,
+                        text: `ERROR: Tool "${toolCall.name}" requires parameters: ${missingRequired.join(', ')}. You sent empty {}. Provide the required parameters or use a different tool.`
+                    } as McpTextContent
+                };
+                allToolResults.push(errorResult);
+                continue;
             }
 
             // SOLUTION 1: Identify messaging tools that should skip feedback
@@ -1407,19 +1584,12 @@ This iteration has been skipped. Choose a different action or complete the task.
             } else {
                 this.logger.error(`Tool execution failed for ${toolName}: ${error}`);
             }
-            
-            // Add error to conversation history 
-            this.memoryManager.addConversationMessage({
-                role: 'assistant',
-                content: `Tool execution failed: ${toolName}`,
-                metadata: {
-                    toolName,
-                    input,
-                    error: error instanceof Error ? error.message : String(error),
-                    timestamp: Date.now()
-                }
-            });
-            
+
+            // Do NOT add an assistant message here — the caller (handleToolExecutionWithHelpers)
+            // already adds a proper tool_result error entry. Adding an assistant message here
+            // creates consecutive assistant messages that corrupt the conversation structure
+            // and cause LLM API calls to fail silently.
+
             throw error;
         }
     }
@@ -2452,7 +2622,19 @@ This iteration has been skipped. Choose a different action or complete the task.
             EventBus.client.off(AgentEvents.TASK_ASSIGNED, this.taskAssignedHandler);
             this.taskAssignedHandler = null;
         }
-        
+
+        // Cleanup user input pause gate subscriptions and resolve any pending pause
+        for (const sub of this.userInputPauseSubscriptions) {
+            sub.unsubscribe();
+        }
+        this.userInputPauseSubscriptions = [];
+        this.activeUserInputRequestIds.clear();
+        if (this.userInputPauseResolve) {
+            this.userInputPauseResolve();
+            this.userInputPausePromise = null;
+            this.userInputPauseResolve = null;
+        }
+
         // Cleanup services
         this.eventHandlerService?.cleanup();
         this.taskExecutionManager?.cleanup();

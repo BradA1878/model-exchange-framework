@@ -290,23 +290,10 @@ export class PredictiveAnalyticsService extends EventEmitter {
         this.setupEventListeners();
         this.startRetrainSchedule();
 
-        // Initialize TF.js models if TensorFlow.js is enabled.
-        // These are async but we fire-and-forget since the heuristic fallbacks
-        // handle predictions while the models are being set up.
-        if (isTensorFlowEnabled()) {
-            this.initializeTfErrorPrediction().catch((error) => {
-                this.logger.warn(
-                    `[PredictiveAnalyticsService] TF.js error prediction init failed, ` +
-                    `using heuristic fallback: ${error instanceof Error ? error.message : String(error)}`
-                );
-            });
-            this.initializeTfAnomalyAutoencoder().catch((error) => {
-                this.logger.warn(
-                    `[PredictiveAnalyticsService] TF.js anomaly autoencoder init failed, ` +
-                    `using heuristic fallback: ${error instanceof Error ? error.message : String(error)}`
-                );
-            });
-        }
+        // TF.js model initialization is deferred to initializeTensorFlowModels().
+        // This service is instantiated at module load time (via validationAnalyticsController),
+        // which runs BEFORE MxfMLService.initialize() in server Step 2.8.
+        // The server calls initializeTensorFlowModels() after MxfMLService is ready.
     }
     
     /**
@@ -319,6 +306,59 @@ export class PredictiveAnalyticsService extends EventEmitter {
         return PredictiveAnalyticsService.instance;
     }
     
+    // =============================================================================
+    // TF.JS DEFERRED INITIALIZATION
+    // =============================================================================
+
+    /**
+     * Initialize TF.js models after MxfMLService is ready.
+     *
+     * Called from server/index.ts after Step 2.8 (MxfMLService.initialize()).
+     * This service is instantiated at module load time (before Step 2.8),
+     * so TF model registration must be deferred to this explicit call.
+     *
+     * Registers and builds both the error prediction Dense classifier and the
+     * anomaly detection autoencoder. If either fails, the heuristic fallbacks
+     * continue to serve predictions.
+     */
+    public async initializeTensorFlowModels(): Promise<void> {
+        if (!isTensorFlowEnabled()) {
+            this.logger.debug(
+                '[PredictiveAnalyticsService] TensorFlow.js disabled, skipping TF model initialization'
+            );
+            return;
+        }
+
+        const mlService = MxfMLService.getInstance();
+        if (!mlService.isEnabled()) {
+            this.logger.warn(
+                '[PredictiveAnalyticsService] MxfMLService not enabled after Step 2.8, ' +
+                'TF models will not be registered'
+            );
+            return;
+        }
+
+        // Initialize error prediction Dense classifier
+        try {
+            await this.initializeTfErrorPrediction();
+        } catch (error) {
+            this.logger.warn(
+                `[PredictiveAnalyticsService] TF.js error prediction init failed, ` +
+                `using heuristic fallback: ${error instanceof Error ? error.message : String(error)}`
+            );
+        }
+
+        // Initialize anomaly detection autoencoder
+        try {
+            await this.initializeTfAnomalyAutoencoder();
+        } catch (error) {
+            this.logger.warn(
+                `[PredictiveAnalyticsService] TF.js anomaly autoencoder init failed, ` +
+                `using heuristic fallback: ${error instanceof Error ? error.message : String(error)}`
+            );
+        }
+    }
+
     // =============================================================================
     // TF.JS ERROR PREDICTION MODEL SETUP
     // =============================================================================

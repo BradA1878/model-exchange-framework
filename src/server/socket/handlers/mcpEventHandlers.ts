@@ -38,8 +38,10 @@ import {
     createMcpToolResultPayload,
     createMcpToolErrorPayload,
     createMcpResourceResultPayload,
-    createMcpToolRegisteredPayload
+    createMcpToolRegisteredPayload,
+    McpToolCallCompletedLocalData
 } from '../../../shared/schemas/EventPayloadSchema';
+import { McpToolExecution } from '../../../shared/models/mcpToolExecution';
 
 // Constants
 const MCP_TOOL_EXECUTION_TIMEOUT_MS = 30000; // 30 seconds timeout for tool execution
@@ -302,19 +304,76 @@ export const setupMcpEventHandlers = (socket: Socket, agentId: string, channelId
         }
     };
 
+    // Handle client-side tool completion events — persist to MongoDB for history/dashboard.
+    // The SDK fires these after executing a tool locally (no server round-trip for execution,
+    // but the completion event is sent so the DB has a complete record).
+    const toolCallCompletedLocalHandler = (payload: any) => {
+        try {
+            validate.assertIsObject(payload);
+            validate.assertIsObject(payload.data);
+
+            // Validate this event is for this agent/channel
+            if (payload.agentId !== agentId || payload.channelId !== channelId) {
+                return;
+            }
+            validate.assertIsNonEmptyString(payload.data.toolName);
+            validate.assertIsNonEmptyString(payload.data.callId);
+
+            const data: McpToolCallCompletedLocalData = payload.data;
+
+            // Determine source type for the DB record
+            const source = data.source === 'external-mcp' ? 'client-external' : 'client-internal';
+
+            // Persist to MongoDB — fire-and-forget, no ack back to client
+            McpToolExecution.create({
+                requestId: data.callId,
+                toolName: data.toolName,
+                source,
+                agentId: payload.agentId,
+                channelId: payload.channelId,
+                parameters: data.input || {},
+                result: data.result,
+                status: 'completed',
+                startedAt: new Date(payload.timestamp - (data.durationMs || 0)),
+                completedAt: new Date(payload.timestamp),
+                durationMs: data.durationMs,
+                metadata: {
+                    executedOn: 'client',
+                }
+            }).catch((error: Error) => {
+                logger.warn(`Failed to persist client-executed tool call: ${error.message}`);
+            });
+
+        } catch (error) {
+            logger.error(`Client tool completion handler error: ${error instanceof Error ? error.message : String(error)}`);
+        }
+    };
+
     // Register EventBus listeners
     EventBus.server.on(Events.Mcp.TOOL_CALL, toolCallHandler);
     EventBus.server.on(Events.Mcp.TOOL_REGISTER, toolRegisterHandler);
     EventBus.server.on(Events.Mcp.RESOURCE_GET, resourceGetHandler);
     EventBus.server.on(Events.Mcp.RESOURCE_LIST, resourceListHandler);
-    
+
+    // Listen for client-side tool completions arriving via socket.
+    // The socket event is forwarded to EventBus.server so the handler above picks it up.
+    socket.on(Events.Mcp.TOOL_CALL_COMPLETED_LOCAL, (payload: any) => {
+        // Inject agentId/channelId from the authenticated socket context
+        const enrichedPayload = { ...payload, agentId, channelId };
+        toolCallCompletedLocalHandler(enrichedPayload);
+    });
+
+    // Register EventBus handler for client-side completions (for internal server-side forwarding)
+    EventBus.server.on(Events.Mcp.TOOL_CALL_COMPLETED_LOCAL, toolCallCompletedLocalHandler);
+
     // Handle disconnection - clean up EventBus handlers
     socket.on('disconnect', () => {
-        
+
         // Remove EventBus listeners
         EventBus.server.off(Events.Mcp.TOOL_CALL, toolCallHandler);
         EventBus.server.off(Events.Mcp.TOOL_REGISTER, toolRegisterHandler);
         EventBus.server.off(Events.Mcp.RESOURCE_GET, resourceGetHandler);
         EventBus.server.off(Events.Mcp.RESOURCE_LIST, resourceListHandler);
+        EventBus.server.off(Events.Mcp.TOOL_CALL_COMPLETED_LOCAL, toolCallCompletedLocalHandler);
     });
 };

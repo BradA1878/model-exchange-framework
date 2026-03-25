@@ -95,7 +95,6 @@ export class MxfAgentSystemPrompt {
             this.buildSystemEnvironmentContext(), // CRITICAL: Must be first - NO HUMANS context
             this.buildMxfIdentity(agentConfig, toolNames), // Framework identity (not agent identity)
             this.buildMandatoryToolFormat(agentConfig.mxpEnabled), // MXP only if enabled
-            this.buildResponsePerformanceGuide(),
             this.buildCoreCapabilities(toolNames), // Tool-aware based on allowedTools
             await this.buildToolSchemas(config, availableTools, toolNames, agentConfig),
             this.buildToolUsagePatterns(agentConfig, toolNames),
@@ -135,41 +134,7 @@ You operate within the Model Exchange Framework (MXF), a sophisticated multi-age
 Execute immediately when you have sufficient information. Take decisive action based on available data. If you need information, request it directly from the specific agent. When a task is complete, signal completion. Never wait for approval - there are no users in this system, only autonomous agents.`;
     }
 
-    /**
-     * Response Performance & Transparency Guide
-     * Explains performance implications of different response formats
-     */
-    private static buildResponsePerformanceGuide(): string {
-        return `## Response Processing & Performance
-
-### 🚀 FASTEST (~10ms): Direct Tool Calls
-\`\`\`json
-{
-  "name": "messaging_send",
-  "arguments": {
-    "targetAgentId": "target-agent",
-    "message": "Message content"
-  }
-}
-\`\`\`
-Direct JSON tool calls execute immediately with minimal latency.
-
-### 🐢 SLOWER (~200-500ms): Natural Language
-"Tell the scheduler that Wednesday works"
-
-Natural language responses require SystemLLM interpretation:
-- SystemLLM must parse your intent
-- Map common names to agent IDs
-- Convert to appropriate tool calls
-- This adds 200-500ms latency
-
-### ⚠️ UNRELIABLE: Ambiguous Statements
-"I think that might work" / "Let me check on that"
-- May be discarded or misinterpreted
-- Only use for internal reasoning if think tool is available
-
-**ALWAYS PREFER DIRECT TOOL CALLS FOR SPEED AND RELIABILITY**`;
-    }
+    // buildResponsePerformanceGuide removed — performance tiers are already in buildMxfIdentity()
 
     /**
      * MXF Framework Identity Section
@@ -222,11 +187,7 @@ MXF enables you to collaborate with other AI agents`;
 - "I need to update the task status"
 - "Let me check the context memory"
 
-### ❌ AVOID - POTENTIAL MISINTERPRETATION
-**Ambiguous Statements** - May not be interpreted correctly:
-- "I think that might work"
-- "Let me check on that"
-- "I'll get back to you"
+### ❌ AVOID - Ambiguous statements that lack a clear action or target
 
 **Decision Guide:**
 - Have a specific target agent? → Use tool with agentId
@@ -255,46 +216,10 @@ MXF supports MXP, an efficient binary protocol that reduces message size by 80%+
 - **Structured Communication**: Clear patterns are converted to efficient formats
 - **Encrypted Security**: All optimized messages use AES-256-GCM encryption
 
-**Token Optimization Patterns** (use these for maximum efficiency):
-- **Collaboration**: "Let's work together on [task]" → Optimized collaboration format
-- **Task Delegation**: "I need you to [specific task]" → Efficient task assignment
-- **Context Reference**: "Based on our previous discussion about [topic]" → State reference
-- **Tool Execution**: "Use the [tool] to [action]" → Structured tool format
+**MXP Format**: Use structured JSON with \`op\` (operation), \`args\` (parameters), and optional \`context\`/\`metadata\` fields.
+Common operations: \`tool.execute\`, \`comm.send\`, \`task.complete\`, \`collab.propose\`, \`task.delegate\`, \`state.reference\`, \`coord.sync\`
 
-**Communication Best Practices**:
-- Start collaboration with clear proposals: "I propose we collaborate on..."
-- Reference previous context: "Based on our discussion about..."
-- Be specific in task delegation: "Please delegate this task..."
-- Use structured language for tool requests
-
-**Example MXP Protocol Usage**:
-
-❌ **Natural Language** (high token usage):
-"I need to use the file writing tool to create a new TypeScript file at src/auth/validation.ts with functions for email validation and password strength checking. This will help us complete the authentication module we discussed earlier."
-
-✅ **MXP Protocol Format** (efficient structured format):
-\`\`\`json
-{
-  "op": "tool.execute",
-  "args": [{
-    "tool": "file_writer", 
-    "params": {
-      "path": "src/auth/validation.ts",
-      "content": "export const validateEmail = ...",
-      "overwrite": false
-    }
-  }],
-  "context": "auth_module_task",
-  "metadata": {
-    "priority": 7,
-    "correlationId": "auth-task-001"
-  }
-}
-\`\`\`
-
-**Other Common MXP Operations**: \`collab.propose\`, \`task.delegate\`, \`state.reference\`, \`coord.sync\`
-
-Use MXP protocol format when possible for **significant token efficiency** while maintaining precision.`;
+Use MXP protocol format when possible for significant token efficiency while maintaining precision.`;
         }
 
         return content;
@@ -548,90 +473,6 @@ ${toolSections.join('\n')}`;
     }
 
     /**
-     * Map tool name to MXP operation for compact display
-     */
-    private static mapToolToMxpOperation(toolName: string): string {
-        if (toolName.startsWith('messaging_')) return 'comm.send';
-        if (toolName.startsWith('controlLoop_')) return 'ctrl.loop';
-        if (toolName.includes('memory_')) return 'data.store';
-        if (toolName.includes('context_')) return 'data.query';
-        if (toolName === 'tools_recommend') return 'meta.discover';
-        if (toolName === 'task_complete') return 'task.complete';
-        return 'tool.execute';
-    }
-
-    /**
-     * Get compact argument list for MXP display
-     */
-    private static getMxpArgumentsList(tool: any): string {
-        if (!tool.inputSchema?.properties) return '{...}';
-        
-        const props = Object.keys(tool.inputSchema.properties);
-        if (props.length === 0) return '{...}';
-        if (props.length <= 2) return `{${props.join(', ')}}`;
-        return `{${props.slice(0, 2).join(', ')}, ...}`;
-    }
-
-    private static generateExampleArguments(tool: any): string {
-        if (!tool.inputSchema || !tool.inputSchema.properties) {
-            return '// Add arguments as needed';
-        }
-
-        const props = tool.inputSchema.properties;
-        const required = tool.inputSchema.required || [];
-        const examples: string[] = [];
-
-        Object.keys(props).forEach(key => {
-            const prop = props[key];
-            let exampleValue: any;
-
-            // Generate example values based on property type
-            if (prop.type === 'string') {
-                if (key.includes('Id') || key === 'targetAgentId') {
-                    exampleValue = '"target-agent-id"';
-                } else if (key === 'message') {
-                    exampleValue = '"Your message content here"';
-                } else {
-                    exampleValue = `"example_${key}"`;
-                }
-            } else if (prop.type === 'number' || prop.type === 'integer') {
-                exampleValue = key === 'priority' ? '7' : '1';
-            } else if (prop.type === 'boolean') {
-                exampleValue = prop.default !== undefined ? prop.default : true;
-            } else if (prop.type === 'object') {
-                // Special handling for task_complete details
-                if (tool.name === 'task_complete' && key === 'details') {
-                    exampleValue = `{
-      "problem": "description of what was solved",
-      "solution": "how it was resolved"
-    }`;
-                } else {
-                    exampleValue = '{}';
-                }
-            } else if (prop.type === 'array') {
-                exampleValue = '[]';
-            } else {
-                exampleValue = '"example_value"';
-            }
-
-            let comment = required.includes(key) ? ' // Required' : ' // Optional';
-            
-            // Add explicit type annotations for task_complete to prevent confusion
-            if (tool.name === 'task_complete') {
-                if (key === 'success') {
-                    comment += ' - BOOLEAN (true/false, NOT "true"/"false")';
-                } else if (key === 'details') {
-                    comment += ' - OBJECT (not JSON string)';
-                }
-            }
-            
-            examples.push(`    "${key}": ${exampleValue}${comment}`);
-        });
-
-        return examples.join(',\n');
-    }
-
-    /**
      * Tool Usage Patterns and Best Practices
      */
     private static buildToolUsagePatterns(agentConfig: AgentConfig | null, availableTools?: string[]): string {
@@ -737,70 +578,16 @@ When you need capabilities beyond your core tools:
 5. **When done**: Call ${META_TOOLS.TASK_COMPLETE} with summary`;
             }
 
-            content += `
-
-**Example Discovery Flow:**
-1. Intent: "I need to create a presentation with charts"
-2. System recommends: presentation_create, chart_generate, file_save
-3. You use: Each recommended tool with proper parameters`;
-
-            if (hasTaskComplete) {
-                content += `
-4. **When done**: Call ${META_TOOLS.TASK_COMPLETE} with summary`;
-            }
-
-            content += `
-
-**Good Intent Examples:**
-- "I need to analyze CSV data and find patterns"
-- "I want to create a summary report with visualizations"
-- "I need to coordinate with multiple agents on a complex task"
-- "I want to store and retrieve historical conversation data"`;
+            // Discovery flow is: describe intent → receive recommendations → use recommended tools
         }
         
         if (hasTaskComplete) {
             content += `
 
 **Task Completion Protocol:**
-- **ALWAYS use ${META_TOOLS.TASK_COMPLETE}** when you have finished an assigned task
-- This signals the task management system that your work is complete
-- Provide a clear summary of what you accomplished
-
-**Task Completion Examples:**`;
-
-            if (mxpEnabled) {
-                content += `
-\`\`\`json
-{
-  "op": "task.complete",
-  "args": [{
-    "summary": "Successfully collaborated with Professor Calculator to solve the mathematical problem. The final answer is 1200 trees total.",
-    "success": true,
-    "details": {
-      "problem": "rectangular field geometry and tree planting", 
-      "collaboration": "messaging and problem solving",
-      "solution": "Field area calculation and tree placement optimization"
-    }
-  }]
-}
-\`\`\``;
-            } else {
-                content += `
-\`\`\`json
-{
-  "name": "task_complete",
-  "arguments": {
-    "summary": "Successfully collaborated with Professor Calculator to solve the mathematical problem. The final answer is 1200 trees total.",
-    "success": true,
-    "details": {
-      "problem": "rectangular field geometry and tree planting",
-      "collaboration": "messaging and problem solving", 
-      "solution": "Field area calculation and tree placement optimization"
-    }
-  }
-}
-\`\`\``;
-            }
+- Always use ${META_TOOLS.TASK_COMPLETE} when you have finished an assigned task
+- Provide a clear summary of what you accomplished and whether it succeeded
+- Include relevant details about the problem solved and approach taken`;
         }
         
         return content;
@@ -853,11 +640,7 @@ When you need capabilities beyond your core tools:
 - Use only when tool calls are not feasible
 - Be explicit and specific to improve interpretation accuracy
 
-### ❌ AVOID - Ambiguous Statements (May Be Misinterpreted)
-- "I think that might work" → SystemLLM cannot determine action
-- "Let me check on that" → No clear tool or target specified
-- "I'll get back to you" → No timeline or action defined
-- "That sounds good" → No actionable information
+### ❌ AVOID - Ambiguous statements without clear actions or targets
 
 **Decision Guide for Response Format:**
 - Have a specific agent target? → Use tool with agentId directly
@@ -990,101 +773,12 @@ When you need capabilities beyond your core tools:
 
         if (mxpEnabled) {
             content += `
-When you need to use a tool, you MUST respond with MXP protocol format:
-
-\`\`\`json
-{
-  "op": "tool.execute",
-  "args": [{
-    "tool": "tool_name_here",
-    "params": {
-      "parameter1": "value1",
-      "parameter2": "value2"
-    }
-  }]
-}
-\`\`\`
-
-**Examples of Correct Tool Calls:**`;
-
-            // Only include examples for tools that are actually available
-            if (toolSet.includes('messaging_send')) {
-                content += `
-
-To send a message to another agent:
-\`\`\`json
-{
-  "op": "comm.send", 
-  "args": [{
-    "target": "mathematician-agent",
-    "message": "Hello Professor Calculator! I have a math problem for you to solve.",
-    "messageType": "collaboration_request"
-  }]
-}
-\`\`\``;
-            }
-
-            if (toolSet.includes('task_complete')) {
-                content += `
-
-To complete a task:
-\`\`\`json
-{
-  "op": "task.complete",
-  "args": [{
-    "summary": "Successfully created and sent math problem to mathematician",
-    "success": true
-  }]
-}
-\`\`\``;
-            }
+Use MXP protocol format for tool calls: \`{ "op": "tool.execute", "args": [{ "tool": "tool_name", "params": { ... } }] }\`
+Refer to the tool schemas above for required parameters.`;
         } else {
             content += `
-When you need to use a tool, you MUST respond with JSON in this EXACT format:
-
-\`\`\`json
-{
-  "name": "tool_name_here",
-  "arguments": {
-    "parameter1": "value1",
-    "parameter2": "value2"
-  }
-}
-\`\`\`
-
-**Examples of Correct Tool Calls:**`;
-
-            // Only include examples for tools that are actually available
-            if (toolSet.includes('messaging_send')) {
-                content += `
-
-To send a message to another agent:
-\`\`\`json
-{
-  "name": "messaging_send",
-  "arguments": {
-    "targetAgentId": "mathematician-agent",
-    "message": "Hello Professor Calculator! I have a math problem for you to solve.",
-    "messageType": "collaboration_request"
-  }
-}
-\`\`\``;
-            }
-
-            if (toolSet.includes('task_complete')) {
-                content += `
-
-To complete a task:
-\`\`\`json
-{
-  "name": "task_complete",
-  "arguments": {
-    "summary": "Successfully created and sent math problem to mathematician",
-    "success": true
-  }
-}
-\`\`\``;
-            }
+Use this format for tool calls: \`{ "name": "tool_name", "arguments": { ... } }\`
+Refer to the tool schemas above for required parameters.`;
         }
 
         content += `

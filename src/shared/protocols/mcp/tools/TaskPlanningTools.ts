@@ -551,31 +551,22 @@ export const task_monitoring_status: McpToolDefinition = {
     handler: async (input: McpToolInput, context: McpToolHandlerContext): Promise<McpToolHandlerResult> => {
         try {
             const startTime = Date.now();
-            
-            // Request monitoring status
-            const statusRequest = {
-                taskId: input.taskId,
-                requestId: uuidv4()
-            };
-            
-            // This would be handled by the monitoring service
-            EventBus.server.emit('monitoring:status_request', statusRequest);
-            
-            // For now, return a simple acknowledgment
+
             const content: McpToolResultContent = {
                 type: 'text',
-                data: `Monitoring status requested for task ${input.taskId}.
-                    
-Check the task events for completion notifications.`
+                data: `Task monitoring status for ${input.taskId}:
+
+Use task_update to check task status, or listen for task completion events on the channel.
+Agent: ${context.agentId} | Channel: ${context.channelId}`
             };
-            
+
             return {
                 content,
                 metadata: {
                     processingTime: Date.now() - startTime
                 }
             } as McpToolHandlerResult;
-            
+
         } catch (error) {
             logger.error(`Failed to get monitoring status: ${error}`);
             throw error;

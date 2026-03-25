@@ -36,6 +36,7 @@ export const dateTimeNowTool = {
     name: 'datetime_now',
     description: 'Get the current date and time. Returns timestamp, ISO string, and human-readable formats with timezone information.',
     enabled: true,
+    executionSide: 'either' as const,
     inputSchema: {
         type: 'object',
         properties: {
@@ -155,6 +156,7 @@ export const dateTimeConvertTool = {
     name: 'datetime_convert',
     description: 'Convert a date/time from one timezone to another. Accepts ISO strings, timestamps, or date strings.',
     enabled: true,
+    executionSide: 'either' as const,
     inputSchema: {
         type: 'object',
         properties: {
@@ -280,6 +282,7 @@ export const dateTimeArithmeticTool = {
     name: 'datetime_arithmetic',
     description: 'Add or subtract time from a date. Supports years, months, weeks, days, hours, minutes, and seconds.',
     enabled: true,
+    executionSide: 'either' as const,
     inputSchema: {
         type: 'object',
         properties: {
@@ -415,6 +418,7 @@ export const dateTimeFormatTool = {
     name: 'datetime_format',
     description: 'Format a date/time in various readable formats. Supports different locales and styles.',
     enabled: true,
+    executionSide: 'either' as const,
     inputSchema: {
         type: 'object',
         properties: {

@@ -113,6 +113,12 @@ export interface AgentConfig {
     mxpEnabled?: boolean;
     mxpPreferredFormat?: 'auto' | 'mxp' | 'natural-language';
     mxpForceEncryption?: boolean;
+
+    // Client-side tool execution
+    /** Enable client-side tool execution for eligible stateless tools (default: false) */
+    enableClientToolExecution?: boolean;
+    /** External MCP server IDs to spawn client-side instead of server-side */
+    clientExternalMcpServers?: string[];
 }
 
 /**

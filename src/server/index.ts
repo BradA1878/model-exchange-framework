@@ -50,6 +50,12 @@ import { firstValueFrom } from 'rxjs';
 import { MxfMeilisearchService, EmbeddingGenerator } from '../shared/services/MxfMeilisearchService';
 import { CodeExecutionSandboxService } from '../shared/services/CodeExecutionSandboxService';
 import { ToolExecutionPersistenceService } from './services/ToolExecutionPersistenceService';
+import { QValueManager } from '../shared/services/QValueManager';
+import { RewardSignalProcessor } from '../shared/services/RewardSignalProcessor';
+import { UtilityScorerService } from '../shared/services/UtilityScorerService';
+import { OrparMemoryCoordinator } from '../shared/services/orpar-memory/OrparMemoryCoordinator';
+import { MxfMLService } from '../shared/services/MxfMLService';
+import { PredictiveAnalyticsService } from '../shared/services/PredictiveAnalyticsService';
 
 /**
  * Initialize logger with appropriate context
@@ -290,10 +296,6 @@ const initializeServer = async () => {
         // Step 2.5: Initialize MULS services if enabled
         if (process.env.MEMORY_UTILITY_LEARNING_ENABLED === 'true') {
             try {
-                const { QValueManager } = await import('../shared/services/QValueManager');
-                const { RewardSignalProcessor } = await import('../shared/services/RewardSignalProcessor');
-                const { UtilityScorerService } = await import('../shared/services/UtilityScorerService');
-
                 // Initialize all MULS services - this sets enabled=true based on env config
                 QValueManager.getInstance().initialize();
                 RewardSignalProcessor.getInstance().initialize();
@@ -309,7 +311,6 @@ const initializeServer = async () => {
         // Step 2.6: Initialize ORPAR-Memory integration if enabled
         if (process.env.ORPAR_MEMORY_INTEGRATION_ENABLED === 'true') {
             try {
-                const { OrparMemoryCoordinator } = await import('../shared/services/orpar-memory/OrparMemoryCoordinator');
                 OrparMemoryCoordinator.getInstance().initialize();
                 logger.info('ORPAR-Memory integration initialized');
             } catch (error) {
@@ -321,9 +322,14 @@ const initializeServer = async () => {
         // Step 2.8: Initialize TensorFlow.js integration if enabled
         if (process.env.TENSORFLOW_ENABLED === 'true') {
             try {
-                const { MxfMLService } = await import('../shared/services/MxfMLService');
                 await MxfMLService.getInstance().initialize();
                 logger.info('TensorFlow.js integration initialized');
+
+                // Step 2.9: Initialize TF.js models in PredictiveAnalyticsService.
+                // PredictiveAnalyticsService is instantiated at module load time
+                // (before Step 2.8), so TF model registration is deferred to here.
+                await PredictiveAnalyticsService.getInstance().initializeTensorFlowModels();
+                logger.info('PredictiveAnalyticsService TF.js models initialized');
             } catch (error) {
                 logger.error(`Failed to initialize TensorFlow.js: ${error instanceof Error ? error.message : String(error)}`);
                 logger.warn('Continuing without TensorFlow.js - ML models disabled');

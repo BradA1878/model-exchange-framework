@@ -447,6 +447,12 @@ export class McpSocketExecutor {
                     // This maps common mistakes like 'reasoning' -> 'analysis' for ORPAR tools
                     const normalizedInput = normalizeOrparParameters(toolName, input);
 
+                    // Default inputConfig for confirm-type user_input (all confirm config fields are optional,
+                    // so LLMs naturally omit the entire object — inject empty object to pass validation)
+                    if (toolName === 'user_input' && normalizedInput.inputType === 'confirm' && !normalizedInput.inputConfig) {
+                        normalizedInput.inputConfig = {};
+                    }
+
                     // Validate input against schema with detailed error reporting
                     const validationResult = validateToolInput(tool.inputSchema, normalizedInput);
                     if (!validationResult.valid) {

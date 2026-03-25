@@ -85,4 +85,6 @@ build-config/
 presentation/
 sync-to-public.sh
 src/**/*.md
+!src/cli/tui/agents/built-in/*.md
 backups/*
+temp/
