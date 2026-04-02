@@ -16,6 +16,7 @@ import { useCallback, useMemo, useRef, type Dispatch } from 'react';
 import type { AppAction, AppState } from '../state';
 import type { ConversationEntry } from '../types';
 import type { InteractiveSessionManager } from '../services/InteractiveSessionManager';
+import type { ToolPermissionService } from '../services/ToolPermissionService';
 import { executeCommand } from '../commands/registry';
 import type { CommandContext } from '../commands/registry';
 import { executeShellCommand } from '../services/ShellExecutor';
@@ -36,6 +37,7 @@ const MODE_PREFIXES: Record<string, string> = {
  * @param submitTask - Function to submit a task to the orchestrator
  * @param submitTaskToAgent - Function to submit a task to a specific agent
  * @param requestExit - Callback to trigger TUI exit
+ * @param permissionService - Optional tool permission service for slash commands
  */
 export function useInputHandler(
     session: InteractiveSessionManager,
@@ -44,6 +46,7 @@ export function useInputHandler(
     submitTask: (task: string, contextString?: string | null, recentResult?: string | null) => Promise<void>,
     submitTaskToAgent: (task: string, agentId: string, contextString?: string | null) => Promise<void>,
     requestExit: () => void,
+    permissionService?: ToolPermissionService,
 ): (input: string) => Promise<void> {
     // Ref for entries — avoids recreating the callback on every entry change
     const entriesRef = useRef<ConversationEntry[]>(state.entries);
@@ -69,7 +72,7 @@ export function useInputHandler(
         // Route based on prefix
         if (trimmed.startsWith('/')) {
             // Slash command
-            const context: CommandContext = { dispatch, session, requestExit, getState: () => state };
+            const context: CommandContext = { dispatch, session, requestExit, getState: () => state, permissionService, submitTask };
             await executeCommand(trimmed, context);
         } else if (trimmed.startsWith('!')) {
             // Shell command

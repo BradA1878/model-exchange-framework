@@ -5,9 +5,9 @@
  * when agents are actively reasoning between tool calls. Provides visual
  * feedback so the user knows the system is working, not hung.
  *
- * When streaming tokens are available (via streamPreview), shows the last
- * ~80 characters of the live LLM output instead of a static "thinking..."
- * message, so the user can see progress in real time.
+ * When streaming tokens are available (via streamPreview), shows up to
+ * 10 lines of the live LLM output so the user can follow the agent's
+ * reasoning in real time.
  *
  * Uses the `useSpinner` hook from @inkjs/ui for the animated dots frame
  * (~80ms interval, lightweight single timer).
@@ -21,8 +21,14 @@ import { useSpinner } from '@inkjs/ui';
 import { useTheme } from '../theme/ThemeContext';
 import type { AgentInfo } from '../types';
 
-/** Maximum characters of streaming preview text to display */
-const PREVIEW_MAX_CHARS = 80;
+/** Maximum characters of streaming preview text to keep (rolling window) */
+const PREVIEW_MAX_CHARS = 2000;
+
+/** Maximum lines of streaming preview to display */
+const PREVIEW_MAX_LINES = 10;
+
+/** Maximum character width per preview line */
+const PREVIEW_LINE_WIDTH = 100;
 
 interface ThinkingIndicatorProps {
     /** Agents currently in 'active' status */
@@ -36,8 +42,8 @@ interface ThinkingIndicatorProps {
  * Appears at the bottom of the conversation area during agent reasoning phases.
  * Automatically disappears when agents go idle (task complete/fail).
  *
- * When streamPreview is available, shows a truncated tail of the streaming text
- * instead of the static "thinking..." label.
+ * When streamPreview is available, shows a multi-line tail of the streaming text
+ * so the user can follow the agent's response as it arrives.
  */
 const ThinkingIndicatorInner: React.FC<ThinkingIndicatorProps> = ({ activeAgents, streamPreview }) => {
     const { frame } = useSpinner({ type: 'dots' });
@@ -55,39 +61,46 @@ const ThinkingIndicatorInner: React.FC<ThinkingIndicatorProps> = ({ activeAgents
         );
     }
 
-    // Determine which agent to highlight based on stream preview
-    const streamingAgentId = streamPreview?.agentId;
-
-    // Show all active agent names
+    // Determine agent labels with colors
     const agentLabels = activeAgents.map(a => {
         const color = theme.agentColors[a.id] || a.color || 'white';
         return { id: a.id, name: a.name, color };
     });
 
-    // Build the trailing label: streaming preview text or "thinking..."
-    let trailingLabel: string;
+    // Build streaming preview lines
+    let previewLines: string[] = [];
     if (streamPreview && streamPreview.text) {
-        // Take the last PREVIEW_MAX_CHARS characters, trim whitespace, collapse newlines
-        const rawTail = streamPreview.text.slice(-PREVIEW_MAX_CHARS);
-        trailingLabel = ' ' + rawTail.replace(/\n+/g, ' ').trim();
-        // Add ellipsis if we truncated
-        if (streamPreview.text.length > PREVIEW_MAX_CHARS) {
-            trailingLabel = ' ...' + trailingLabel.trimStart();
-        }
-    } else {
-        trailingLabel = ' thinking...';
+        // Take the trailing portion of the stream text
+        const tail = streamPreview.text.slice(-PREVIEW_MAX_CHARS);
+        // Split into lines, take the last N, and truncate each to max width
+        const allLines = tail.split('\n');
+        previewLines = allLines
+            .slice(-PREVIEW_MAX_LINES)
+            .map(line => line.length > PREVIEW_LINE_WIDTH ? line.slice(0, PREVIEW_LINE_WIDTH) + '...' : line);
     }
 
     return (
-        <Box paddingX={1} gap={0}>
-            <Text dimColor> {frame} </Text>
-            {agentLabels.map((agent, idx) => (
-                <React.Fragment key={idx}>
-                    {idx > 0 && <Text dimColor>, </Text>}
-                    <Text color={agent.color as any}>{agent.name}</Text>
-                </React.Fragment>
-            ))}
-            <Text dimColor>{trailingLabel}</Text>
+        <Box flexDirection="column" paddingX={1}>
+            {/* Agent name line with spinner */}
+            <Box gap={0}>
+                <Text dimColor> {frame} </Text>
+                {agentLabels.map((agent, idx) => (
+                    <React.Fragment key={idx}>
+                        {idx > 0 && <Text dimColor>, </Text>}
+                        <Text color={agent.color as any}>{agent.name}</Text>
+                    </React.Fragment>
+                ))}
+                {previewLines.length === 0 && <Text dimColor> thinking...</Text>}
+            </Box>
+
+            {/* Streaming preview lines */}
+            {previewLines.length > 0 && (
+                <Box flexDirection="column" paddingLeft={4}>
+                    {previewLines.map((line, idx) => (
+                        <Text key={idx} dimColor wrap="truncate">{line}</Text>
+                    ))}
+                </Box>
+            )}
         </Box>
     );
 };

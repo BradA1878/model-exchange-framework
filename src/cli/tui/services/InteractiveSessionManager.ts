@@ -430,6 +430,23 @@ export class InteractiveSessionManager {
         return this.defaultModel;
     }
 
+    /**
+     * Compact an agent's conversation history to free context window space.
+     * Called by the TUI when an agent approaches its model's context limit.
+     *
+     * @param agentId - The agent whose history should be compacted
+     */
+    async compactAgent(agentId: string): Promise<void> {
+        const conn = this.agents.get(agentId);
+        if (!conn) return;
+
+        try {
+            await conn.agent.getMemoryManager().compactConversation();
+        } catch (error) {
+            // Errors are logged inside MxfMemoryManager — nothing to surface here
+        }
+    }
+
     /** Get the per-agent model overrides from config */
     getAgentModels(): Record<string, string> {
         return this.config.agentModels || {};

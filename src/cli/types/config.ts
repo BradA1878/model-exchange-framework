@@ -41,6 +41,9 @@ export interface MxfConfig {
 
     /** Agent selection and customization */
     agents?: MxfAgentsConfig;
+
+    /** Default cost budget limit in USD for TUI sessions (null/absent = no limit) */
+    costBudget?: number;
 }
 
 /** Docker infrastructure container settings */

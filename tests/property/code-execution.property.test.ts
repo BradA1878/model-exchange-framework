@@ -14,96 +14,8 @@ describe('Code Execution Property Tests', () => {
         sandbox = CodeExecutionSandboxService.getInstance();
     });
 
-    describe('Dangerous Pattern Invariants', () => {
-        // Define dangerous pattern generators
-        const dangerousPatternArbs = {
-            eval: fc.stringMatching(/eval\s*\(/),
-            functionConstructor: fc.stringMatching(/Function\s*\(/),
-            require: fc.stringMatching(/require\s*\(/),
-            importFrom: fc.constant('import x from "module"'),
-            processExit: fc.constant('process.exit(0)'),
-            processKill: fc.constant('process.kill(1)'),
-            proto: fc.constant('obj.__proto__ = {}'),
-            childProcess: fc.constant('child_process.exec("ls")'),
-            bunSpawn: fc.constant('Bun.spawn(["ls"])'),
-            bunFile: fc.constant('Bun.file("/etc/passwd")'),
-        };
-
-        it('code containing eval() always fails validation', () => {
-            fc.assert(
-                fc.property(
-                    fc.string({ minLength: 0, maxLength: 100 }),
-                    fc.string({ minLength: 0, maxLength: 100 }),
-                    (prefix, suffix) => {
-                        const code = `${prefix}eval("test")${suffix}`;
-                        const validation = sandbox.validateCode(code);
-                        return validation.safe === false;
-                    }
-                ),
-                { numRuns: 50 }
-            );
-        });
-
-        it('code containing require() always fails validation', () => {
-            fc.assert(
-                fc.property(
-                    fc.string({ minLength: 0, maxLength: 100 }),
-                    fc.string({ minLength: 0, maxLength: 100 }),
-                    (prefix, suffix) => {
-                        const code = `${prefix}require("fs")${suffix}`;
-                        const validation = sandbox.validateCode(code);
-                        return validation.safe === false;
-                    }
-                ),
-                { numRuns: 50 }
-            );
-        });
-
-        it('code containing Bun.spawn always fails validation', () => {
-            fc.assert(
-                fc.property(
-                    fc.string({ minLength: 0, maxLength: 100 }),
-                    fc.string({ minLength: 0, maxLength: 100 }),
-                    (prefix, suffix) => {
-                        const code = `${prefix}Bun.spawn(["ls"])${suffix}`;
-                        const validation = sandbox.validateCode(code);
-                        return validation.safe === false;
-                    }
-                ),
-                { numRuns: 50 }
-            );
-        });
-
-        it('code containing Bun.file always fails validation', () => {
-            fc.assert(
-                fc.property(
-                    fc.string({ minLength: 0, maxLength: 100 }),
-                    fc.string({ minLength: 0, maxLength: 100 }),
-                    (prefix, suffix) => {
-                        const code = `${prefix}Bun.file("/path")${suffix}`;
-                        const validation = sandbox.validateCode(code);
-                        return validation.safe === false;
-                    }
-                ),
-                { numRuns: 50 }
-            );
-        });
-
-        it('code containing Bun.write always fails validation', () => {
-            fc.assert(
-                fc.property(
-                    fc.string({ minLength: 0, maxLength: 100 }),
-                    fc.string({ minLength: 0, maxLength: 100 }),
-                    (prefix, suffix) => {
-                        const code = `${prefix}Bun.write("/path", "data")${suffix}`;
-                        const validation = sandbox.validateCode(code);
-                        return validation.safe === false;
-                    }
-                ),
-                { numRuns: 50 }
-            );
-        });
-
+    describe('Blocked Pattern Invariants', () => {
+        // Patterns that corrupt the executor harness (hard blocked)
         it('code containing __proto__ always fails validation', () => {
             fc.assert(
                 fc.property(
@@ -119,13 +31,13 @@ describe('Code Execution Property Tests', () => {
             );
         });
 
-        it('code containing process.exit always fails validation', () => {
+        it('code containing constructor[] bracket access always fails validation', () => {
             fc.assert(
                 fc.property(
                     fc.string({ minLength: 0, maxLength: 100 }),
                     fc.string({ minLength: 0, maxLength: 100 }),
                     (prefix, suffix) => {
-                        const code = `${prefix}process.exit(0)${suffix}`;
+                        const code = `${prefix}constructor["prototype"]${suffix}`;
                         const validation = sandbox.validateCode(code);
                         return validation.safe === false;
                     }
@@ -133,50 +45,33 @@ describe('Code Execution Property Tests', () => {
                 { numRuns: 50 }
             );
         });
+    });
 
-        it('code containing process.kill always fails validation', () => {
-            fc.assert(
-                fc.property(
-                    fc.string({ minLength: 0, maxLength: 100 }),
-                    fc.string({ minLength: 0, maxLength: 100 }),
-                    (prefix, suffix) => {
-                        const code = `${prefix}process.kill(1)${suffix}`;
-                        const validation = sandbox.validateCode(code);
-                        return validation.safe === false;
-                    }
-                ),
-                { numRuns: 50 }
-            );
+    describe('Sandbox-Safe Patterns (No Longer Blocked)', () => {
+        // These patterns are harmless inside the sandboxed Docker container
+        // and should pass validation (they were previously blocked)
+        it.each([
+            ['eval("test")', 'eval()'],
+            ['new Function("return 1")', 'Function constructor'],
+            ['require("fs")', 'require()'],
+            ['process.exit(0)', 'process.exit'],
+            ['process.kill(1)', 'process.kill'],
+            ['Bun.file("/path")', 'Bun.file'],
+            ['Bun.write("/path", "data")', 'Bun.write'],
+        ])('code containing %s passes validation (safe in sandbox)', (code) => {
+            const validation = sandbox.validateCode(code);
+            expect(validation.safe).toBe(true);
         });
 
-        it('code containing child_process always fails validation', () => {
-            fc.assert(
-                fc.property(
-                    fc.string({ minLength: 0, maxLength: 100 }),
-                    fc.string({ minLength: 0, maxLength: 100 }),
-                    (prefix, suffix) => {
-                        const code = `${prefix}child_process.exec("ls")${suffix}`;
-                        const validation = sandbox.validateCode(code);
-                        return validation.safe === false;
-                    }
-                ),
-                { numRuns: 50 }
-            );
-        });
-
-        it('code containing Function constructor always fails validation', () => {
-            fc.assert(
-                fc.property(
-                    fc.string({ minLength: 0, maxLength: 100 }),
-                    fc.string({ minLength: 0, maxLength: 100 }),
-                    (prefix, suffix) => {
-                        const code = `${prefix}new Function("return 1")${suffix}`;
-                        const validation = sandbox.validateCode(code);
-                        return validation.safe === false;
-                    }
-                ),
-                { numRuns: 50 }
-            );
+        // Warning patterns: pass validation (safe=true) but produce warnings
+        it.each([
+            ['child_process.exec("ls")', 'child_process'],
+            ['Bun.spawn(["ls"])', 'Bun.spawn'],
+            ['Bun.spawnSync(["ls"])', 'Bun.spawnSync'],
+        ])('code containing %s passes validation with warning', (code) => {
+            const validation = sandbox.validateCode(code);
+            expect(validation.safe).toBe(true);
+            expect(validation.issues.some(i => i.type === 'warning')).toBe(true);
         });
     });
 
@@ -201,15 +96,8 @@ describe('Code Execution Property Tests', () => {
             fc.assert(
                 fc.property(
                     fc.string({ minLength: 1, maxLength: 50 }).filter(s =>
-                        // Filter out strings that might accidentally contain dangerous patterns
-                        !s.includes('eval') &&
-                        !s.includes('require') &&
-                        !s.includes('import') &&
-                        !s.includes('Bun.') &&
-                        !s.includes('process.') &&
+                        // Filter out strings that might accidentally contain blocked patterns
                         !s.includes('__proto__') &&
-                        !s.includes('child_process') &&
-                        !s.includes('Function') &&
                         !s.includes('constructor[')
                     ),
                     (str) => {
@@ -264,9 +152,10 @@ describe('Code Execution Property Tests', () => {
                         // Safe code
                         fc.constant('return 1 + 1;'),
                         fc.constant('const x = 42; return x;'),
-                        // Dangerous code
-                        fc.constant('eval("test")'),
-                        fc.constant('require("fs")'),
+                        // Blocked code (prototype pollution)
+                        fc.constant('obj.__proto__ = {}'),
+                        fc.constant('constructor["prototype"]'),
+                        // Warning-only code (safe in sandbox)
                         fc.constant('Bun.spawn(["ls"])')
                     ),
                     (code) => {
@@ -284,8 +173,8 @@ describe('Code Execution Property Tests', () => {
                 fc.property(
                     fc.oneof(
                         fc.constant('return 1;'),
-                        fc.constant('eval("test")'),
-                        fc.constant('require("fs")'),
+                        fc.constant('obj.__proto__ = {}'),
+                        fc.constant('Bun.spawn(["ls"])'),
                         fc.constant('a'.repeat(100001)) // Will trigger warning
                     ),
                     (code) => {

@@ -160,6 +160,11 @@ import type { CodeExecutionPayloads } from './event-definitions/CodeExecutionEve
 export { CodeExecutionEvents };
 export type { CodeExecutionPayloads };
 
+import { ShellExecutionEvents } from './event-definitions/ShellExecutionEvents';
+import type { ShellExecutionPayloads } from './event-definitions/ShellExecutionEvents';
+export { ShellExecutionEvents };
+export type { ShellExecutionPayloads };
+
 import { WorkflowEvents } from './event-definitions/WorkflowEvents';
 import type { WorkflowPayloads } from './event-definitions/WorkflowEvents';
 export { WorkflowEvents };
@@ -238,6 +243,7 @@ export namespace Events {
     export const Mxp = MxpEvents;
     export const Meilisearch = MeilisearchEvents;
     export const CodeExecution = CodeExecutionEvents;
+    export const Shell = ShellExecutionEvents;
     export const Workflow = WorkflowEvents;
     export const InferenceParameter = InferenceParameterEvents;
     export const Plan = PlanEvents;
@@ -271,6 +277,7 @@ export type EventMap =
     MxpPayloads &
     MeilisearchPayloads &
     CodeExecutionPayloads &
+    ShellExecutionPayloads &
     WorkflowPayloads &
     InferenceParameterPayloads &
     PlanPayloads &

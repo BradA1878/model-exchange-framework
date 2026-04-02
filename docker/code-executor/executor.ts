@@ -152,17 +152,19 @@ async function executeCode(request: ExecutionRequest): Promise<ExecutionResult> 
  */
 async function main() {
     try {
-        // Read JSON request from stdin
-        // Bun.stdin.text() reads until EOF which is signaled by stream.end() on the host
-        const stdin = await Bun.stdin.text();
+        // Read the execution request from the MXF_REQUEST environment variable.
+        // The host passes the request as base64-encoded JSON via env var instead
+        // of stdin because dockerode's hijacked stream does not reliably deliver
+        // stdin data to the container process.
+        const encoded = process.env.MXF_REQUEST;
 
-        if (!stdin.trim()) {
+        if (!encoded) {
             const result: ExecutionResult = {
                 success: false,
                 output: null,
                 logs: [],
                 executionTime: 0,
-                error: 'No input provided',
+                error: 'No MXF_REQUEST environment variable provided',
                 timeout: false
             };
             process.stdout.write(JSON.stringify(result));
@@ -171,14 +173,15 @@ async function main() {
 
         let request: ExecutionRequest;
         try {
-            request = JSON.parse(stdin);
+            const decoded = Buffer.from(encoded, 'base64').toString('utf8');
+            request = JSON.parse(decoded);
         } catch (parseError: any) {
             const result: ExecutionResult = {
                 success: false,
                 output: null,
                 logs: [],
                 executionTime: 0,
-                error: `Invalid JSON input: ${parseError.message}`,
+                error: `Invalid MXF_REQUEST: ${parseError.message}`,
                 timeout: false
             };
             process.stdout.write(JSON.stringify(result));

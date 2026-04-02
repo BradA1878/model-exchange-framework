@@ -88,3 +88,4 @@ src/**/*.md
 !src/cli/tui/agents/built-in/*.md
 backups/*
 temp/
+.claude/worktrees/

@@ -27,6 +27,10 @@ interface InfoBarProps {
     confirmationPending: boolean;
     /** Title of the pending confirmation (shown in the alert) */
     confirmationTitle: string | null;
+    /** Number of additional confirmation requests queued behind the current one */
+    confirmationQueueSize?: number;
+    /** Vim mode state: 'normal'/'insert' when enabled, null when disabled */
+    vimMode?: 'normal' | 'insert' | null;
 }
 
 /** Map mode names to display labels */
@@ -46,6 +50,8 @@ const InfoBarInner: React.FC<InfoBarProps> = ({
     isAgentWorking,
     confirmationPending,
     confirmationTitle,
+    confirmationQueueSize = 0,
+    vimMode = null,
 }) => {
     const theme = useTheme();
     const { stdout } = useStdout();
@@ -67,10 +73,14 @@ const InfoBarInner: React.FC<InfoBarProps> = ({
             : `${names.join(', ')} ● working`;
     }
 
-    // Confirmation alert
-    const confirmLabel = confirmationPending
-        ? `⚠ CONFIRM: ${confirmationTitle || 'Pending approval'}`
-        : '';
+    // Confirmation alert with queue count
+    let confirmLabel = '';
+    if (confirmationPending) {
+        confirmLabel = `⚠ CONFIRM: ${confirmationTitle || 'Pending approval'}`;
+        if (confirmationQueueSize > 0) {
+            confirmLabel += ` (+${confirmationQueueSize} more)`;
+        }
+    }
 
     return (
         <Box flexDirection="column">
@@ -79,8 +89,16 @@ const InfoBarInner: React.FC<InfoBarProps> = ({
                 <Text color={theme.border as any}>{rule}</Text>
             </Box>
 
-            {/* Info line: mode | agent status | confirmation alert */}
+            {/* Info line: vim mode | mode | agent status | confirmation alert */}
             <Box paddingX={1} gap={1}>
+                {vimMode !== null && vimMode !== undefined && (
+                    <>
+                        <Text bold color={vimMode === 'normal' ? (theme.warning as any) : (theme.statusActive as any)}>
+                            [{vimMode.toUpperCase()}]
+                        </Text>
+                        <Text color={theme.dimText as any}>|</Text>
+                    </>
+                )}
                 <Text color={theme.dimText as any}>{modeLabel}</Text>
 
                 {agentLabel && (

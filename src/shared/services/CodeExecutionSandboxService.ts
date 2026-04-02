@@ -105,23 +105,32 @@ const DEFAULT_CONFIG: SandboxConfig = {
 };
 
 /**
- * Dangerous patterns to detect in code
- * These are checked BEFORE sending to container for defense in depth
+ * Patterns that can break the executor harness itself (prototype pollution).
+ * These are blocked outright because they could corrupt the executor's runtime
+ * before it produces output, making the result unreadable.
  */
-const DANGEROUS_PATTERNS = [
-    { pattern: /eval\s*\(/g, message: 'eval() is not allowed' },
-    { pattern: /Function\s*\(/g, message: 'Function constructor is not allowed' },
-    { pattern: /require\s*\(/g, message: 'require() is not allowed - modules must be whitelisted' },
-    { pattern: /import\s+.*from/g, message: 'import statements are not allowed' },
-    { pattern: /process\.exit/g, message: 'process.exit is not allowed' },
-    { pattern: /process\.kill/g, message: 'process.kill is not allowed' },
+const BLOCKED_PATTERNS = [
     { pattern: /__proto__/g, message: 'Prototype pollution attempts are not allowed' },
-    { pattern: /constructor\s*\[/g, message: 'Constructor access is not allowed' },
-    { pattern: /child_process/g, message: 'child_process module is not allowed' },
-    { pattern: /Bun\.spawn/g, message: 'Bun.spawn is not allowed' },
-    { pattern: /Bun\.spawnSync/g, message: 'Bun.spawnSync is not allowed' },
-    { pattern: /Bun\.file/g, message: 'Bun.file is not allowed' },
-    { pattern: /Bun\.write/g, message: 'Bun.write is not allowed' },
+    { pattern: /constructor\s*\[/g, message: 'Constructor access via bracket notation is not allowed' },
+];
+
+/**
+ * Patterns that are harmless inside the sandboxed Docker container but worth
+ * surfacing as warnings so agents are aware of what their code is doing.
+ *
+ * These are NOT blocked because the container already enforces isolation:
+ * - No network access (NetworkMode: none)
+ * - Read-only root filesystem (only /tmp is writable, 64MB cap)
+ * - All capabilities dropped, non-root user
+ * - PID limit of 64, strict memory/CPU limits
+ * - eval/Function are safe — the executor itself uses AsyncFunction constructor
+ * - process.exit just exits the container; the host handles it gracefully
+ * - require/import can only access built-in modules already in the image
+ */
+const WARNING_PATTERNS = [
+    { pattern: /child_process/g, message: 'child_process usage detected (sandboxed — all capabilities dropped)' },
+    { pattern: /Bun\.spawn/g, message: 'Bun.spawn usage detected (sandboxed — process spawning is restricted)' },
+    { pattern: /Bun\.spawnSync/g, message: 'Bun.spawnSync usage detected (sandboxed — process spawning is restricted)' },
 ];
 
 /**
@@ -198,13 +207,24 @@ export class CodeExecutionSandboxService {
     public validateCode(code: string): CodeValidationResult {
         const issues: Array<{ type: 'error' | 'warning'; message: string; pattern?: string }> = [];
 
-        // Check for dangerous patterns
-        for (const { pattern, message } of DANGEROUS_PATTERNS) {
-            // Reset regex lastIndex for global patterns
+        // Check for patterns that can break the executor harness (hard block)
+        for (const { pattern, message } of BLOCKED_PATTERNS) {
             pattern.lastIndex = 0;
             if (pattern.test(code)) {
                 issues.push({
                     type: 'error',
+                    message,
+                    pattern: pattern.source
+                });
+            }
+        }
+
+        // Check for patterns worth surfacing as informational warnings
+        for (const { pattern, message } of WARNING_PATTERNS) {
+            pattern.lastIndex = 0;
+            if (pattern.test(code)) {
+                issues.push({
+                    type: 'warning',
                     message,
                     pattern: pattern.source
                 });

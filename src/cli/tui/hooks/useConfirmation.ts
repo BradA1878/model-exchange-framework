@@ -22,6 +22,7 @@ import { useEffect, useRef, useCallback, type Dispatch } from 'react';
 import type { InteractiveSessionManager } from '../services/InteractiveSessionManager';
 import type { UserInputRequestData } from '../../../sdk/index';
 import type { AppAction } from '../state';
+import { ToolPermissionService } from '../services/ToolPermissionService';
 
 /** A queued confirmation request waiting to be shown */
 interface QueuedRequest {
@@ -33,24 +34,28 @@ interface QueuedRequest {
  * Hook that bridges agent user_input requests to TUI confirmation prompts.
  *
  * Registers a callback on the session manager that fires when any agent
- * calls `user_input`. Only one confirmation prompt is shown at a time;
+ * calls `user_input`. Before showing a prompt, checks the ToolPermissionService
+ * for auto-approve/deny rules. Only one confirmation prompt is shown at a time;
  * additional requests are queued and processed sequentially.
  *
  * @param session - The InteractiveSessionManager (null before connect)
  * @param dispatch - React dispatch for state updates
  * @param agentNames - Dynamic map of agentId → display name
+ * @param permissionService - Optional tool permission service for auto-approve/deny
  * @returns Object with handleConfirmationResponse callback
  */
 export function useConfirmation(
     session: InteractiveSessionManager | null,
     dispatch: Dispatch<AppAction>,
     agentNames?: Record<string, string>,
+    permissionService?: ToolPermissionService | null,
 ): {
     handleConfirmationResponse: (accepted: boolean) => void;
 } {
     const dispatchRef = useRef(dispatch);
     const sessionRef = useRef(session);
     const agentNamesRef = useRef(agentNames || {});
+    const permissionServiceRef = useRef(permissionService);
 
     // The request ID currently being shown to the user (null = no prompt active)
     const currentRequestIdRef = useRef<string | null>(null);
@@ -72,6 +77,10 @@ export function useConfirmation(
     useEffect(() => {
         agentNamesRef.current = agentNames || {};
     }, [agentNames]);
+
+    useEffect(() => {
+        permissionServiceRef.current = permissionService;
+    }, [permissionService]);
 
     /**
      * Show a confirmation prompt for a single request.
@@ -114,13 +123,58 @@ export function useConfirmation(
     }, []);
 
     // Register the user input callback on the session manager
+    // Checks tool permission policies before showing/queuing confirmation prompts
     useEffect(() => {
         if (!session) return;
 
         session.setUserInputCallback((agentId, request) => {
+            // Check permission policies before showing a prompt
+            // The request title often contains the tool name context (e.g., "Write src/main.ts")
+            const svc = permissionServiceRef.current;
+            if (svc && request.inputType === 'confirm') {
+                // Extract tool name hint from the request metadata or title
+                const toolName = (request as any).toolName || '';
+                const args = (request as any).toolArgs || {};
+                if (toolName) {
+                    const decision = svc.evaluate(agentId, toolName, args);
+                    if (decision === 'allow') {
+                        // Auto-approve — resolve immediately without showing prompt
+                        session.resolveUserInput(request.requestId, true);
+                        dispatchRef.current({
+                            type: 'ADD_ENTRY',
+                            entry: {
+                                type: 'confirmation-response',
+                                agentId,
+                                agentName: agentNamesRef.current[agentId] || agentId,
+                                content: `Auto-approved: ${request.title || toolName}`,
+                                confirmationAccepted: true,
+                            },
+                        });
+                        return;
+                    }
+                    if (decision === 'deny') {
+                        // Auto-deny — resolve immediately
+                        session.resolveUserInput(request.requestId, false);
+                        dispatchRef.current({
+                            type: 'ADD_ENTRY',
+                            entry: {
+                                type: 'confirmation-response',
+                                agentId,
+                                agentName: agentNamesRef.current[agentId] || agentId,
+                                content: `Auto-denied: ${request.title || toolName}`,
+                                confirmationAccepted: false,
+                            },
+                        });
+                        return;
+                    }
+                    // 'ask' — fall through to show confirmation prompt
+                }
+            }
+
             if (currentRequestIdRef.current) {
                 // A confirmation is already showing — queue this request
                 pendingQueueRef.current.push({ agentId, request });
+                dispatchRef.current({ type: 'SET_CONFIRMATION_QUEUE_SIZE', size: pendingQueueRef.current.length });
                 return;
             }
             // No active prompt — show immediately
@@ -162,6 +216,7 @@ export function useConfirmation(
             // preventing the component-switch race that causes freezes).
             dispatchRef.current({ type: 'ADD_ENTRY', entry: responseEntry });
             const next = pendingQueueRef.current.shift()!;
+            dispatchRef.current({ type: 'SET_CONFIRMATION_QUEUE_SIZE', size: pendingQueueRef.current.length });
             setTimeout(() => {
                 showConfirmation(next.agentId, next.request);
             }, 100);

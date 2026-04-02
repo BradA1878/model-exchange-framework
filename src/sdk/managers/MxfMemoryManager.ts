@@ -40,6 +40,7 @@ import {
     MeilisearchBackfillEventData
 } from '../../shared/schemas/EventPayloadSchema';
 import { EventBus } from '../../shared/events/EventBus';
+import { Events } from '../../shared/events/EventNames';
 
 export interface MemoryManagerConfig {
     agentId: string;
@@ -507,6 +508,83 @@ export class MxfMemoryManager {
         } catch (error) {
             this.logger.error(`Error saving cleared conversation history: ${error instanceof Error ? error.message : String(error)}`);
         }
+    }
+
+    /**
+     * Compact the conversation history to free context window space.
+     * Keeps the most recent messages and system messages, removes older blocks
+     * while preserving tool call-result pair integrity.
+     * Emits CONTEXT_COMPACTED event with before/after counts.
+     *
+     * @param keepRecent - Number of recent non-system messages to keep (default: half of maxHistory)
+     * @returns Object with originalMessages and compactedMessages counts
+     */
+    public async compactConversation(keepRecent?: number): Promise<{ originalMessages: number; compactedMessages: number }> {
+        const originalCount = this.conversationHistory.length;
+
+        // Target: keep half of maxHistory by default (aggressive compaction to buy headroom)
+        const targetKeep = keepRecent ?? Math.floor(this.config.maxHistory / 2);
+
+        if (originalCount <= targetKeep) {
+            this.logger.info(`[MemoryManager] Compact skipped — only ${originalCount} messages (target: ${targetKeep})`);
+            return { originalMessages: originalCount, compactedMessages: originalCount };
+        }
+
+        // Separate system messages (always kept) from conversation messages
+        const systemMessages = this.conversationHistory.filter(m => m.role === 'system');
+        const nonSystemMessages = this.conversationHistory.filter(m => m.role !== 'system');
+
+        // Group into conversation blocks to avoid orphaning tool call-result pairs
+        const blocks = this.groupIntoConversationBlocks(nonSystemMessages);
+
+        // Keep the newest blocks that fit in the target
+        let keptCount = 0;
+        const keepBlocks: ConversationMessage[][] = [];
+        for (let i = blocks.length - 1; i >= 0; i--) {
+            const block = blocks[i];
+            if (keptCount + block.length <= targetKeep) {
+                keptCount += block.length;
+                keepBlocks.unshift(block);
+            } else {
+                break;
+            }
+        }
+
+        // Reconstruct with system messages + kept blocks, chronological order
+        this.conversationHistory = [
+            ...systemMessages,
+            ...keepBlocks.flat(),
+        ].sort((a, b) => a.timestamp - b.timestamp);
+
+        // Reset saved count since we removed messages MongoDB has
+        this.lastSavedMessageCount = 0;
+
+        const compactedCount = this.conversationHistory.length;
+        this.logger.info(
+            `[MemoryManager] Compacted conversation: ${originalCount} → ${compactedCount} messages ` +
+            `(removed ${originalCount - compactedCount} oldest messages)`
+        );
+
+        // Persist the compacted state
+        try {
+            await this.saveAgentMemory();
+        } catch (error) {
+            this.logger.error(`Error saving compacted history: ${error instanceof Error ? error.message : String(error)}`);
+        }
+
+        // Emit compaction event for TUI notification
+        this.eventBus.client.emit(Events.Agent.CONTEXT_COMPACTED, {
+            agentId: this.agentId,
+            channelId: this.config.channelId,
+            data: {
+                agentId: this.agentId,
+                originalMessages: originalCount,
+                compactedMessages: compactedCount,
+                timestamp: Date.now(),
+            },
+        });
+
+        return { originalMessages: originalCount, compactedMessages: compactedCount };
     }
 
     /**

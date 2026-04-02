@@ -10,6 +10,7 @@
 import type { Dispatch } from 'react';
 import type { AppAction, AppState } from '../state';
 import type { InteractiveSessionManager } from '../services/InteractiveSessionManager';
+import type { ToolPermissionService } from '../services/ToolPermissionService';
 
 /** Context passed to slash command handlers */
 export interface CommandContext {
@@ -21,6 +22,10 @@ export interface CommandContext {
     requestExit: () => void;
     /** Get current app state (for commands that need to read state) */
     getState?: () => AppState;
+    /** Tool permission service for managing auto-approve/deny rules */
+    permissionService?: ToolPermissionService;
+    /** Submit a task to the orchestrator agent (for /retry) */
+    submitTask?: (task: string, contextString?: string | null, recentResult?: string | null) => Promise<void>;
 }
 
 /** Definition of a single slash command */

@@ -79,6 +79,7 @@ export const INFRASTRUCTURE_TOOLS = {
     MEMORY_STORE: 'memory_store',
     MEMORY_RETRIEVE: 'memory_retrieve',
     SHELL_EXECUTE: 'shell_execute',
+    SHELL_TASK_STATUS: 'shell_task_status',
     CODE_EXECUTE: 'code_execute'
 } as const;
 

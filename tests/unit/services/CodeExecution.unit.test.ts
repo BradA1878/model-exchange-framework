@@ -1,9 +1,12 @@
 /**
  * Unit tests for CodeExecutionSandboxService
- * Tests dangerous pattern detection, safe code validation, warnings, and configuration
+ * Tests pattern detection, safe code validation, warnings, and configuration
  *
  * Note: These tests focus on the validateCode() method which runs BEFORE
- * container execution for defense in depth. Actual execution tests are in integration tests.
+ * container execution. Only prototype pollution patterns are hard-blocked
+ * because they can corrupt the executor harness. All other patterns are
+ * safe inside the sandboxed Docker container (no network, read-only FS,
+ * all capabilities dropped, non-root user).
  */
 
 import { CodeExecutionSandboxService } from '@mxf/shared/services/CodeExecutionSandboxService';
@@ -15,106 +18,98 @@ describe('CodeExecutionSandboxService Unit Tests', () => {
         sandbox = CodeExecutionSandboxService.getInstance();
     });
 
-    describe('Dangerous Pattern Detection', () => {
-        // eval() - dynamic code execution
-        it('should detect eval() as dangerous', () => {
-            const validation = sandbox.validateCode('eval("malicious code")');
-            expect(validation.safe).toBe(false);
-            expect(validation.issues.some(i => i.message.includes('eval'))).toBe(true);
-        });
-
-        it('should detect eval with different spacing', () => {
-            const validation = sandbox.validateCode('eval   ("test")');
-            expect(validation.safe).toBe(false);
-        });
-
-        // Function() - dynamic code execution
-        it('should detect Function() constructor as dangerous', () => {
-            const validation = sandbox.validateCode('new Function("return 1")');
-            expect(validation.safe).toBe(false);
-            expect(validation.issues.some(i => i.message.includes('Function constructor'))).toBe(true);
-        });
-
-        it('should detect Function with different casing', () => {
-            const validation = sandbox.validateCode('Function ("code")');
-            expect(validation.safe).toBe(false);
-        });
-
-        // require() - module loading
-        it('should detect require() as dangerous', () => {
-            const validation = sandbox.validateCode('const fs = require("fs")');
-            expect(validation.safe).toBe(false);
-            expect(validation.issues.some(i => i.message.includes('require'))).toBe(true);
-        });
-
-        // import statements
-        it('should detect import statements as dangerous', () => {
-            const validation = sandbox.validateCode('import fs from "fs"');
-            expect(validation.safe).toBe(false);
-            expect(validation.issues.some(i => i.message.includes('import'))).toBe(true);
-        });
-
-        // process.exit
-        it('should detect process.exit as dangerous', () => {
-            const validation = sandbox.validateCode('process.exit(1)');
-            expect(validation.safe).toBe(false);
-            expect(validation.issues.some(i => i.message.includes('process.exit'))).toBe(true);
-        });
-
-        // process.kill
-        it('should detect process.kill as dangerous', () => {
-            const validation = sandbox.validateCode('process.kill(process.pid)');
-            expect(validation.safe).toBe(false);
-            expect(validation.issues.some(i => i.message.includes('process.kill'))).toBe(true);
-        });
-
-        // __proto__ - prototype pollution
+    describe('Blocked Pattern Detection (Executor Harness Protection)', () => {
+        // __proto__ - prototype pollution can corrupt the executor before it returns output
         it('should detect __proto__ as dangerous', () => {
             const validation = sandbox.validateCode('obj.__proto__ = {}');
             expect(validation.safe).toBe(false);
             expect(validation.issues.some(i => i.message.includes('Prototype pollution'))).toBe(true);
         });
 
-        // constructor[] - prototype access
+        // constructor[] - prototype access via bracket notation
         it('should detect constructor[] access as dangerous', () => {
             const validation = sandbox.validateCode('obj.constructor["prototype"]');
             expect(validation.safe).toBe(false);
             expect(validation.issues.some(i => i.message.includes('Constructor'))).toBe(true);
         });
+    });
 
-        // child_process
-        it('should detect child_process module reference as dangerous', () => {
+    describe('Warning Pattern Detection (Informational Only)', () => {
+        // These pass validation (safe=true) but produce warnings
+
+        it('should warn about child_process usage', () => {
             const validation = sandbox.validateCode('const cp = child_process.exec("ls")');
-            expect(validation.safe).toBe(false);
-            expect(validation.issues.some(i => i.message.includes('child_process'))).toBe(true);
+            expect(validation.safe).toBe(true);
+            expect(validation.issues.some(i =>
+                i.type === 'warning' && i.message.includes('child_process')
+            )).toBe(true);
         });
 
-        // Bun.spawn
-        it('should detect Bun.spawn as dangerous', () => {
+        it('should warn about Bun.spawn usage', () => {
             const validation = sandbox.validateCode('Bun.spawn(["ls"])');
-            expect(validation.safe).toBe(false);
-            expect(validation.issues.some(i => i.message.includes('Bun.spawn'))).toBe(true);
+            expect(validation.safe).toBe(true);
+            expect(validation.issues.some(i =>
+                i.type === 'warning' && i.message.includes('Bun.spawn')
+            )).toBe(true);
         });
 
-        // Bun.spawnSync
-        it('should detect Bun.spawnSync as dangerous', () => {
+        it('should warn about Bun.spawnSync usage', () => {
             const validation = sandbox.validateCode('Bun.spawnSync(["ls"])');
-            expect(validation.safe).toBe(false);
-            expect(validation.issues.some(i => i.message.includes('Bun.spawnSync'))).toBe(true);
+            expect(validation.safe).toBe(true);
+            expect(validation.issues.some(i =>
+                i.type === 'warning' && i.message.includes('Bun.spawnSync')
+            )).toBe(true);
+        });
+    });
+
+    describe('Sandbox-Safe Patterns (No Longer Blocked)', () => {
+        // These patterns are harmless inside the sandboxed Docker container.
+        // The container enforces isolation: no network, read-only FS, all caps dropped,
+        // non-root user, memory/CPU/PID limits.
+
+        it('should allow eval() (safe in sandbox)', () => {
+            const validation = sandbox.validateCode('eval("1 + 1")');
+            expect(validation.safe).toBe(true);
         });
 
-        // Bun.file
-        it('should detect Bun.file as dangerous', () => {
+        it('should allow eval with different spacing', () => {
+            const validation = sandbox.validateCode('eval   ("test")');
+            expect(validation.safe).toBe(true);
+        });
+
+        it('should allow Function() constructor (executor itself uses AsyncFunction)', () => {
+            const validation = sandbox.validateCode('new Function("return 1")');
+            expect(validation.safe).toBe(true);
+        });
+
+        it('should allow require() (only built-in modules in container)', () => {
+            const validation = sandbox.validateCode('const fs = require("fs")');
+            expect(validation.safe).toBe(true);
+        });
+
+        it('should allow import statements (only built-in modules in container)', () => {
+            const validation = sandbox.validateCode('import fs from "fs"');
+            expect(validation.safe).toBe(true);
+        });
+
+        it('should allow process.exit (just exits the container)', () => {
+            const validation = sandbox.validateCode('process.exit(1)');
+            expect(validation.safe).toBe(true);
+        });
+
+        it('should allow process.kill (PID namespace is isolated)', () => {
+            const validation = sandbox.validateCode('process.kill(process.pid)');
+            expect(validation.safe).toBe(true);
+        });
+
+        it('should allow Bun.file (root FS is read-only)', () => {
             const validation = sandbox.validateCode('const file = Bun.file("/etc/passwd")');
-            expect(validation.safe).toBe(false);
-            expect(validation.issues.some(i => i.message.includes('Bun.file'))).toBe(true);
+            expect(validation.safe).toBe(true);
         });
 
-        // Bun.write
-        it('should detect Bun.write as dangerous', () => {
+        it('should allow Bun.write (root FS is read-only, /tmp is capped)', () => {
             const validation = sandbox.validateCode('await Bun.write("/tmp/test", "data")');
-            expect(validation.safe).toBe(false);
-            expect(validation.issues.some(i => i.message.includes('Bun.write'))).toBe(true);
+            expect(validation.safe).toBe(true);
         });
     });
 
@@ -239,18 +234,27 @@ describe('CodeExecutionSandboxService Unit Tests', () => {
         });
     });
 
-    describe('Multiple Dangerous Patterns', () => {
-        it('should detect all dangerous patterns in code with multiple issues', () => {
+    describe('Multiple Patterns', () => {
+        it('should detect multiple blocked patterns in same code', () => {
             const code = `
-                eval("test");
-                require("fs");
+                obj.__proto__ = {};
+                obj.constructor["prototype"].polluted = true;
+            `;
+            const validation = sandbox.validateCode(code);
+            expect(validation.safe).toBe(false);
+            const errors = validation.issues.filter(i => i.type === 'error');
+            expect(errors.length).toBeGreaterThanOrEqual(2);
+        });
+
+        it('should report both errors and warnings when both types present', () => {
+            const code = `
+                obj.__proto__ = {};
                 Bun.spawn(["ls"]);
             `;
             const validation = sandbox.validateCode(code);
             expect(validation.safe).toBe(false);
-            // Should have at least 3 errors
-            const errors = validation.issues.filter(i => i.type === 'error');
-            expect(errors.length).toBeGreaterThanOrEqual(3);
+            expect(validation.issues.some(i => i.type === 'error')).toBe(true);
+            expect(validation.issues.some(i => i.type === 'warning')).toBe(true);
         });
     });
 
@@ -265,22 +269,18 @@ describe('CodeExecutionSandboxService Unit Tests', () => {
             expect(validation.safe).toBe(true);
         });
 
-        it('should handle code with comments containing dangerous patterns', () => {
-            // Comments with dangerous patterns should NOT trigger detection
-            // since they're strings - but regex-based detection will catch them
-            const code = '// eval("test") - this is a comment\nreturn 1;';
+        it('should detect __proto__ even in comments (regex-based detection)', () => {
+            const code = '// obj.__proto__ = {} - this is a comment\nreturn 1;';
             const validation = sandbox.validateCode(code);
-            // Note: regex-based detection will still catch it in comments
-            // This is by design for defense in depth
+            // Regex-based detection catches it in comments — conservative by design
             expect(validation.safe).toBe(false);
         });
 
-        it('should handle code with dangerous patterns in strings', () => {
-            // Patterns in strings should be caught for defense in depth
-            const code = 'return "eval()";';
+        it('should not flag sandbox-safe patterns in comments or strings', () => {
+            // eval in a comment is fine since eval is no longer blocked
+            const code = '// eval("test")\nreturn 1;';
             const validation = sandbox.validateCode(code);
-            // Will be caught by regex (defense in depth)
-            expect(validation.safe).toBe(false);
+            expect(validation.safe).toBe(true);
         });
     });
 });

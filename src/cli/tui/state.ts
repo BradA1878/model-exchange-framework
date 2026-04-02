@@ -10,7 +10,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import type { ConversationEntry, AgentInfo, ConnectionStatus } from './types';
 import type { SessionCostData } from './services/CostTracker';
-import { createInitialCostData, trackIteration, trackTokenUsage } from './services/CostTracker';
+import { createInitialCostData, trackIteration, trackTokenUsage, checkContextThresholds } from './services/CostTracker';
 /** Resolve an agent name from the agents array in state, falling back to the raw ID */
 function resolveAgentName(agents: AgentInfo[], agentId: string): string {
     const agent = agents.find(a => a.id === agentId);
@@ -41,6 +41,8 @@ export interface AppState {
     error: string | null;
     /** Whether a confirmation prompt is pending (locks input to [y/n] mode) */
     confirmationPending: boolean;
+    /** Number of additional confirmation requests queued behind the current one */
+    confirmationQueueSize: number;
     /** Entry ID of the pending confirmation prompt (for resolving) */
     pendingConfirmationEntryId: string | null;
     /** Title of the pending confirmation prompt (shown inline in [y/n] input) */
@@ -59,6 +61,14 @@ export interface AppState {
     currentMode: 'chat' | 'plan' | 'action';
     /** Live streaming preview from the active LLM response (null when not streaming) */
     streamPreview: { agentId: string; text: string } | null;
+    /** Agent IDs that have already triggered context compaction (prevents repeated triggers) */
+    compactedAgents: Set<string>;
+    /** Active file operations per path — tracks which agent is modifying each file for conflict detection */
+    activeFileOps: Map<string, { agentId: string; agentName: string; toolName: string; timestamp: number }>;
+    /** Active conversation entry type filter (null = show all, string = show only matching type) */
+    entryFilter: string | null;
+    /** Vim mode state: 'normal'/'insert' when enabled, null when disabled */
+    vimMode: 'normal' | 'insert' | null;
 }
 
 /** A pending selection prompt shown in the InputLine */
@@ -86,6 +96,7 @@ export type AppAction =
     | { type: 'SET_MODEL_OVERRIDE'; model: string | null }
     | { type: 'UPDATE_ENTRY'; entryId: string; updates: Partial<ConversationEntry> }
     | { type: 'SET_CONFIRMATION_PENDING'; pending: boolean; entryId?: string | null; title?: string }
+    | { type: 'SET_CONFIRMATION_QUEUE_SIZE'; size: number }
     | { type: 'TOGGLE_DETAIL_MODE' }
     | { type: 'TRACK_ITERATION'; agentId: string; iterationType: 'message' | 'tool-call' | 'task-complete' }
     | { type: 'TRACK_TOKEN_USAGE'; agentId: string; inputTokens: number; outputTokens: number; totalTokens: number; model?: string }
@@ -94,6 +105,11 @@ export type AppAction =
     | { type: 'SET_MODE'; mode: 'chat' | 'plan' | 'action' }
     | { type: 'UPDATE_STREAM_PREVIEW'; agentId: string; chunk: string }
     | { type: 'CLEAR_STREAM_PREVIEW' }
+    | { type: 'MARK_AGENT_COMPACTED'; agentId: string }
+    | { type: 'SET_ENTRY_FILTER'; filter: string | null }
+    | { type: 'SET_COST_BUDGET'; budget: number | null }
+    | { type: 'MARK_BUDGET_WARNING_EMITTED' }
+    | { type: 'MARK_BUDGET_EXCEEDED' }
     // Compound actions — consolidate multiple state changes into a single dispatch
     // to reduce re-render count (socket callbacks bypass React 18 auto-batching)
     | {
@@ -124,6 +140,7 @@ export type AppAction =
         entry: Omit<ConversationEntry, 'id' | 'timestamp'>;
         title: string | null;
     }
+    | { type: 'SET_VIM_MODE'; mode: 'normal' | 'insert' | null }
     | {
         /** Compound: add confirmation response entry + clear pending state in one render.
          * Mirrors SET_CONFIRMATION for the response side — prevents the two-dispatch
@@ -131,6 +148,19 @@ export type AppAction =
          * InputLine to freeze when switching from TextInput back to MultilineInput. */
         type: 'CONFIRMATION_RESPONSE';
         entry: Omit<ConversationEntry, 'id' | 'timestamp'>;
+    }
+    | {
+        /** Track a file modification operation in progress for parallel agent conflict detection */
+        type: 'TRACK_FILE_OP';
+        filePath: string;
+        agentId: string;
+        agentName: string;
+        toolName: string;
+    }
+    | {
+        /** Clear a tracked file operation when the tool execution completes */
+        type: 'CLEAR_FILE_OP';
+        filePath: string;
     };
 
 /** Preferences passed from TuiConfig to initial state */
@@ -154,6 +184,7 @@ export function createInitialState(preferences?: InitialPreferences): AppState {
         modelOverride: null,
         error: null,
         confirmationPending: false,
+        confirmationQueueSize: 0,
         pendingConfirmationEntryId: null,
         confirmationTitle: null,
         detailMode: preferences?.detailModeDefault ?? false,
@@ -163,6 +194,10 @@ export function createInitialState(preferences?: InitialPreferences): AppState {
         pendingSelection: null,
         currentMode: 'action',
         streamPreview: null,
+        compactedAgents: new Set<string>(),
+        activeFileOps: new Map(),
+        entryFilter: null,
+        vimMode: null,
     };
 }
 
@@ -262,6 +297,12 @@ export function appReducer(state: AppState, action: AppAction): AppState {
                 confirmationTitle: action.pending ? (action.title || null) : null,
             };
 
+        case 'SET_CONFIRMATION_QUEUE_SIZE':
+            return {
+                ...state,
+                confirmationQueueSize: action.size,
+            };
+
         case 'TOGGLE_DETAIL_MODE':
             return {
                 ...state,
@@ -278,14 +319,47 @@ export function appReducer(state: AppState, action: AppAction): AppState {
 
         case 'TRACK_TOKEN_USAGE': {
             const tokenAgentName = resolveAgentName(state.agents, action.agentId);
+            const updatedCostData = trackTokenUsage(
+                state.costData, action.agentId, tokenAgentName,
+                action.inputTokens, action.outputTokens, action.totalTokens, action.model,
+            );
+            // Check if any agent is approaching its context window limit
+            // (the actual compaction event is emitted by useEventMonitor after dispatch)
             return {
                 ...state,
-                costData: trackTokenUsage(
-                    state.costData, action.agentId, tokenAgentName,
-                    action.inputTokens, action.outputTokens, action.totalTokens, action.model,
-                ),
+                costData: updatedCostData,
             };
         }
+
+        case 'MARK_AGENT_COMPACTED': {
+            const newCompacted = new Set(state.compactedAgents);
+            newCompacted.add(action.agentId);
+            return { ...state, compactedAgents: newCompacted };
+        }
+
+        case 'SET_ENTRY_FILTER':
+            return {
+                ...state,
+                entryFilter: action.filter,
+            };
+
+        case 'SET_COST_BUDGET':
+            return {
+                ...state,
+                costData: { ...state.costData, costBudget: action.budget, budgetWarningEmitted: false, budgetExceeded: false },
+            };
+
+        case 'MARK_BUDGET_WARNING_EMITTED':
+            return {
+                ...state,
+                costData: { ...state.costData, budgetWarningEmitted: true },
+            };
+
+        case 'MARK_BUDGET_EXCEEDED':
+            return {
+                ...state,
+                costData: { ...state.costData, budgetExceeded: true },
+            };
 
         case 'SET_THEME':
             return {
@@ -306,11 +380,17 @@ export function appReducer(state: AppState, action: AppAction): AppState {
             };
 
         case 'UPDATE_STREAM_PREVIEW': {
-            // Append chunk to the existing preview text for this agent (or start new)
+            // Append chunk to the existing preview text for this agent (or start new).
+            // Apply a rolling window (2000 chars) to prevent unbounded memory growth
+            // while keeping enough context for the multi-line preview display.
+            const STREAM_PREVIEW_MAX = 2000;
             const existing = state.streamPreview;
-            const newText = existing && existing.agentId === action.agentId
+            let newText = existing && existing.agentId === action.agentId
                 ? existing.text + action.chunk
                 : action.chunk;
+            if (newText.length > STREAM_PREVIEW_MAX) {
+                newText = newText.slice(-STREAM_PREVIEW_MAX);
+            }
             return {
                 ...state,
                 streamPreview: { agentId: action.agentId, text: newText },
@@ -321,6 +401,12 @@ export function appReducer(state: AppState, action: AppAction): AppState {
             return {
                 ...state,
                 streamPreview: null,
+            };
+
+        case 'SET_VIM_MODE':
+            return {
+                ...state,
+                vimMode: action.mode,
             };
 
         // Compound: add entry + update agent status + optionally track iteration in one render
@@ -401,6 +487,7 @@ export function appReducer(state: AppState, action: AppAction): AppState {
                 ...state,
                 entries: [...state.entries, responseEntry],
                 confirmationPending: false,
+                confirmationQueueSize: 0,
                 pendingConfirmationEntryId: null,
                 confirmationTitle: null,
             };
@@ -432,6 +519,27 @@ export function appReducer(state: AppState, action: AppAction): AppState {
                 currentTaskId: action.clearTaskId ? null : state.currentTaskId,
                 streamPreview: null,
             };
+        }
+
+        // Track a file modification operation — records which agent is working on each file path.
+        // If another agent already has an active op on this path, both entries are preserved
+        // (the conflict warning is emitted at dispatch time in useEventMonitor).
+        case 'TRACK_FILE_OP': {
+            const newOps = new Map(state.activeFileOps);
+            newOps.set(action.filePath, {
+                agentId: action.agentId,
+                agentName: action.agentName,
+                toolName: action.toolName,
+                timestamp: Date.now(),
+            });
+            return { ...state, activeFileOps: newOps };
+        }
+
+        // Clear a tracked file operation when the tool execution completes
+        case 'CLEAR_FILE_OP': {
+            const clearedOps = new Map(state.activeFileOps);
+            clearedOps.delete(action.filePath);
+            return { ...state, activeFileOps: clearedOps };
         }
 
         default:

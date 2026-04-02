@@ -37,6 +37,9 @@ import { promisify } from 'util';
 import crypto from 'crypto';
 import { getSecurityGuard, SecurityContext } from '../security/McpSecurityGuard';
 import { getConfirmationManager } from '../security/McpConfirmationManager';
+import { execute as shellExecuteHandler } from './shell/ShellExecuteHandler';
+import { processOutput } from './shell/LargeOutputHandler';
+import { BackgroundTaskManager } from '../../../services/BackgroundTaskManager';
 import { MemoryService } from '../../../services/MemoryService';
 import { CodeExecutionSandboxService, ExecutionLanguage } from '../../../services/CodeExecutionSandboxService';
 import { Events } from '../../../events/EventNames';
@@ -352,11 +355,43 @@ export const shellExecTool = {
                 type: 'array',
                 items: { type: 'string' },
                 description: 'List of allowed commands (for security)'
+            },
+            description: {
+                type: 'string',
+                description: 'Human-readable summary of what this command does (for logging, audit trails, and display)'
+            },
+            runInBackground: {
+                type: 'boolean',
+                default: false,
+                description: 'Run the command in the background. Returns a taskId immediately that can be queried with shell_task_status.'
+            },
+            backgroundTimeout: {
+                type: 'number',
+                description: 'Timeout in seconds for background tasks (only used when runInBackground is true)',
+                minimum: 1
             }
         },
         required: ['command']
     },
 
+    /**
+     * Delegates to the enhanced ShellExecuteHandler for foreground execution, or
+     * to BackgroundTaskManager for background execution.
+     *
+     * Foreground mode provides:
+     * - Command semantics (exit code interpretation)
+     * - Destructive command warnings
+     * - Command classification (read-only, silent, etc.)
+     * - Large output handling (persist + preview)
+     * - Event emission throughout lifecycle
+     * - spawn() instead of exec() for streaming
+     *
+     * Background mode provides:
+     * - Immediate taskId return
+     * - Ring-buffer output accumulation
+     * - Throttled progress events via EventBus
+     * - Query via shell_task_status tool
+     */
     async handler(input: {
         command: string;
         args?: string[];
@@ -365,109 +400,129 @@ export const shellExecTool = {
         timeout?: number;
         captureOutput?: boolean;
         allowedCommands?: string[];
+        description?: string;
+        runInBackground?: boolean;
+        backgroundTimeout?: number;
     }, context: {
         agentId: AgentId;
         channelId: ChannelId;
         requestId: string;
-    }): Promise<{
-        command: string;
-        exitCode: number;
-        stdout?: string;
-        stderr?: string;
-        executionTime: number;
-        executedAt: number;
-    }> {
-        try {
-            validator.assertIsString(input.command, 'command');
-            
-            // Create security context
-            const securityContext: SecurityContext = {
-                agentId: context.agentId,
-                channelId: context.channelId,
-                requestId: context.requestId
+    }) {
+        // Background execution: delegate to BackgroundTaskManager
+        if (input.runInBackground) {
+            const btm = BackgroundTaskManager.getInstance();
+            const { taskId } = await btm.startBackground(
+                input.command,
+                {
+                    workingDirectory: input.workingDirectory,
+                    environment: input.environment,
+                    timeout: input.backgroundTimeout,
+                    description: input.description
+                },
+                context
+            );
+            return {
+                taskId,
+                command: input.command,
+                description: input.description,
+                status: 'running',
+                message: `Background task started. Use shell_task_status with taskId "${taskId}" to check progress.`
             };
-            
-            // Validate command with security guard
-            const commandValidation = securityGuard.validateCommand(input.command, securityContext);
-            
-            if (!commandValidation.allowed) {
-                throw new Error(commandValidation.reason || 'Command not allowed');
-            }
-            
-            // Check if confirmation is required
-            if (commandValidation.requiresConfirmation) {
-                const confirmed = await confirmationManager.requestConfirmation(
-                    'command',
-                    `Execute shell command`,
-                    {
-                        command: input.command,
-                        riskLevel: commandValidation.riskLevel || 'medium',
-                        reason: commandValidation.reason || 'Command requires confirmation'
-                    },
-                    securityContext,
-                    input.timeout || 30000
-                );
-                
-                if (!confirmed) {
-                    throw new Error('Command execution denied by user');
-                }
-            }
-            
-            // Additional check for allowed commands list if provided
-            if (input.allowedCommands) {
-                const baseCommand = input.command.split(' ')[0];
-                if (!input.allowedCommands.includes(baseCommand)) {
-                    throw new Error(`Command '${baseCommand}' not in allowed commands list`);
-                }
-            }
-
-
-            const startTime = Date.now();
-            
-            try {
-                // Build the full command string with properly escaped arguments
-                // Shell-escape each argument by wrapping in single quotes and escaping any embedded single quotes
-                const quotedArgs = input.args ? input.args.map(arg => `'${arg.replace(/'/g, "'\\''")}'`).join(' ') : '';
-                const fullCommand = input.args ?
-                    `${input.command} ${quotedArgs}` :
-                    input.command;
-
-                // Execute the command
-                const result = await execAsync(fullCommand, {
-                    cwd: input.workingDirectory || process.cwd(),
-                    env: { ...process.env, ...input.environment },
-                    timeout: input.timeout || 30000,
-                    maxBuffer: 1024 * 1024 * 10 // 10MB buffer
-                });
-                
-                const executionTime = Date.now() - startTime;
-                
-                return {
-                    command: fullCommand,
-                    exitCode: 0,
-                    stdout: input.captureOutput ? result.stdout : undefined,
-                    stderr: input.captureOutput ? result.stderr : undefined,
-                    executionTime,
-                    executedAt: Date.now()
-                };
-                
-            } catch (execError: any) {
-                const executionTime = Date.now() - startTime;
-                
-                // Handle execution errors (non-zero exit codes)
-                return {
-                    command: input.command,
-                    exitCode: execError.code || 1,
-                    stdout: input.captureOutput ? execError.stdout || '' : undefined,
-                    stderr: input.captureOutput ? execError.stderr || execError.message : undefined,
-                    executionTime,
-                    executedAt: Date.now()
-                };
-            }
-        } catch (error) {
-            logger.error(`Failed to execute command: ${error}`);
-            throw new Error(`Failed to execute command: ${error instanceof Error ? error.message : String(error)}`);
         }
+
+        // Foreground execution: delegate to ShellExecuteHandler
+        return shellExecuteHandler(input, context);
+    }
+};
+
+/**
+ * MCP Tool: shell_task_status
+ * Query the status and output of background shell tasks started via shell_execute
+ * with runInBackground: true.
+ */
+export const shellTaskStatusTool = {
+    name: INFRASTRUCTURE_TOOLS.SHELL_TASK_STATUS,
+    description: 'Get status, output preview, or cancel a background shell task. Use after starting a command with runInBackground: true.',
+    inputSchema: {
+        type: 'object',
+        properties: {
+            taskId: {
+                type: 'string',
+                description: 'The taskId returned by shell_execute when runInBackground was true'
+            },
+            action: {
+                type: 'string',
+                enum: ['status', 'output', 'cancel', 'list'],
+                default: 'status',
+                description: 'Action to perform: status (get task info), output (get full output), cancel (stop the task), list (list all tasks)'
+            },
+            agentId: {
+                type: 'string',
+                description: 'Filter tasks by agent (only used with action: list)'
+            }
+        },
+        required: []
+    },
+
+    async handler(input: {
+        taskId?: string;
+        action?: 'status' | 'output' | 'cancel' | 'list';
+        agentId?: AgentId;
+    }, context: {
+        agentId: AgentId;
+        channelId: ChannelId;
+        requestId: string;
+    }) {
+        const btm = BackgroundTaskManager.getInstance();
+        const action = input.action || 'status';
+
+        if (action === 'list') {
+            const tasks = btm.listTasks(input.agentId as AgentId);
+            return {
+                action: 'list',
+                count: tasks.length,
+                tasks
+            };
+        }
+
+        if (!input.taskId) {
+            throw new Error('taskId is required for status, output, and cancel actions');
+        }
+
+        if (action === 'cancel') {
+            const cancelled = btm.cancelTask(input.taskId);
+            return {
+                action: 'cancel',
+                taskId: input.taskId,
+                cancelled,
+                message: cancelled
+                    ? 'Task cancellation initiated (SIGTERM sent)'
+                    : 'Task not found or not running'
+            };
+        }
+
+        if (action === 'output') {
+            const output = btm.getTaskOutput(input.taskId);
+            if (output === null) {
+                throw new Error(`Task not found: ${input.taskId}`);
+            }
+            return {
+                action: 'output',
+                taskId: input.taskId,
+                output,
+                outputSize: Buffer.byteLength(output, 'utf-8')
+            };
+        }
+
+        // Default: status
+        const status = btm.getTaskStatus(input.taskId);
+        if (!status) {
+            throw new Error(`Task not found: ${input.taskId}`);
+        }
+        return {
+            action: 'status',
+            ...status
+        };
     }
 };
 
@@ -508,6 +563,10 @@ export const codeExecuteTool = {
                 type: 'boolean',
                 description: 'Capture console.log output',
                 default: true
+            },
+            description: {
+                type: 'string',
+                description: 'Human-readable summary of what this code does (for logging, audit trails, and display)'
             }
         },
         required: ['code'],
@@ -561,6 +620,8 @@ export const codeExecuteTool = {
                     memory: number;
                     timeout: boolean;
                 };
+                outputTruncated?: boolean;
+                persistedOutputId?: string;
             };
         };
     }> {
@@ -755,17 +816,39 @@ export const codeExecuteTool = {
                 });
             }
 
+            // Apply LargeOutputHandler to code execution output if it's large
+            const outputStr = String(result.output ?? '');
+            let processedOutput = result.output;
+            let outputTruncated = false;
+            let persistedOutputId: string | undefined;
+
+            if (Buffer.byteLength(outputStr, 'utf-8') > 512 * 1024) {
+                const processed = await processOutput(
+                    outputStr,
+                    {
+                        agentId: context.agentId,
+                        channelId: context.channelId,
+                        commandHash: result.codeHash
+                    }
+                );
+                processedOutput = processed.inline;
+                outputTruncated = processed.isTruncated;
+                persistedOutputId = processed.persistedOutputId;
+            }
+
             return {
                 content: {
                     type: 'application/json',
                     data: {
                         success: result.success,
-                        output: result.output,
+                        output: processedOutput,
                         logs: input.captureConsole !== false ? result.logs : undefined,
                         executionTime: result.executionTime,
                         codeHash: result.codeHash,
                         error: result.error,
-                        resourceUsage: result.resourceUsage
+                        resourceUsage: result.resourceUsage,
+                        outputTruncated: outputTruncated || undefined,
+                        persistedOutputId
                     }
                 }
             };
@@ -838,5 +921,6 @@ export const infrastructureTools = [
     memoryStoreTool,
     memoryRetrieveTool,
     shellExecTool,
+    shellTaskStatusTool,
     codeExecuteTool
 ];

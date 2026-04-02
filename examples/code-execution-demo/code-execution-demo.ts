@@ -317,9 +317,9 @@ async function demo() {
     console.log('Demo 8: Security Validation (Expected to Fail)');
     console.log('-'.repeat(60));
 
-    console.log('Code: eval("malicious code") - BLOCKED');
+    console.log('Code: __proto__ pollution attempt - BLOCKED');
     const result8 = await agent.executeTool('code_execute', {
-      code: 'eval("malicious code");'
+      code: 'const obj = {}; obj.__proto__.polluted = true;'
     });
 
     // Result may be an error string or object with success=false

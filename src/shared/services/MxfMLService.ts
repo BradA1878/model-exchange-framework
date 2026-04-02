@@ -905,10 +905,20 @@ export class MxfMLService {
 
             return true;
         } catch (error) {
-            this.logger.error(
-                `[MxfMLService] Failed to load model ${modelId}: ` +
-                `${error instanceof Error ? error.message : String(error)}`
-            );
+            const message = error instanceof Error ? error.message : String(error);
+            // "not found" is expected on first run before models are trained —
+            // log at warn, not error, to avoid false alarms at startup
+            const isNotFound = message.toLowerCase().includes('not found');
+            if (isNotFound) {
+                this.logger.warn(
+                    `[MxfMLService] Model ${modelId} not found in storage — ` +
+                    `will be created when training data is available`
+                );
+            } else {
+                this.logger.error(
+                    `[MxfMLService] Failed to load model ${modelId}: ${message}`
+                );
+            }
             return false;
         }
     }

@@ -13,10 +13,13 @@
  * @author Brad Anderson <BradA1878@pm.me>
  */
 
-import { useEffect, useRef, type Dispatch } from 'react';
+import { useEffect, useRef, useCallback, type Dispatch } from 'react';
 import { Events } from '../../../sdk/index';
 import type { MxfChannelMonitor } from '../../../sdk/index';
 import type { AppAction } from '../state';
+import type { AppState } from '../state';
+import { checkContextThresholds, checkBudget } from '../services/CostTracker';
+import { ToolHookService } from '../services/ToolHookService';
 
 /** Tool names that are filtered from display — handled by the confirmation flow */
 const USER_INPUT_TOOLS = new Set(['user_input', 'request_user_input', 'get_user_input_response']);
@@ -110,6 +113,23 @@ function describeToolCall(toolName: string, args: Record<string, any>): string {
     }
 }
 
+/** Tool names that modify files — tracked for parallel agent conflict detection */
+const FILE_MODIFICATION_TOOLS = new Set([
+    'write_file', 'edit_file', 'create_file', 'move_file', 'delete_file', 'replace_in_file',
+]);
+
+/**
+ * Extract the target file path from tool arguments.
+ * Checks common argument names in priority order: path, file_path, destination.
+ *
+ * @param args - Tool input arguments
+ * @returns The file path string, or null if no path argument found
+ */
+function extractFilePath(args: Record<string, any>): string | null {
+    const raw = args.path || args.file_path || args.destination;
+    return typeof raw === 'string' ? raw : null;
+}
+
 /** Tool names that generate activity cards when called by specialist agents */
 const ACTIVITY_CARD_TOOLS = new Set(['read_file', 'write_file', 'list_directory', 'code_execute', 'shell_execute']);
 
@@ -182,6 +202,12 @@ function summarizeToolResult(toolName: string, result: any): string {
 }
 
 /**
+ * Callback invoked when an agent approaches its context window limit.
+ * The TUI caller (App.tsx) provides this to trigger compaction via InteractiveSessionManager.
+ */
+export type OnContextCompactNeeded = (agentId: string, usedTokens: number, contextWindow: number) => void;
+
+/**
  * Hook that subscribes to channel events and dispatches state updates.
  *
  * Events monitored:
@@ -189,6 +215,8 @@ function summarizeToolResult(toolName: string, result: any): string {
  * - TOOL_CALL → ADD_ENTRY (type: 'tool-call') or 'activity-card' for specialist agents
  * - TASK_COMPLETED → ADD_ENTRY (system success), agent status updates
  * - TASK_FAILED → ADD_ENTRY (error), agent status updates
+ * - LLM_USAGE → TRACK_TOKEN_USAGE + context window threshold check
+ * - CONTEXT_COMPACTED → system notice in conversation
  *
  * Filters: user_input tool calls are hidden (handled by confirmation flow),
  * task_complete tool calls are hidden (completion handler covers that).
@@ -197,16 +225,22 @@ function summarizeToolResult(toolName: string, result: any): string {
  * @param dispatch - React dispatch function for state updates
  * @param agentNames - Dynamic map of agentId → display name
  * @param orchestratorId - The orchestrator agent's ID (for completion detection)
+ * @param getState - Returns current AppState (for context threshold checks)
+ * @param onContextCompactNeeded - Callback when an agent needs context compaction
  */
 export function useEventMonitor(
     channel: MxfChannelMonitor | null,
     dispatch: Dispatch<AppAction>,
     agentNames?: Record<string, string>,
     orchestratorId?: string,
+    getState?: () => AppState,
+    onContextCompactNeeded?: OnContextCompactNeeded,
 ): void {
     const dispatchRef = useRef(dispatch);
     const agentNamesRef = useRef(agentNames || {});
     const orchestratorIdRef = useRef(orchestratorId || '');
+    const getStateRef = useRef(getState);
+    const onContextCompactNeededRef = useRef(onContextCompactNeeded);
 
     useEffect(() => {
         dispatchRef.current = dispatch;
@@ -219,6 +253,14 @@ export function useEventMonitor(
     useEffect(() => {
         orchestratorIdRef.current = orchestratorId || '';
     }, [orchestratorId]);
+
+    useEffect(() => {
+        getStateRef.current = getState;
+    }, [getState]);
+
+    useEffect(() => {
+        onContextCompactNeededRef.current = onContextCompactNeeded;
+    }, [onContextCompactNeeded]);
 
     /** Resolve an agent name from the dynamic map, falling back to the raw ID */
     function resolveName(agentId: string): string {
@@ -279,7 +321,8 @@ export function useEventMonitor(
             }
         };
 
-        // Listen for tool calls — create activity cards for specialist agent operations
+        // Listen for tool calls — create activity cards for specialist agent operations.
+        // Runs pre-hooks from ~/.mxf/hooks/ before dispatching tool-call entries.
         const toolCallHandler = (payload: any) => {
             const toolName = payload.data?.toolName || payload.toolName || 'unknown';
             const args = payload.data?.arguments || payload.data?.args || {};
@@ -295,68 +338,131 @@ export function useEventMonitor(
             // Don't show user_input tool calls — the confirmation flow handles these
             if (USER_INPUT_TOOLS.has(toolName)) return;
 
-            // For non-orchestrator agents calling file/code tools, show activity cards
-            // Compound dispatch: add activity-card entry + track iteration (1 render instead of 2)
-            if (!isOrchestrator(agentId) && ACTIVITY_CARD_TOOLS.has(toolName)) {
+            // Parallel agent file conflict detection — warn when two agents target the same file
+            if (FILE_MODIFICATION_TOOLS.has(toolName)) {
+                const filePath = extractFilePath(args);
+                if (filePath) {
+                    const resolvedPath = resolveDisplayPath(filePath);
+                    const currentAgentName = resolveName(agentId);
+
+                    // Check for an existing operation on this path from a different agent
+                    const existingOp = getStateRef.current?.()?.activeFileOps?.get(resolvedPath);
+                    if (existingOp && existingOp.agentId !== agentId) {
+                        dispatchRef.current({
+                            type: 'ADD_ENTRY',
+                            entry: {
+                                type: 'system',
+                                content: `⚠ File conflict: ${existingOp.agentName} and ${currentAgentName} are both modifying ${resolvedPath}`,
+                            },
+                        });
+                    }
+
+                    // Track this file operation so future overlapping ops are detected
+                    dispatchRef.current({
+                        type: 'TRACK_FILE_OP',
+                        filePath: resolvedPath,
+                        agentId,
+                        agentName: currentAgentName,
+                        toolName,
+                    });
+                }
+            }
+
+            // Run pre-hooks asynchronously, then dispatch the tool-call entry
+            const hookService = ToolHookService.getInstance();
+            hookService.runPreHooks(toolName, args).then((hookResult) => {
+                // If a pre-hook blocked this tool call, show a system notice and skip display
+                if (hookResult.blocked) {
+                    dispatchRef.current({
+                        type: 'ADD_ENTRY',
+                        entry: {
+                            type: 'system',
+                            content: `Hook blocked ${toolName}: ${hookResult.reason || 'blocked by pre-hook'}`,
+                        },
+                    });
+                    return;
+                }
+
+                // For non-orchestrator agents calling file/code tools, show activity cards
+                // Compound dispatch: add activity-card entry + track iteration (1 render instead of 2)
+                if (!isOrchestrator(agentId) && ACTIVITY_CARD_TOOLS.has(toolName)) {
+                    dispatchRef.current({
+                        type: 'ADD_ENTRY_WITH_AGENT_STATUS',
+                        entry: {
+                            type: 'activity-card',
+                            agentId,
+                            agentName: resolveName(agentId),
+                            content: describeActivity(toolName, args),
+                            toolName,
+                            toolArgs: args,
+                            activityStatus: 'active',
+                        },
+                        agentId,
+                        agentStatus: 'active',
+                        iteration: { iterationType: 'tool-call' },
+                    });
+                    return;
+                }
+
+                // For planning_create, expand the plan items inline so the user sees the content
+                // Compound dispatch: add agent entry + track iteration (1 render instead of 2)
+                if (toolName === 'planning_create' && args.items && Array.isArray(args.items)) {
+                    const title = args.title || 'Plan';
+                    const items = args.items
+                        .map((item: any, i: number) => `  ${i + 1}. ${item.title || item.name || 'Item'}`)
+                        .join('\n');
+                    const content = `Created plan: ${title}\n${items}`;
+
+                    dispatchRef.current({
+                        type: 'ADD_ENTRY_WITH_AGENT_STATUS',
+                        entry: {
+                            type: 'agent',
+                            agentId,
+                            agentName: resolveName(agentId),
+                            content,
+                        },
+                        agentId,
+                        agentStatus: 'active',
+                        iteration: { iterationType: 'tool-call' },
+                    });
+                    return;
+                }
+
+                // For all other tool calls, show as regular tool-call entries
+                // with human-readable descriptions instead of raw JSON
+                // Compound dispatch: add tool-call entry + track iteration (1 render instead of 2)
                 dispatchRef.current({
                     type: 'ADD_ENTRY_WITH_AGENT_STATUS',
                     entry: {
-                        type: 'activity-card',
+                        type: 'tool-call',
                         agentId,
                         agentName: resolveName(agentId),
-                        content: describeActivity(toolName, args),
+                        content: describeToolCall(toolName, args),
                         toolName,
                         toolArgs: args,
-                        activityStatus: 'active',
+                        collapsed: true,
                     },
                     agentId,
                     agentStatus: 'active',
                     iteration: { iterationType: 'tool-call' },
                 });
-                return;
-            }
-
-            // For planning_create, expand the plan items inline so the user sees the content
-            // Compound dispatch: add agent entry + track iteration (1 render instead of 2)
-            if (toolName === 'planning_create' && args.items && Array.isArray(args.items)) {
-                const title = args.title || 'Plan';
-                const items = args.items
-                    .map((item: any, i: number) => `  ${i + 1}. ${item.title || item.name || 'Item'}`)
-                    .join('\n');
-                const content = `Created plan: ${title}\n${items}`;
-
+            }).catch(() => {
+                // If hook execution itself fails, proceed with normal tool-call display
                 dispatchRef.current({
                     type: 'ADD_ENTRY_WITH_AGENT_STATUS',
                     entry: {
-                        type: 'agent',
+                        type: 'tool-call',
                         agentId,
                         agentName: resolveName(agentId),
-                        content,
+                        content: describeToolCall(toolName, args),
+                        toolName,
+                        toolArgs: args,
+                        collapsed: true,
                     },
                     agentId,
                     agentStatus: 'active',
                     iteration: { iterationType: 'tool-call' },
                 });
-                return;
-            }
-
-            // For all other tool calls, show as regular tool-call entries
-            // with human-readable descriptions instead of raw JSON
-            // Compound dispatch: add tool-call entry + track iteration (1 render instead of 2)
-            dispatchRef.current({
-                type: 'ADD_ENTRY_WITH_AGENT_STATUS',
-                entry: {
-                    type: 'tool-call',
-                    agentId,
-                    agentName: resolveName(agentId),
-                    content: describeToolCall(toolName, args),
-                    toolName,
-                    toolArgs: args,
-                    collapsed: true,
-                },
-                agentId,
-                agentStatus: 'active',
-                iteration: { iterationType: 'tool-call' },
             });
         };
 
@@ -453,6 +559,7 @@ export function useEventMonitor(
         };
 
         // Listen for LLM token usage — dispatches token tracking for cost estimates
+        // and checks if any agent is approaching its context window limit
         const llmUsageHandler = (payload: any) => {
             const agentId = payload.agentId;
             const data = payload.data;
@@ -465,6 +572,71 @@ export function useEventMonitor(
                 outputTokens: data.outputTokens || 0,
                 totalTokens: data.totalTokens || 0,
                 model: data.model,
+            });
+
+            // Check context window thresholds and budget after token update.
+            // Use setTimeout(0) so the reducer has processed the token update first.
+            setTimeout(() => {
+                const state = getStateRef.current?.();
+                if (!state) return;
+
+                // Context window compaction check
+                const overThreshold = checkContextThresholds(state.costData);
+                for (const agent of overThreshold) {
+                    // Only fire once per agent per session
+                    if (state.compactedAgents.has(agent.agentId)) continue;
+
+                    dispatchRef.current({ type: 'MARK_AGENT_COMPACTED', agentId: agent.agentId });
+                    dispatchRef.current({
+                        type: 'ADD_ENTRY',
+                        entry: {
+                            type: 'system',
+                            content: `Context window ${Math.round(agent.usageRatio * 100)}% full for ${resolveName(agent.agentId)} — triggering compaction`,
+                        },
+                    });
+
+                    // Notify the session manager to compact this agent's conversation history
+                    onContextCompactNeededRef.current?.(agent.agentId, agent.usedTokens, agent.contextWindow);
+                }
+
+                // Budget threshold check — warn at 80%, alert at 100%
+                const budgetResult = checkBudget(state.costData);
+                if (budgetResult.warning) {
+                    dispatchRef.current({ type: 'MARK_BUDGET_WARNING_EMITTED' });
+                    dispatchRef.current({
+                        type: 'ADD_ENTRY',
+                        entry: {
+                            type: 'system',
+                            content: `⚠ Budget warning: estimated cost ~$${budgetResult.estimatedCost.toFixed(4)} has reached 80% of $${budgetResult.budget!.toFixed(2)} budget`,
+                        },
+                    });
+                }
+                if (budgetResult.exceeded && !state.costData.budgetExceeded) {
+                    dispatchRef.current({ type: 'MARK_BUDGET_EXCEEDED' });
+                    dispatchRef.current({
+                        type: 'ADD_ENTRY',
+                        entry: {
+                            type: 'system',
+                            content: `Budget exceeded: estimated cost ~$${budgetResult.estimatedCost.toFixed(4)} has reached the $${budgetResult.budget!.toFixed(2)} budget limit. Use /budget clear to remove the limit or /budget <amount> to increase it.`,
+                        },
+                    });
+                }
+            }, 0);
+        };
+
+        // Listen for context compaction completion — show system notice
+        const contextCompactedHandler = (payload: any) => {
+            const agentId = payload.agentId || payload.data?.agentId;
+            const original = payload.data?.originalMessages || 0;
+            const compacted = payload.data?.compactedMessages || 0;
+            if (!agentId) return;
+
+            dispatchRef.current({
+                type: 'ADD_ENTRY',
+                entry: {
+                    type: 'system',
+                    content: `Context compacted for ${resolveName(agentId)}: ${original} → ${compacted} messages`,
+                },
             });
         };
 
@@ -499,16 +671,29 @@ export function useEventMonitor(
             });
         };
 
-        // Listen for tool results — show output from tool executions
+        // Listen for tool results — show output from tool executions.
+        // Runs post-hooks from ~/.mxf/hooks/ after dispatching the result entry.
         const toolResultHandler = (payload: any) => {
             const toolName = payload.data?.toolName || '';
             const result = payload.data?.result;
             const agentId = payload.agentId || '';
+            const args = payload.data?.arguments || payload.data?.args || {};
 
             // Skip results from user_input tools (handled by confirmation flow)
             if (USER_INPUT_TOOLS.has(toolName)) return;
             // Skip task_complete results (handled by completion handler)
             if (toolName === 'task_complete') return;
+
+            // Clear tracked file operation now that the tool execution is complete
+            if (FILE_MODIFICATION_TOOLS.has(toolName)) {
+                const filePath = extractFilePath(payload.data?.arguments || payload.data?.args || {});
+                if (filePath) {
+                    dispatchRef.current({
+                        type: 'CLEAR_FILE_OP',
+                        filePath: resolveDisplayPath(filePath),
+                    });
+                }
+            }
 
             // Build a concise result summary based on tool type
             const summary = summarizeToolResult(toolName, result);
@@ -524,18 +709,89 @@ export function useEventMonitor(
             }
 
             // Only add a tool-result entry if there's a meaningful summary
-            if (!summary) return;
+            if (summary) {
+                dispatchRef.current({
+                    type: 'ADD_ENTRY',
+                    entry: {
+                        type: 'tool-result',
+                        agentId,
+                        agentName: resolveName(agentId),
+                        content: summary,
+                        toolName,
+                    },
+                });
+            }
 
-            dispatchRef.current({
-                type: 'ADD_ENTRY',
-                entry: {
-                    type: 'tool-result',
-                    agentId,
-                    agentName: resolveName(agentId),
-                    content: summary,
-                    toolName,
-                },
+            // Fire-and-forget: run post-hooks after dispatching the result
+            const hookService = ToolHookService.getInstance();
+            hookService.runPostHooks(toolName, args, summary).catch(() => {
+                // Post-hooks are fire-and-forget — errors already logged by the service
             });
+        };
+
+        // Task lifecycle handlers — show task creation, assignment, and dependency events
+        // as system notices so the user can track orchestration activity
+        const taskCreatedHandler = (payload: any) => {
+            try {
+                const task = payload.data?.task;
+                if (!task) return;
+                const agentId = task.assignedTo || payload.agentId || '';
+                const agentName = agentId ? resolveName(agentId) : '';
+                const assignee = agentName ? ` → ${agentName}` : '';
+                dispatchRef.current({
+                    type: 'ADD_ENTRY',
+                    entry: {
+                        type: 'system',
+                        content: `Task created: ${task.title || task.id}${assignee}`,
+                    },
+                });
+            } catch { /* ignore malformed payloads */ }
+        };
+
+        const taskAssignedHandler = (payload: any) => {
+            try {
+                const task = payload.data?.task;
+                if (!task) return;
+                const agentId = task.assignedTo || '';
+                const agentName = agentId ? resolveName(agentId) : 'unknown';
+                dispatchRef.current({
+                    type: 'ADD_ENTRY',
+                    entry: {
+                        type: 'system',
+                        content: `Task assigned: ${task.title || task.id} → ${agentName}`,
+                    },
+                });
+            } catch { /* ignore malformed payloads */ }
+        };
+
+        const taskDependencyResolvedHandler = (payload: any) => {
+            try {
+                const task = payload.data?.task;
+                const resolved = payload.data?.resolvedDependency;
+                if (!task) return;
+                dispatchRef.current({
+                    type: 'ADD_ENTRY',
+                    entry: {
+                        type: 'system',
+                        content: `Dependency resolved for ${task.title || task.id}: ${resolved || 'dependency cleared'}`,
+                    },
+                });
+            } catch { /* ignore malformed payloads */ }
+        };
+
+        const taskBlockingClearedHandler = (payload: any) => {
+            try {
+                const task = payload.data?.task;
+                const cleared = payload.data?.clearedBlocker;
+                if (!task) return;
+                dispatchRef.current({
+                    type: 'ADD_ENTRY',
+                    entry: {
+                        type: 'system',
+                        content: `Blocker cleared for ${task.title || task.id}: ${cleared || 'unblocked'}`,
+                    },
+                });
+            } catch { /* ignore malformed payloads */ }
         };
 
         // Subscribe to events
@@ -547,6 +803,11 @@ export function useEventMonitor(
         channel.on(Events.Agent.LLM_STREAM_CHUNK, llmStreamChunkHandler);
         channel.on(Events.Agent.LLM_REASONING, llmReasoningHandler);
         channel.on(Events.Mcp.TOOL_RESULT, toolResultHandler);
+        channel.on(Events.Agent.CONTEXT_COMPACTED, contextCompactedHandler);
+        channel.on(Events.Task.CREATED, taskCreatedHandler);
+        channel.on(Events.Task.ASSIGNED, taskAssignedHandler);
+        channel.on(Events.Task.DEPENDENCY_RESOLVED, taskDependencyResolvedHandler);
+        channel.on(Events.Task.BLOCKING_CLEARED, taskBlockingClearedHandler);
 
         // Cleanup on unmount
         return () => {
@@ -558,6 +819,11 @@ export function useEventMonitor(
             channel.off(Events.Agent.LLM_STREAM_CHUNK);
             channel.off(Events.Agent.LLM_REASONING);
             channel.off(Events.Mcp.TOOL_RESULT);
+            channel.off(Events.Agent.CONTEXT_COMPACTED);
+            channel.off(Events.Task.CREATED);
+            channel.off(Events.Task.ASSIGNED);
+            channel.off(Events.Task.DEPENDENCY_RESOLVED);
+            channel.off(Events.Task.BLOCKING_CLEARED);
         };
     }, [channel]);
 }

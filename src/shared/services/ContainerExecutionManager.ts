@@ -237,7 +237,9 @@ export class ContainerExecutionManager {
 
             this.logger.info(`Building Docker image from ${dockerfilePath}...`);
 
-            // Build image using Docker API
+            // Build image using Docker API with no-cache to ensure source changes
+            // are always picked up. Without nocache, Docker may reuse cached layers
+            // even when the executor.ts content has changed.
             const stream = await this.docker.buildImage(
                 {
                     context: dockerfilePath,
@@ -245,7 +247,8 @@ export class ContainerExecutionManager {
                 },
                 {
                     t: this.getImageName(),
-                    dockerfile: 'Dockerfile'
+                    dockerfile: 'Dockerfile',
+                    nocache: true
                 }
             );
 
@@ -309,17 +312,15 @@ export class ContainerExecutionManager {
         );
 
         try {
-            // Create container with security constraints
-            const container = await this.createSecureContainer(containerId);
+            // Create container with the execution request baked in as an env var
+            const executionRequest = { ...request, timeout };
+            const container = await this.createSecureContainer(containerId, executionRequest);
 
-            // Start container
+            // Start container — executor reads MXF_REQUEST env var and runs immediately
             await container.start();
 
-            // Send execution request via stdin and read stdout
-            const result = await this.executeInContainer(container, {
-                ...request,
-                timeout
-            });
+            // Read stdout/stderr and wait for container exit
+            const result = await this.executeInContainer(container, executionRequest);
 
             // Cleanup container
             await this.destroyContainer(container, request.context?.requestId);
@@ -363,17 +364,33 @@ export class ContainerExecutionManager {
     }
 
     /**
-     * Create a secure container with all security constraints
+     * Create a secure container with all security constraints.
+     *
+     * The execution request is passed via the MXF_REQUEST environment variable
+     * (base64-encoded JSON) instead of stdin. Dockerode's hijacked stream does
+     * not reliably deliver stdin data to the container process, but environment
+     * variables are available immediately at process start.
      */
-    private async createSecureContainer(name: string): Promise<Docker.Container> {
+    private async createSecureContainer(
+        name: string,
+        request?: ContainerExecutionRequest
+    ): Promise<Docker.Container> {
+        // Pass the execution request as a base64-encoded env var so the executor
+        // can read it without depending on stdin pipe delivery through Docker's
+        // hijacked stream (which is unreliable with dockerode).
+        const env: string[] = [];
+        if (request) {
+            const requestJson = JSON.stringify(request);
+            const encoded = Buffer.from(requestJson).toString('base64');
+            env.push(`MXF_REQUEST=${encoded}`);
+        }
+
         const container = await this.docker.createContainer({
             name,
             Image: this.getImageName(),
-            AttachStdin: true,
+            Env: env,
             AttachStdout: true,
             AttachStderr: true,
-            OpenStdin: true,
-            StdinOnce: true,
             Tty: false,
             HostConfig: {
                 // Network: Disabled - no network access
@@ -454,13 +471,12 @@ export class ContainerExecutionManager {
             }, request.timeout + this.config.timeoutBuffer);
 
             try {
-                // Attach to container streams
+                // Attach to container stdout/stderr streams (no stdin needed —
+                // the execution request is passed via MXF_REQUEST env var)
                 const stream = await container.attach({
                     stream: true,
-                    stdin: true,
                     stdout: true,
-                    stderr: true,
-                    hijack: true
+                    stderr: true
                 });
 
                 // Collect output
@@ -544,14 +560,6 @@ export class ContainerExecutionManager {
                 // Docker multiplexes stdout/stderr - use demuxStream to split them
                 // NOTE: demuxStream() sets up 'data' listeners and returns immediately (async!)
                 container.modem.demuxStream(stream, stdoutStream, stderrStream);
-
-                // Write request to stdin with newline delimiter
-                // The newline signals end of input to the executor (which reads until newline/valid JSON)
-                const requestJson = JSON.stringify(request);
-                this.logger.debug(`[ContainerExecution] Sending to container (${requestJson.length} chars)`);
-                this.logger.debug(`[ContainerExecution] Request JSON preview: ${requestJson.substring(0, 500)}`);
-                stream.write(requestJson + '\n', 'utf8');
-                stream.end();
 
                 // Wait for BOTH container exit AND stream processing to complete
                 // This prevents the race condition where container exits but demux hasn't finished

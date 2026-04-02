@@ -125,6 +125,10 @@ export const AgentEvents = {
     // Tool configuration events
     ALLOWED_TOOLS_UPDATE: 'agent:allowed_tools:update', // Request to update agent's allowed tools
     ALLOWED_TOOLS_UPDATED: 'agent:allowed_tools:updated', // Confirmation of allowed tools update
+
+    // Context window management events
+    CONTEXT_COMPACT_NEEDED: 'agent:context_compact:needed', // Agent approaching context window limit — trigger compaction
+    CONTEXT_COMPACTED: 'agent:context_compacted', // Agent conversation history was compacted
 };
 
 /**
@@ -176,4 +180,8 @@ export interface AgentPayloads {
     // Tool configuration events
     'agent:allowed_tools:update': { agentId: string; allowedTools: string[] };
     'agent:allowed_tools:updated': { agentId: string; allowedTools: string[]; success: boolean };
+
+    // Context window management events
+    'agent:context_compact:needed': { agentId: string; usedTokens: number; contextWindow: number; usageRatio: number; timestamp: number };
+    'agent:context_compacted': { agentId: string; originalMessages: number; compactedMessages: number; timestamp: number };
 }

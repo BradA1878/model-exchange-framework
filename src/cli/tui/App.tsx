@@ -46,6 +46,7 @@ import { useConfirmation } from './hooks/useConfirmation';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { useThrottledValue } from './hooks/useThrottledValue';
 import { ThemeProvider } from './theme/ThemeContext';
+import { ToolPermissionService } from './services/ToolPermissionService';
 
 // Import slash command handlers to register them
 import './commands/handlers';
@@ -116,6 +117,8 @@ const App: React.FC<AppProps> = ({ config, session }) => {
     // Build static items array for Ink's <Static>. Each item is rendered once
     // to stdout and lives in terminal scrollback — older entries are never re-rendered.
     // HeaderBar renders once at the top. Connection status lives in StatusBar (dynamic).
+    // When entryFilter is active, only entries matching the filter type are shown.
+    // System entries from /filter itself always pass through so the user sees confirmation.
     const staticItems = useMemo((): StaticItem[] => {
         const items: StaticItem[] = [
             { kind: 'header', id: '__header__' },
@@ -126,20 +129,42 @@ const App: React.FC<AppProps> = ({ config, session }) => {
         for (const entry of throttledEntries) {
             // Filter out activity cards when showAgentActivity is disabled
             if (!state.showAgentActivity && entry.type === 'activity-card') continue;
+
+            // Apply entry type filter when active. System messages about filtering
+            // always pass through so the user sees filter confirmations.
+            if (state.entryFilter) {
+                const isFilterSystemMessage = entry.type === 'system' && (
+                    entry.content.startsWith('Showing only:') ||
+                    entry.content.startsWith('Filter cleared:') ||
+                    entry.content.startsWith('Unknown filter type:')
+                );
+                if (!isFilterSystemMessage && entry.type !== state.entryFilter) continue;
+            }
+
             items.push({ kind: 'entry', id: entry.id, entry, detailMode: state.detailMode });
         }
         return items;
-    }, [throttledEntries, state.detailMode, state.showAgentActivity]);
+    }, [throttledEntries, state.detailMode, state.showAgentActivity, state.entryFilter]);
 
     // Session lifecycle — connect on mount (creates agents), disconnect on unmount
     // Saves session history to ~/.mxf/sessions/ on disconnect
     const { submitTask, submitTaskToAgent } = useSession(session, dispatch, getState);
 
+    // Context compaction callback — triggered when an agent approaches its context window limit
+    const handleContextCompactNeeded = useCallback((agentId: string) => {
+        session.compactAgent(agentId);
+    }, [session]);
+
     // Event monitoring — subscribe to channel events after connection
-    useEventMonitor(session.getChannel(), dispatch, agentMaps.names, orchestratorId);
+    // Includes context window threshold checking and compaction triggers
+    useEventMonitor(session.getChannel(), dispatch, agentMaps.names, orchestratorId, getState, handleContextCompactNeeded);
+
+    // Tool permission service — evaluates auto-approve/deny rules from config and session
+    const permissionService = useMemo(() => new ToolPermissionService(), []);
 
     // Confirmation hook — bridges agent user_input requests to [y/n] prompts
-    const { handleConfirmationResponse } = useConfirmation(session, dispatch, agentMaps.names);
+    // Permission service is checked before showing prompts (auto-approve/deny if matched)
+    const { handleConfirmationResponse } = useConfirmation(session, dispatch, agentMaps.names, permissionService);
 
     // Exit callback for /exit command and Ctrl+C
     const requestExit = useCallback(() => {
@@ -164,7 +189,7 @@ const App: React.FC<AppProps> = ({ config, session }) => {
 
     // Input handler — routes /, !, @mentions, and natural language
     const handleInput = useInputHandler(
-        session, dispatch, state, submitTask, submitTaskToAgent, requestExit,
+        session, dispatch, state, submitTask, submitTaskToAgent, requestExit, permissionService,
     );
 
     // Selection handler — resolves pending selections (e.g., model picker)
@@ -249,6 +274,8 @@ const App: React.FC<AppProps> = ({ config, session }) => {
                     isAgentWorking={state.isAgentWorking}
                     confirmationPending={state.confirmationPending}
                     confirmationTitle={state.confirmationTitle}
+                    confirmationQueueSize={state.confirmationQueueSize}
+                    vimMode={state.vimMode}
                 />
             </Box>
         </ThemeProvider>

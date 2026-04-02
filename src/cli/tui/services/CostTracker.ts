@@ -53,10 +53,41 @@ export interface SessionCostData {
     totalTokens: number;
     /** Session start time (epoch ms) */
     startTime: number;
+    /** Budget limit in USD (null = no limit) */
+    costBudget: number | null;
+    /** Running estimated cost in USD, accumulated from each LLM usage event */
+    estimatedCost: number;
+    /** Whether the 80% budget warning has already been emitted this session */
+    budgetWarningEmitted: boolean;
+    /** Whether the budget has been exceeded (cost >= budget) */
+    budgetExceeded: boolean;
+}
+
+/**
+ * Load the cost budget default from ~/.mxf/config.json if present.
+ * Reads the `costBudget` field at the config root level.
+ *
+ * @returns Budget value in USD, or null if not configured
+ */
+function loadBudgetFromConfig(): number | null {
+    try {
+        const configPath = `${process.env.HOME || '~'}/.mxf/config.json`;
+        const fs = require('fs');
+        if (!fs.existsSync(configPath)) return null;
+        const content = fs.readFileSync(configPath, 'utf-8');
+        const config = JSON.parse(content);
+        if (typeof config.costBudget === 'number' && config.costBudget > 0) {
+            return config.costBudget;
+        }
+        return null;
+    } catch {
+        return null;
+    }
 }
 
 /**
  * Create initial empty cost data for a new session.
+ * Loads the default cost budget from ~/.mxf/config.json if configured.
  */
 export function createInitialCostData(): SessionCostData {
     return {
@@ -69,6 +100,10 @@ export function createInitialCostData(): SessionCostData {
         totalOutputTokens: 0,
         totalTokens: 0,
         startTime: Date.now(),
+        costBudget: loadBudgetFromConfig(),
+        estimatedCost: 0,
+        budgetWarningEmitted: false,
+        budgetExceeded: false,
     };
 }
 
@@ -167,13 +202,114 @@ export function trackTokenUsage(
         lastModel: model || existing.lastModel,
     };
 
+    // Accumulate estimated cost from this usage event using the model pricing table.
+    // Uses a default rate (Sonnet-tier) if the model is not in the pricing table.
+    const DEFAULT_INPUT_RATE = 3;   // $/1M input tokens (Sonnet-tier default)
+    const DEFAULT_OUTPUT_RATE = 15; // $/1M output tokens (Sonnet-tier default)
+    const usageCost = model
+        ? (estimateCost(inputTokens, outputTokens, model)
+            ?? (inputTokens * DEFAULT_INPUT_RATE + outputTokens * DEFAULT_OUTPUT_RATE) / 1_000_000)
+        : (inputTokens * DEFAULT_INPUT_RATE + outputTokens * DEFAULT_OUTPUT_RATE) / 1_000_000;
+
     return {
         ...costData,
         agents: { ...costData.agents, [agentId]: updated },
         totalInputTokens: costData.totalInputTokens + inputTokens,
         totalOutputTokens: costData.totalOutputTokens + outputTokens,
         totalTokens: costData.totalTokens + totalTokens,
+        estimatedCost: costData.estimatedCost + usageCost,
     };
+}
+
+/**
+ * Context window sizes (in tokens) for common models.
+ * Used to detect when an agent is approaching its context limit
+ * so the TUI can trigger compaction before the LLM fails.
+ */
+const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
+    // Anthropic
+    'claude-opus-4-6': 200_000,
+    'claude-sonnet-4-6': 200_000,
+    'claude-opus-4-5': 200_000,
+    'claude-sonnet-4-5': 200_000,
+    'claude-haiku-4-5': 200_000,
+    // OpenAI
+    'gpt-4.1': 1_047_576,
+    'gpt-4.1-mini': 1_047_576,
+    'gpt-4o': 128_000,
+    'gpt-4o-mini': 128_000,
+    'o1': 200_000,
+    'o3-mini': 200_000,
+    // Google
+    'gemini-3-pro-preview': 1_000_000,
+    'gemini-3-flash-preview': 1_000_000,
+    'gemini-2.5-pro': 1_048_576,
+    'gemini-2.5-flash': 1_048_576,
+    'gemini-2.0-flash': 1_048_576,
+    // xAI
+    'grok-3': 131_072,
+    'grok-3-mini': 131_072,
+    // Meta
+    'meta-llama/llama-3.1-405b-instruct': 128_000,
+    'meta-llama/llama-3.1-70b-instruct': 128_000,
+    // DeepSeek
+    'deepseek/deepseek-chat': 128_000,
+    'deepseek/deepseek-reasoner': 128_000,
+};
+
+/** Fraction of the context window at which compaction is triggered */
+const CONTEXT_COMPACT_THRESHOLD = 0.75;
+
+/**
+ * Look up the context window size for a model.
+ * Tries exact match, then prefix/substring match.
+ *
+ * @param model - Model identifier
+ * @returns Context window size in tokens, or null if unknown
+ */
+export function getModelContextWindow(model: string): number | null {
+    let window = MODEL_CONTEXT_WINDOWS[model];
+    if (window) return window;
+
+    const key = Object.keys(MODEL_CONTEXT_WINDOWS).find((k) => model.startsWith(k) || model.includes(k));
+    if (key) return MODEL_CONTEXT_WINDOWS[key];
+
+    return null;
+}
+
+/**
+ * Check if any agent is approaching its model's context window limit.
+ * Returns the agentId(s) that need compaction, or an empty array if all are fine.
+ *
+ * @param costData - Current session cost data
+ * @returns Array of { agentId, usedTokens, contextWindow, usageRatio } for agents needing compaction
+ */
+export function checkContextThresholds(costData: SessionCostData): Array<{
+    agentId: string;
+    usedTokens: number;
+    contextWindow: number;
+    usageRatio: number;
+}> {
+    const results: Array<{ agentId: string; usedTokens: number; contextWindow: number; usageRatio: number }> = [];
+
+    for (const agent of Object.values(costData.agents)) {
+        if (!agent.lastModel || agent.totalTokens === 0) continue;
+
+        const contextWindow = getModelContextWindow(agent.lastModel);
+        if (!contextWindow) continue;
+
+        const usageRatio = agent.totalTokens / contextWindow;
+        if (usageRatio >= CONTEXT_COMPACT_THRESHOLD) {
+            results.push({
+                agentId: agent.agentId,
+                usedTokens: agent.totalTokens,
+                contextWindow,
+                usageRatio,
+            });
+        }
+    }
+
+    return results;
 }
 
 /**
@@ -297,5 +433,67 @@ export function formatCostSummary(costData: SessionCostData): string {
         }
     }
 
+    // Append budget status if a budget is set
+    if (costData.costBudget !== null) {
+        lines.push(`  Budget:      ${formatBudgetStatus(costData)}`);
+    }
+
     return lines.join('\n');
+}
+
+/** Result of checking the current cost against the configured budget */
+export interface BudgetCheckResult {
+    /** True if cost >= 80% of budget and warning has not yet been emitted */
+    warning: boolean;
+    /** True if cost >= budget */
+    exceeded: boolean;
+    /** Current estimated cost in USD */
+    estimatedCost: number;
+    /** Configured budget limit in USD (null if no budget) */
+    budget: number | null;
+}
+
+/**
+ * Check the current estimated cost against the configured budget.
+ * Returns whether a warning should be shown (80% threshold) and whether
+ * the budget has been exceeded (100% threshold).
+ *
+ * @param costData - Current session cost data
+ * @returns Budget check result with warning and exceeded flags
+ */
+export function checkBudget(costData: SessionCostData): BudgetCheckResult {
+    const budget = costData.costBudget;
+    const cost = costData.estimatedCost;
+
+    if (budget === null || budget <= 0) {
+        return { warning: false, exceeded: false, estimatedCost: cost, budget };
+    }
+
+    const ratio = cost / budget;
+    return {
+        warning: ratio >= 0.8 && !costData.budgetWarningEmitted,
+        exceeded: ratio >= 1.0,
+        estimatedCost: cost,
+        budget,
+    };
+}
+
+/**
+ * Format a human-readable budget status string.
+ * Shows estimated cost, budget limit, and percentage used.
+ *
+ * @param costData - Current session cost data
+ * @returns Formatted budget status (e.g., "$1.23 / $5.00 (24.6%)")
+ */
+export function formatBudgetStatus(costData: SessionCostData): string {
+    const cost = costData.estimatedCost;
+    const budget = costData.costBudget;
+
+    if (budget === null) {
+        return `~$${cost.toFixed(4)} (no budget set)`;
+    }
+
+    const pct = budget > 0 ? ((cost / budget) * 100).toFixed(1) : '0.0';
+    const status = costData.budgetExceeded ? ' EXCEEDED' : '';
+    return `~$${cost.toFixed(4)} / $${budget.toFixed(2)} (${pct}%)${status}`;
 }

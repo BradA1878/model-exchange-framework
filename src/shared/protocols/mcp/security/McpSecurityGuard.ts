@@ -28,6 +28,9 @@
 import { Logger } from '../../../utils/Logger';
 import { platform } from 'os';
 import * as path from 'path';
+import { extractEffectiveCommands, parseCommand } from '../tools/shell/ShellCommandParser';
+import { classifyCommand } from '../tools/shell/CommandClassification';
+import { getDestructiveWarnings } from '../tools/shell/DestructiveCommandWarnings';
 
 const logger = new Logger('info', 'McpSecurityGuard', 'server');
 
@@ -44,6 +47,8 @@ export interface CommandValidationResult {
     reason?: string;
     requiresConfirmation?: boolean;
     riskLevel?: 'low' | 'medium' | 'high' | 'critical';
+    /** Informational warnings about destructive patterns detected in the command */
+    warnings?: string[];
 }
 
 export interface PathValidationResult {
@@ -206,17 +211,92 @@ export class McpSecurityGuard {
     }
     
     /**
-     * Validate a shell command for execution
+     * Validate a shell command for execution.
+     *
+     * Uses the ShellCommandParser to extract ALL effective commands from compound
+     * expressions (e.g., `echo hello; rm -rf /`) and validates each one individually.
+     * This prevents security bypass via command chaining.
+     *
+     * Also integrates CommandClassification to allow read-only commands without
+     * confirmation, and DestructiveCommandWarnings for informational warnings.
      */
     validateCommand(command: string, context: SecurityContext): CommandValidationResult {
         const normalizedCommand = command.trim().toLowerCase();
-        const commandParts = normalizedCommand.split(/\s+/);
-        const baseCommand = commandParts[0];
-        
+
+        // Use the parser to extract all effective commands from compound expressions.
+        // This prevents bypass via `echo hello; rm -rf /` where only `echo` was validated.
+        const parsed = parseCommand(command);
+        const effectiveCommands = extractEffectiveCommands(command);
+
+        // Subshell constructs ($() or backticks) cannot be safely parsed — the parser
+        // detects their presence but doesn't extract commands inside them. Require
+        // confirmation so agents can't bypass validation with `echo $(rm -rf /)`.
+        if (parsed.hasSubshells) {
+            const destructiveWarnings = getDestructiveWarnings(command);
+            const warningMessages = destructiveWarnings.length > 0
+                ? destructiveWarnings.map(w => w.warning)
+                : undefined;
+            return {
+                allowed: true,
+                requiresConfirmation: true,
+                reason: 'Command contains subshell constructs ($() or backticks) that cannot be statically validated',
+                riskLevel: 'high',
+                warnings: warningMessages
+            };
+        }
+
+        // Collect destructive warnings (informational, does not block)
+        const destructiveWarnings = getDestructiveWarnings(command);
+        const warningMessages = destructiveWarnings.length > 0
+            ? destructiveWarnings.map(w => w.warning)
+            : undefined;
+
+        // Track the most restrictive result across all commands in the expression
+        let mostRestrictiveResult: CommandValidationResult = {
+            allowed: true,
+            riskLevel: 'low',
+            warnings: warningMessages
+        };
+
+        // Validate each effective command independently
+        for (const effectiveCmd of effectiveCommands) {
+            const result = this.validateSingleCommand(effectiveCmd, normalizedCommand, context);
+            if (!result.allowed) {
+                // Any blocked command blocks the whole expression
+                return { ...result, warnings: warningMessages };
+            }
+            // Escalate risk level and confirmation requirement
+            if (this.riskRank(result.riskLevel) > this.riskRank(mostRestrictiveResult.riskLevel)) {
+                mostRestrictiveResult = { ...result, warnings: warningMessages };
+            } else if (result.requiresConfirmation && !mostRestrictiveResult.requiresConfirmation) {
+                mostRestrictiveResult = { ...result, warnings: warningMessages };
+            }
+        }
+
+        // If the overall command is classified as read-only, skip confirmation
+        const classification = classifyCommand(command);
+        if (classification.isReadOnly && mostRestrictiveResult.requiresConfirmation) {
+            mostRestrictiveResult.requiresConfirmation = false;
+        }
+
+        return mostRestrictiveResult;
+    }
+
+    /**
+     * Validate a single (non-compound) command against security rules.
+     */
+    private validateSingleCommand(
+        effectiveCommand: string,
+        fullNormalizedCommand: string,
+        _context: SecurityContext
+    ): CommandValidationResult {
+        const normalizedCmd = effectiveCommand.trim().toLowerCase();
+        const baseCommand = normalizedCmd.split(/\s+/)[0];
+
         // Check if command is in safe allowlist
         if (SAFE_COMMANDS.includes(baseCommand)) {
             // Still check for dangerous patterns
-            if (this.containsDangerousPattern(normalizedCommand)) {
+            if (this.containsDangerousPattern(fullNormalizedCommand)) {
                 return {
                     allowed: false,
                     reason: 'Command contains dangerous patterns',
@@ -225,10 +305,10 @@ export class McpSecurityGuard {
             }
             return { allowed: true, riskLevel: 'low' };
         }
-        
+
         // Check common dangerous commands
         for (const dangerous of COMMON_DANGEROUS_COMMANDS) {
-            if (normalizedCommand.includes(dangerous)) {
+            if (normalizedCmd.includes(dangerous)) {
                 return {
                     allowed: false,
                     reason: `Command contains dangerous pattern: ${dangerous}`,
@@ -236,13 +316,13 @@ export class McpSecurityGuard {
                 };
             }
         }
-        
+
         // Check OS-specific rules
         const osRules = OS_COMMAND_RULES[this.platform as keyof typeof OS_COMMAND_RULES] || OS_COMMAND_RULES.linux;
-        
+
         // Check blocked commands
         for (const blocked of osRules.blocked) {
-            if (normalizedCommand.includes(blocked)) {
+            if (normalizedCmd.includes(blocked)) {
                 return {
                     allowed: false,
                     reason: `Command '${blocked}' is blocked on ${this.platform}`,
@@ -250,7 +330,7 @@ export class McpSecurityGuard {
                 };
             }
         }
-        
+
         // Check restricted commands
         for (const restricted of osRules.restricted) {
             if (baseCommand === restricted.command) {
@@ -262,20 +342,7 @@ export class McpSecurityGuard {
                 };
             }
         }
-        
-        // Check for shell operators that might be dangerous
-        const dangerousOperators = ['&&', '||', ';', '|', '`', '$(',  '${', '>>', '2>'];
-        for (const op of dangerousOperators) {
-            if (normalizedCommand.includes(op)) {
-                return {
-                    allowed: true,
-                    requiresConfirmation: true,
-                    reason: `Command contains shell operator '${op}'`,
-                    riskLevel: 'medium'
-                };
-            }
-        }
-        
+
         // Unknown command - require confirmation
         return {
             allowed: true,
@@ -283,6 +350,20 @@ export class McpSecurityGuard {
             reason: 'Unknown command requires confirmation',
             riskLevel: 'medium'
         };
+    }
+
+    /**
+     * Numeric rank for risk levels, used to find the most restrictive result
+     * across compound commands.
+     */
+    private riskRank(level?: 'low' | 'medium' | 'high' | 'critical'): number {
+        switch (level) {
+            case 'critical': return 4;
+            case 'high': return 3;
+            case 'medium': return 2;
+            case 'low': return 1;
+            default: return 0;
+        }
     }
     
     /**
