@@ -379,12 +379,48 @@ const model: LlmModelConfig | null = configManager.getLlmModel();
 const feature: FeatureToggle | null = configManager.getFeature('mcp_integration');
 ```
 
+## Prompt Compaction Configuration
+
+The `PromptCompactionConfig` controls the multi-layer compaction pipeline. All flags default to `false` and can be enabled via environment variables or programmatically.
+
+```typescript
+import { PromptCompactionConfig } from './src/shared/config/PromptCompactionConfig';
+
+// Check if a feature is enabled
+const config = PromptCompactionConfig.getInstance();
+
+// Environment variable overrides (set before server start):
+// MICROCOMPACTION_ENABLED=true
+// REACTIVE_COMPACTION_ENABLED=true
+// POST_COMPACTION_RESTORATION_ENABLED=true
+// SYSTEM_REMINDERS_ENABLED=true
+// STRUCTURED_SUMMARIES_ENABLED=true
+// DEFERRED_TOOL_SCHEMAS_ENABLED=true
+// TOOL_BEHAVIORAL_GUIDANCE_ENABLED=true
+// DYNAMIC_CONTEXT_INJECTION_ENABLED=true
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `MICROCOMPACTION_ENABLED` | `false` | Strip old tool result bodies, keep metadata |
+| `REACTIVE_COMPACTION_ENABLED` | `false` | Escalating compaction on 413 or threshold exceeded |
+| `POST_COMPACTION_RESTORATION_ENABLED` | `false` | Restore high-priority artifacts after compaction |
+| `SYSTEM_REMINDERS_ENABLED` | `false` | Inject contextual reminders on triggers |
+| `STRUCTURED_SUMMARIES_ENABLED` | `false` | Heuristic summary builder for compaction |
+| `DEFERRED_TOOL_SCHEMAS_ENABLED` | `false` | Tier-1/tier-2 tool schema splitting |
+| `TOOL_BEHAVIORAL_GUIDANCE_ENABLED` | `false` | Per-tool behavioral hints |
+| `DYNAMIC_CONTEXT_INJECTION_ENABLED` | `false` | Runtime context injection providers |
+
+See [Compaction Pipeline](../mxf/compaction-pipeline.md) and [Prompting Enhancements](../mxf/prompting-enhancements.md) for detailed documentation.
+
 ## Related Documentation
 
 - [SDK Index](./index.md) - Main SDK documentation
 - [MxfAgent](../mxf/index.md) - Agent implementation
 - [Event System](./events.md) - Event handling patterns
 - [MXP Configuration](./mxp-config.md) - MXP-specific configuration
+- [Compaction Pipeline](../mxf/compaction-pipeline.md) - Multi-layer compaction system
+- [Prompting Enhancements](../mxf/prompting-enhancements.md) - Behavioral guidance and deferred schemas
 
 ---
 

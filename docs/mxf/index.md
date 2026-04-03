@@ -112,11 +112,15 @@ Vue 3-based web interface for:
   - MCP Services (Tool execution and management)
   - Pattern Services (Ephemeral events, Pattern detection)
 
+### Interactive CLI
+- **[Interactive CLI Guide](interactive-cli.md)** - TUI interface, slash commands, agent system, one-shot mode
+
 ### Advanced Topics
 - **[Extensibility](extensibility.md)** - Plugin and extension development
 - **[Security](security.md)** - Security model and best practices
 - **[Development Lifecycle](development-lifecycle.md)** - From development to deployment
 - **[Validation System](validation-system.md)** - Comprehensive validation and error prevention architecture
+- **[Shell Execution](shell-execution.md)** - Enhanced shell command parsing, classification, sandboxing
 
 ### Memory & Learning
 - **[Nested Learning](nested-learning.md)** - Multi-timescale memory architecture
@@ -134,6 +138,8 @@ Vue 3-based web interface for:
 - **[Dynamic Inference Parameters](dynamic-inference-parameters.md)** - Complexity-based model selection
 - **[TOON Optimization](toon-optimization.md)** - Token-optimized encoding
 - **[Prompt Auto-Compaction](prompt-auto-compaction.md)** - Automatic prompt compression
+- **[Compaction Pipeline](compaction-pipeline.md)** - Multi-layer compaction (microcompaction, reactive, restoration)
+- **[Prompting Enhancements](prompting-enhancements.md)** - Behavioral guidance, deferred schemas, dynamic context
 - **[Database Abstraction](database-abstraction.md)** - Swappable database backends
 
 ### Implementation Guides

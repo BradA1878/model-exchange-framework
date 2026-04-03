@@ -380,9 +380,102 @@ All available events organized by category:
 - `Events.Channel.CREATED`
 - `Events.Channel.UPDATED`
 
+### Compaction Events
+
+Events for the multi-layer compaction pipeline:
+
+```typescript
+import { Events } from '@mxf/sdk';
+
+// Microcompaction applied (tool result trimming, no LLM call)
+agent.on(Events.Compaction.MICROCOMPACTION_APPLIED, (payload) => {
+    console.log('Trimmed tool results for:', payload.data.agentId);
+    console.log('Tool results stripped:', payload.data.toolResultsStripped);
+    console.log('Tokens removed:', payload.data.tokensRemoved);
+});
+
+// Reactive compaction triggered (413 recovery or threshold exceeded)
+agent.on(Events.Compaction.REACTIVE_COMPACTION_TRIGGERED, (payload) => {
+    console.log('Strategy:', payload.data.strategy);
+    console.log('Status code:', payload.data.statusCode);
+    console.log('Retry attempt:', payload.data.retryAttempt);
+    console.log('Tokens before:', payload.data.tokensBefore);
+    console.log('Tokens after:', payload.data.tokensAfter);
+});
+
+// Post-compaction artifacts restored
+agent.on(Events.Compaction.POST_COMPACTION_RESTORED, (payload) => {
+    console.log('Artifacts restored:', payload.data.artifactsRestored);
+    console.log('Artifact names:', payload.data.artifactNames);
+    console.log('Tokens added:', payload.data.tokensAdded);
+});
+
+// Compaction summary generated
+agent.on(Events.Compaction.COMPACTION_SUMMARY_GENERATED, (payload) => {
+    console.log('Method:', payload.data.method);
+    console.log('Messages summarized:', payload.data.messagesSummarized);
+    console.log('Summary tokens:', payload.data.summaryTokens);
+});
+```
+
+See [Compaction Pipeline](../mxf/compaction-pipeline.md) for full documentation.
+
+### Shell Execution Events
+
+Events for shell command execution lifecycle:
+
+```typescript
+import { Events } from '@mxf/sdk';
+
+// Shell command started
+agent.on(Events.Shell.SHELL_EXECUTION_STARTED, (payload) => {
+    console.log('Command:', payload.data.command);
+    console.log('Classification:', payload.data.classification);
+});
+
+// Shell command completed
+agent.on(Events.Shell.SHELL_EXECUTION_COMPLETED, (payload) => {
+    console.log('Exit code:', payload.data.exitCode);
+    console.log('Meaning:', payload.data.exitCodeMeaning);
+});
+
+// Shell command failed
+agent.on(Events.Shell.SHELL_EXECUTION_FAILED, (payload) => {
+    console.error('Command failed:', payload.data.command);
+    console.error('Error:', payload.data.error);
+});
+
+// Destructive command warning
+agent.on(Events.Shell.SHELL_DESTRUCTIVE_WARNING, (payload) => {
+    console.warn('Destructive command:', payload.data.command);
+    for (const w of payload.data.warnings) {
+        console.warn(`  [${w.severity}] ${w.warning}`);
+    }
+});
+
+// Background task events
+agent.on(Events.Shell.SHELL_BACKGROUND_STARTED, (payload) => {
+    console.log('Background task:', payload.data.taskId);
+});
+
+agent.on(Events.Shell.SHELL_BACKGROUND_COMPLETED, (payload) => {
+    console.log('Task done:', payload.data.taskId, 'exit:', payload.data.exitCode);
+});
+
+// Large output persisted to MongoDB
+agent.on(Events.Shell.SHELL_OUTPUT_PERSISTED, (payload) => {
+    console.log('Output persisted:', payload.data.outputId);
+    console.log('Total bytes:', payload.data.totalBytes);
+});
+```
+
+See [Shell Execution](../mxf/shell-execution.md) for full documentation.
+
 ## See Also
 
 - [SDK Overview](index.md)
 - [Event Handling Examples](examples-events.md)
 - [Basic Examples](examples-basic.md)
 - [Multi-Agent Examples](examples-multi-agent.md)
+- [Compaction Pipeline](../mxf/compaction-pipeline.md)
+- [Shell Execution](../mxf/shell-execution.md)

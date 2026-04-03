@@ -26,9 +26,15 @@ Welcome to the comprehensive technical documentation for the Model Exchange Fram
 - **[Memory Utility Learning (MULS)](./mxf/memory-utility-learning.md)** - Q-value weighted memory retrieval
 - **[ORPAR-Memory Integration](./mxf/orpar-memory-integration.md)** - Phase-aware memory coupling
 
+### 🖥️ **Interactive CLI**
+- **[Interactive CLI Guide](./mxf/interactive-cli.md)** - TUI interface, slash commands, agent system, one-shot mode
+
 ### 🤖 **Advanced Systems**
 - **[TensorFlow.js Integration](./mxf/index.md#tensorflow)** - On-device ML models
 - **[Code Execution](./mxf/code-execution.md)** - Secure sandboxed execution
+- **[Shell Execution](./mxf/shell-execution.md)** - Enhanced shell parsing, classification, sandboxing
+- **[Compaction Pipeline](./mxf/compaction-pipeline.md)** - Multi-layer compaction system
+- **[Prompting Enhancements](./mxf/prompting-enhancements.md)** - Behavioral guidance, deferred schemas
 - **[Workflow System](./mxf/workflow-system.md)** - Sequential, parallel, loop patterns
 - **[LSP Integration](./mxf/lsp-integration.md)** - Language Server Protocol bridge
 - **[P2P Foundation](./mxf/p2p-foundation.md)** - Decentralized coordination
@@ -119,6 +125,28 @@ The **Model Exchange Framework (MXF)** is a framework for building autonomous mu
 - [Security Model](./mxf/security.md) - Authentication and encryption
 - [Extensibility](./mxf/extensibility.md) - Custom integrations
 - [Dashboard](./dashboard/index.md) - Management interface (⚠️ in development)
+
+## What's New in MXF (Q2 2026)
+
+### Interactive CLI
+
+MXF now includes a full **Interactive TUI CLI** (`bun run mxf`) — an Ink/React-based terminal interface with 27+ slash commands, built-in agents (Planner, Operator, Executor, Reviewer), cost tracking, streaming reasoning, and one-shot task execution via `mxf run "task"`.
+
+📖 **[Interactive CLI Guide →](./mxf/interactive-cli.md)**
+
+### Multi-Layer Compaction Pipeline
+
+A comprehensive **compaction pipeline** for managing context window usage: tool result microcompaction (no LLM call), reactive compaction with escalating strategies (413 recovery), post-compaction artifact restoration, and system reminders. All features behind opt-in flags.
+
+📖 **[Compaction Pipeline →](./mxf/compaction-pipeline.md)** | **[Prompting Enhancements →](./mxf/prompting-enhancements.md)**
+
+### Enhanced Shell Execution
+
+Shell commands are now parsed by a **recursive descent parser**, classified by category and risk, with **semantic exit code interpretation** (grep returning 1 = no matches, not failure), destructive command warnings, optional Docker sandboxing, large output handling, and background task execution.
+
+📖 **[Shell Execution →](./mxf/shell-execution.md)**
+
+---
 
 ## What's New in MXF (Q1 2026)
 

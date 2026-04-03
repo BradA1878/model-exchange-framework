@@ -265,7 +265,9 @@ Tools for system operations and code execution.
 |------|-------------|
 | `memory_store` | Store data in memory |
 | `memory_retrieve` | Retrieve data from memory |
-| `shell_execute` | Execute shell commands (sandboxed) |
+| `shell_execute` | Execute shell commands with parsing, classification, semantic exit codes, destructive warnings, and optional Docker sandbox. See [Shell Execution](shell-execution.md) |
+| `shell_task_status` | Check status of background shell tasks |
+| `shell_output_retrieve` | Retrieve large outputs persisted to MongoDB |
 | `code_execute` | Execute code in isolated sandbox |
 | `json_append` | Append entry to JSON file |
 | `json_read` | Read JSON file |

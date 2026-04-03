@@ -4,6 +4,8 @@
 
 Prompt Auto-Compaction is a sophisticated multi-phase system that intelligently compresses conversation history while preserving critical information. Using a ResNet-inspired architecture with skip connections (residuals), it maintains high-importance content while applying tiered compression to less critical messages.
 
+**See also:** For the multi-layer compaction pipeline (microcompaction, reactive compaction, post-compaction restoration, system reminders), see [Compaction Pipeline](./compaction-pipeline.md).
+
 ## Key Features
 
 - **ResNet-Inspired Architecture**: Skip connections (residuals) preserve critical information
@@ -660,6 +662,8 @@ For a 1000-message conversation:
 
 ## Related Documentation
 
+- [Compaction Pipeline](compaction-pipeline.md) - Multi-layer compaction (microcompaction, reactive compaction, post-compaction restoration)
+- [Prompting Enhancements](prompting-enhancements.md) - Behavioral guidance, deferred schemas, dynamic context
 - [Dynamic Inference Parameters](dynamic-inference-parameters.md)
 - [TOON Optimization](toon-optimization.md)
 - [MXP Protocol](mxp-protocol.md)
