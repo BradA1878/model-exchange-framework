@@ -13,7 +13,7 @@ export interface ConversationEntry {
     /** Unique identifier for this entry */
     id: string;
     /** Type of entry determines rendering style */
-    type: 'user' | 'agent' | 'tool-call' | 'tool-result' | 'system' | 'error' | 'result' | 'activity-card' | 'confirmation-prompt' | 'confirmation-response' | 'reasoning';
+    type: 'user' | 'agent' | 'tool-call' | 'tool-result' | 'system' | 'error' | 'result' | 'activity-card' | 'confirmation-prompt' | 'confirmation-response' | 'reasoning' | 'task-complete-banner';
     /** Agent ID that produced this entry (for agent/tool-call types) */
     agentId?: string;
     /** Display name of the agent */

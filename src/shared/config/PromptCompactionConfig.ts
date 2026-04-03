@@ -54,6 +54,43 @@ export interface PromptCompactionConfig {
     // System prompt optimization
     condensedMode: boolean;
     maxSystemPromptTokens: number;
+
+    // --- Phase 1 feature flags (all default false for safe rollout) ---
+
+    /** Enable tool result microcompaction (cheap, no LLM — strips old tool result bodies) */
+    microcompactionEnabled: boolean;
+    /** Token count above which microcompaction triggers */
+    microcompactionTokenThreshold: number;
+
+    /** Enable percentage-based compaction thresholds instead of fixed window size */
+    percentageCompactionEnabled: boolean;
+    /** Context usage percentage at which auto-compaction triggers (0.0–1.0) */
+    compactionThresholdPercent: number;
+
+    /** Enable structured summary format for compacted conversations */
+    structuredSummariesEnabled: boolean;
+
+    /** Enable post-compaction artifact restoration (task state, ORPAR phase, etc.) */
+    postCompactionRestorationEnabled: boolean;
+
+    /** Enable reactive compaction for 413 context overflow recovery */
+    reactiveCompactionEnabled: boolean;
+
+    /** Enable mid-conversation system reminders */
+    systemRemindersEnabled: boolean;
+    /** Max total tokens for system reminders per LLM request */
+    systemReminderTokenBudget: number;
+
+    /** Enable tool-specific behavioral guidance in tool descriptions */
+    toolBehavioralGuidanceEnabled: boolean;
+
+    /** Enable progressive tool schema disclosure (tier-1 full / tier-2 deferred) */
+    deferredToolSchemasEnabled: boolean;
+
+    /** Enable dynamic context injection (task progress, errors, channel state) */
+    dynamicContextInjectionEnabled: boolean;
+    /** Max tokens for dynamic context injection */
+    dynamicContextTokenBudget: number;
 }
 
 /**
@@ -81,7 +118,27 @@ export function loadPromptCompactionConfig(): PromptCompactionConfig {
 
         // System prompt optimization
         condensedMode: process.env.PROMPT_COMPACTION_CONDENSED_MODE === 'true',
-        maxSystemPromptTokens: parseInt(process.env.PROMPT_COMPACTION_MAX_SYSTEM_PROMPT_TOKENS || '2500')
+        maxSystemPromptTokens: parseInt(process.env.PROMPT_COMPACTION_MAX_SYSTEM_PROMPT_TOKENS || '2500'),
+
+        // Phase 1 feature flags (all default false)
+        microcompactionEnabled: process.env.MICROCOMPACTION_ENABLED === 'true',
+        microcompactionTokenThreshold: parseInt(process.env.MICROCOMPACTION_TOKEN_THRESHOLD || '50000'),
+
+        percentageCompactionEnabled: process.env.PERCENTAGE_COMPACTION_ENABLED === 'true',
+        compactionThresholdPercent: parseFloat(process.env.COMPACTION_THRESHOLD_PERCENT || '0.80'),
+
+        structuredSummariesEnabled: process.env.STRUCTURED_SUMMARIES_ENABLED === 'true',
+        postCompactionRestorationEnabled: process.env.POST_COMPACTION_RESTORATION_ENABLED === 'true',
+        reactiveCompactionEnabled: process.env.REACTIVE_COMPACTION_ENABLED === 'true',
+
+        systemRemindersEnabled: process.env.SYSTEM_REMINDERS_ENABLED === 'true',
+        systemReminderTokenBudget: parseInt(process.env.SYSTEM_REMINDER_TOKEN_BUDGET || '500'),
+
+        toolBehavioralGuidanceEnabled: process.env.TOOL_BEHAVIORAL_GUIDANCE_ENABLED === 'true',
+        deferredToolSchemasEnabled: process.env.DEFERRED_TOOL_SCHEMAS_ENABLED === 'true',
+
+        dynamicContextInjectionEnabled: process.env.DYNAMIC_CONTEXT_INJECTION_ENABLED === 'true',
+        dynamicContextTokenBudget: parseInt(process.env.DYNAMIC_CONTEXT_TOKEN_BUDGET || '1000'),
     };
 
     logger.info('Prompt compaction configuration loaded', config);
@@ -123,6 +180,20 @@ export function validatePromptCompactionConfig(config: PromptCompactionConfig): 
         errors.push('Max system prompt tokens must be positive');
     }
 
+    // Validate Phase 1 settings
+    if (config.microcompactionTokenThreshold <= 0) {
+        errors.push('Microcompaction token threshold must be positive');
+    }
+    if (config.compactionThresholdPercent < 0 || config.compactionThresholdPercent > 1.0) {
+        errors.push('Compaction threshold percent must be between 0.0 and 1.0');
+    }
+    if (config.systemReminderTokenBudget <= 0) {
+        errors.push('System reminder token budget must be positive');
+    }
+    if (config.dynamicContextTokenBudget <= 0) {
+        errors.push('Dynamic context token budget must be positive');
+    }
+
     if (errors.length > 0) {
         logger.error('Prompt compaction configuration validation failed', { errors });
     }
@@ -146,6 +217,20 @@ export function getDefaultPromptCompactionConfig(): PromptCompactionConfig {
         tier2Size: 50,
         defaultTokenBudget: 8000,
         condensedMode: false,
-        maxSystemPromptTokens: 2500
+        maxSystemPromptTokens: 2500,
+
+        microcompactionEnabled: false,
+        microcompactionTokenThreshold: 50000,
+        percentageCompactionEnabled: false,
+        compactionThresholdPercent: 0.80,
+        structuredSummariesEnabled: false,
+        postCompactionRestorationEnabled: false,
+        reactiveCompactionEnabled: false,
+        systemRemindersEnabled: false,
+        systemReminderTokenBudget: 500,
+        toolBehavioralGuidanceEnabled: false,
+        deferredToolSchemasEnabled: false,
+        dynamicContextInjectionEnabled: false,
+        dynamicContextTokenBudget: 1000,
     };
 }

@@ -233,6 +233,18 @@ const ConversationEntryInner: React.FC<ConversationEntryProps> = ({ entry, detai
             );
         }
 
+        case 'task-complete-banner': {
+            // Visual separator banner displayed after task completion with elapsed time
+            const separator = '═'.repeat(55);
+            return (
+                <Box flexDirection="column" paddingX={1} marginTop={1}>
+                    <Text dimColor>{separator}</Text>
+                    <Text bold color={theme.success as any}>✓ {entry.content}</Text>
+                    <Text dimColor>{separator}</Text>
+                </Box>
+            );
+        }
+
         case 'result':
             return (
                 <Box flexDirection="column" paddingX={1} marginTop={1}>

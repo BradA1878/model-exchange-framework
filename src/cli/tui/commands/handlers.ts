@@ -12,7 +12,7 @@ import type { CommandContext } from './registry';
 import { buildContextString } from '../../utils/context';
 import { ConfigService } from '../../services/ConfigService';
 import { loadAll } from '../agents/AgentLoader';
-import { formatCostSummary, formatBudgetStatus, getModelContextWindow } from '../services/CostTracker';
+import { formatCostSummary, formatBudgetStatus, getModelContextWindow, getContextUsagePercent, formatTokenRecovery } from '../services/CostTracker';
 import { getThemeNames } from '../theme/themes';
 import { SessionHistoryService, formatSessionList } from '../services/SessionHistory';
 import { ToolHookService } from '../services/ToolHookService';
@@ -900,14 +900,28 @@ registerCommand({
     usage: '/compact [agent-id]',
     handler: async (args: string, context: CommandContext) => {
         const targetId = args.trim() || null;
+        const state = context.getState?.();
 
         if (targetId) {
-            // Compact specific agent
+            // Compact specific agent — show immediate feedback
+            context.dispatch({
+                type: 'ADD_ENTRY',
+                entry: { type: 'system', content: `Compacting context for ${targetId}...` },
+            });
             try {
+                // Capture pre-compaction token count for recovery stats
+                const preTokens = state?.costData?.agents[targetId]?.totalTokens || 0;
+                const usagePct = state ? getContextUsagePercent(targetId, state.costData) : null;
+                const usageStr = usagePct !== null ? ` (was ${usagePct}% full)` : '';
+
                 await context.session.compactAgent(targetId);
+
+                const postTokens = state?.costData?.agents[targetId]?.totalTokens || 0;
+                const recoveryStr = preTokens > 0 ? ` — ${formatTokenRecovery(preTokens, postTokens)}` : '';
+
                 context.dispatch({
                     type: 'ADD_ENTRY',
-                    entry: { type: 'system', content: `Context compaction triggered for ${targetId}.` },
+                    entry: { type: 'system', content: `Context compacted for ${targetId}${usageStr}${recoveryStr}` },
                 });
             } catch (error: any) {
                 context.dispatch({
@@ -916,18 +930,35 @@ registerCommand({
                 });
             }
         } else {
-            // Compact all agents
+            // Compact all agents — show immediate feedback
             const definitions = context.session.getConnectedDefinitions();
+            context.dispatch({
+                type: 'ADD_ENTRY',
+                entry: { type: 'system', content: `Compacting context for ${definitions.length} agents...` },
+            });
+
+            let compactedCount = 0;
             for (const def of definitions) {
                 try {
                     await context.session.compactAgent(def.agentId);
+                    compactedCount++;
                 } catch {
                     // Errors logged inside compactAgent
                 }
             }
+
+            // Build summary with per-agent context usage
+            const agentSummaries = definitions.map((def) => {
+                const pct = state ? getContextUsagePercent(def.agentId, state.costData) : null;
+                return pct !== null ? `${def.name} (${pct}%)` : def.name;
+            });
+
             context.dispatch({
                 type: 'ADD_ENTRY',
-                entry: { type: 'system', content: `Context compaction triggered for ${definitions.length} agents.` },
+                entry: {
+                    type: 'system',
+                    content: `Context compacted for ${compactedCount}/${definitions.length} agents: ${agentSummaries.join(', ')}`,
+                },
             });
         }
     },

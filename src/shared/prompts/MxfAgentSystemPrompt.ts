@@ -33,14 +33,17 @@
 import { AgentConfig } from '../interfaces/AgentInterfaces';
 import { Logger } from '../utils/Logger';
 import { createStrictValidator } from '../utils/validation';
-import { 
-    COMMUNICATION_TOOLS, 
-    CONTROL_LOOP_TOOLS, 
-    CONTEXT_MEMORY_TOOLS, 
-    META_TOOLS 
+import {
+    COMMUNICATION_TOOLS,
+    CONTROL_LOOP_TOOLS,
+    CONTEXT_MEMORY_TOOLS,
+    META_TOOLS
 } from '../constants/ToolNames';
 import { CORE_MXF_TOOLS } from '../constants/CoreTools';
 import { PROMPT_TEMPLATES } from '../utils/PromptTemplateReplacer';
+import { ToolBehavioralGuidance } from './ToolBehavioralGuidance';
+import { DeferredToolSchemaRegistry } from './DeferredToolSchemaRegistry';
+import { loadPromptCompactionConfig } from '../config/PromptCompactionConfig';
 
 const logger = new Logger('info', 'MxfAgentSystemPrompt', 'client');
 const validator = createStrictValidator('MxfAgentSystemPrompt');
@@ -371,31 +374,52 @@ Use tools to take actions - the system will automatically execute your tool requ
             return '## Tool Usage Reference\n\n❌ **ERROR: No allowed tools found**\n\nThis agent has no tools configured in its allowedTools list.';
         }
 
+        // Apply deferred tool schema disclosure if enabled — tier-2 tools get
+        // a name-only listing instead of full schemas to save prompt tokens
+        const compactionConfig = loadPromptCompactionConfig();
+        let deferredSummary = '';
+        let toolsForFullDocs = finalToolsForDocumentation;
+
+        if (compactionConfig.deferredToolSchemasEnabled) {
+            const registry = DeferredToolSchemaRegistry.getInstance();
+            const allNames = finalToolsForDocumentation.map(t => t.name);
+            const { tier1, tier2 } = registry.partition(allNames);
+
+            if (tier2.length > 0) {
+                toolsForFullDocs = finalToolsForDocumentation.filter(t => tier1.includes(t.name));
+                deferredSummary = '\n\n' + registry.buildDeferredSummary(tier2);
+                logger.info('Deferred tool schemas applied', {
+                    tier1Count: tier1.length,
+                    tier2Count: tier2.length,
+                });
+            }
+        }
+
         // Build tool schemas dynamically from MXF core tools only
         const toolSections = [];
-        
+
         // Group allowed tools by category (only show documentation for tools this agent can actually use)
-        const communicationTools = finalToolsForDocumentation.filter(t => t.name.startsWith('messaging_'));
-        const controlLoopTools = finalToolsForDocumentation.filter(t => t.name.startsWith('controlLoop_'));
-        const infrastructureTools = finalToolsForDocumentation.filter(t => 
-            t.name === 'filesystem_read' || t.name === 'filesystem_write' || 
+        const communicationTools = toolsForFullDocs.filter(t => t.name.startsWith('messaging_'));
+        const controlLoopTools = toolsForFullDocs.filter(t => t.name.startsWith('controlLoop_'));
+        const infrastructureTools = toolsForFullDocs.filter(t =>
+            t.name === 'filesystem_read' || t.name === 'filesystem_write' ||
             t.name === 'filesystem_list' || t.name === 'shell_execute' ||
             t.name === 'memory_store' || t.name === 'memory_retrieve'
         );
-        const contextMemoryTools = finalToolsForDocumentation.filter(t => 
+        const contextMemoryTools = toolsForFullDocs.filter(t =>
             t.name.startsWith('channel_') || t.name.startsWith('agent_') || t.name.startsWith('context_')
         );
-        const planningTools = finalToolsForDocumentation.filter(t => t.name.startsWith('planning_'));
-        const validationTools = finalToolsForDocumentation.filter(t => 
+        const planningTools = toolsForFullDocs.filter(t => t.name.startsWith('planning_'));
+        const validationTools = toolsForFullDocs.filter(t =>
             t.name === 'no_further_action' || t.name === 'validate_next_action'
         );
-        const metaTools = finalToolsForDocumentation.filter(t => ['task_complete', 'tools_recommend'].includes(t.name));
+        const metaTools = toolsForFullDocs.filter(t => ['task_complete', 'tools_recommend'].includes(t.name));
         
         // Communication Tools Section
         if (communicationTools.length > 0) {
             toolSections.push('### Communication Tools\n');
             for (const tool of communicationTools) {
-                toolSections.push(this.buildToolExample(tool, agentConfig?.mxpEnabled));
+                toolSections.push(this.buildToolExample(tool, agentConfig?.mxpEnabled, compactionConfig.toolBehavioralGuidanceEnabled));
             }
         }
 
@@ -403,7 +427,7 @@ Use tools to take actions - the system will automatically execute your tool requ
         if (controlLoopTools.length > 0) {
             toolSections.push('### Control Loop Tools\n');
             for (const tool of controlLoopTools) {
-                toolSections.push(this.buildToolExample(tool, agentConfig?.mxpEnabled));
+                toolSections.push(this.buildToolExample(tool, agentConfig?.mxpEnabled, compactionConfig.toolBehavioralGuidanceEnabled));
             }
         }
 
@@ -411,7 +435,7 @@ Use tools to take actions - the system will automatically execute your tool requ
         if (infrastructureTools.length > 0) {
             toolSections.push('### Infrastructure Tools\n');
             for (const tool of infrastructureTools) {
-                toolSections.push(this.buildToolExample(tool, agentConfig?.mxpEnabled));
+                toolSections.push(this.buildToolExample(tool, agentConfig?.mxpEnabled, compactionConfig.toolBehavioralGuidanceEnabled));
             }
         }
 
@@ -419,7 +443,7 @@ Use tools to take actions - the system will automatically execute your tool requ
         if (contextMemoryTools.length > 0) {
             toolSections.push('### Context & Memory Tools\n');
             for (const tool of contextMemoryTools) {
-                toolSections.push(this.buildToolExample(tool, agentConfig?.mxpEnabled));
+                toolSections.push(this.buildToolExample(tool, agentConfig?.mxpEnabled, compactionConfig.toolBehavioralGuidanceEnabled));
             }
         }
 
@@ -427,7 +451,7 @@ Use tools to take actions - the system will automatically execute your tool requ
         if (planningTools.length > 0) {
             toolSections.push('### Planning Tools\n');
             for (const tool of planningTools) {
-                toolSections.push(this.buildToolExample(tool, agentConfig?.mxpEnabled));
+                toolSections.push(this.buildToolExample(tool, agentConfig?.mxpEnabled, compactionConfig.toolBehavioralGuidanceEnabled));
             }
         }
 
@@ -435,7 +459,7 @@ Use tools to take actions - the system will automatically execute your tool requ
         if (validationTools.length > 0) {
             toolSections.push('### Validation Tools\n');
             for (const tool of validationTools) {
-                toolSections.push(this.buildToolExample(tool, agentConfig?.mxpEnabled));
+                toolSections.push(this.buildToolExample(tool, agentConfig?.mxpEnabled, compactionConfig.toolBehavioralGuidanceEnabled));
             }
         }
 
@@ -443,20 +467,26 @@ Use tools to take actions - the system will automatically execute your tool requ
         if (metaTools.length > 0) {
             toolSections.push('### Meta Tools\n');
             for (const tool of metaTools) {
-                toolSections.push(this.buildToolExample(tool, agentConfig?.mxpEnabled));
+                toolSections.push(this.buildToolExample(tool, agentConfig?.mxpEnabled, compactionConfig.toolBehavioralGuidanceEnabled));
             }
         }
 
         return `## Tool Usage Reference
 
-${toolSections.join('\n')}`;
+${toolSections.join('\n')}${deferredSummary}`;
     }
 
-    private static buildToolExample(tool: any, mxpEnabled?: boolean): string {
+    /**
+     * Build a single tool's documentation entry.
+     * @param tool - Tool definition with name, description, inputSchema
+     * @param mxpEnabled - Whether MXP is enabled for this agent
+     * @param behavioralGuidanceEnabled - Whether to append behavioral hints (pre-resolved from config)
+     */
+    private static buildToolExample(tool: any, mxpEnabled?: boolean, behavioralGuidanceEnabled?: boolean): string {
         // Native tool calling format - describe the tool without JSON examples
         const params = tool.inputSchema?.properties || {};
         const required = tool.inputSchema?.required || [];
-        
+
         const paramsList: string[] = [];
         for (const [key, value] of Object.entries(params)) {
             const param = value as any;
@@ -464,12 +494,19 @@ ${toolSections.join('\n')}`;
             const requiredMarker = isRequired ? '(required)' : '(optional)';
             paramsList.push(`  - ${key} ${requiredMarker}: ${param.description || 'No description'}`);
         }
-        
-        const paramsSection = paramsList.length > 0 
+
+        const paramsSection = paramsList.length > 0
             ? `\nParameters:\n${paramsList.join('\n')}`
             : '';
-        
-        return `**${tool.name}** - ${tool.description}${paramsSection}\n`;
+
+        // Append behavioral guidance if enabled (flag resolved once per buildToolSchemas call)
+        let guidanceSection = '';
+        if (behavioralGuidanceEnabled) {
+            const guidance = ToolBehavioralGuidance.getInstance();
+            guidanceSection = guidance.buildGuidanceString(tool.name);
+        }
+
+        return `**${tool.name}** - ${tool.description}${paramsSection}${guidanceSection}\n`;
     }
 
     /**

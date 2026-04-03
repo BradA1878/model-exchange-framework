@@ -68,6 +68,14 @@ import {
     UserInputCancelledData,
     UserInputTimeoutData,
 } from '../events/event-definitions/UserInputEvents';
+import {
+    CompactionEvents,
+    MicrocompactionAppliedPayload,
+    AutoCompactionTriggeredPayload,
+    ReactiveCompactionTriggeredPayload,
+    PostCompactionRestoredPayload,
+    CompactionSummaryGeneratedPayload,
+} from '../events/event-definitions/CompactionEvents';
 
 // Create logger instance for event payload schema
 const logger = new Logger('warn', 'EventPayloadSchema', 'server');
@@ -4255,6 +4263,176 @@ export function createUserInputTimeoutPayload(
         agentId,
         channelId as ChannelId,
         timeoutData,
+        options
+    );
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Compaction Event Payload Types & Helpers
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/** Payload type for microcompaction applied events */
+export type MicrocompactionAppliedEventPayload = BaseEventPayload<MicrocompactionAppliedPayload>;
+
+/** Payload type for auto-compaction triggered events */
+export type AutoCompactionTriggeredEventPayload = BaseEventPayload<AutoCompactionTriggeredPayload>;
+
+/** Payload type for reactive compaction triggered events */
+export type ReactiveCompactionTriggeredEventPayload = BaseEventPayload<ReactiveCompactionTriggeredPayload>;
+
+/** Payload type for post-compaction restoration completed events */
+export type PostCompactionRestoredEventPayload = BaseEventPayload<PostCompactionRestoredPayload>;
+
+/** Payload type for compaction summary generated events */
+export type CompactionSummaryGeneratedEventPayload = BaseEventPayload<CompactionSummaryGeneratedPayload>;
+
+/**
+ * Creates a MicrocompactionAppliedEventPayload for tool result stripping events.
+ *
+ * @param agentId - Agent whose context was microcompacted
+ * @param channelId - Channel context
+ * @param data - Microcompaction details (tool results stripped, tokens removed)
+ * @param options - Optional base event payload options
+ * @returns A MicrocompactionAppliedEventPayload
+ */
+export function createMicrocompactionAppliedPayload(
+    agentId: AgentId,
+    channelId: ChannelId,
+    data: Omit<MicrocompactionAppliedPayload, 'eventType' | 'agentId' | 'channelId' | 'timestamp'>,
+    options: { source?: string; eventId?: string; timestamp?: number; } = {}
+): MicrocompactionAppliedEventPayload {
+    return createBaseEventPayload<MicrocompactionAppliedPayload>(
+        CompactionEvents.MICROCOMPACTION_APPLIED,
+        agentId,
+        channelId,
+        {
+            eventType: CompactionEvents.MICROCOMPACTION_APPLIED,
+            agentId,
+            channelId,
+            timestamp: options.timestamp || Date.now(),
+            ...data,
+        },
+        options
+    );
+}
+
+/**
+ * Creates an AutoCompactionTriggeredEventPayload for threshold-based compaction events.
+ *
+ * @param agentId - Agent whose context was compacted
+ * @param channelId - Channel context
+ * @param data - Auto-compaction details (usage percent, message/token counts)
+ * @param options - Optional base event payload options
+ * @returns An AutoCompactionTriggeredEventPayload
+ */
+export function createAutoCompactionTriggeredPayload(
+    agentId: AgentId,
+    channelId: ChannelId,
+    data: Omit<AutoCompactionTriggeredPayload, 'eventType' | 'agentId' | 'channelId' | 'timestamp'>,
+    options: { source?: string; eventId?: string; timestamp?: number; } = {}
+): AutoCompactionTriggeredEventPayload {
+    return createBaseEventPayload<AutoCompactionTriggeredPayload>(
+        CompactionEvents.AUTO_COMPACTION_TRIGGERED,
+        agentId,
+        channelId,
+        {
+            eventType: CompactionEvents.AUTO_COMPACTION_TRIGGERED,
+            agentId,
+            channelId,
+            timestamp: options.timestamp || Date.now(),
+            ...data,
+        },
+        options
+    );
+}
+
+/**
+ * Creates a ReactiveCompactionTriggeredEventPayload for 413 error recovery events.
+ *
+ * @param agentId - Agent whose context overflowed
+ * @param channelId - Channel context
+ * @param data - Reactive compaction details (status code, strategy, token counts)
+ * @param options - Optional base event payload options
+ * @returns A ReactiveCompactionTriggeredEventPayload
+ */
+export function createReactiveCompactionTriggeredPayload(
+    agentId: AgentId,
+    channelId: ChannelId,
+    data: Omit<ReactiveCompactionTriggeredPayload, 'eventType' | 'agentId' | 'channelId' | 'timestamp'>,
+    options: { source?: string; eventId?: string; timestamp?: number; } = {}
+): ReactiveCompactionTriggeredEventPayload {
+    return createBaseEventPayload<ReactiveCompactionTriggeredPayload>(
+        CompactionEvents.REACTIVE_COMPACTION_TRIGGERED,
+        agentId,
+        channelId,
+        {
+            eventType: CompactionEvents.REACTIVE_COMPACTION_TRIGGERED,
+            agentId,
+            channelId,
+            timestamp: options.timestamp || Date.now(),
+            ...data,
+        },
+        options
+    );
+}
+
+/**
+ * Creates a PostCompactionRestoredEventPayload for artifact restoration events.
+ *
+ * @param agentId - Agent whose context was restored
+ * @param channelId - Channel context
+ * @param data - Restoration details (artifact count, names, tokens added)
+ * @param options - Optional base event payload options
+ * @returns A PostCompactionRestoredEventPayload
+ */
+export function createPostCompactionRestoredPayload(
+    agentId: AgentId,
+    channelId: ChannelId,
+    data: Omit<PostCompactionRestoredPayload, 'eventType' | 'agentId' | 'channelId' | 'timestamp'>,
+    options: { source?: string; eventId?: string; timestamp?: number; } = {}
+): PostCompactionRestoredEventPayload {
+    return createBaseEventPayload<PostCompactionRestoredPayload>(
+        CompactionEvents.POST_COMPACTION_RESTORED,
+        agentId,
+        channelId,
+        {
+            eventType: CompactionEvents.POST_COMPACTION_RESTORED,
+            agentId,
+            channelId,
+            timestamp: options.timestamp || Date.now(),
+            ...data,
+        },
+        options
+    );
+}
+
+/**
+ * Creates a CompactionSummaryGeneratedEventPayload for summary generation events.
+ *
+ * @param agentId - Agent whose context was summarized
+ * @param channelId - Channel context
+ * @param data - Summary details (method, messages summarized, sections, tokens)
+ * @param options - Optional base event payload options
+ * @returns A CompactionSummaryGeneratedEventPayload
+ */
+export function createCompactionSummaryGeneratedPayload(
+    agentId: AgentId,
+    channelId: ChannelId,
+    data: Omit<CompactionSummaryGeneratedPayload, 'eventType' | 'agentId' | 'channelId' | 'timestamp'>,
+    options: { source?: string; eventId?: string; timestamp?: number; } = {}
+): CompactionSummaryGeneratedEventPayload {
+    return createBaseEventPayload<CompactionSummaryGeneratedPayload>(
+        CompactionEvents.COMPACTION_SUMMARY_GENERATED,
+        agentId,
+        channelId,
+        {
+            eventType: CompactionEvents.COMPACTION_SUMMARY_GENERATED,
+            agentId,
+            channelId,
+            timestamp: options.timestamp || Date.now(),
+            ...data,
+        },
         options
     );
 }

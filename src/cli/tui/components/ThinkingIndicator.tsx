@@ -35,6 +35,8 @@ interface ThinkingIndicatorProps {
     activeAgents: AgentInfo[];
     /** Live streaming preview from LLM (null when not streaming) */
     streamPreview?: { agentId: string; text: string } | null;
+    /** Current task title for context (shown alongside "thinking...") */
+    currentTaskTitle?: string | null;
 }
 
 /**
@@ -45,7 +47,7 @@ interface ThinkingIndicatorProps {
  * When streamPreview is available, shows a multi-line tail of the streaming text
  * so the user can follow the agent's response as it arrives.
  */
-const ThinkingIndicatorInner: React.FC<ThinkingIndicatorProps> = ({ activeAgents, streamPreview }) => {
+const ThinkingIndicatorInner: React.FC<ThinkingIndicatorProps> = ({ activeAgents, streamPreview, currentTaskTitle }) => {
     const { frame } = useSpinner({ type: 'dots' });
     const theme = useTheme();
 
@@ -90,7 +92,12 @@ const ThinkingIndicatorInner: React.FC<ThinkingIndicatorProps> = ({ activeAgents
                         <Text color={agent.color as any}>{agent.name}</Text>
                     </React.Fragment>
                 ))}
-                {previewLines.length === 0 && <Text dimColor> thinking...</Text>}
+                {previewLines.length === 0 && (
+                    <Text dimColor>
+                        {' thinking...'}
+                        {currentTaskTitle ? ` (${currentTaskTitle.length > 40 ? currentTaskTitle.slice(0, 40) + '...' : currentTaskTitle})` : ''}
+                    </Text>
+                )}
             </Box>
 
             {/* Streaming preview lines */}

@@ -158,6 +158,42 @@ function describeActivity(toolName: string, args: Record<string, any>): string {
 }
 
 /**
+ * Build a brief activity label for the StatusBar (e.g., "reading auth.ts", "delegating").
+ * Shorter than describeActivity — fits the status line without wrapping.
+ */
+function describeActivityBrief(toolName: string, args: Record<string, any>): string {
+    switch (toolName) {
+        case 'read_file':
+            return `reading ${basename(args.path || args.filePath || '')}`;
+        case 'write_file':
+            return `writing ${basename(args.path || args.filePath || '')}`;
+        case 'list_directory':
+            return 'listing files';
+        case 'code_execute':
+            return `executing ${args.language || 'code'}`;
+        case 'shell_execute':
+            return 'running command';
+        case 'task_create_with_plan':
+            return 'creating subtasks';
+        case 'messaging_send':
+            return 'delegating';
+        case 'task_monitoring_status':
+            return 'checking tasks';
+        case 'planning_create':
+        case 'planning_update_item':
+            return 'planning';
+        default:
+            return toolName.replace(/_/g, ' ');
+    }
+}
+
+/** Extract the file basename from a path */
+function basename(filePath: string): string {
+    const parts = filePath.split('/');
+    return parts[parts.length - 1] || filePath;
+}
+
+/**
  * Build a concise result summary from a tool execution result.
  * Formats output differently based on tool type — file reads show line count,
  * shell/code execution shows first ~200 chars of output, planning/messaging tools
@@ -383,6 +419,41 @@ export function useEventMonitor(
                     return;
                 }
 
+                // Orchestrator progress messages — surface coordination tool calls
+                // as system notices so the user can see what the orchestrator is doing
+                if (isOrchestrator(agentId)) {
+                    let progressMessage: string | null = null;
+
+                    if (toolName === 'task_create_with_plan') {
+                        progressMessage = 'Planning: Creating subtasks';
+                    } else if (toolName === 'messaging_send' && args.targetAgentId) {
+                        progressMessage = `Delegating to ${resolveName(args.targetAgentId)}`;
+                    } else if (toolName === 'task_monitoring_status') {
+                        progressMessage = 'Checking progress of active tasks';
+                    } else if (toolName === 'planning_create') {
+                        // planning_create is handled below with inline plan expansion,
+                        // so only add a progress message when it has no items to expand
+                        if (!args.items || !Array.isArray(args.items)) {
+                            progressMessage = 'Creating execution plan';
+                        }
+                    }
+
+                    if (progressMessage) {
+                        dispatchRef.current({
+                            type: 'ADD_ENTRY',
+                            entry: {
+                                type: 'system',
+                                content: progressMessage,
+                                agentId,
+                                agentName: resolveName(agentId),
+                            },
+                        });
+                    }
+                }
+
+                // Brief activity label for StatusBar display
+                const activityLabel = describeActivityBrief(toolName, args);
+
                 // For non-orchestrator agents calling file/code tools, show activity cards
                 // Compound dispatch: add activity-card entry + track iteration (1 render instead of 2)
                 if (!isOrchestrator(agentId) && ACTIVITY_CARD_TOOLS.has(toolName)) {
@@ -399,6 +470,7 @@ export function useEventMonitor(
                         },
                         agentId,
                         agentStatus: 'active',
+                        currentActivity: activityLabel,
                         iteration: { iterationType: 'tool-call' },
                     });
                     return;
@@ -423,6 +495,7 @@ export function useEventMonitor(
                         },
                         agentId,
                         agentStatus: 'active',
+                        currentActivity: activityLabel,
                         iteration: { iterationType: 'tool-call' },
                     });
                     return;
@@ -444,6 +517,7 @@ export function useEventMonitor(
                     },
                     agentId,
                     agentStatus: 'active',
+                    currentActivity: activityLabel,
                     iteration: { iterationType: 'tool-call' },
                 });
             }).catch(() => {
@@ -493,6 +567,12 @@ export function useEventMonitor(
                 // Extract original task title from the completion payload
                 const taskTitle = payload.data?.task?.title || '';
 
+                // Capture task start time BEFORE the setTimeout — TASK_RESOLVED (dispatched
+                // inside the timeout) clears it from state, so reading it inside the callback
+                // would always return null. This also means elapsed time reflects when the
+                // completion event fired, not when the delayed callback ran.
+                const taskStartTime = getStateRef.current?.()?.taskStartTime;
+
                 // Brief delay for any final messages to arrive, then single compound dispatch
                 setTimeout(() => {
                     // Build result content with original prompt context
@@ -506,6 +586,17 @@ export function useEventMonitor(
                         resultEntry: resultContent ? { type: 'result', content: resultContent } : undefined,
                         agentIds: Object.keys(agentNamesRef.current),
                         clearTaskId: true,
+                    });
+
+                    // Add task completion banner with elapsed time after the result entry
+                    const elapsedMs = taskStartTime ? Date.now() - taskStartTime : 0;
+                    const elapsedStr = elapsedMs > 0 ? ` (${Math.round(elapsedMs / 1000)}s)` : '';
+                    dispatchRef.current({
+                        type: 'ADD_ENTRY',
+                        entry: {
+                            type: 'task-complete-banner',
+                            content: `Task Complete${elapsedStr}`,
+                        },
                     });
 
                     // Reset for next task
@@ -624,18 +715,56 @@ export function useEventMonitor(
             }, 0);
         };
 
-        // Listen for context compaction completion — show system notice
+        // Listen for context compaction completion — show system notice with token recovery stats
         const contextCompactedHandler = (payload: any) => {
             const agentId = payload.agentId || payload.data?.agentId;
             const original = payload.data?.originalMessages || 0;
             const compacted = payload.data?.compactedMessages || 0;
+            const tokensBefore = payload.data?.tokensBefore || 0;
+            const tokensAfter = payload.data?.tokensAfter || 0;
+            if (!agentId) return;
+
+            let content = `Context compacted for ${resolveName(agentId)}: ${original} → ${compacted} messages`;
+            if (tokensBefore > 0 && tokensAfter > 0) {
+                const recovered = tokensBefore - tokensAfter;
+                const pct = Math.round((recovered / tokensBefore) * 100);
+                content += ` (recovered ~${recovered.toLocaleString()} tokens, ${pct}% reduction)`;
+            }
+
+            dispatchRef.current({
+                type: 'ADD_ENTRY',
+                entry: { type: 'system', content },
+            });
+        };
+
+        // Listen for microcompaction events — show system notice when tool results are trimmed
+        const microcompactionHandler = (payload: any) => {
+            const agentId = payload.agentId || payload.data?.agentId;
+            const tokensRemoved = payload.data?.tokensRemoved || 0;
+            const toolResultsStripped = payload.data?.toolResultsStripped || 0;
+            if (!agentId || tokensRemoved === 0) return;
+
+            dispatchRef.current({
+                type: 'ADD_ENTRY',
+                entry: {
+                    type: 'system',
+                    content: `Trimmed ${toolResultsStripped} old tool results for ${resolveName(agentId)} (saved ~${tokensRemoved.toLocaleString()} tokens)`,
+                },
+            });
+        };
+
+        // Listen for reactive compaction events — show warning for emergency context overflow recovery
+        const reactiveCompactionHandler = (payload: any) => {
+            const agentId = payload.agentId || payload.data?.agentId;
+            const strategy = payload.data?.strategy || 'unknown';
+            const retryAttempt = payload.data?.retryAttempt || 0;
             if (!agentId) return;
 
             dispatchRef.current({
                 type: 'ADD_ENTRY',
                 entry: {
                     type: 'system',
-                    content: `Context compacted for ${resolveName(agentId)}: ${original} → ${compacted} messages`,
+                    content: `Emergency context compaction for ${resolveName(agentId)} (attempt ${retryAttempt}, strategy: ${strategy})`,
                 },
             });
         };
@@ -761,6 +890,15 @@ export function useEventMonitor(
                         content: `Task assigned: ${task.title || task.id} → ${agentName}`,
                     },
                 });
+                // Set the assigned agent's activity to "processing task"
+                if (agentId) {
+                    dispatchRef.current({
+                        type: 'SET_AGENT_STATUS',
+                        agentId,
+                        status: 'active',
+                        currentActivity: 'processing task',
+                    });
+                }
             } catch { /* ignore malformed payloads */ }
         };
 
@@ -804,6 +942,8 @@ export function useEventMonitor(
         channel.on(Events.Agent.LLM_REASONING, llmReasoningHandler);
         channel.on(Events.Mcp.TOOL_RESULT, toolResultHandler);
         channel.on(Events.Agent.CONTEXT_COMPACTED, contextCompactedHandler);
+        channel.on(Events.Compaction.MICROCOMPACTION_APPLIED, microcompactionHandler);
+        channel.on(Events.Compaction.REACTIVE_COMPACTION_TRIGGERED, reactiveCompactionHandler);
         channel.on(Events.Task.CREATED, taskCreatedHandler);
         channel.on(Events.Task.ASSIGNED, taskAssignedHandler);
         channel.on(Events.Task.DEPENDENCY_RESOLVED, taskDependencyResolvedHandler);
@@ -820,6 +960,8 @@ export function useEventMonitor(
             channel.off(Events.Agent.LLM_REASONING);
             channel.off(Events.Mcp.TOOL_RESULT);
             channel.off(Events.Agent.CONTEXT_COMPACTED);
+            channel.off(Events.Compaction.MICROCOMPACTION_APPLIED);
+            channel.off(Events.Compaction.REACTIVE_COMPACTION_TRIGGERED);
             channel.off(Events.Task.CREATED);
             channel.off(Events.Task.ASSIGNED);
             channel.off(Events.Task.DEPENDENCY_RESOLVED);

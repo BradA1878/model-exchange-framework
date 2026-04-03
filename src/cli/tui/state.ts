@@ -31,6 +31,10 @@ export interface AppState {
     tokenCount: number;
     /** ID of the currently active task (null when idle) */
     currentTaskId: string | null;
+    /** Title/description of the currently active task (shown in ThinkingIndicator) */
+    currentTaskTitle: string | null;
+    /** Timestamp when the current task was submitted (for elapsed time in completion banner) */
+    taskStartTime: number | null;
     /** Whether an agent is actively processing */
     isAgentWorking: boolean;
     /** Accumulated context string from /context commands */
@@ -86,8 +90,8 @@ export type AppAction =
     | { type: 'ADD_ENTRY'; entry: Omit<ConversationEntry, 'id' | 'timestamp'> }
     | { type: 'SET_CONNECTION'; status: ConnectionStatus }
     | { type: 'SET_AGENTS'; agents: AgentInfo[] }
-    | { type: 'SET_AGENT_STATUS'; agentId: string; status: AgentInfo['status'] }
-    | { type: 'SET_TASK'; taskId: string | null }
+    | { type: 'SET_AGENT_STATUS'; agentId: string; status: AgentInfo['status']; currentActivity?: string }
+    | { type: 'SET_TASK'; taskId: string | null; title?: string | null }
     | { type: 'CLEAR_ENTRIES' }
     | { type: 'SET_ERROR'; error: string | null }
     | { type: 'ADD_TOKENS'; count: number }
@@ -117,6 +121,7 @@ export type AppAction =
         entry: Omit<ConversationEntry, 'id' | 'timestamp'>;
         agentId: string;
         agentStatus: AgentInfo['status'];
+        currentActivity?: string;
         iteration?: { iterationType: 'message' | 'tool-call' | 'task-complete' };
     }
     | {
@@ -179,6 +184,8 @@ export function createInitialState(preferences?: InitialPreferences): AppState {
         agents: [],
         tokenCount: 0,
         currentTaskId: null,
+        currentTaskTitle: null,
+        taskStartTime: null,
         isAgentWorking: false,
         contextString: null,
         modelOverride: null,
@@ -232,7 +239,14 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         case 'SET_AGENT_STATUS': {
             const agents = state.agents.map((agent) =>
                 agent.id === action.agentId
-                    ? { ...agent, status: action.status }
+                    ? {
+                        ...agent,
+                        status: action.status,
+                        // Set activity when active, clear when idle/error
+                        currentActivity: action.status === 'active'
+                            ? (action.currentActivity ?? agent.currentActivity)
+                            : undefined,
+                    }
                     : agent
             );
             return { ...state, agents };
@@ -242,6 +256,8 @@ export function appReducer(state: AppState, action: AppAction): AppState {
             return {
                 ...state,
                 currentTaskId: action.taskId,
+                currentTaskTitle: action.title ?? (action.taskId ? state.currentTaskTitle : null),
+                taskStartTime: action.taskId ? (state.taskStartTime ?? Date.now()) : null,
             };
 
         case 'CLEAR_ENTRIES':
@@ -418,7 +434,13 @@ export function appReducer(state: AppState, action: AppAction): AppState {
             };
             const updatedAgents = state.agents.map((agent) =>
                 agent.id === action.agentId
-                    ? { ...agent, status: action.agentStatus }
+                    ? {
+                        ...agent,
+                        status: action.agentStatus,
+                        currentActivity: action.agentStatus === 'active'
+                            ? (action.currentActivity ?? agent.currentActivity)
+                            : undefined,
+                    }
                     : agent
             );
             let costData = state.costData;
@@ -508,7 +530,7 @@ export function appReducer(state: AppState, action: AppAction): AppState {
             }
             const idledAgents = state.agents.map((agent) =>
                 action.agentIds.includes(agent.id)
-                    ? { ...agent, status: 'idle' as const }
+                    ? { ...agent, status: 'idle' as const, currentActivity: undefined }
                     : agent
             );
             return {
@@ -517,6 +539,8 @@ export function appReducer(state: AppState, action: AppAction): AppState {
                 agents: idledAgents,
                 isAgentWorking: false,
                 currentTaskId: action.clearTaskId ? null : state.currentTaskId,
+                currentTaskTitle: action.clearTaskId ? null : state.currentTaskTitle,
+                taskStartTime: action.clearTaskId ? null : state.taskStartTime,
                 streamPreview: null,
             };
         }

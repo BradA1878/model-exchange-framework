@@ -37,6 +37,10 @@ type ChannelId = string;
 type AgentId = string;
 import { MxpConfigManager } from './MxpConfigManager';
 import crypto from 'crypto';
+import { StructuredSummaryBuilder } from '../services/StructuredSummaryBuilder';
+import { loadPromptCompactionConfig } from '../config/PromptCompactionConfig';
+import { getContextLimit, getCompactionThreshold } from '../config/ModelContextLimits';
+import { ConversationMessage } from '../interfaces/ConversationMessage';
 
 export interface CompressedContext {
     recent: any[];                    // Uncompressed recent messages
@@ -405,6 +409,125 @@ export class ContextCompressionEngine {
      */
     public clearCache(): void {
         this.contextCache.clear();
+    }
+
+    // --- Phase 4 additions: structured summaries, preservation, percentage thresholds ---
+
+    /**
+     * Check if auto-compaction should trigger based on percentage of model context window.
+     * When PERCENTAGE_COMPACTION_ENABLED is true, triggers when total tokens exceed
+     * the configured threshold percentage of the model's context limit.
+     *
+     * @param totalTokens - Current estimated token count
+     * @param modelId - Model identifier for context limit lookup
+     * @returns Whether compaction should be triggered
+     */
+    public shouldAutoCompact(totalTokens: number, modelId: string): boolean {
+        const config = loadPromptCompactionConfig();
+        if (!config.percentageCompactionEnabled) return false;
+
+        const threshold = getCompactionThreshold(modelId, config.compactionThresholdPercent);
+        return totalTokens > threshold;
+    }
+
+    /**
+     * Get the percentage-based compaction threshold for a model.
+     * Returns the token count at which compaction should trigger.
+     */
+    public getAutoCompactionThreshold(modelId: string): number {
+        const config = loadPromptCompactionConfig();
+        return getCompactionThreshold(modelId, config.compactionThresholdPercent);
+    }
+
+    /**
+     * Compress conversation history using structured summaries.
+     * Replaces the simple truncation approach with heuristic section extraction.
+     * Only activates when STRUCTURED_SUMMARIES_ENABLED is true.
+     *
+     * @param messages - Conversation messages to compress
+     * @param keepRecentCount - Number of recent messages to preserve verbatim
+     * @returns Compressed messages array (summary + recent), or null if feature disabled
+     */
+    public compressWithStructuredSummary(
+        messages: ConversationMessage[],
+        keepRecentCount: number = 5,
+    ): ConversationMessage[] | null {
+        const config = loadPromptCompactionConfig();
+        if (!config.structuredSummariesEnabled) return null;
+
+        if (messages.length <= keepRecentCount) return messages;
+
+        const cutoff = messages.length - keepRecentCount;
+        const olderMessages = messages.slice(0, cutoff);
+        const recentMessages = messages.slice(cutoff);
+
+        const builder = StructuredSummaryBuilder.getInstance();
+        const summary = builder.buildSummary(olderMessages);
+        const summaryText = builder.formatAsPrompt(summary);
+
+        const summaryMessage: ConversationMessage = {
+            id: `structured-summary-${Date.now()}`,
+            role: 'system',
+            content: summaryText,
+            timestamp: Date.now(),
+            metadata: {
+                contextLayer: 'system',
+                messageType: 'system-notice',
+                ephemeral: false,
+                compactionSummary: true,
+                messagesSummarized: olderMessages.length,
+                summarySections: summary.sections,
+            },
+        };
+
+        this.logger.info('Structured summary compression applied', {
+            messagesBefore: messages.length,
+            messagesAfter: recentMessages.length + 1,
+            summarySections: summary.sections,
+        });
+
+        return [summaryMessage, ...recentMessages];
+    }
+
+    /**
+     * Categorize messages by preservation priority for compaction.
+     * Returns messages grouped into three tiers:
+     *   - preserve: Must keep verbatim (task descriptions, errors, user directives)
+     *   - summarize: Keep summary (tool results — name + status, compress body)
+     *   - compress: Can freely compress (routine status updates, verbose outputs)
+     */
+    public categorizeByPreservation(messages: ConversationMessage[]): {
+        preserve: ConversationMessage[];
+        summarize: ConversationMessage[];
+        compress: ConversationMessage[];
+    } {
+        const preserve: ConversationMessage[] = [];
+        const summarize: ConversationMessage[] = [];
+        const compress: ConversationMessage[] = [];
+
+        for (const msg of messages) {
+            const layer = msg.metadata?.contextLayer;
+            const msgType = msg.metadata?.messageType;
+
+            // Always preserve: task descriptions, error messages, user/task-assigner directives
+            if (layer === 'task' || msgType === 'task-description') {
+                preserve.push(msg);
+            } else if (msg.role === 'user') {
+                preserve.push(msg);
+            } else if (msg.metadata?.isError === true) {
+                preserve.push(msg);
+            }
+            // Summarize: tool results (keep name + status, compress body)
+            else if (msg.role === 'tool' || layer === 'tool-result' || msgType === 'tool-result') {
+                summarize.push(msg);
+            }
+            // Freely compress: everything else
+            else {
+                compress.push(msg);
+            }
+        }
+
+        return { preserve, summarize, compress };
     }
 }
 

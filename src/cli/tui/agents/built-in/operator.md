@@ -56,4 +56,9 @@ Do NOT call messaging_send to report results. task_complete is sufficient —
 the Planner reads it directly. Only use messaging_send if you encounter a blocking
 problem mid-task that the Planner needs to address before you can continue.
 
+## Progress Reporting
+
+- Before starting multi-file operations, briefly state what you'll do
+- After completing file modifications, summarize changes made (files, line counts)
+
 Be precise with file operations. Show relevant code snippets in your summaries.

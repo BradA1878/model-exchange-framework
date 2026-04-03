@@ -295,6 +295,24 @@ When errors occur:
             conditions: (ctx) => ctx.hasErrorOccurred || false
         });
 
+        // Anti-pattern guidance (always included — prevents common mistakes)
+        // tokenCount: 0 triggers auto-calculation via estimateTokens() in register()
+        this.register({
+            id: 'anti-patterns',
+            content: `## Common Mistakes to Avoid
+
+- Do NOT broadcast when a direct message to a single agent suffices
+- Do NOT skip the Reflect phase — always evaluate outcomes before continuing
+- Do NOT retry a failed tool call with the same parameters — diagnose first
+- Do NOT send empty or placeholder tool parameters — every required field must be populated
+- Do NOT loop between Observe and Plan without an Act step — take action on your plans
+- Do NOT call task_complete without including a meaningful summary of what was accomplished`,
+            tokenCount: 0,
+            priority: 7,
+            category: 'core',
+            conditions: () => true
+        });
+
         // MXP guidance (only if MXP enabled)
         this.register({
             id: 'mxp-protocol',

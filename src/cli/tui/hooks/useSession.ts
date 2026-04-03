@@ -178,6 +178,8 @@ export function useSession(
 
         dispatch({ type: 'SET_AGENT_WORKING', working: true });
         dispatch({ type: 'SET_AGENT_STATUS', agentId: orchestratorId, status: 'active' });
+        // Record task title and start time for the completion banner elapsed time display
+        dispatch({ type: 'SET_TASK', taskId: orchestratorId, title: task });
 
         try {
             await sessionRef.current.submitTask(task, contextString, recentResult);
@@ -221,6 +223,8 @@ export function useSession(
         // Mark target agent as working
         dispatch({ type: 'SET_AGENT_WORKING', working: true });
         dispatch({ type: 'SET_AGENT_STATUS', agentId, status: 'active' });
+        // Record task title and start time for the completion banner elapsed time display
+        dispatch({ type: 'SET_TASK', taskId: agentId, title: task });
 
         try {
             await sessionRef.current.submitTaskToAgent(task, agentId, contextString);

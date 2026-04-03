@@ -39,6 +39,8 @@ import { SystemLlmMemoryAnalyzer } from '../../shared/services/SystemLlmMemoryAn
 import { ChannelConfig } from '../../shared/interfaces/ChannelConfig';
 import { MxpConfigManager } from '../../shared/mxp/MxpConfigManager';
 import { ContextCompressionEngine } from '../../shared/mxp/ContextCompressionEngine';
+import { DynamicContextRegistry, DynamicContextInput } from '../../shared/prompts/DynamicContextProvider';
+import { loadPromptCompactionConfig } from '../../shared/config/PromptCompactionConfig';
 
 export interface PromptManagerCallbacks {
     getConversationHistory: () => ConversationMessage[];
@@ -171,7 +173,30 @@ export class MxfSystemPromptManager {
             if (mxpContext) {
                 completePrompt = `${completePrompt}\n\n${mxpContext}`;
             }
-            
+
+            // Add dynamic context if enabled — runtime information like task progress,
+            // recent errors, and channel state injected by registered providers
+            const compactionConfig = loadPromptCompactionConfig();
+            if (compactionConfig.dynamicContextInjectionEnabled) {
+                try {
+                    const registry = DynamicContextRegistry.getInstance();
+                    const contextInput: DynamicContextInput = {
+                        agentId: this.agentConfig.agentId,
+                        channelId: this.agentConfig.channelId || '',
+                        channelAgentCount: this.callbacks.getChannelContext?.()?.participants?.length,
+                    };
+                    const dynamicContent = await registry.gatherContext(
+                        contextInput,
+                        compactionConfig.dynamicContextTokenBudget,
+                    );
+                    if (dynamicContent) {
+                        completePrompt = `${completePrompt}\n\n${dynamicContent}`;
+                    }
+                } catch (dynamicError) {
+                    this.logger.warn(`Dynamic context injection failed: ${dynamicError}`);
+                }
+            }
+
             // Add agent-specific configuration prompt
             if (this.agentConfig.agentConfigPrompt) {
                 const agentIdentityPrompt = MxfAgentSystemPrompt.buildAgentIdentityPrompt(this.agentConfig);

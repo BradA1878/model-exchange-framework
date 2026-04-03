@@ -245,6 +245,7 @@ const App: React.FC<AppProps> = ({ config, session }) => {
                 <ThinkingIndicator
                     activeAgents={showThinking ? activeAgents : []}
                     streamPreview={showThinking ? throttledStreamPreview : null}
+                    currentTaskTitle={state.currentTaskTitle}
                 />
 
                 <StatusBar

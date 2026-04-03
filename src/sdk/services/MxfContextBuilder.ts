@@ -36,6 +36,13 @@ import { AgentConfig } from '../../shared/interfaces/AgentInterfaces';
 import { Logger } from '../../shared/utils/Logger';
 import { MxfActionHistoryService } from './MxfActionHistoryService';
 import { PromptTemplateReplacer } from '../../shared/utils/PromptTemplateReplacer';
+import { ToolResultMicrocompactor } from './ToolResultMicrocompactor';
+import { PostCompactionRestorer } from './PostCompactionRestorer';
+import { SystemReminderService, ReminderTrigger, ReminderContext } from './SystemReminderService';
+import { loadPromptCompactionConfig } from '../../shared/config/PromptCompactionConfig';
+import { EventBus } from '../../shared/events/EventBus';
+import { Events } from '../../shared/events/EventNames';
+import { createMicrocompactionAppliedPayload } from '../../shared/schemas/EventPayloadSchema';
 
 /**
  * Build AgentContext from current agent state
@@ -125,33 +132,113 @@ export class MxfContextBuilder {
             progress: currentTask.progress
         } : null;
         
+        // Apply microcompaction if enabled — strips old tool result bodies (cheapest, no LLM)
+        let processedHistory = conversationHistory;
+        const compactionConfig = loadPromptCompactionConfig();
+
+        if (compactionConfig.microcompactionEnabled) {
+            const microcompactor = ToolResultMicrocompactor.getInstance();
+            const microResult = microcompactor.compact(
+                processedHistory,
+                compactionConfig.microcompactionTokenThreshold,
+            );
+            if (microResult.wasApplied) {
+                processedHistory = microResult.messages;
+                this.logger.info('Microcompaction applied to context', {
+                    agentId: agentConfig.agentId,
+                    toolResultsStripped: microResult.toolResultsStripped,
+                    tokensRecovered: microResult.tokensBefore - microResult.tokensAfter,
+                });
+
+                // Emit microcompaction event
+                try {
+                    const payload = createMicrocompactionAppliedPayload(
+                        agentConfig.agentId, channelId,
+                        {
+                            toolResultsStripped: microResult.toolResultsStripped,
+                            tokensRemoved: microResult.tokensBefore - microResult.tokensAfter,
+                            tokensBefore: microResult.tokensBefore,
+                            tokensAfter: microResult.tokensAfter,
+                        },
+                    );
+                    EventBus.client.emit(Events.Compaction.MICROCOMPACTION_APPLIED, payload);
+                } catch (emitError) {
+                    this.logger.warn('Failed to emit microcompaction event', {
+                        error: emitError instanceof Error ? emitError.message : String(emitError),
+                    });
+                }
+
+                // Restore critical artifacts after compaction if enabled
+                if (compactionConfig.postCompactionRestorationEnabled) {
+                    try {
+                        const restorer = PostCompactionRestorer.getInstance();
+                        const restoration = await restorer.restore(agentConfig.agentId, channelId);
+                        if (restoration.messages.length > 0) {
+                            processedHistory = [...processedHistory, ...restoration.messages];
+                            this.logger.info('Post-compaction restoration applied', {
+                                agentId: agentConfig.agentId,
+                                artifactsRestored: restoration.artifactNames,
+                                tokensAdded: restoration.tokensAdded,
+                            });
+                        }
+                    } catch (restoreError) {
+                        this.logger.warn('Post-compaction restoration failed', {
+                            error: restoreError instanceof Error ? restoreError.message : String(restoreError),
+                        });
+                    }
+                }
+            }
+        }
+
+        // Inject system reminders if enabled — mid-conversation reinforcement
+        if (compactionConfig.systemRemindersEnabled) {
+            const reminderService = SystemReminderService.getInstance();
+            const reminderContext: ReminderContext = {
+                agentId: agentConfig.agentId,
+                channelId,
+                conversationLength: processedHistory.length,
+                currentTask: currentTask?.title || currentTask?.description,
+                orparPhase: currentOrparPhase || undefined,
+            };
+
+            // Check before_llm_request trigger (the most common injection point)
+            const reminders = reminderService.getApplicableReminders(
+                'before_llm_request',
+                reminderContext,
+                compactionConfig.systemReminderTokenBudget,
+            );
+            if (reminders.length > 0) {
+                processedHistory = [...processedHistory, ...reminders];
+            }
+        }
+
         // Assemble complete context
         const context: AgentContext = {
             // Core context - use enhanced system prompt with templates replaced
             systemPrompt: enhancedSystemPrompt,
             agentConfig,
             currentTask: taskContext,
-            
-            // Raw conversation history (no reconstruction!)
-            conversationHistory,
-            
+
+            // Conversation history (with microcompaction + reminders applied if enabled)
+            conversationHistory: processedHistory,
+
             // Recent actions
             recentActions,
-            
+
             // Available tools
             availableTools,
-            
+
             // Metadata
             agentId: agentConfig.agentId,
             channelId,
             timestamp: Date.now(),
-            
+
             metadata: {
                 // No special hints yet - MCP clients have full context
             }
         };
-        
-        
+
+
         return context;
     }
     

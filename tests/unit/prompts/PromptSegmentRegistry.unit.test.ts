@@ -191,6 +191,29 @@ describe('PromptSegmentRegistry (Phase 4)', () => {
         });
     });
 
+    describe('anti-patterns segment', () => {
+        it('should include anti-patterns segment by default', () => {
+            const segment = registry.getSegment('anti-patterns');
+            expect(segment).toBeDefined();
+            expect(segment!.category).toBe('core');
+            expect(segment!.priority).toBe(7);
+        });
+
+        it('should always activate anti-patterns segment', () => {
+            const context: SegmentContext = {};
+            const segments = registry.getApplicableSegments(context, 5000);
+            expect(segments.some(s => s.id === 'anti-patterns')).toBe(true);
+        });
+
+        it('should contain key anti-pattern guidance', () => {
+            const segment = registry.getSegment('anti-patterns');
+            expect(segment!.content).toContain('broadcast');
+            expect(segment!.content).toContain('Reflect phase');
+            expect(segment!.content).toContain('retry');
+            expect(segment!.content).toContain('task_complete');
+        });
+    });
+
     describe('configure', () => {
         it('should update configuration', () => {
             registry.configure({

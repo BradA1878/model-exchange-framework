@@ -76,11 +76,12 @@ const StatusBarInner: React.FC<StatusBarProps> = ({ agents, iterationCount, isAg
                     );
                 })}
                 {isAgentWorking && (() => {
-                    const activeNames = agents
-                        .filter(a => a.status === 'active')
-                        .map(a => a.name);
-                    const label = activeNames.length > 0
-                        ? activeNames.join(', ') + ' working'
+                    const activeAgents = agents.filter(a => a.status === 'active');
+                    const label = activeAgents.length > 0
+                        ? activeAgents.map(a => a.currentActivity
+                            ? `${a.name} ● ${a.currentActivity}`
+                            : `${a.name} ● working`
+                        ).join(' | ')
                         : 'working';
                     return <Spinner label={label} />;
                 })()}

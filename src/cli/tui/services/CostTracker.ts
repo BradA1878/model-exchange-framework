@@ -441,6 +441,40 @@ export function formatCostSummary(costData: SessionCostData): string {
     return lines.join('\n');
 }
 
+/**
+ * Get the context usage percentage for a specific agent.
+ * Returns the ratio of tokens used to the model's context window, or null
+ * if the model or token count is unknown.
+ *
+ * @param agentId - Agent to check
+ * @param costData - Current session cost data
+ * @returns Usage percentage (0–100), or null if unknown
+ */
+export function getContextUsagePercent(agentId: string, costData: SessionCostData): number | null {
+    const agent = costData.agents[agentId];
+    if (!agent || !agent.lastModel || agent.totalTokens === 0) return null;
+
+    const contextWindow = getModelContextWindow(agent.lastModel);
+    if (!contextWindow) return null;
+
+    return Math.round((agent.totalTokens / contextWindow) * 100);
+}
+
+/**
+ * Format a human-readable token recovery string for compaction feedback.
+ *
+ * @param tokensBefore - Token count before compaction
+ * @param tokensAfter - Token count after compaction
+ * @returns Formatted string (e.g., "recovered ~12,800 tokens (38% reduction)")
+ */
+export function formatTokenRecovery(tokensBefore: number, tokensAfter: number): string {
+    const recovered = tokensBefore - tokensAfter;
+    if (recovered <= 0) return 'no tokens recovered';
+
+    const pct = tokensBefore > 0 ? Math.round((recovered / tokensBefore) * 100) : 0;
+    return `recovered ~${recovered.toLocaleString()} tokens (${pct}% reduction)`;
+}
+
 /** Result of checking the current cost against the configured budget */
 export interface BudgetCheckResult {
     /** True if cost >= 80% of budget and warning has not yet been emitted */

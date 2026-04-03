@@ -102,6 +102,8 @@ import {
 import { reflectionService } from '../shared/services/ReflectionService';
 import { Subscription } from 'rxjs';
 import { UserInputEvents } from '../shared/events/event-definitions/UserInputEvents';
+import { ReactiveCompactionService } from './services/ReactiveCompactionService';
+import { loadPromptCompactionConfig } from '../shared/config/PromptCompactionConfig';
 
 // Define a minimal ControlLoopStateEnum if needed
 export enum ControlLoopStateEnum {
@@ -690,7 +692,52 @@ export class MxfAgent extends MxfClient {
                     this.modelLogger.debug('📡 Falling back to non-streaming');
                     response = await this.mcpClientManager.sendWithContext(agentContext, mcpOptions);
                 } else {
-                    throw streamError;
+                    // Check for context overflow (413) — apply reactive compaction if enabled
+                    const reactiveService = ReactiveCompactionService.getInstance();
+                    const compactionConfig = loadPromptCompactionConfig();
+                    if (compactionConfig.reactiveCompactionEnabled && reactiveService.isContextOverflowError(streamError)) {
+                        this.modelLogger.warn('Context overflow detected — applying reactive compaction');
+                        const compactionResult = await reactiveService.compact(
+                            agentContext.conversationHistory,
+                            this.agentId,
+                            this.config.channelId,
+                            1,
+                            streamError.status || streamError.statusCode || 413,
+                        );
+                        if (compactionResult.success) {
+                            // Update context with compacted history and retry
+                            agentContext.conversationHistory = compactionResult.messages;
+                            this.modelLogger.info(`Reactive compaction recovered ${compactionResult.tokensBefore - compactionResult.tokensAfter} tokens (${compactionResult.strategy}), retrying`);
+                            try {
+                                response = await this.mcpClientManager.sendWithContextStreaming(agentContext, mcpOptions, onStreamChunk);
+                            } catch (retryError: any) {
+                                // Second attempt — escalate strategy
+                                if (reactiveService.isContextOverflowError(retryError)) {
+                                    const secondResult = await reactiveService.compact(
+                                        agentContext.conversationHistory,
+                                        this.agentId,
+                                        this.config.channelId,
+                                        2,
+                                        retryError.status || retryError.statusCode || 413,
+                                    );
+                                    if (secondResult.success) {
+                                        agentContext.conversationHistory = secondResult.messages;
+                                        response = await this.mcpClientManager.sendWithContext(agentContext, mcpOptions);
+                                    } else {
+                                        // Compaction couldn't reduce tokens further — re-throw the original error
+                                        this.modelLogger.error('Reactive compaction exhausted — context still too large after 2 attempts');
+                                        throw streamError;
+                                    }
+                                } else {
+                                    throw retryError;
+                                }
+                            }
+                        } else {
+                            throw streamError;
+                        }
+                    } else {
+                        throw streamError;
+                    }
                 }
             }
             

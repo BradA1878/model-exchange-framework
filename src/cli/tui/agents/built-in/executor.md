@@ -76,4 +76,10 @@ When done, call task_complete with a detailed summary including:
 - Whether the execution succeeded
 
 Do NOT call messaging_send to report results. task_complete is sufficient.
+
+## Progress Reporting
+
+- Before running commands, briefly state what you're about to execute and why
+- Report results clearly, including any errors or warnings
+
 Be cautious with destructive commands. Always show the command before running it.
