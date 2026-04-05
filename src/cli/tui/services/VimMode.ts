@@ -1,11 +1,29 @@
 /**
  * MXF CLI TUI — Vim Mode Service
  *
- * Lightweight state machine providing basic vim-style keybindings for the TUI
- * input area. Supports normal/insert mode switching and basic cursor movement.
+ * Lightweight state machine providing vim-style keybindings for the TUI
+ * input area. Supports normal/insert mode switching, cursor movement,
+ * word navigation, line operations, and undo.
  *
- * Starts in insert mode by default so non-vim users are unaffected.
+ * Starts in insert mode by default so the user can type immediately.
  * Toggled on/off via the /vim slash command.
+ *
+ * Normal mode keys:
+ *   i/a/I/A     — enter insert mode (at cursor/after/home/end)
+ *   o/O         — open line below/above and enter insert mode
+ *   h/l         — move left/right
+ *   j/k         — move down/up
+ *   w/b         — word forward/backward
+ *   0/$         — move to line start/end
+ *   x           — delete character at cursor
+ *   dd          — delete entire line
+ *   u           — undo
+ *   p           — paste from kill buffer
+ *   Escape      — stay in normal mode (no-op)
+ *
+ * Insert mode keys:
+ *   Escape      — switch to normal mode
+ *   All other   — pass through to input component
  *
  * @author Brad Anderson <BradA1878@pm.me>
  */
@@ -112,7 +130,7 @@ export class VimModeService {
 
     /**
      * Handle keys in normal mode.
-     * Provides basic movement, mode switching, and editing commands.
+     * Provides movement, mode switching, and editing commands.
      */
     private handleNormalMode(key: string): VimKeyResult {
         // Check for pending multi-key sequences (e.g., 'dd')
@@ -140,11 +158,33 @@ export class VimModeService {
                 this._mode = 'insert';
                 return { action: 'enter-insert-end', consumed: true };
 
-            // Cursor movement
+            // Open line — insert newline and enter insert mode
+            case 'o':
+                this._mode = 'insert';
+                return { action: 'open-line-below', consumed: true };
+            case 'O':
+                this._mode = 'insert';
+                return { action: 'open-line-above', consumed: true };
+
+            // Cursor movement — character
             case 'h':
                 return { action: 'move-left', consumed: true };
             case 'l':
                 return { action: 'move-right', consumed: true };
+
+            // Cursor movement — vertical
+            case 'j':
+                return { action: 'move-down', consumed: true };
+            case 'k':
+                return { action: 'move-up', consumed: true };
+
+            // Cursor movement — word
+            case 'w':
+                return { action: 'move-word-forward', consumed: true };
+            case 'b':
+                return { action: 'move-word-backward', consumed: true };
+
+            // Cursor movement — line boundaries
             case '0':
                 return { action: 'move-home', consumed: true };
             case '$':
@@ -157,6 +197,14 @@ export class VimModeService {
                 // Start of multi-key 'dd' sequence
                 this._pendingKey = 'd';
                 return { action: 'pending', consumed: true };
+
+            // Undo
+            case 'u':
+                return { action: 'undo', consumed: true };
+
+            // Paste from kill buffer
+            case 'p':
+                return { action: 'paste-after', consumed: true };
 
             // All other keys are swallowed in normal mode
             default:

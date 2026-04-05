@@ -160,7 +160,8 @@ export const TASK_PLANNING_TOOLS = {
     TASK_CREATE_CUSTOM_COMPLETION: 'task_create_custom_completion',
     TASK_LINK_TO_PLAN: 'task_link_to_plan',
     TASK_MONITORING_STATUS: 'task_monitoring_status',
-    TASK_UPDATE: 'task_update' // Task status/progress update
+    TASK_UPDATE: 'task_update', // Task status/progress update
+    TASK_DELEGATE: 'task_delegate' // Yield control after delegating to another agent
 } as const;
 
 /**
@@ -170,6 +171,20 @@ export const USER_INPUT_TOOLS = {
     USER_INPUT: 'user_input',
     REQUEST_USER_INPUT: 'request_user_input',
     GET_USER_INPUT_RESPONSE: 'get_user_input_response',
+} as const;
+
+/**
+ * Search Tools - Scoped grep/find for working directory search
+ */
+export const SEARCH_TOOLS = {
+    SEARCH_PROJECT: 'search_project',
+} as const;
+
+/**
+ * Progress Tools - Structured progress reporting for UI status display
+ */
+export const PROGRESS_TOOLS = {
+    PROGRESS_UPDATE: 'progress_update',
 } as const;
 
 /**
@@ -282,6 +297,23 @@ export const FETCH_SERVER_TOOLS = {
     DELETE: 'fetch_delete'
 } as const;
 
+/**
+ * User Memory Tools - Persistent cross-session user memory
+ */
+export const USER_MEMORY_TOOLS = {
+    USER_MEMORY_SAVE: 'user_memory_save',
+    USER_MEMORY_RECALL: 'user_memory_recall',
+    USER_MEMORY_FORGET: 'user_memory_forget',
+    USER_MEMORY_SHAKE: 'user_memory_shake',
+} as const;
+
+/**
+ * Project Tools - Project context scanning and orientation
+ */
+export const PROJECT_TOOLS = {
+    PROJECT_CONTEXT: 'project_context',
+} as const;
+
 // =============================================================================
 // AGGREGATED TOOL COLLECTIONS
 // =============================================================================
@@ -302,7 +334,10 @@ export const ALL_INTERNAL_TOOLS = {
     ...WEB_TOOLS,
     ...PLANNING_TOOLS,
     ...TASK_PLANNING_TOOLS,
-    ...USER_INPUT_TOOLS
+    ...USER_INPUT_TOOLS,
+    ...SEARCH_TOOLS,
+    ...PROGRESS_TOOLS,
+    ...USER_MEMORY_TOOLS
 } as const;
 
 /**
@@ -359,7 +394,10 @@ export const TOOL_CATEGORIES = {
     WEB_REQUEST: 'web_request',
     WEB: 'web',
     AUTOMATION: 'automation',
-    USER_INPUT: 'user_input'
+    USER_INPUT: 'user_input',
+    SEARCH: 'search',
+    PROGRESS: 'progress',
+    USER_MEMORY: 'user_memory'
 } as const;
 
 // =============================================================================
@@ -381,6 +419,8 @@ export type WebToolName = typeof WEB_TOOLS[keyof typeof WEB_TOOLS];
 export type PlanningToolName = typeof PLANNING_TOOLS[keyof typeof PLANNING_TOOLS];
 export type TaskPlanningToolName = typeof TASK_PLANNING_TOOLS[keyof typeof TASK_PLANNING_TOOLS];
 export type UserInputToolName = typeof USER_INPUT_TOOLS[keyof typeof USER_INPUT_TOOLS];
+export type ProgressToolName = typeof PROGRESS_TOOLS[keyof typeof PROGRESS_TOOLS];
+export type UserMemoryToolName = typeof USER_MEMORY_TOOLS[keyof typeof USER_MEMORY_TOOLS];
 
 export type CalculatorToolName = typeof CALCULATOR_TOOLS[keyof typeof CALCULATOR_TOOLS];
 export type SequentialThinkingToolName = typeof SEQUENTIAL_THINKING_TOOLS[keyof typeof SEQUENTIAL_THINKING_TOOLS];
@@ -459,6 +499,12 @@ export const getToolCategory = (toolName: string): ToolCategory | null => {
     }
     if (Object.values(USER_INPUT_TOOLS).includes(toolName as UserInputToolName)) {
         return TOOL_CATEGORIES.USER_INPUT;
+    }
+    if (Object.values(PROGRESS_TOOLS).includes(toolName as ProgressToolName)) {
+        return TOOL_CATEGORIES.PROGRESS;
+    }
+    if (Object.values(USER_MEMORY_TOOLS).includes(toolName as UserMemoryToolName)) {
+        return TOOL_CATEGORIES.USER_MEMORY;
     }
     return null;
 };

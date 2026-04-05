@@ -610,6 +610,20 @@ export class MxfMeilisearchService {
             throw error;
         }
     }
+
+    /**
+     * Returns true if Meilisearch is enabled via environment variable
+     */
+    public isEnabled(): boolean {
+        return process.env.ENABLE_MEILISEARCH === 'true';
+    }
+
+    /**
+     * Returns the underlying Meilisearch client for direct index operations
+     */
+    public getClient(): MeiliSearch {
+        return this.client;
+    }
 }
 
 export default MxfMeilisearchService;

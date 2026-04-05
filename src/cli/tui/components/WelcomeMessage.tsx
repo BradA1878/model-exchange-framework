@@ -22,8 +22,8 @@ export const WelcomeMessage: React.FC = () => {
         <Box flexDirection="column" paddingX={1}>
             <Text bold color={theme.accent as any}>Welcome to MXF Interactive</Text>
             <Text> </Text>
-            <Text color={theme.dimText as any}>Type a task in natural language. The Planner will coordinate</Text>
-            <Text color={theme.dimText as any}>Operator, Executor, and Reviewer agents as needed.</Text>
+            <Text color={theme.dimText as any}>Type a task in natural language. The Concierge will handle simple</Text>
+            <Text color={theme.dimText as any}>requests directly and delegate complex work to specialist agents.</Text>
             <Text> </Text>
             <Text color={theme.dimText as any}>Use @agent to direct a message to a specific agent</Text>
             <Text color={theme.dimText as any}>  (e.g., @operator fix the import on line 23)</Text>

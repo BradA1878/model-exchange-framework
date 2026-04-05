@@ -64,6 +64,10 @@ import { knowledgeGraphTools } from './KnowledgeGraphTools';
 import { predictiveTools } from './PredictiveTools';
 import { userInputTools } from './UserInputTools';
 import { wolframTools } from './WolframTools';
+import { projectContextTools } from './ProjectContextTools';
+import { searchProjectTools } from './SearchProjectTools';
+import { progressTools } from './ProgressTools';
+import { userMemoryTools } from './UserMemoryTools';
 
 /**
  * All available MXF MCP tools organized by category
@@ -151,7 +155,19 @@ export const mxfMcpTools = {
     userInput: userInputTools,
 
     // Wolfram Alpha — symbolic math, numerical computation, curated econ/geo data
-    wolfram: wolframTools
+    wolfram: wolframTools,
+
+    // Project context scanning and orientation tools
+    projectContext: projectContextTools,
+
+    // Search tools for scoped grep/find within working directory
+    search: searchProjectTools,
+
+    // Progress reporting tools for UI status display
+    progress: progressTools,
+
+    // User memory tools for persistent cross-session user context
+    userMemory: userMemoryTools
 };
 
 /**
@@ -188,7 +204,11 @@ export const allMxfMcpTools = [
     ...knowledgeGraphTools,
     ...predictiveTools,
     ...userInputTools,
-    ...wolframTools
+    ...wolframTools,
+    ...projectContextTools,
+    ...searchProjectTools,
+    ...progressTools,
+    ...userMemoryTools
 ];
 
 /**
@@ -231,6 +251,9 @@ export const getMxfMcpToolNames = () => {
         dateTime: dateTimeTools.map(tool => tool.name),
         predictive: predictiveTools.map(tool => tool.name),
         wolfram: wolframTools.map(tool => tool.name),
+        projectContext: projectContextTools.map(tool => tool.name),
+        search: searchProjectTools.map(tool => tool.name),
+        progress: progressTools.map(tool => tool.name),
         all: allMxfMcpTools.map(tool => tool.name)
     };
 };
@@ -241,7 +264,7 @@ export const getMxfMcpToolNames = () => {
 export const mxfMcpToolMetadata = {
     version: '1.0.0',
     description: 'MXF-specific MCP tools for enhanced agent capabilities',
-    categories: ['communication', 'coordination', 'controlLoop', 'infrastructure', 'contextMemory', 'actionValidation', 'meta', 'web', 'git', 'typescript', 'taskBridge', 'test', 'codeAnalysis', 'safety', 'planning', 'effectiveness', 'analytics', 'dateTime', 'memoryUtility', 'dag', 'knowledgeGraph', 'predictive', 'userInput'],
+    categories: ['communication', 'coordination', 'controlLoop', 'infrastructure', 'contextMemory', 'actionValidation', 'meta', 'web', 'git', 'typescript', 'taskBridge', 'test', 'codeAnalysis', 'safety', 'planning', 'effectiveness', 'analytics', 'dateTime', 'memoryUtility', 'dag', 'knowledgeGraph', 'predictive', 'userInput', 'projectContext', 'search', 'progress'],
     totalTools: allMxfMcpTools.length,
     capabilities: [
         'agent-to-agent messaging',
@@ -328,12 +351,13 @@ export const mxfMcpToolMetadata = {
         'operation risk scoring',
         'ML model metadata inspection',
         'user input prompting and collection',
-        'blocking and async user input modes'
+        'blocking and async user input modes',
+        'structured progress reporting for UI status display'
     ]
 };
 
 // Re-export individual tool arrays for selective imports
-export { agentCommunicationTools, coordinationTools, controlLoopTools, infrastructureTools, contextMemoryTools, MemorySearchTools, actionValidationTools, metaTools, webTools, gitTools, typescriptTools, taskBridgeTools, testTools, codeAnalysisTools, safetyTools, planningTools, effectivenessTools, taskPlanningTools, analyticsTools, dateTimeTools, inferenceParameterTools, MemoryUtilityTools, dagTools, knowledgeGraphTools, predictiveTools, userInputTools, wolframTools };
+export { agentCommunicationTools, coordinationTools, controlLoopTools, infrastructureTools, contextMemoryTools, MemorySearchTools, actionValidationTools, metaTools, webTools, gitTools, typescriptTools, taskBridgeTools, testTools, codeAnalysisTools, safetyTools, planningTools, effectivenessTools, taskPlanningTools, analyticsTools, dateTimeTools, inferenceParameterTools, MemoryUtilityTools, dagTools, knowledgeGraphTools, predictiveTools, userInputTools, wolframTools, projectContextTools, searchProjectTools, progressTools, userMemoryTools };
 
 // Re-export individual tools for direct imports
 export {
@@ -437,7 +461,8 @@ export {
     task_create_with_plan,
     task_create_custom_completion,
     task_link_to_plan,
-    task_monitoring_status
+    task_monitoring_status,
+    task_delegate
 } from './TaskPlanningTools';
 
 export {
@@ -528,3 +553,26 @@ export {
     wolframComputeTool,
     wolframFullTool
 } from './WolframTools';
+
+export {
+    // Project Context Tools
+    project_context_tool
+} from './ProjectContextTools';
+
+export {
+    // Search Project Tools
+    search_project_tool
+} from './SearchProjectTools';
+
+export {
+    // Progress Tools
+    progressUpdateTool
+} from './ProgressTools';
+
+export {
+    // User Memory Tools
+    userMemorySaveTool,
+    userMemoryRecallTool,
+    userMemoryForgetTool,
+    userMemoryShakeTool
+} from './UserMemoryTools';

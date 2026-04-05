@@ -89,3 +89,8 @@ src/**/*.md
 backups/*
 temp/
 .claude/worktrees/
+
+# Tauri desktop app build artifacts
+src/desktop/src-tauri/target/
+src/desktop/node_modules/
+src/desktop/dist/

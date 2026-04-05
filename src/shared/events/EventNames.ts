@@ -215,6 +215,11 @@ import type { CompactionPayloads } from './event-definitions/CompactionEvents';
 export { CompactionEvents };
 export type { CompactionPayloads };
 
+import { ProgressEvents } from './event-definitions/ProgressEvents';
+import type { ProgressPayloads } from './event-definitions/ProgressEvents';
+export { ProgressEvents };
+export type { ProgressPayloads };
+
 /**
  * Socket Authentication Events
  * Used for socket authentication success/failure communication
@@ -259,6 +264,7 @@ export namespace Events {
     export const TensorFlow = TensorFlowEvents;
     export const UserInput = UserInputEvents;
     export const Compaction = CompactionEvents;
+    export const Progress = ProgressEvents;
 }
 
 /**
@@ -293,7 +299,8 @@ export type EventMap =
     KnowledgeGraphPayloads &
     TensorFlowPayloads &
     UserInputPayloads &
-    CompactionPayloads;
+    CompactionPayloads &
+    ProgressPayloads;
 
 /**
  * Event name type - any valid event name

@@ -8,13 +8,16 @@
  */
 
 import * as crypto from 'crypto';
+import { execSync } from 'child_process';
+import { join } from 'path';
+import { existsSync } from 'fs';
 import { Command } from 'commander';
 import axios from 'axios';
 import { ConfigService } from '../services/ConfigService';
 import { InfraManager } from '../services/InfraManager';
 import { HealthChecker } from '../services/HealthChecker';
 import { logSuccess, logError, logInfo, logWarning, logHeader, logStep, logSection, maskSecret } from '../utils/output';
-import { checkAllPrerequisites } from '../utils/prerequisites';
+import { checkAllPrerequisites, checkRust, installRust, ensureCargoInShellProfile } from '../utils/prerequisites';
 
 /**
  * Run Phase A: infrastructure setup (no server required).
@@ -22,12 +25,35 @@ import { checkAllPrerequisites } from '../utils/prerequisites';
  * Steps: check prerequisites, generate credentials, write config,
  * start Docker containers, wait for healthy, write .env bridge file.
  */
-async function runPhaseA(force: boolean): Promise<void> {
+async function runPhaseA(force: boolean, noDesktop: boolean): Promise<void> {
     logHeader('MXF Install');
 
-    // Check prerequisites (Docker, Docker Compose)
+    // Check prerequisites (Rust, Docker, Docker Compose)
     logInfo('Checking prerequisites...');
-    const { passed, results } = await checkAllPrerequisites();
+    let { passed, results } = await checkAllPrerequisites();
+
+    // If Rust is the only failure, offer to install it automatically
+    if (!passed) {
+        const rustResult = results.find(r => r.name === 'Rust');
+        if (rustResult && !rustResult.available) {
+            logWarning('Rust is not installed (required for the desktop app).');
+            logInfo('Installing Rust via rustup...');
+
+            const installed = await installRust();
+            if (installed) {
+                logSuccess('Rust installed successfully');
+                ensureCargoInShellProfile();
+                logInfo('Added Rust to your shell profile for future sessions.');
+
+                // Re-run all checks now that Rust is installed
+                ({ passed, results } = await checkAllPrerequisites());
+            } else {
+                logError('Failed to install Rust automatically.');
+                logInfo('Install manually: curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh');
+                process.exit(1);
+            }
+        }
+    }
 
     if (!passed) {
         logError('Prerequisite checks failed:');
@@ -54,8 +80,10 @@ async function runPhaseA(force: boolean): Promise<void> {
         process.exit(1);
     }
 
+    const totalSteps = noDesktop ? 5 : 6;
+
     // Step 1: Generate security credentials
-    logStep(1, 5, 'Generating security credentials...');
+    logStep(1, totalSteps, 'Generating security credentials...');
     const config = configService.createDefault();
     logSuccess('Security credentials generated');
 
@@ -69,7 +97,7 @@ async function runPhaseA(force: boolean): Promise<void> {
     }
 
     // Step 3: Start infrastructure containers
-    logStep(2, 5, 'Starting infrastructure containers...');
+    logStep(2, totalSteps, 'Starting infrastructure containers...');
     try {
         const infraManager = InfraManager.getInstance();
         const preStatus = await infraManager.getStatus();
@@ -94,7 +122,7 @@ async function runPhaseA(force: boolean): Promise<void> {
     }
 
     // Step 4: Wait for containers to become healthy
-    logStep(3, 5, 'Waiting for containers to become healthy...');
+    logStep(3, totalSteps, 'Waiting for containers to become healthy...');
     const healthy = await InfraManager.getInstance().waitForHealthy(60000);
     if (healthy) {
         logSuccess('All containers are healthy');
@@ -104,7 +132,7 @@ async function runPhaseA(force: boolean): Promise<void> {
     }
 
     // Step 5: Write .env bridge file
-    logStep(4, 5, 'Writing .env bridge file...');
+    logStep(4, totalSteps, 'Writing .env bridge file...');
     try {
         configService.writeEnvFile(process.cwd());
         logSuccess('.env bridge file written to project root');
@@ -113,7 +141,44 @@ async function runPhaseA(force: boolean): Promise<void> {
         process.exit(1);
     }
 
-    logStep(5, 5, 'Phase A complete');
+    // Step 6: Build desktop app (unless --no-desktop)
+    if (!noDesktop) {
+        logStep(5, totalSteps, 'Building desktop app...');
+        const desktopDir = join(process.cwd(), 'src', 'desktop');
+
+        if (!existsSync(desktopDir)) {
+            logWarning('Desktop source not found at src/desktop — skipping desktop build.');
+        } else {
+            try {
+                // Install frontend dependencies
+                logInfo('Installing desktop dependencies...');
+                execSync('bun install', { cwd: desktopDir, stdio: 'inherit' });
+
+                // Build the Tauri app (sources cargo env automatically via package.json script)
+                logInfo('Building Tauri app (this may take a few minutes on first build)...');
+                execSync('. "$HOME/.cargo/env" 2>/dev/null; bun tauri build', {
+                    cwd: desktopDir,
+                    stdio: 'inherit',
+                    shell: '/bin/sh',
+                    timeout: 600000, // 10 minute timeout for first build
+                });
+
+                // Verify the build produced an app bundle
+                const appBundle = join(desktopDir, 'src-tauri', 'target', 'release', 'bundle', 'macos', 'MXF.app');
+                if (existsSync(appBundle)) {
+                    logSuccess(`Desktop app built: ${appBundle}`);
+                } else {
+                    logWarning('Desktop build completed but app bundle was not found at expected path.');
+                }
+            } catch (error) {
+                logWarning(`Desktop build failed: ${error}`);
+                logInfo('The TUI is still available via: bun run mxf-shell');
+                logInfo('You can retry the desktop build later with: bun run desktop:build');
+            }
+        }
+    }
+
+    logStep(totalSteps, totalSteps, 'Phase A complete');
 
     // Print summary
     logSection('Install Summary');
@@ -126,6 +191,12 @@ async function runPhaseA(force: boolean): Promise<void> {
     logSection('Next Steps');
     logInfo('1. Start the MXF server:          bun run dev');
     logInfo('2. Complete setup:                 bun run mxf install --complete-setup');
+    logInfo('3. Launch MXF:                     bun run mxf');
+    if (!noDesktop) {
+        logInfo('   (desktop app built — use bun run mxf-shell for terminal TUI)');
+    } else {
+        logInfo('   (TUI-only — build desktop later with: bun run desktop:build)');
+    }
 }
 
 /**
@@ -294,12 +365,14 @@ export function registerInstallCommand(program: Command): void {
         .description('Set up MXF infrastructure, generate credentials, and create a user')
         .option('--force', 'Overwrite existing configuration')
         .option('--complete-setup', 'Complete setup by creating a user (requires running server)')
-        .action(async (options: { force?: boolean; completeSetup?: boolean }) => {
+        .option('--no-desktop', 'Skip building the Tauri desktop app (TUI-only setup)')
+        .action(async (options: { force?: boolean; completeSetup?: boolean; desktop?: boolean }) => {
             try {
                 if (options.completeSetup) {
                     await runPhaseB();
                 } else {
-                    await runPhaseA(options.force === true);
+                    // Commander's --no-desktop sets options.desktop to false
+                    await runPhaseA(options.force === true, options.desktop === false);
                 }
             } catch (error) {
                 logError(`Install failed: ${error}`);

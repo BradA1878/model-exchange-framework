@@ -1,16 +1,18 @@
 /**
  * MXF CLI TUI — Input Line Component
  *
- * Text input line at the bottom of the TUI. Uses @inkjs/ui TextInput
- * for user input with a `> ` prompt prefix. Handles submit via Enter
- * and delegates to the input handler for routing (slash commands,
- * shell commands, @mentions, or natural language tasks).
+ * Text input line at the bottom of the TUI. Uses MultilineInput for user
+ * input with a `> ` prompt prefix. Handles submit via Enter and delegates
+ * to the input handler for routing (slash commands, shell commands,
+ * @mentions, or natural language tasks).
  *
  * Features:
  * - Tab autocomplete for /commands and @agents
  * - Arrow key history navigation (up/down) via useInputHistory hook
- * - Esc key clears current input
+ * - Smart Up/Down: multiline cursor movement passes through, history on edges
+ * - Esc key clears current input (or switches vim to normal mode)
  * - Confirmation mode: [y/n] prompt for side-effecting actions
+ * - Vim mode integration: dispatches mode changes to InfoBar via state
  *
  * @author Brad Anderson <BradA1878@pm.me>
  */
@@ -23,6 +25,7 @@ import { useInputHistory } from '../hooks/useInputHistory';
 import { getCompletions } from '../services/AutocompleteProvider';
 import { getRegisteredCommands } from '../commands/registry';
 import { useTheme } from '../theme/ThemeContext';
+import { VimModeService } from '../services/VimMode';
 import type { AppAction, PendingSelection } from '../state';
 
 interface InputLineProps {
@@ -75,10 +78,21 @@ export const InputLine: React.FC<InputLineProps> = ({
     const completionIndexRef = useRef<number>(-1);
     const [ghostText, setGhostText] = useState('');
 
+    // Track whether MultilineInput consumed the last Up/Down arrow press.
+    // When the cursor is in the middle of a multiline buffer, arrows move
+    // the cursor between lines. Only navigate history when on the first/last line.
+    const verticalArrowHandledRef = useRef(false);
+
     // Handle Tab for autocomplete, arrow keys for history, and Esc to clear
     useInput((input, key) => {
-        // Esc — cancel selection mode, or clear current input and autocomplete
+        // Esc — in vim mode, let MultilineInput handle it for mode switching.
+        // Otherwise, cancel selection mode or clear current input and autocomplete.
         if (key.escape) {
+            const vim = VimModeService.getInstance();
+            if (vim.isEnabled() && vim.getMode() === 'insert') {
+                // Vim insert mode → let MultilineInput handle Esc for normal mode switch
+                return;
+            }
             if (pendingSelection && dispatch) {
                 dispatch({ type: 'SET_PENDING_SELECTION', selection: null });
                 dispatch({ type: 'ADD_ENTRY', entry: { type: 'system', content: 'Selection cancelled.' } });
@@ -116,10 +130,15 @@ export const InputLine: React.FC<InputLineProps> = ({
             return;
         }
 
-        // Up arrow — navigate to previous history entry
-        // Skip when Select component is active (it handles its own arrow keys)
+        // Up arrow — navigate to previous history entry.
+        // Skip when: Select component is active, or MultilineInput consumed the
+        // arrow for cursor movement within a multiline buffer.
         if (key.upArrow && !confirmationPending && !pendingSelection) {
-            const prev = navigateUp();
+            if (verticalArrowHandledRef.current) {
+                verticalArrowHandledRef.current = false;
+                return;
+            }
+            const prev = navigateUp(value);
             if (prev !== null) {
                 setValue(prev);
                 clearAutocomplete();
@@ -127,9 +146,14 @@ export const InputLine: React.FC<InputLineProps> = ({
             return;
         }
 
-        // Down arrow — navigate to next history entry
-        // Skip when Select component is active (it handles its own arrow keys)
+        // Down arrow — navigate to next history entry.
+        // Skip when: Select component is active, or MultilineInput consumed the
+        // arrow for cursor movement within a multiline buffer.
         if (key.downArrow && !confirmationPending && !pendingSelection) {
+            if (verticalArrowHandledRef.current) {
+                verticalArrowHandledRef.current = false;
+                return;
+            }
             const next = navigateDown();
             if (next !== null) {
                 setValue(next);
@@ -179,6 +203,13 @@ export const InputLine: React.FC<InputLineProps> = ({
         await onSubmit(trimmed);
     }, [onSubmit, confirmationPending, onConfirmation, addToHistory, resetNavigation, clearAutocomplete]);
 
+    /** Sync vim mode changes to app state (for InfoBar display) */
+    const handleVimModeChange = useCallback((mode: 'normal' | 'insert' | null) => {
+        if (dispatch) {
+            dispatch({ type: 'SET_VIM_MODE', mode });
+        }
+    }, [dispatch]);
+
     // Selection mode — arrow-key navigable Select component (e.g., model picker)
     if (pendingSelection) {
         return (
@@ -203,7 +234,7 @@ export const InputLine: React.FC<InputLineProps> = ({
     const modePrefix = confirmationPending ? '' : (currentMode === 'chat' ? 'chat' : currentMode === 'plan' ? 'plan' : '');
     const placeholder = confirmationPending
         ? 'y or n'
-        : isDisabled ? 'Agent working...' : 'Type a task or /help (Ctrl+J: newline)';
+        : isDisabled ? 'Agent working...' : 'Type a task or /help';
 
     return (
         <Box paddingX={1}>
@@ -223,6 +254,10 @@ export const InputLine: React.FC<InputLineProps> = ({
                 onChange={handleChange}
                 onSubmit={handleSubmit}
                 externalValue={value}
+                onVerticalArrow={(_dir, handled) => {
+                    verticalArrowHandledRef.current = handled;
+                }}
+                onVimModeChange={handleVimModeChange}
             />
             {ghostText && !confirmationPending && <Text dimColor>{ghostText}</Text>}
         </Box>

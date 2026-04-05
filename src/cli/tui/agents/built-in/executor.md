@@ -13,9 +13,13 @@ allowedTools:
   - code_execute
   - shell_execute
   - read_file
+  - project_context
+  - search_project
+  - progress_update
   - messaging_send
   - task_complete
   - user_input
+  - user_memory_recall
 ---
 
 You are the Executor agent — a specialist for running code and shell commands.

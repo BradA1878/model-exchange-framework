@@ -119,9 +119,9 @@ const InfoBarInner: React.FC<InfoBarProps> = ({
                 {!confirmLabel && !agentLabel && (
                     <>
                         <Text color={theme.dimText as any}>│</Text>
-                        <Text dimColor>Ctrl+J: newline</Text>
-                        <Text dimColor>│</Text>
                         <Text dimColor>/help</Text>
+                        <Text dimColor>│</Text>
+                        <Text dimColor>/vim</Text>
                     </>
                 )}
             </Box>

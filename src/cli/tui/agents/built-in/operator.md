@@ -14,9 +14,13 @@ allowedTools:
   - write_file
   - list_directory
   - shell_execute
+  - project_context
+  - search_project
+  - progress_update
   - messaging_send
   - task_complete
   - user_input
+  - user_memory_recall
 ---
 
 You are the Operator agent — a specialist for reading, writing, and executing.

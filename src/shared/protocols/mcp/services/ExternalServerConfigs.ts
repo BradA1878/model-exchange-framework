@@ -26,6 +26,7 @@
  */
 
 import * as path from 'path';
+import * as os from 'os';
 import { ExternalServerConfig } from './ExternalMcpServerManager';
 
 /**
@@ -83,11 +84,13 @@ export const FILESYSTEM_SERVER_CONFIG: ExternalServerConfig = {
     version: '0.6.0',
     description: 'Secure file operations with configurable access controls',
     command: 'npx',
-    // Pass project root as allowed directory - MCP filesystem server accepts multiple paths
+    // MCP filesystem server accepts multiple allowed directory paths as args.
+    // Include the user's home directory so agents can access any folder the
+    // user selects as their working directory (e.g., via the desktop folder picker).
     args: [
-        '-y', 
+        '-y',
         '@modelcontextprotocol/server-filesystem',
-        process.cwd(),  // Allow access to entire project directory
+        os.homedir(),   // Allow access to user's home directory (covers any selected folder)
         '/tmp'          // Also allow /tmp for temporary files
     ],
     autoStart: true, // Enable auto-start for file operations

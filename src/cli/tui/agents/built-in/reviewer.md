@@ -12,8 +12,11 @@ reasoningEffort: medium
 allowedTools:
   - read_file
   - list_directory
+  - project_context
+  - search_project
   - messaging_send
   - task_complete
+  - user_memory_recall
 ---
 
 You are the Reviewer agent — a specialist for code quality and review.

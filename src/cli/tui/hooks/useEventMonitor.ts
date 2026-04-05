@@ -364,8 +364,8 @@ export function useEventMonitor(
             const args = payload.data?.arguments || payload.data?.args || {};
             const agentId = payload.agentId || orchestratorIdRef.current;
 
-            // Don't show task_complete tool calls — the completion handler covers that
-            if (toolName === 'task_complete') {
+            // Don't show task_complete/task_delegate tool calls — internal plumbing
+            if (toolName === 'task_complete' || toolName === 'task_delegate') {
                 // Still track iteration for cost tracking
                 dispatchRef.current({ type: 'TRACK_ITERATION', agentId, iterationType: 'tool-call' });
                 return;
@@ -604,12 +604,16 @@ export function useEventMonitor(
                 }, 500);
             } else {
                 // Specialist agent finished a subtask — compound: add entry + set agent idle
+                // Distinguish success from failure so rejected tasks are visually distinct
+                const success = result?.success !== false;
                 if (summary) {
                     dispatchRef.current({
                         type: 'ADD_ENTRY_WITH_AGENT_STATUS',
                         entry: {
-                            type: 'system',
-                            content: `${resolveName(completingAgentId)} completed: ${summary}`,
+                            type: success ? 'system' : 'error',
+                            content: success
+                                ? `${resolveName(completingAgentId)} completed: ${summary}`
+                                : `${resolveName(completingAgentId)} declined: ${summary}`,
                         },
                         agentId: completingAgentId,
                         agentStatus: 'idle',
@@ -810,8 +814,8 @@ export function useEventMonitor(
 
             // Skip results from user_input tools (handled by confirmation flow)
             if (USER_INPUT_TOOLS.has(toolName)) return;
-            // Skip task_complete results (handled by completion handler)
-            if (toolName === 'task_complete') return;
+            // Skip task_complete/task_delegate results (internal plumbing)
+            if (toolName === 'task_complete' || toolName === 'task_delegate') return;
 
             // Clear tracked file operation now that the tool execution is complete
             if (FILE_MODIFICATION_TOOLS.has(toolName)) {

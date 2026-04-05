@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MXF</title>
+    <style>
+        /* Base styles — dark theme default (black/gray/green palette) */
+        :root {
+            --bg-primary: #0d0d0d;
+            --bg-secondary: #1a1a1a;
+            --bg-tertiary: #262626;
+            --text-primary: #d4d4d4;
+            --text-secondary: #a3a3a3;
+            --text-dim: #5c5c5c;
+            --accent: #87a878;
+            --accent-hover: #9dba8f;
+            --border: #333333;
+            --success: #6b8f4a;
+            --warning: #b8a44e;
+            --error: #c45c5c;
+            --info: #6b7f3a;
+            --font-mono: 'SF Mono', 'Cascadia Code', 'JetBrains Mono', 'Fira Code', Menlo, monospace;
+            --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        html, body, #root {
+            height: 100%;
+            width: 100%;
+            overflow: hidden;
+        }
+
+        body {
+            font-family: var(--font-sans);
+            font-size: 14px;
+            color: var(--text-primary);
+            background-color: var(--bg-primary);
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+        }
+
+        /* Scrollbar styling */
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: var(--bg-primary);
+        }
+        ::-webkit-scrollbar-thumb {
+            background: var(--border);
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--text-dim);
+        }
+
+        /* Blinking cursor animation for streaming */
+        @keyframes blink {
+            50% { opacity: 0; }
+        }
+
+        /* Pulse animation for confirmation alerts */
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.6; }
+        }
+
+        /* Font size base (adjustable via /font command) */
+        :root {
+            --font-size-base: 14px;
+        }
+
+        /* Markdown content styles */
+        .mxf-markdown h1, .mxf-markdown h2, .mxf-markdown h3,
+        .mxf-markdown h4, .mxf-markdown h5, .mxf-markdown h6 {
+            color: var(--text-primary);
+            margin: 12px 0 6px 0;
+            line-height: 1.3;
+        }
+        .mxf-markdown h1 { font-size: 1.4em; }
+        .mxf-markdown h2 { font-size: 1.2em; }
+        .mxf-markdown h3 { font-size: 1.1em; }
+        .mxf-markdown p {
+            margin: 6px 0;
+        }
+        .mxf-markdown ul, .mxf-markdown ol {
+            padding-left: 24px;
+            margin: 6px 0;
+        }
+        .mxf-markdown li {
+            margin: 3px 0;
+        }
+        .mxf-markdown img {
+            max-width: 100%;
+            border-radius: 4px;
+        }
+        .mxf-markdown strong {
+            color: var(--text-primary);
+            font-weight: 600;
+        }
+        .mxf-markdown em {
+            color: var(--text-secondary);
+        }
+
+        /* highlight.js theme — green-tinted dark */
+        .hljs {
+            background: var(--bg-primary) !important;
+            color: var(--text-primary) !important;
+        }
+        .hljs-keyword,
+        .hljs-selector-tag,
+        .hljs-built_in { color: #87a878; }
+        .hljs-string,
+        .hljs-attr { color: #9dba8f; }
+        .hljs-comment,
+        .hljs-quote { color: #5c5c5c; font-style: italic; }
+        .hljs-number,
+        .hljs-literal { color: #b8a44e; }
+        .hljs-function .hljs-title,
+        .hljs-title.function_ { color: #a3c48c; }
+        .hljs-type,
+        .hljs-class .hljs-title { color: #8fb573; }
+        .hljs-variable,
+        .hljs-template-variable { color: #d4d4d4; }
+        .hljs-meta { color: #6b7f3a; }
+        .hljs-regexp { color: #9dba8f; }
+        .hljs-addition { color: #6b8f4a; background: rgba(107, 143, 74, 0.1); }
+        .hljs-deletion { color: #c45c5c; background: rgba(196, 92, 92, 0.1); }
+        .hljs-symbol { color: #87a878; }
+        .hljs-tag { color: #6b7f3a; }
+        .hljs-name { color: #87a878; }
+        .hljs-selector-class,
+        .hljs-selector-id { color: #9dba8f; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+</body>
+</html>

@@ -1331,6 +1331,15 @@ This iteration has been skipped. Choose a different action or complete the task.
                     } as McpTextContent
                 };
 
+                // Check for task_delegate — stops the LLM loop without completing the task.
+                // The agent yielded control to a downstream agent; we break the loop
+                // but leave taskCompleted=false so the agent can accept new tasks later,
+                // and we do NOT cancel the current task on the server.
+                if (toolCall.name === 'task_delegate') {
+                    allToolResults.push(toolResultContent);
+                    return { taskComplete: true, toolResults: allToolResults };
+                }
+
                 // Check for task completion before returning tool result
                 const taskComplete = toolCall.name === 'task_complete';
                 if (taskComplete) {

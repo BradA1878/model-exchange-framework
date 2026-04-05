@@ -1,6 +1,6 @@
 {
   "name": "model-exchange-framework",
-  "version": "1.7.1",
+  "version": "1.8.0",
   "description": "Model Exchange Framework (MXF): Multi-agent AI orchestration framework with advanced optimization",
   "private": true,
   "scripts": {
@@ -52,7 +52,12 @@
     "test:property": "jest --config tests/jest.unit.config.ts tests/property",
     "test:mutation": "stryker run",
     "test:mutation:incremental": "stryker run --incremental",
+    "desktop:dev": ". \"$HOME/.cargo/env\" 2>/dev/null; cd src/desktop && bun tauri dev",
+    "desktop:build": ". \"$HOME/.cargo/env\" 2>/dev/null; cd src/desktop && bun tauri build",
+    "desktop:build:debug": ". \"$HOME/.cargo/env\" 2>/dev/null; cd src/desktop && bun tauri build --debug",
     "mxf": "bun run src/cli/index.ts",
+    "mxf:tui": "bun run src/cli/index.ts --tui",
+    "mxf-shell": "bun run src/cli/index.ts --tui",
     "mxf:install": "bun run src/cli/index.ts install",
     "mxf:init": "bun run src/cli/index.ts init",
     "mxf:status": "bun run src/cli/index.ts status",

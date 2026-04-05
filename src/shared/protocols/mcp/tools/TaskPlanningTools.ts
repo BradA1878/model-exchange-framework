@@ -102,7 +102,7 @@ export const task_create_with_plan: McpToolDefinition = {
             assignTo: {
                 type: 'array',
                 items: { type: 'string' },
-                description: 'Agent IDs to assign this task to'
+                description: 'Agent IDs to assign this task to. REQUIRED for delegation — without this, the task stays assigned to the calling agent and nobody else picks it up. Example: ["mxf-planner"]'
             },
             priority: {
                 type: 'string',
@@ -175,6 +175,13 @@ export const task_create_with_plan: McpToolDefinition = {
             };
             
             // Create the task with monitoring config
+            // If no assignTo specified and the caller is the orchestrator (Concierge),
+            // default to mxf-planner so the task actually gets picked up by the right agent
+            const callerIsOrchestrator = context.agentId?.includes('concierge') ||
+                (context as any).metadata?.role === 'orchestrator';
+            const defaultAssignee = callerIsOrchestrator ? 'mxf-planner' : (context.agentId || 'system');
+            const assignedAgentIds = input.assignTo || [defaultAssignee];
+
             const taskId = uuidv4();
             const taskPayload = createTaskEventPayload(
                 TaskEvents.CREATE_REQUEST,
@@ -183,14 +190,14 @@ export const task_create_with_plan: McpToolDefinition = {
                 {
                     taskId: taskId,
                     fromAgentId: context.agentId || 'system',
-                    toAgentId: input.assignTo?.[0] || context.agentId || 'system',
+                    toAgentId: assignedAgentIds[0],
                     task: {
                         channelId: context.channelId,
                         title: input.title,
                         description: `${input.description}\n\nThis task will automatically complete when the plan steps are finished.`,
-                        assignmentScope: input.assignTo && input.assignTo.length > 1 ? 'multiple' : 'single',
+                        assignmentScope: assignedAgentIds.length > 1 ? 'multiple' : 'single',
                         assignmentStrategy: 'manual',
-                        assignedAgentIds: input.assignTo || [context.agentId || 'system'],
+                        assignedAgentIds,
                         coordinationMode: 'collaborative',
                         priority: input.priority || 'medium',
                         metadata: {
@@ -574,10 +581,48 @@ Agent: ${context.agentId} | Channel: ${context.channelId}`
     }
 };
 
+/**
+ * Yield control after delegating a task to another agent.
+ *
+ * Calling this tool tells the framework "I delegated my work and I'm done —
+ * stop my LLM loop." Unlike task_complete, this does NOT mark the parent
+ * task as completed, so downstream agents continue their work uninterrupted.
+ *
+ * The agent loop in MxfAgent.ts recognises this tool name and breaks the
+ * iteration loop without setting the persistent taskCompleted flag.
+ */
+export const task_delegate: McpToolDefinition = {
+    name: 'task_delegate',
+    description: 'Signal that you have delegated your work to another agent and are done. Stops your processing loop without completing the parent task, so the downstream agent can continue.',
+    inputSchema: {
+        type: 'object',
+        properties: {
+            summary: {
+                type: 'string',
+                description: 'Brief summary of what was delegated and to whom'
+            }
+        },
+        required: ['summary']
+    },
+    enabled: true,
+    handler: async (input: McpToolInput, context: McpToolHandlerContext): Promise<McpToolHandlerResult> => {
+        const content: McpToolResultContent = {
+            type: 'text',
+            data: `Delegation acknowledged. Agent ${context.agentId} yielding control.\n\n${input.summary}`
+        };
+
+        return {
+            content,
+            metadata: { delegated: true }
+        } as McpToolHandlerResult;
+    }
+};
+
 // Export all task planning tools
 export const taskPlanningTools = [
     task_create_with_plan,
     task_create_custom_completion,
     task_link_to_plan,
-    task_monitoring_status
+    task_monitoring_status,
+    task_delegate
 ];

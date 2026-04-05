@@ -18,11 +18,13 @@
  * @author Brad Anderson <BradA1878@pm.me>
  */
 
+import crypto from 'crypto';
 import { v4 as uuidv4 } from 'uuid';
 import { MxfSDK, LlmProviderType, MxfChannelMonitor } from '../../../sdk/index';
 import type { MxfAgent, UserInputRequestData, UserInputResponseValue } from '../../../sdk/index';
 import type { TuiConfig } from '../types';
 import type { AgentDefinition } from '../agents/AgentDefinitions';
+import { UserMemoryService } from '../../../shared/services/UserMemoryService';
 
 /** A connected agent with its credentials and definition */
 interface AgentConnection {
@@ -68,6 +70,8 @@ export class InteractiveSessionManager {
     private cleanupDone: boolean = false;
     private connected: boolean = false;
     private defaultModel: string;
+    private userId: string = '';
+    private userMemoryContext: string = '';
     /** Whether this is a named session (shared across terminals) */
     private isNamedSession: boolean;
 
@@ -143,6 +147,12 @@ export class InteractiveSessionManager {
         }
 
         this.connected = true;
+
+        // Auto-inject user memories into session context.
+        // Uses a hash of the access token as a stable userId.
+        this.injectUserMemories().catch((_err) => {
+            // Non-fatal: session works without user memories
+        });
     }
 
     /**
@@ -169,11 +179,14 @@ export class InteractiveSessionManager {
         const keys = await this.sdk.generateKey(this.channelId);
         const credentials = { keyId: keys.keyId, secretKey: keys.secretKey };
 
-        // For orchestrator agents, inject a dynamic team roster so it only
-        // delegates to agents that are actually enabled in this session.
+        // Inject dynamic team rosters for agents that delegate work.
+        // - Orchestrator (Concierge): sees all other agents including Planner
+        // - Sub-orchestrators (Planner): sees only non-orchestrator specialists
         let systemPrompt = definition.systemPrompt;
         if (definition.role === 'orchestrator') {
             systemPrompt = this.buildOrchestratorPrompt(definition);
+        } else if (definition.allowedTools.includes('task_create_with_plan')) {
+            systemPrompt = this.buildSubOrchestratorPrompt(definition);
         }
 
         // Inject the working directory so agents know where file operations resolve.
@@ -305,6 +318,15 @@ export class InteractiveSessionManager {
         }
 
         let description = task;
+        // Inject working directory into the description so agents see it
+        // (agents read descriptions, not metadata)
+        if (this.config.workingDirectory) {
+            description += `\n\nWorking directory: ${this.config.workingDirectory}`;
+        }
+        // Inject user memories from previous sessions
+        if (this.userMemoryContext) {
+            description += this.userMemoryContext;
+        }
         if (contextString) {
             description += '\n\nContext:\n' + contextString;
         }
@@ -348,6 +370,14 @@ export class InteractiveSessionManager {
         }
 
         let description = task;
+        // Inject working directory into the description so agents see it
+        if (this.config.workingDirectory) {
+            description += `\n\nWorking directory: ${this.config.workingDirectory}`;
+        }
+        // Inject user memories from previous sessions
+        if (this.userMemoryContext) {
+            description += this.userMemoryContext;
+        }
         if (contextString) {
             description += '\n\nContext:\n' + contextString;
         }
@@ -430,6 +460,11 @@ export class InteractiveSessionManager {
         return this.defaultModel;
     }
 
+    /** Update the working directory for file operations (e.g., from desktop folder picker) */
+    setWorkingDirectory(dir: string): void {
+        this.config.workingDirectory = dir;
+    }
+
     /**
      * Compact an agent's conversation history to free context window space.
      * Called by the TUI when an agent approaches its model's context limit.
@@ -450,6 +485,34 @@ export class InteractiveSessionManager {
     /** Get the per-agent model overrides from config */
     getAgentModels(): Record<string, string> {
         return this.config.agentModels || {};
+    }
+
+    /**
+     * Load the user's top memories and inject them into the session context
+     * so agents have user context from the very first task.
+     *
+     * Derives a stable userId from the access token via SHA-256 hash (first 16 hex chars).
+     * Stores the formatted context block in userMemoryContext for use by submitTask()
+     * and submitTaskToAgent().
+     */
+    private async injectUserMemories(): Promise<void> {
+        const userId = crypto.createHash('sha256')
+            .update(this.config.accessToken)
+            .digest('hex')
+            .substring(0, 16);
+
+        this.userId = userId;
+
+        const service = UserMemoryService.getInstance();
+
+        const memories = await service.getSessionContext(userId, 10);
+        if (memories.length === 0) return;
+
+        // Format memories as a concise context block
+        const lines = memories.map((m) =>
+            `[${m.type}] ${m.title} (${m.staleness}): ${m.content}`
+        );
+        this.userMemoryContext = `\n\nUser memories from previous sessions:\n${lines.join('\n')}`;
     }
 
     /**
@@ -514,6 +577,38 @@ export class InteractiveSessionManager {
     }
 
     /**
+     * Build a sub-orchestrator's system prompt with a filtered team roster.
+     *
+     * Sub-orchestrators (e.g., Planner) delegate to other specialists but should
+     * NOT see the main orchestrator (Concierge) in their roster — only pure
+     * specialist agents that actually execute work.
+     *
+     * @param agent - The sub-orchestrator agent definition
+     * @returns The system prompt with a filtered team roster appended
+     */
+    private buildSubOrchestratorPrompt(agent: AgentDefinition): string {
+        // Sub-orchestrators see all specialists except the main orchestrator and themselves
+        const teammates = this.config.agentDefinitions.filter(
+            d => d.agentId !== agent.agentId && d.role !== 'orchestrator',
+        );
+
+        const teamLines = teammates.map(d => {
+            return `- **${d.name}** (${d.agentId}): ${d.description}`;
+        });
+
+        const teamSection = [
+            '',
+            '## Available Team',
+            '',
+            ...teamLines,
+            '',
+            'Only delegate to the agents listed above. Do NOT message or assign tasks to any other agent IDs.',
+        ].join('\n');
+
+        return agent.systemPrompt + teamSection;
+    }
+
+    /**
      * Map an LLM provider string from config to the LlmProviderType enum.
      * Same logic as SessionRunner.mapLlmProvider().
      */
@@ -533,6 +628,37 @@ export class InteractiveSessionManager {
             throw new Error(`Unknown LLM provider: ${provider}. Supported: ${Object.keys(providerMap).join(', ')}`);
         }
         return mapped;
+    }
+
+    /**
+     * Cancel in-flight work by disconnecting and reconnecting all agents.
+     *
+     * This kills active LLM calls (which are tied to the agent's socket
+     * connection) without tearing down the channel or SDK. After reconnecting,
+     * agents are idle and ready for new tasks.
+     */
+    async reconnectAgents(): Promise<void> {
+        if (!this.sdk || !this.connected) return;
+
+        // Stash definitions before disconnecting
+        const definitions: AgentDefinition[] = [];
+        for (const [, connection] of this.agents) {
+            definitions.push(connection.definition);
+            await connection.agent.disconnect().catch(() => {});
+        }
+        this.agents.clear();
+
+        // Clear pending input resolvers
+        for (const [, resolver] of this.pendingInputResolvers) {
+            resolver(false);
+        }
+        this.pendingInputResolvers.clear();
+
+        // Reconnect each agent with fresh keys
+        const llmProvider = this.mapLlmProvider(this.config.llmProvider);
+        for (const definition of definitions) {
+            await this.connectAgent(definition, llmProvider);
+        }
     }
 
     /**
