@@ -26,6 +26,7 @@
     "node_modules",
     "dist",
     "**/*.spec.ts",
-    "src/cli/tui/**/*"
+    "src/cli/tui/**/*",
+    "src/desktop/**/*"
   ]
 }
