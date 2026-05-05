@@ -184,6 +184,26 @@ export class OpenRouterMcpClient extends BaseMcpClient {
         return exactoModel;
     }
 
+    /**
+     * Build the standard OpenRouter request headers.
+     *
+     * Precedence for app-attribution headers (X-Title and HTTP-Referer):
+     *   1. Per-request override via `options.title` / `options.referer`
+     *   2. Env vars `OPENROUTER_APP_TITLE` / `OPENROUTER_APP_URL`
+     *   3. MXF defaults
+     *
+     * Set the env vars when embedding MXF in another application so traffic
+     * attributes correctly in that application's OpenRouter dashboard.
+     */
+    private buildOpenRouterHeaders(options?: Record<string, any>): Record<string, string> {
+        return {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${this.config.apiKey}`,
+            'HTTP-Referer': options?.referer || process.env.OPENROUTER_APP_URL || 'http://mxf.dev',
+            'X-Title': options?.title || process.env.OPENROUTER_APP_TITLE || 'MXF'
+        };
+    }
+
     // Request queue to prevent concurrent requests that might cause JSON parsing issues
     private static requestQueue: Array<() => Promise<any>> = [];
     private static isProcessingQueue = false;
@@ -595,12 +615,7 @@ export class OpenRouterMcpClient extends BaseMcpClient {
             Object.assign(requestBody, options.providerOptions);
         }
 
-        const headers: Record<string, string> = {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${this.config.apiKey}`,
-            'HTTP-Referer': options?.referer || 'http://mxf.dev',
-            'X-Title': options?.title || 'MXF'
-        };
+        const headers = this.buildOpenRouterHeaders(options);
 
         const response = await fetch(`${this.baseUrl}/chat/completions`, {
             method: 'POST',
@@ -1041,12 +1056,9 @@ export class OpenRouterMcpClient extends BaseMcpClient {
             // HTTP-Referer is the primary identifier for app attribution
             // X-Title sets the display name in rankings and analytics
             // Both are needed for proper attribution - see https://openrouter.ai/docs/app-attribution
-            const headers: Record<string, string> = {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${this.config.apiKey}`,
-                'HTTP-Referer': options?.referer || 'http://mxf.dev',
-                'X-Title': options?.title || 'MXF'
-            };
+            // Customize via OPENROUTER_APP_TITLE / OPENROUTER_APP_URL env vars when
+            // embedding MXF in another application.
+            const headers = this.buildOpenRouterHeaders(options);
             
             // Log basic request info
             // console.log ('')

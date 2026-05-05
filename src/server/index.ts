@@ -157,11 +157,16 @@ const initializeServer = async () => {
                             throw new Error('OPENROUTER_API_KEY not set');
                         }
 
+                        // App attribution shows in OpenRouter Logs dashboard.
+                        // Override via OPENROUTER_APP_TITLE / OPENROUTER_APP_URL env vars
+                        // when embedding MXF in another application. The "(Meilisearch)"
+                        // suffix differentiates embedding traffic from chat completions.
+                        const baseTitle = process.env.OPENROUTER_APP_TITLE || 'MXF';
                         const headers: Record<string, string> = {
                             'Content-Type': 'application/json',
                             'Authorization': `Bearer ${process.env.OPENROUTER_API_KEY}`,
-                            'HTTP-Referer': 'https://mxf.dev',
-                            'X-Title': 'MXF (Meilisearch)'
+                            'HTTP-Referer': process.env.OPENROUTER_APP_URL || 'https://mxf.dev',
+                            'X-Title': `${baseTitle} (Meilisearch)`
                         };
 
                         const OpenAI = require('openai').default;
