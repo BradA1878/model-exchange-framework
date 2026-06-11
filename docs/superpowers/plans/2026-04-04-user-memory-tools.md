@@ -38,7 +38,7 @@
  * limitations under the License.
  *
  * @author Brad Anderson <BradA1878@pm.me>
- * @repository https://github.com/mxf-dev/mxf
+ * @repository https://github.com/BradA1878/model-exchange-framework
  * @documentation https://mxf-dev.github.io/mxf/
  */
 
@@ -177,7 +177,7 @@ git commit -m "feat: add UserMemory Mongoose model for cross-session user memory
  * limitations under the License.
  *
  * @author Brad Anderson <BradA1878@pm.me>
- * @repository https://github.com/mxf-dev/mxf
+ * @repository https://github.com/BradA1878/model-exchange-framework
  * @documentation https://mxf-dev.github.io/mxf/
  */
 
@@ -799,7 +799,7 @@ git commit -m "feat: register user memory tool names and category"
  * limitations under the License.
  *
  * @author Brad Anderson <BradA1878@pm.me>
- * @repository https://github.com/mxf-dev/mxf
+ * @repository https://github.com/BradA1878/model-exchange-framework
  * @documentation https://mxf-dev.github.io/mxf/
  */
 

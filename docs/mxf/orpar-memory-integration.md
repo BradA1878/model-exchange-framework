@@ -313,4 +313,4 @@ RETRIEVAL_LAMBDA_REASONING=0.3
 
 ---
 
-For questions or contributions, please refer to the [GitHub repository](https://github.com/mxf-dev/mxf).
+For questions or contributions, please refer to the [GitHub repository](https://github.com/BradA1878/model-exchange-framework).

@@ -53,7 +53,7 @@ The Model Exchange Framework (MXF) is a platform for building autonomous multi-a
 #### 1. Clone Repository
 
 ```bash
-git clone https://github.com/mxf-dev/mxf
+git clone https://github.com/BradA1878/model-exchange-framework
 cd mxf
 ```
 
@@ -123,7 +123,7 @@ bun run docker:health
 
 ```bash
 # Clone the repository
-git clone https://github.com/mxf-dev/mxf
+git clone https://github.com/BradA1878/model-exchange-framework
 cd mxf
 
 # Install Bun (fast package manager and runtime)
@@ -331,7 +331,7 @@ Q-value weighted memory retrieval where memories are ranked by learned utility s
 npm install @mxf-dev/sdk
 ```
 
-**Note**: `@mxf-dev/sdk` pulls in `@mxf-dev/core` automatically. To build the SDK from source instead, see the [contributing guide](https://github.com/mxf-dev/mxf).
+**Note**: `@mxf-dev/sdk` pulls in `@mxf-dev/core` automatically. To build the SDK from source instead, see the [contributing guide](https://github.com/BradA1878/model-exchange-framework).
 
 ### 2. Set Up Your Environment
 
@@ -1062,7 +1062,7 @@ echo $XAI_API_KEY
 ## Support & Resources
 
 - **Documentation**: [Full documentation](./index.md)
-- **GitHub Issues**: [Report bugs](https://github.com/mxf-dev/mxf/issues)
+- **GitHub Issues**: [Report bugs](https://github.com/BradA1878/model-exchange-framework/issues)
 - **Examples**: Check `/examples` directory
 
 ## Quick Reference

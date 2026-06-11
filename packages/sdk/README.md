@@ -446,7 +446,7 @@ const sdk = new MxfSDK({
 ## 📞 Support
 
 - **Documentation**: [Full documentation](../../docs/index.html)
-- **GitHub Issues**: [Report bugs](https://github.com/mxf-dev/mxf/issues)
+- **GitHub Issues**: [Report bugs](https://github.com/BradA1878/model-exchange-framework/issues)
 - **Examples**: Check `/examples` directory for complete applications
 
 ## 📄 License

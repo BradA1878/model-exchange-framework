@@ -7,7 +7,7 @@
   "author": "Brad Anderson <BradA1878@pm.me>",
   "repository": {
     "type": "git",
-    "url": "https://github.com/mxf-dev/mxf",
+    "url": "https://github.com/BradA1878/model-exchange-framework",
     "directory": "packages/sdk"
   },
   "engines": {

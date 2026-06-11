@@ -14,7 +14,7 @@
  * limitations under the License.
  *
  * @author Brad Anderson <BradA1878@pm.me>
- * @repository https://github.com/mxf-dev/mxf
+ * @repository https://github.com/BradA1878/model-exchange-framework
  */
 
 /**

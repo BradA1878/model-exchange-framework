@@ -314,4 +314,4 @@ The MXF architecture is designed to evolve:
 4. See [SDK Documentation](../sdk/index.md) for agent development
 5. Visit [Dashboard Guide](../dashboard/index.md) for UI documentation
 
-For questions or contributions, please refer to the [GitHub repository](https://github.com/mxf-dev/mxf).
+For questions or contributions, please refer to the [GitHub repository](https://github.com/BradA1878/model-exchange-framework).

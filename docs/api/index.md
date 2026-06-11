@@ -426,7 +426,7 @@ Current version: **v1** (stable)
 - **OpenAPI Spec**: `/api/openapi.json`
 - **Postman Collection**: `/api/postman-collection.json`
 - **Rate Limits**: Check `X-RateLimit-*` headers
-- **Issues**: [GitHub Issues](https://github.com/mxf-dev/mxf/issues)
+- **Issues**: [GitHub Issues](https://github.com/BradA1878/model-exchange-framework/issues)
 
 ## Related Documentation
 

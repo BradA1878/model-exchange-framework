@@ -64,7 +64,7 @@ npm install @mxf-dev/sdk    # or: bun add @mxf-dev/sdk
 To build from source instead (for contributing):
 
 ```bash
-git clone https://github.com/mxf-dev/mxf.git
+git clone https://github.com/BradA1878/model-exchange-framework.git
 cd mxf
 npm install
 

@@ -100,12 +100,12 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/mxf-dev/mxf"
+    "url": "https://github.com/BradA1878/model-exchange-framework"
   },
   "bugs": {
-    "url": "https://github.com/mxf-dev/mxf/issues"
+    "url": "https://github.com/BradA1878/model-exchange-framework/issues"
   },
-  "homepage": "https://github.com/mxf-dev/mxf#readme",
+  "homepage": "https://github.com/BradA1878/model-exchange-framework#readme",
   "dependencies": {
     "@google/genai": "^0.9.0",
     "@inkjs/ui": "1",

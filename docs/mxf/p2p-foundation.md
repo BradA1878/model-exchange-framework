@@ -501,4 +501,4 @@ When P2P features are disabled (default):
 
 **Disclaimer:** P2P Decentralization Foundation is an experimental feature not intended for production use. All features are disabled by default. Enable only in controlled research/development environments. For production systems, use standard centralized MXF architecture.
 
-For questions or contributions related to P2P features, please refer to the [GitHub repository](https://github.com/mxf-dev/mxf).
+For questions or contributions related to P2P features, please refer to the [GitHub repository](https://github.com/BradA1878/model-exchange-framework).

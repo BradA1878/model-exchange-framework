@@ -132,7 +132,7 @@ For questions about this Code of Conduct, please contact:
 **Brad Anderson**  
 Email: BradA1878@pm.me  
 Project: Model Exchange Framework (MXF)  
-Repository: https://github.com/mxf-dev/mxf
+Repository: https://github.com/BradA1878/model-exchange-framework
 
 ---
 

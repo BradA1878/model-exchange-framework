@@ -306,7 +306,7 @@ Four core manager classes and five handler categories:
 **Option A: Docker Deployment (Recommended for Production)**
 
 ```bash
-git clone https://github.com/mxf-dev/mxf
+git clone https://github.com/BradA1878/model-exchange-framework
 cd mxf
 
 # Configure environment
@@ -325,7 +325,7 @@ bun run docker:health
 **Option B: Local Development**
 
 ```bash
-git clone https://github.com/mxf-dev/mxf
+git clone https://github.com/BradA1878/model-exchange-framework
 cd mxf
 bun install
 bun run build
@@ -481,7 +481,7 @@ handler: async (input, context): Promise<McpToolHandlerResult> => {
 ## Support & Resources
 
 - **📖 Full Documentation**: Browse sections above
-- **💻 GitHub Repository**: [Create an issue](https://github.com/mxf-dev/mxf/issues)
+- **💻 GitHub Repository**: [Create an issue](https://github.com/BradA1878/model-exchange-framework/issues)
 - **🎯 Examples**: See [Example Projects](./examples/first-contact.md) documentation
 - **📝 Getting Started**: [Complete guide](./getting-started.md)
 

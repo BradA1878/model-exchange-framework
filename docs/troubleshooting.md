@@ -576,8 +576,8 @@ DEBUG_DEMO=true bun run demo:your-demo
 
 If you're still experiencing issues:
 
-1. **Check existing issues:** [GitHub Issues](https://github.com/mxf-dev/mxf/issues)
-2. **Ask the community:** [GitHub Discussions](https://github.com/mxf-dev/mxf/discussions)
+1. **Check existing issues:** [GitHub Issues](https://github.com/BradA1878/model-exchange-framework/issues)
+2. **Ask the community:** [GitHub Discussions](https://github.com/BradA1878/model-exchange-framework/discussions)
 3. **Review documentation:** [Full Documentation](./index.md)
 
 When reporting issues, include:
