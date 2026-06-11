@@ -529,5 +529,8 @@ const setupApiRoutes = () => {
 // Start the initialization process
 initializeServer();
 
-// Export app and server for testing (supertest integration)
-export { app, server, io };
+// This entry module must not export anything. When the compiled file is run
+// with `bun run dist/server/index.js`, Bun inspects the entry's exports and
+// calls Bun.serve() on anything that looks like a server config — exporting
+// app/server/io here made that misfire and kill the process with a
+// Bun.serve() TypeError after startup. Nothing imports these exports.
