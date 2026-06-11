@@ -23,8 +23,8 @@ Fixes #<!-- issue number -->
 ## Components Affected
 <!-- Check all that apply -->
 - [ ] Server Core (`src/server/`)
-- [ ] SDK (`src/sdk/`)
-- [ ] Shared utilities/types (`src/shared/`)
+- [ ] SDK (`packages/sdk/src/`)
+- [ ] Shared utilities/types (`packages/core/src/`)
 - [ ] Dashboard (`dashboard/`)
 - [ ] REST API (`src/server/api/`)
 - [ ] Socket.IO handlers (`src/server/socket/`)
@@ -34,7 +34,7 @@ Fixes #<!-- issue number -->
 - [ ] Task Management
 - [ ] Memory System
 - [ ] Validation System
-- [ ] Event system (`src/shared/events/`)
+- [ ] Event system (`packages/core/src/events/`)
 - [ ] Database models/schemas
 - [ ] Docker configuration
 - [ ] Documentation (`docs/`)
@@ -67,7 +67,7 @@ Fixes #<!-- issue number -->
 - [ ] **No unnecessary complexity**: Avoided over-engineering or unnecessary abstractions
 - [ ] **No fallbacks/timeouts**: Did not add unnecessary fallbacks or simulation code
 - [ ] **Event naming**: Used `EventNames.ts` for event constants (single source of truth)
-- [ ] **Validation**: Used `src/shared/utils/validation.ts` for validation and assertions
+- [ ] **Validation**: Used `packages/core/src/utils/validation.ts` for validation and assertions
 - [ ] **Fail-fast**: Added proper validation for fail-fast behavior
 
 ## Testing
@@ -141,7 +141,7 @@ Paste test results here
 <!-- Check all that apply -->
 - [ ] Updated relevant documentation in `docs/`
 - [ ] Updated README.md (if needed)
-- [ ] Updated SDK documentation (`src/sdk/README.md`)
+- [ ] Updated SDK documentation (`packages/sdk/src/README.md`)
 - [ ] Updated API documentation
 - [ ] Added JSDoc comments to new functions/classes
 - [ ] Updated examples/demos

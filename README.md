@@ -4,7 +4,8 @@ Author: [Brad Anderson](brada1878@gmail.com)
 Copyright 2024-2026 Brad Anderson
 
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](http://www.apache.org/licenses/LICENSE-2.0)
-[![Version](https://img.shields.io/badge/version-1.5.2-blue.svg)](https://github.com/BradA1878/model-exchange-framework)
+[![Version](https://img.shields.io/badge/version-2.0.0-blue.svg)](https://github.com/mxf-dev/mxf)
+[![npm](https://img.shields.io/badge/npm-@mxf--dev%2Fsdk-red.svg)](https://www.npmjs.com/package/@mxf-dev/sdk)
 [![Bun](https://img.shields.io/badge/Bun-1.1+-green.svg)](https://bun.sh/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.0+-blue.svg)](https://www.typescriptlang.org/)
 
@@ -16,6 +17,16 @@ Copyright 2024-2026 Brad Anderson
 ---
 
 A sophisticated framework for **autonomous multi-agent collaboration**, communication, and tool execution. MXF enables intelligent agents to work together naturally through goal-oriented task prompting, real-time messaging protocols, intelligent tool discovery, and task completion coordination.
+
+> **📦 New in 2.0 — the SDK is a standalone npm package.** Build agents against a
+> running MXF server without cloning this repo:
+> ```bash
+> npm install @mxf-dev/sdk        # or: bun add @mxf-dev/sdk
+> ```
+> Packages: [`@mxf-dev/sdk`](https://www.npmjs.com/package/@mxf-dev/sdk) (agent client) ·
+> [`@mxf-dev/core`](https://www.npmjs.com/package/@mxf-dev/core) (events, schemas, types, protocol).
+> Run the dashboard against any server with `npx @mxf-dev/dashboard --api-url <server>`
+> ([mxf-dev/dashboard](https://github.com/mxf-dev/dashboard)). Clone this repo only to run the **server** itself.
 
 ## 🌟 Features
 
@@ -486,8 +497,8 @@ MXF provides comprehensive REST APIs for complete framework management:
 
 ```bash
 # Clone the repository
-git clone https://github.com/BradA1878/model-exchange-framework
-cd model-exchange-framework
+git clone https://github.com/mxf-dev/mxf
+cd mxf
 
 # Copy environment template
 cp .env.example .env
@@ -505,7 +516,7 @@ openssl rand -base64 32  # AGENT_API_KEY
 # - OPENROUTER_API_KEY (optional, for SystemLLM)
 nano .env
 
-# Deploy full stack (MXF + MongoDB + Meilisearch + Redis + Dashboard)
+# Deploy the stack (MXF + MongoDB + Meilisearch + Redis)
 bun run docker:up
 
 # View logs
@@ -517,10 +528,12 @@ bun run docker:health
 
 **Services deployed:**
 - MXF Server: `http://localhost:3001`
-- Dashboard: `http://localhost:5173`
 - Meilisearch: `http://localhost:7700`
 - MongoDB: `localhost:27017`
 - Redis: `localhost:6379`
+
+The dashboard is a separate package — run it against this server with
+`npx @mxf-dev/dashboard --api-url http://localhost:3001`.
 
 📖 **[Complete Docker Deployment Guide](docs/deployment.md)**
 
@@ -528,8 +541,8 @@ bun run docker:health
 
 ```bash
 # Clone the repository
-git clone https://github.com/BradA1878/model-exchange-framework
-cd model-exchange-framework
+git clone https://github.com/mxf-dev/mxf
+cd mxf
 
 # Install Bun (fast package manager and runtime)
 curl -fsSL https://bun.sh/install | bash
@@ -570,19 +583,18 @@ bun run start:dev
 
 > ⚠️ **Note:** The Dashboard is currently in development. Some features may be incomplete.
 
-MXF includes a modern Vue 3 dashboard for managing channels, agents, analytics, and more:
+MXF has a modern Vue 3 dashboard for managing channels, agents, analytics, and
+more. It lives in its own repo and npm package — [mxf-dev/dashboard](https://github.com/mxf-dev/dashboard)
+([`@mxf-dev/dashboard`](https://www.npmjs.com/package/@mxf-dev/dashboard)) — and
+runs against any MXF server:
 
 ```bash
-# Ensure infrastructure is running (MongoDB, Meilisearch, Redis)
-bun run docker:infra:up
+# Start infrastructure + the MXF server (port 3001)
+bun run docker:infra:up && bun run start:dev
 
-# Start the MXF server (port 3001)
-bun run start:dev
-
-# In another terminal, start the dashboard (port 5173)
-cd dashboard
-npm install
-bun run dev
+# In another terminal, run the dashboard against it — no clone, no build
+npx @mxf-dev/dashboard --api-url http://localhost:3001
+# then open http://localhost:4173
 ```
 
 **Dashboard Features:**
@@ -597,7 +609,7 @@ bun run dev
 - **Performance Optimization**: View bottlenecks and optimization recommendations
 - **Error Prediction Monitoring**: ML model accuracy and prediction effectiveness
 
-📖 **[Complete Dashboard Documentation](dashboard/README.md)**
+📖 **[Complete Dashboard Documentation](https://github.com/mxf-dev/dashboard#readme)**
 
 ### 🔐 **Demo Environment Setup**
 
@@ -885,7 +897,7 @@ MEMORY_STRATA_ENABLED=true
 - **[Interactive Architecture Diagram](docs/diagram/mxf-architecture.html)** - Visual system exploration
 - **[SDK Documentation](docs/sdk/index.md)** - TypeScript SDK reference
 - **[API Documentation](docs/api/index.md)** - REST and WebSocket APIs
-- **[Dashboard Documentation](dashboard/README.md)** - Dashboard guide
+- **[Dashboard](https://github.com/mxf-dev/dashboard)** - The Vue dashboard (own repo + `@mxf-dev/dashboard` npm package)
 
 ## License
 
@@ -989,9 +1001,12 @@ export const customTool: McpTool = {
 
 ### Basic Agent Setup
 
+```bash
+npm install @mxf-dev/sdk    # or: bun add @mxf-dev/sdk
+```
+
 ```typescript
-// Import from the SDK (use relative path within the monorepo)
-import { MxfSDK, LlmProviderType } from './src/sdk/index';
+import { MxfSDK, LlmProviderType } from '@mxf-dev/sdk';
 
 // Initialize SDK with Personal Access Token (REQUIRED)
 const sdk = new MxfSDK({
@@ -1159,9 +1174,9 @@ This project is licensed under the [Apache License 2.0](https://www.apache.org/l
 
 For questions, issues, or contributions:
 
-- **Author**: [Brad Anderson](https://brada1878.github.io/model-exchange-framework/)
-- **Documentation**: [Full documentation](https://brada1878.github.io/model-exchange-framework/)
-- **GitHub Issues**: [Report bugs](https://github.com/BradA1878/model-exchange-framework/issues)
+- **Author**: [Brad Anderson](https://mxf-dev.github.io/mxf/)
+- **Documentation**: [Full documentation](https://mxf-dev.github.io/mxf/)
+- **GitHub Issues**: [Report bugs](https://github.com/mxf-dev/mxf/issues)
 - **Examples**: Check `/examples` directory
 - **Architecture**: View the [interactive architecture diagram](./docs/diagram/mxf-architecture.html)
 

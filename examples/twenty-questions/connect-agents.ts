@@ -55,15 +55,15 @@
  */
 
 import dotenv from 'dotenv';
-import { MxfSDK, LlmProviderType } from '../../src/sdk';
+import { MxfSDK, LlmProviderType } from '@mxf-dev/sdk';
 import { GameServer } from './server/server/GameServer';
 import { join } from 'path';
 import { io as SocketIOClient, Socket as ClientSocket } from 'socket.io-client';
-import { EventBus } from '../../src/shared/events/EventBus';
-import { OrparEvents } from '../../src/shared/events/event-definitions/OrparEvents';
-import { OrparMemoryEvents } from '../../src/shared/events/event-definitions/OrparMemoryEvents';
-import { createBaseEventPayload } from '../../src/shared/schemas/EventPayloadSchema';
-import { clearAgentOrparState } from '../../src/shared/protocols/mcp/tools/OrparTools';
+import { EventBus } from '@mxf-dev/core/events/EventBus';
+import { OrparEvents } from '@mxf-dev/core/events/event-definitions/OrparEvents';
+import { OrparMemoryEvents } from '@mxf-dev/core/events/event-definitions/OrparMemoryEvents';
+import { createBaseEventPayload } from '@mxf-dev/core/schemas/EventPayloadSchema';
+import { clearAgentOrparState } from '@mxf-dev/core/protocols/mcp/tools/OrparTools';
 
 /**
  * ORPAR-MEMORY INTEGRATION
@@ -637,7 +637,7 @@ async function connectAgents() {
 
     console.log('Step 5: Setting up ORPAR event listeners...\n');
 
-    const { Events } = await import('../../src/shared/events/EventNames');
+    const { Events } = await import('@mxf-dev/core/events/EventNames');
 
     // Helper to format ORPAR phase output with content (no truncation)
     const formatOrparLog = (role: string, phase: string, content: string, color: string) => {

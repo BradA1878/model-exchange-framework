@@ -17,7 +17,7 @@
 ### Task 1: UserMemory Mongoose Model
 
 **Files:**
-- Create: `src/shared/models/userMemory.ts`
+- Create: `packages/core/src/models/userMemory.ts`
 
 - [ ] **Step 1: Create the model file with schema and interfaces**
 
@@ -38,8 +38,8 @@
  * limitations under the License.
  *
  * @author Brad Anderson <BradA1878@pm.me>
- * @repository https://github.com/BradA1878/model-exchange-framework
- * @documentation https://brada1878.github.io/model-exchange-framework/
+ * @repository https://github.com/mxf-dev/mxf
+ * @documentation https://mxf-dev.github.io/mxf/
  */
 
 /**
@@ -147,7 +147,7 @@ Expected: No errors
 - [ ] **Step 3: Commit**
 
 ```bash
-git add src/shared/models/userMemory.ts
+git add packages/core/src/models/userMemory.ts
 git commit -m "feat: add UserMemory Mongoose model for cross-session user memory"
 ```
 
@@ -156,7 +156,7 @@ git commit -m "feat: add UserMemory Mongoose model for cross-session user memory
 ### Task 2: UserMemoryService Singleton
 
 **Files:**
-- Create: `src/shared/services/UserMemoryService.ts`
+- Create: `packages/core/src/services/UserMemoryService.ts`
 
 - [ ] **Step 1: Create the service file**
 
@@ -177,8 +177,8 @@ git commit -m "feat: add UserMemory Mongoose model for cross-session user memory
  * limitations under the License.
  *
  * @author Brad Anderson <BradA1878@pm.me>
- * @repository https://github.com/BradA1878/model-exchange-framework
- * @documentation https://brada1878.github.io/model-exchange-framework/
+ * @repository https://github.com/mxf-dev/mxf
+ * @documentation https://mxf-dev.github.io/mxf/
  */
 
 /**
@@ -683,7 +683,7 @@ Expected: No errors
 - [ ] **Step 3: Commit**
 
 ```bash
-git add src/shared/services/UserMemoryService.ts
+git add packages/core/src/services/UserMemoryService.ts
 git commit -m "feat: add UserMemoryService singleton for cross-session user memory"
 ```
 
@@ -692,7 +692,7 @@ git commit -m "feat: add UserMemoryService singleton for cross-session user memo
 ### Task 3: Register Tool Names in ToolNames.ts
 
 **Files:**
-- Modify: `src/shared/constants/ToolNames.ts`
+- Modify: `packages/core/src/constants/ToolNames.ts`
 
 - [ ] **Step 1: Add USER_MEMORY_TOOLS constant**
 
@@ -769,7 +769,7 @@ Expected: No errors
 - [ ] **Step 7: Commit**
 
 ```bash
-git add src/shared/constants/ToolNames.ts
+git add packages/core/src/constants/ToolNames.ts
 git commit -m "feat: register user memory tool names and category"
 ```
 
@@ -778,7 +778,7 @@ git commit -m "feat: register user memory tool names and category"
 ### Task 4: UserMemoryTools MCP Tool Definitions
 
 **Files:**
-- Create: `src/shared/protocols/mcp/tools/UserMemoryTools.ts`
+- Create: `packages/core/src/protocols/mcp/tools/UserMemoryTools.ts`
 
 - [ ] **Step 1: Create the tools file with all 4 tools**
 
@@ -799,8 +799,8 @@ git commit -m "feat: register user memory tool names and category"
  * limitations under the License.
  *
  * @author Brad Anderson <BradA1878@pm.me>
- * @repository https://github.com/BradA1878/model-exchange-framework
- * @documentation https://brada1878.github.io/model-exchange-framework/
+ * @repository https://github.com/mxf-dev/mxf
+ * @documentation https://mxf-dev.github.io/mxf/
  */
 
 /**
@@ -1128,7 +1128,7 @@ Expected: No errors
 - [ ] **Step 3: Commit**
 
 ```bash
-git add src/shared/protocols/mcp/tools/UserMemoryTools.ts
+git add packages/core/src/protocols/mcp/tools/UserMemoryTools.ts
 git commit -m "feat: add 4 user memory MCP tools (save, recall, forget, shake)"
 ```
 
@@ -1137,7 +1137,7 @@ git commit -m "feat: add 4 user memory MCP tools (save, recall, forget, shake)"
 ### Task 5: Register Tools in index.ts
 
 **Files:**
-- Modify: `src/shared/protocols/mcp/tools/index.ts`
+- Modify: `packages/core/src/protocols/mcp/tools/index.ts`
 
 - [ ] **Step 1: Add import**
 
@@ -1212,7 +1212,7 @@ Expected: No errors
 - [ ] **Step 10: Commit**
 
 ```bash
-git add src/shared/protocols/mcp/tools/index.ts
+git add packages/core/src/protocols/mcp/tools/index.ts
 git commit -m "feat: register user memory tools in tool index"
 ```
 
@@ -1449,7 +1449,7 @@ Expected: No errors
 
 - [ ] **Step 2: Verify tool registration**
 
-Run: `grep -r 'user_memory' src/shared/constants/ToolNames.ts src/shared/protocols/mcp/tools/index.ts`
+Run: `grep -r 'user_memory' packages/core/src/constants/ToolNames.ts packages/core/src/protocols/mcp/tools/index.ts`
 Expected: Tool names appear in both files
 
 - [ ] **Step 3: Verify agent prompts**
@@ -1471,15 +1471,15 @@ git commit -m "fix: resolve any type-check issues in user memory implementation"
 ### New Files (3)
 | File | Task | Purpose |
 |------|------|---------|
-| `src/shared/models/userMemory.ts` | 1 | Mongoose model, interfaces, staleness thresholds |
-| `src/shared/services/UserMemoryService.ts` | 2 | Singleton — CRUD, search fallback chain, staleness, write lock |
-| `src/shared/protocols/mcp/tools/UserMemoryTools.ts` | 4 | 4 MCP tools: save, recall, forget, shake |
+| `packages/core/src/models/userMemory.ts` | 1 | Mongoose model, interfaces, staleness thresholds |
+| `packages/core/src/services/UserMemoryService.ts` | 2 | Singleton — CRUD, search fallback chain, staleness, write lock |
+| `packages/core/src/protocols/mcp/tools/UserMemoryTools.ts` | 4 | 4 MCP tools: save, recall, forget, shake |
 
 ### Modified Files (8)
 | File | Task | Changes |
 |------|------|---------|
-| `src/shared/constants/ToolNames.ts` | 3 | Add USER_MEMORY_TOOLS, category, type |
-| `src/shared/protocols/mcp/tools/index.ts` | 5 | Import, register, export user memory tools |
+| `packages/core/src/constants/ToolNames.ts` | 3 | Add USER_MEMORY_TOOLS, category, type |
+| `packages/core/src/protocols/mcp/tools/index.ts` | 5 | Import, register, export user memory tools |
 | `src/desktop/src/services/toolDescriptions.ts` | 6 | Add human-readable descriptions for 4 tools |
 | `src/cli/tui/services/InteractiveSessionManager.ts` | 7 | Auto-inject user memories on connect |
 | `src/cli/tui/agents/built-in/concierge.md` | 8 | Add 4 tools + user memory instructions |

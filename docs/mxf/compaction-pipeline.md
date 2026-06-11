@@ -81,7 +81,7 @@ flowchart TB
 
 ## ToolResultMicrocompactor
 
-**Source:** `src/sdk/services/ToolResultMicrocompactor.ts`
+**Source:** `packages/sdk/src/services/ToolResultMicrocompactor.ts`
 
 The cheapest compaction layer. Strips old tool result bodies without any LLM call, replacing them with a compact summary line while preserving conversation structure.
 
@@ -126,7 +126,7 @@ Microcompaction runs inside `MxfContextBuilder.buildContext()` when `microcompac
 
 ## StructuredSummaryBuilder
 
-**Source:** `src/shared/services/StructuredSummaryBuilder.ts`
+**Source:** `packages/core/src/services/StructuredSummaryBuilder.ts`
 
 Builds structured summaries from conversation history using heuristic extraction. No LLM call required. Used by reactive compaction to replace older messages with a compact summary.
 
@@ -148,7 +148,7 @@ The `formatAsPrompt()` method produces a compact string wrapped in `<conversatio
 
 ## ReactiveCompactionService
 
-**Source:** `src/sdk/services/ReactiveCompactionService.ts`
+**Source:** `packages/sdk/src/services/ReactiveCompactionService.ts`
 
 Emergency handler for context overflow (HTTP 413) errors. When an LLM request fails because the context is too large, this service applies escalating compaction strategies and retries.
 
@@ -188,7 +188,7 @@ if (reactive.isContextOverflowError(error)) {
 
 ## PostCompactionRestorer
 
-**Source:** `src/sdk/services/PostCompactionRestorer.ts`
+**Source:** `packages/sdk/src/services/PostCompactionRestorer.ts`
 
 After compaction drops messages, critical state can be lost. This service restores artifacts that must survive compaction by injecting system-role messages with the restored content.
 
@@ -225,7 +225,7 @@ Restoration messages are injected as system-role messages with `metadata.ephemer
 
 ## SystemReminderService
 
-**Source:** `src/sdk/services/SystemReminderService.ts`
+**Source:** `packages/sdk/src/services/SystemReminderService.ts`
 
 Generates contextual system reminders injected mid-conversation to reinforce instructions at strategic points. Inspired by Claude Code's `<system-reminder>` pattern.
 
@@ -278,7 +278,7 @@ reminders.register({
 
 ## ModelContextLimits
 
-**Source:** `src/shared/config/ModelContextLimits.ts`
+**Source:** `packages/core/src/config/ModelContextLimits.ts`
 
 Maps model IDs to their context window sizes in tokens. Used by percentage-based compaction to know when to trigger.
 
@@ -304,7 +304,7 @@ registerModelContextLimit('my-custom-model', 256_000);
 
 ## Configuration
 
-All compaction features are controlled through `PromptCompactionConfig` (`src/shared/config/PromptCompactionConfig.ts`). Every feature flag defaults to `false`.
+All compaction features are controlled through `PromptCompactionConfig` (`packages/core/src/config/PromptCompactionConfig.ts`). Every feature flag defaults to `false`.
 
 ### Complete flag reference
 
@@ -338,7 +338,7 @@ All compaction features are controlled through `PromptCompactionConfig` (`src/sh
 
 ## CompactionEvents
 
-**Source:** `src/shared/events/event-definitions/CompactionEvents.ts`
+**Source:** `packages/core/src/events/event-definitions/CompactionEvents.ts`
 
 Five typed events provide observability into compaction operations.
 
@@ -451,12 +451,12 @@ SYSTEM_REMINDER_TOKEN_BUDGET=500
 
 | File | Location |
 |------|----------|
-| ToolResultMicrocompactor | `src/sdk/services/ToolResultMicrocompactor.ts` |
-| StructuredSummaryBuilder | `src/shared/services/StructuredSummaryBuilder.ts` |
-| ReactiveCompactionService | `src/sdk/services/ReactiveCompactionService.ts` |
-| PostCompactionRestorer | `src/sdk/services/PostCompactionRestorer.ts` |
-| SystemReminderService | `src/sdk/services/SystemReminderService.ts` |
-| ModelContextLimits | `src/shared/config/ModelContextLimits.ts` |
-| PromptCompactionConfig | `src/shared/config/PromptCompactionConfig.ts` |
-| CompactionEvents | `src/shared/events/event-definitions/CompactionEvents.ts` |
-| MxfContextBuilder (wiring) | `src/sdk/services/MxfContextBuilder.ts` |
+| ToolResultMicrocompactor | `packages/sdk/src/services/ToolResultMicrocompactor.ts` |
+| StructuredSummaryBuilder | `packages/core/src/services/StructuredSummaryBuilder.ts` |
+| ReactiveCompactionService | `packages/sdk/src/services/ReactiveCompactionService.ts` |
+| PostCompactionRestorer | `packages/sdk/src/services/PostCompactionRestorer.ts` |
+| SystemReminderService | `packages/sdk/src/services/SystemReminderService.ts` |
+| ModelContextLimits | `packages/core/src/config/ModelContextLimits.ts` |
+| PromptCompactionConfig | `packages/core/src/config/PromptCompactionConfig.ts` |
+| CompactionEvents | `packages/core/src/events/event-definitions/CompactionEvents.ts` |
+| MxfContextBuilder (wiring) | `packages/sdk/src/services/MxfContextBuilder.ts` |

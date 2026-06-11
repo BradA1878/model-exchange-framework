@@ -14,8 +14,8 @@
  * limitations under the License.
  *
  * @author Brad Anderson <BradA1878@pm.me>
- * @repository https://github.com/BradA1878/model-exchange-framework
- * @documentation https://brada1878.github.io/model-exchange-framework/
+ * @repository https://github.com/mxf-dev/mxf
+ * @documentation https://mxf-dev.github.io/mxf/
  */
 
 /**
@@ -30,8 +30,8 @@
 
 import express from 'express';
 import { PersonalAccessTokenService } from '../services/PersonalAccessTokenService';
-import { createStrictValidator } from '../../../shared/utils/validation';
-import { Logger } from '../../../shared/utils/Logger';
+import { createStrictValidator } from '@mxf-dev/core/utils/validation';
+import { Logger } from '@mxf-dev/core/utils/Logger';
 
 // Create validator and logger
 const validator = createStrictValidator('TokenRoutes');
@@ -63,6 +63,23 @@ router.post('/', async (req, res) => {
 
         // Validate required fields
         validator.assertIsNonEmptyString(name, 'name is required');
+
+        // Validate optional fields fail-fast instead of letting junk flow into
+        // the token service.
+        if (description !== undefined && (typeof description !== 'string' || description.length > 1000)) {
+            return res.status(400).json({
+                success: false,
+                error: 'description must be a string of at most 1000 characters'
+            });
+        }
+        for (const [fieldName, fieldValue] of [['maxRequestsPerDay', maxRequestsPerDay], ['maxRequestsPerMonth', maxRequestsPerMonth]] as const) {
+            if (fieldValue !== undefined && (typeof fieldValue !== 'number' || !Number.isInteger(fieldValue) || fieldValue <= 0)) {
+                return res.status(400).json({
+                    success: false,
+                    error: `${fieldName} must be a positive integer`
+                });
+            }
+        }
 
         // Extract userId from authenticated user context
         const userId = (req as any).user?.id?.toString();
@@ -230,6 +247,12 @@ router.delete('/:tokenId', async (req, res) => {
         const { reason } = req.body || {};
 
         validator.assertIsNonEmptyString(tokenId, 'tokenId is required');
+        if (reason !== undefined && (typeof reason !== 'string' || reason.length > 500)) {
+            return res.status(400).json({
+                success: false,
+                error: 'reason must be a string of at most 500 characters'
+            });
+        }
 
         // Extract userId from authenticated user context
         const userId = (req as any).user?.id?.toString();

@@ -608,7 +608,7 @@ REQUIRE_SYSTEMLLM_APPROVAL=false
 
 ## Implementation Files
 
-**Types**: `src/shared/types/InferenceParameterTypes.ts`
-**Defaults**: `src/shared/constants/DefaultPhaseProfiles.ts`
-**Tools**: `src/shared/protocols/mcp/tools/InferenceParameterTools.ts`
+**Types**: `packages/core/src/types/InferenceParameterTypes.ts`
+**Defaults**: `packages/core/src/constants/DefaultPhaseProfiles.ts`
+**Tools**: `packages/core/src/protocols/mcp/tools/InferenceParameterTools.ts`
 **Service**: `src/server/socket/services/InferenceParameterService.ts`

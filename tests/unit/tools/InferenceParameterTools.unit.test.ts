@@ -9,7 +9,7 @@ import {
     getCurrentParamsTool,
     getParameterStatusTool,
     getAvailableModelsTool
-} from '@mxf/shared/protocols/mcp/tools/InferenceParameterTools';
+} from '../../../src/server/mcp/tools/InferenceParameterTools';
 import {
     DEFAULT_PHASE_PROFILES,
     OBSERVATION_PROFILE,
@@ -23,15 +23,15 @@ import {
     estimateCost,
     validateProfileAgainstGovernance,
     mergeWithDefaults
-} from '@mxf/shared/constants/DefaultPhaseProfiles';
+} from '@mxf-dev/core/constants/DefaultPhaseProfiles';
 import {
     PhaseParameterProfile,
     OrparPhase,
     ParameterOverrideScope,
     ResetParameterScope,
     InferenceParameterResponse
-} from '@mxf/shared/types/InferenceParameterTypes';
-import { LlmProviderType } from '@mxf/shared/protocols/mcp/LlmProviders';
+} from '@mxf-dev/core/types/InferenceParameterTypes';
+import { LlmProviderType } from '@mxf-dev/core/protocols/mcp/LlmProviders';
 
 describe('InferenceParameterTools', () => {
     describe('DEFAULT_PHASE_PROFILES', () => {

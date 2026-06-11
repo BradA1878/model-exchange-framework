@@ -22,12 +22,12 @@ This document provides a complete guide for the Meilisearch semantic search inte
 - **MongoDB** - Port 27017
 - **Meilisearch** - Port 7700
 - **Redis** (caching) - Port 6379
-- **Dashboard** (Vue.js) - Port 5173
+- **Dashboard** (Vue.js, separate package: `npx @mxf-dev/dashboard`) - Port 4173
 
 ### 2. **Meilisearch Service** (Server-side)
 
 ```
-✅ src/shared/services/MxfMeilisearchService.ts
+✅ packages/core/src/services/MxfMeilisearchService.ts
 ```
 
 **Capabilities:**
@@ -47,7 +47,7 @@ This document provides a complete guide for the Meilisearch semantic search inte
 ### 3. **Memory Search Tools** (MCP Tools)
 
 ```
-✅ src/shared/protocols/mcp/tools/MemorySearchTools.ts
+✅ packages/core/src/protocols/mcp/tools/MemorySearchTools.ts
 ```
 
 **Three new tools:**
@@ -163,7 +163,7 @@ bun run docker:meilisearch:stats
 Create a test agent and index some data:
 
 ```typescript
-import { MxfSDK } from '@mxf/sdk';
+import { MxfSDK } from '@mxf-dev/sdk';
 
 // Initialize SDK with Personal Access Token (recommended)
 const sdk = new MxfSDK({
@@ -313,7 +313,7 @@ Meilisearch, MongoDB, and Redis each have their own memory requirements. Monitor
 Create `tests/meilisearch-integration.test.ts`:
 
 ```typescript
-import { MxfMeilisearchService } from '../src/shared/services/MxfMeilisearchService';
+import { MxfMeilisearchService } from '@mxf-dev/core/services/MxfMeilisearchService';
 
 describe('Meilisearch Integration', () => {
   let service: MxfMeilisearchService;
@@ -476,8 +476,8 @@ docker ps | grep meilisearch
 
 ```typescript
 // scripts/backfill-meilisearch.ts
-import { MxfMeilisearchService } from '../src/shared/services/MxfMeilisearchService';
-import { AgentMemory } from '../src/shared/models/memory';
+import { MxfMeilisearchService } from '@mxf-dev/core/services/MxfMeilisearchService';
+import { AgentMemory } from '@mxf-dev/core/models/memory';
 
 const service = MxfMeilisearchService.getInstance();
 await service.initialize();

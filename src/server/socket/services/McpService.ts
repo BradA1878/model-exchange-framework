@@ -14,8 +14,8 @@
  * limitations under the License.
  *
  * @author Brad Anderson <BradA1878@pm.me>
- * @repository https://github.com/BradA1878/model-exchange-framework
- * @documentation https://brada1878.github.io/model-exchange-framework/
+ * @repository https://github.com/mxf-dev/mxf
+ * @documentation https://mxf-dev.github.io/mxf/
  */
 
 /**
@@ -25,14 +25,14 @@
  * them via socket events to connected clients.
  */
 
-import { Logger } from '../../../shared/utils/Logger';
-import { listAllMcpTools } from '../../../shared/models/mcpTool';
-import { Agent } from '../../../shared/models/agent';
+import { Logger } from '@mxf-dev/core/utils/Logger';
+import { listAllMcpTools } from '@mxf-dev/core/models/mcpTool';
+import { Agent } from '@mxf-dev/core/models/agent';
 import { firstValueFrom, from } from 'rxjs';
-import { createStrictValidator } from '../../../shared/utils/validation';
+import { createStrictValidator } from '@mxf-dev/core/utils/validation';
 import { AgentService } from './AgentService';
-import { Events } from '../../../shared/events/EventNames';
-import { EventBus } from '../../../shared/events/EventBus';
+import { Events } from '@mxf-dev/core/events/EventNames';
+import { EventBus } from '@mxf-dev/core/events/EventBus';
 import { 
     createMxfToolListResultPayload, 
     createMxfToolListErrorPayload,
@@ -40,9 +40,9 @@ import {
     MxfToolListResultEventData,
     MxfToolListErrorEventData,
     BaseEventPayload 
-} from '../../../shared/schemas/EventPayloadSchema';
-import { CORE_MXF_TOOLS, getCoreToolsArray } from '../../../shared/constants/CoreTools';
-import { Channel } from '../../../shared/models/channel';
+} from '@mxf-dev/core/schemas/EventPayloadSchema';
+import { CORE_MXF_TOOLS, getCoreToolsArray } from '@mxf-dev/core/constants/CoreTools';
+import { Channel } from '@mxf-dev/core/models/channel';
 
 /**
  * Simplified tool definition for socket communication

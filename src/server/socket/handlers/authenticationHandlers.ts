@@ -14,8 +14,8 @@
  * limitations under the License.
  *
  * @author Brad Anderson <BradA1878@pm.me>
- * @repository https://github.com/BradA1878/model-exchange-framework
- * @documentation https://brada1878.github.io/model-exchange-framework/
+ * @repository https://github.com/mxf-dev/mxf
+ * @documentation https://mxf-dev.github.io/mxf/
  */
 
 /**
@@ -32,15 +32,19 @@
  */
 
 import { Socket } from 'socket.io';
-import logger from '../../../shared/utils/Logger';
-import { createStrictValidator } from '../../../shared/utils/validation';
-import { EventBus } from '../../../shared/events/EventBus';
-import { AuthEvents } from '../../../shared/events/EventNames';
+import logger from '@mxf-dev/core/utils/Logger';
+import { createStrictValidator } from '@mxf-dev/core/utils/validation';
+import { EventBus } from '@mxf-dev/core/events/EventBus';
+import { AuthEvents } from '@mxf-dev/core/events/EventNames';
 import { getNormalizedChannelName } from './utilityHandlers';
 import KeyAuthHelper from '../../utils/keyAuthHelper';
-import { Channel } from '../../../shared/models/channel';
+import { Channel } from '@mxf-dev/core/models/channel';
+import { requireEnv } from '@mxf-dev/core/utils/env';
+import { User } from '@mxf-dev/core/models/user';
+import jwt from 'jsonwebtoken';
+import bcrypt from 'bcrypt';
 import { AgentService } from '../services/AgentService';
-import { ConfigManager } from '../../../sdk/config/ConfigManager';
+import { ConfigManager } from '@mxf-dev/core/config/ConfigManager';
 import { PersonalAccessTokenService } from '../../api/services/PersonalAccessTokenService';
 
 // Create module logger
@@ -199,7 +203,6 @@ const tryPATSocketAuthentication = async (socket: Socket, accessToken: string): 
         }
 
         // Fetch user to get username
-        const { User } = require('../../../shared/models/user');
         const user = await User.findById(validation.userId);
 
         if (!user || !user.isActive) {
@@ -235,11 +238,9 @@ const tryPATSocketAuthentication = async (socket: Socket, accessToken: string): 
  */
 const tryJwtSocketAuthentication = async (socket: Socket, token: string): Promise<string | null> => {
     try {
-        const jwt = require('jsonwebtoken');
-        const { User } = require('../../../shared/models/user');
 
         // Verify token
-        const secret = process.env.JWT_SECRET || 'default_jwt_secret_for_dev';
+        const secret = requireEnv('JWT_SECRET', 'Set a strong secret in .env — it signs and verifies all user JWTs.');
         const decoded = jwt.verify(token, secret) as any;
 
         if (!decoded || !decoded.userId) {
@@ -254,13 +255,13 @@ const tryJwtSocketAuthentication = async (socket: Socket, token: string): Promis
 
         // Store user auth data
         socket.data = {
-            userId: user._id.toString(),
+            userId: String(user._id),
             username: user.username,
             authType: 'jwt',
             authenticated: true
         };
 
-        return user._id.toString();
+        return String(user._id);
 
     } catch (error) {
         return null;
@@ -278,8 +279,6 @@ const tryJwtSocketAuthentication = async (socket: Socket, token: string): Promis
  */
 const tryUsernamePasswordSocketAuthentication = async (socket: Socket, username: string, password: string): Promise<string | null> => {
     try {
-        const bcrypt = require('bcrypt');
-        const { User } = require('../../../shared/models/user');
         
         // Find user by username or email
         const user = await User.findOne({
@@ -301,13 +300,13 @@ const tryUsernamePasswordSocketAuthentication = async (socket: Socket, username:
         
         // Store user auth data
         socket.data = {
-            userId: user._id.toString(),
+            userId: String(user._id),
             username: user.username,
             authType: 'password',  // Different from JWT to indicate socket-based auth
             authenticated: true
         };
         
-        return user._id.toString();
+        return String(user._id);
         
     } catch (error) {
         return null;

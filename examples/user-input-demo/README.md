@@ -75,8 +75,8 @@ After all steps, the agent calls `task_complete` with a summary of all choices.
 The key integration point is `agent.onUserInput()`. Here's the pattern for each input type:
 
 ```typescript
-import { MxfSDK } from '../../src/sdk/index';
-import type { UserInputRequestData, UserInputResponseValue } from '../../src/sdk/index';
+import { MxfSDK } from '@mxf-dev/sdk';
+import type { UserInputRequestData, UserInputResponseValue } from '@mxf-dev/sdk';
 import prompts from 'prompts';
 
 // After creating the agent via sdk.createAgent()

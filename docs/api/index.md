@@ -110,7 +110,7 @@ curl -X POST http://localhost:3001/api/channels \
 ### WebSocket Example
 
 ```typescript
-import { MxfSDK, Events } from '@mxf/sdk';
+import { MxfSDK, Events } from '@mxf-dev/sdk';
 
 // Initialize SDK with Personal Access Token (recommended)
 const sdk = new MxfSDK({
@@ -316,7 +316,7 @@ POST /api/webhooks
 The MXF SDK provides TypeScript/JavaScript clients:
 
 ```typescript
-import { MxfSDK } from '@mxf/sdk';
+import { MxfSDK } from '@mxf-dev/sdk';
 
 const sdk = new MxfSDK({
     serverUrl: 'http://localhost:3001',
@@ -426,7 +426,7 @@ Current version: **v1** (stable)
 - **OpenAPI Spec**: `/api/openapi.json`
 - **Postman Collection**: `/api/postman-collection.json`
 - **Rate Limits**: Check `X-RateLimit-*` headers
-- **Issues**: [GitHub Issues](https://github.com/BradA1878/model-exchange-framework/issues)
+- **Issues**: [GitHub Issues](https://github.com/mxf-dev/mxf/issues)
 
 ## Related Documentation
 

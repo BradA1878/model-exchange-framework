@@ -12,8 +12,8 @@ import {
   stripCodeBlocks,
   detectFormat,
   formatWithMetadata,
-} from '@mxf/shared/utils/toon/formatter';
-import { FormatOptions } from '@mxf/shared/utils/toon/types';
+} from '@mxf-dev/core/utils/toon/formatter';
+import { FormatOptions } from '@mxf-dev/core/utils/toon/types';
 
 describe('TOON Formatter', () => {
   describe('formatMessagePayload', () => {

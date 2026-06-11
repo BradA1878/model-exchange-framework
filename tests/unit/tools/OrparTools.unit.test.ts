@@ -13,7 +13,7 @@ import {
     orparActTool,
     orparReflectTool,
     ORPAR_TOOL_NAMES
-} from '@mxf/shared/protocols/mcp/tools/OrparTools';
+} from '@mxf-dev/core/protocols/mcp/tools/OrparTools';
 
 describe('OrparTools State Management', () => {
     const testAgentId = 'test-agent-123';

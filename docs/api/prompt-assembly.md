@@ -97,7 +97,7 @@ Additionally emits SystemEvents with `orparPhase` metadata:
 
 ### SDK Layer
 
-**ControlLoopHandlers.ts** (`src/sdk/handlers/ControlLoopHandlers.ts`)
+**ControlLoopHandlers.ts** (`packages/sdk/src/handlers/ControlLoopHandlers.ts`)
 
 Tracks current phase and subscribes to server events:
 
@@ -131,7 +131,7 @@ setCurrentPhase(phase): void      // Allows external phase control
 | `'action'` | `'Act'` |
 | `'reflection'` | `'Reflect'` |
 
-**MxfAgent.ts** (`src/sdk/MxfAgent.ts`)
+**MxfAgent.ts** (`packages/sdk/src/MxfAgent.ts`)
 
 Gets current phase and passes to context builder:
 
@@ -152,7 +152,7 @@ const agentContext = await this.contextBuilder.buildContext(
 );
 ```
 
-**MxfContextBuilder.ts** (`src/sdk/services/MxfContextBuilder.ts`)
+**MxfContextBuilder.ts** (`packages/sdk/src/services/MxfContextBuilder.ts`)
 
 Accepts phase parameter and injects into template context:
 
@@ -172,7 +172,7 @@ buildContext(..., currentOrparPhase?: OrparPhase): Promise<AgentContext> {
 
 ## Template Replacement
 
-**PromptTemplateReplacer.ts** (`src/shared/utils/PromptTemplateReplacer.ts`)
+**PromptTemplateReplacer.ts** (`packages/core/src/utils/PromptTemplateReplacer.ts`)
 
 ### Available Templates
 
@@ -205,7 +205,7 @@ buildContext(..., currentOrparPhase?: OrparPhase): Promise<AgentContext> {
 
 ## System Prompt Output
 
-**MxfAgentSystemPrompt.ts** (`src/shared/prompts/MxfAgentSystemPrompt.ts`)
+**MxfAgentSystemPrompt.ts** (`packages/core/src/prompts/MxfAgentSystemPrompt.ts`)
 
 The `buildOrparGuidelines()` method generates prompts using templates:
 
@@ -300,17 +300,17 @@ Future extensions can subscribe to the same events without modifying core code.
 ### Server Files
 - `src/server/socket/implementations/ControlLoop.ts` - Emits phase events
 - `src/server/socket/services/SystemLlmService.ts` - Emits SystemEvents
-- `src/shared/events/event-definitions/SystemEvents.ts` - Event definitions
+- `packages/core/src/events/event-definitions/SystemEvents.ts` - Event definitions
 
 ### SDK Files
-- `src/sdk/handlers/ControlLoopHandlers.ts` - Phase tracking + handlers
-- `src/sdk/MxfAgent.ts` - Passes phase to context
-- `src/sdk/services/MxfContextBuilder.ts` - Accepts phase parameter
-- `src/sdk/services/MxfStructuredPromptBuilder.ts` - Message layering
+- `packages/sdk/src/handlers/ControlLoopHandlers.ts` - Phase tracking + handlers
+- `packages/sdk/src/MxfAgent.ts` - Passes phase to context
+- `packages/sdk/src/services/MxfContextBuilder.ts` - Accepts phase parameter
+- `packages/sdk/src/services/MxfStructuredPromptBuilder.ts` - Message layering
 
 ### Shared Files
-- `src/shared/utils/PromptTemplateReplacer.ts` - Template definitions
-- `src/shared/prompts/MxfAgentSystemPrompt.ts` - Uses templates
+- `packages/core/src/utils/PromptTemplateReplacer.ts` - Template definitions
+- `packages/core/src/prompts/MxfAgentSystemPrompt.ts` - Uses templates
 
 ## See Also
 

@@ -14,8 +14,8 @@
  * limitations under the License.
  *
  * @author Brad Anderson <BradA1878@pm.me>
- * @repository https://github.com/BradA1878/model-exchange-framework
- * @documentation https://brada1878.github.io/model-exchange-framework/
+ * @repository https://github.com/mxf-dev/mxf
+ * @documentation https://mxf-dev.github.io/mxf/
  */
 
 /**
@@ -34,12 +34,12 @@
  */
 
 import { BehaviorSubject, Observable, catchError, map, of, lastValueFrom } from 'rxjs';
-import { EventBus } from '../../../shared/events/EventBus';
-import { Events } from '../../../shared/events/EventNames';
-import { Logger } from '../../../shared/utils/Logger';
-import { Observation, Reasoning, PlanAction, Plan, Reflection } from '../../../shared/types/ControlLoopTypes';
-import { LlmProviderType } from '../../../shared/protocols/mcp/LlmProviders';
-import { COMMUNICATION_TOOLS, CONTEXT_MEMORY_TOOLS, META_TOOLS } from '../../../shared/constants/ToolNames';
+import { EventBus } from '@mxf-dev/core/events/EventBus';
+import { Events } from '@mxf-dev/core/events/EventNames';
+import { Logger } from '@mxf-dev/core/utils/Logger';
+import { Observation, Reasoning, PlanAction, Plan, Reflection } from '@mxf-dev/core/types/ControlLoopTypes';
+import { LlmProviderType } from '@mxf-dev/core/protocols/mcp/LlmProviders';
+import { COMMUNICATION_TOOLS, CONTEXT_MEMORY_TOOLS, META_TOOLS } from '@mxf-dev/core/constants/ToolNames';
 import mongoose from 'mongoose';
 import { 
     TOPIC_EXTRACTION_SCHEMA, 
@@ -48,9 +48,8 @@ import {
     PLAN_CREATION_SCHEMA,
     REFLECTION_SCHEMA,
     TOOL_RECOMMENDATION_SCHEMA
-} from '../../../shared/schemas/JsonResponseSchemas';
-import { 
-    createLlmInstructionStartedPayload,
+} from '@mxf-dev/core/schemas/JsonResponseSchemas';
+import { createBaseEventPayload, createLlmInstructionStartedPayload,
     createLlmInstructionCompletedPayload,
     createLlmInstructionErrorPayload,
     LlmInstructionStartedEventData,
@@ -65,11 +64,11 @@ import {
     createTemporalContext,
     createBasicCoordinationAnalysis,
     validateSystemEventPayload
-} from '../../../shared/schemas/EventPayloadSchema';
-import { LlmProviderFactory } from '../../../shared/protocols/mcp/LlmProviderFactory';
-import { McpMessage, McpRole, McpTextContent, McpContentType, IMcpClient } from '../../../shared/protocols/mcp/IMcpClient';
-import { ChannelMessage, AgentId, ChannelId } from '../../../shared/types/ChannelContext';
-import { ConversationTopic } from '../../../shared/types/ChannelContext';
+} from '@mxf-dev/core/schemas/EventPayloadSchema';
+import { LlmProviderFactory } from '@mxf-dev/core/protocols/mcp/LlmProviderFactory';
+import { McpMessage, McpRole, McpTextContent, McpContentType, IMcpClient } from '@mxf-dev/core/protocols/mcp/IMcpClient';
+import { ChannelMessage, AgentId, ChannelId } from '@mxf-dev/core/types/ChannelContext';
+import { ConversationTopic } from '@mxf-dev/core/types/ChannelContext';
 import { 
     PromptInput,
     TopicsExtractionInput, 
@@ -80,7 +79,7 @@ import {
     ReasoningAnalysisResult,
     LlmOptions,
     LlmOperationResult
-} from '../../../shared/types/LlmTypes';
+} from '@mxf-dev/core/types/LlmTypes';
 import { v4 as uuidv4 } from 'uuid';
 import { 
     SystemEvents,
@@ -88,21 +87,21 @@ import {
     CoordinationAnalysis,
     TemporalContext,
     SystemEventType
-} from '../../../shared/events/event-definitions/SystemEvents';
-import { HybridMcpService } from '../../../shared/protocols/mcp/services/HybridMcpService';
-import { createStrictValidator } from '../../../shared/utils/validation';
-import { NetworkErrorType, classifyNetworkError } from '../../../shared/types/NetworkRecoveryTypes';
+} from '@mxf-dev/core/events/event-definitions/SystemEvents';
+import { HybridMcpService } from '../../mcp/services/HybridMcpService';
+import { createStrictValidator } from '@mxf-dev/core/utils/validation';
+import { NetworkErrorType, classifyNetworkError } from '@mxf-dev/core/types/NetworkRecoveryTypes';
 
 // JSON Schema definitions for structured outputs
-import { McpToolHandlerContext, McpToolHandlerResult } from '../../../shared/protocols/mcp/McpServerTypes';
+import { McpToolHandlerContext, McpToolHandlerResult } from '@mxf-dev/core/protocols/mcp/McpServerTypes';
 
 // ActionHistoryService removed - action history tracking moved to SDK side for proper client/server separation
-import { createChannelMessage } from '../../../shared/schemas/MessageSchemas';
-import { createChannelMessageEventPayload } from '../../../shared/schemas/EventPayloadSchema';
+import { createChannelMessage } from '@mxf-dev/core/schemas/MessageSchemas';
+import { createChannelMessageEventPayload } from '@mxf-dev/core/schemas/EventPayloadSchema';
 
 import { ChannelService } from './ChannelService';
 import { AgentService } from './AgentService';
-import { ConfigManager, ConfigEvents, ChannelSystemLlmChangeEvent } from '../../../sdk/config/ConfigManager';
+import { ConfigManager, ConfigEvents, ChannelSystemLlmChangeEvent } from '@mxf-dev/core/config/ConfigManager';
 
 const logger = new Logger('debug', 'SystemLlmService', 'server');
 const validator = createStrictValidator('SystemLlmService');
@@ -2657,7 +2656,7 @@ Return the interpreted action with confidence score (0-1).`;
     private processPrompt(input: PromptInput): Observable<string> {
         return new Observable(observer => {
             const executePrompt = async (): Promise<void> => {
-                const instructionId = `instruction-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+                const instructionId = `instruction-${uuidv4()}`;
                 
                 try {
                     // Emit instruction started event
@@ -2781,7 +2780,7 @@ Return the interpreted action with confidence score (0-1).`;
                     next: (response: string) => {
                         try {
                             // Parse and validate the response
-                            const result = this.parseStructuredResponse(response, 'topic-extraction', `instruction-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`) as TopicExtractionResult;
+                            const result = this.parseStructuredResponse(response, 'topic-extraction', `instruction-${uuidv4()}`) as TopicExtractionResult;
                             
                             // Transform to ConversationTopic format
                             const conversationTopics: ConversationTopic[] = result.topics.map((topic: any) => ({
@@ -2851,7 +2850,7 @@ Return the interpreted action with confidence score (0-1).`;
                 }).subscribe({
                     next: (response: string) => {
                         try {
-                            const summary = this.parseStructuredResponse(response, 'conversation-summary', `instruction-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`) as ConversationSummaryResult;
+                            const summary = this.parseStructuredResponse(response, 'conversation-summary', `instruction-${uuidv4()}`) as ConversationSummaryResult;
                             observer.next(summary);
                             observer.complete();
                         } catch (parseError) {
@@ -2909,7 +2908,7 @@ Return the interpreted action with confidence score (0-1).`;
                 }).subscribe({
                     next: (response: string) => {
                         try {
-                            const result = this.parseStructuredResponse(response, 'reasoning-analysis', `instruction-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`) as ReasoningAnalysisResult;
+                            const result = this.parseStructuredResponse(response, 'reasoning-analysis', `instruction-${uuidv4()}`) as ReasoningAnalysisResult;
                             observer.next(result);
                             observer.complete();
                         } catch (parseError) {
@@ -4733,16 +4732,15 @@ Start with "💡 System coordination insight:" followed by your suggestion.`;
             // Emit optimization event using basic event emission
             EventBus.server.emit(
                 Events.Mxp.CONTEXT_COMPRESSED,
-                {
-                    agentId,
-                    channelId,
+                createBaseEventPayload(Events.Mxp.CONTEXT_COMPRESSED, agentId, channelId, {
                     originalTokens,
-                    compressedTokens,
+                    optimizedTokens: compressedTokens,
+                    operationId: uuidv4(),
                     compressionRatio: actualCompressionRatio,
                     strategy: options.strategy || 'context_compression',
                     processingTimeMs: Date.now() - startTime,
                     timestamp: Date.now()
-                }
+                })
             );
 
 

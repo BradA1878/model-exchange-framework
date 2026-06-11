@@ -14,13 +14,18 @@
     "skipLibCheck": true,
     "baseUrl": "..",
     "paths": {
-      "@mxf/*": ["src/*"],
+      "@mxf-dev/core": ["packages/core/src/index.ts"],
+      "@mxf-dev/core/*": ["packages/core/src/*"],
+      "@mxf-dev/sdk": ["packages/sdk/src/index.ts"],
+      "@mxf-dev/sdk/*": ["packages/sdk/src/*"],
       "@tests/*": ["tests/*"]
     }
   },
   "include": [
     "./**/*.ts",
     "../src/**/*.ts",
+    "../packages/core/src/**/*.ts",
+    "../packages/sdk/src/**/*.ts",
     "../examples/**/*.ts"
   ],
   "exclude": [

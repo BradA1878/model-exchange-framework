@@ -14,8 +14,8 @@
  * limitations under the License.
  *
  * @author Brad Anderson <BradA1878@pm.me>
- * @repository https://github.com/BradA1878/model-exchange-framework
- * @documentation https://brada1878.github.io/model-exchange-framework/
+ * @repository https://github.com/mxf-dev/mxf
+ * @documentation https://mxf-dev.github.io/mxf/
  */
 
 /**
@@ -27,17 +27,17 @@
  */
 
 import { Socket } from 'socket.io';
-import { EventBus } from '../../../shared/events/EventBus';
-import { TaskEvents } from '../../../shared/events/event-definitions/TaskEvents';
-import { createTaskEventPayload, TaskEventPayload, TaskEventData, createBaseEventPayload } from '../../../shared/schemas/EventPayloadSchema';
-import { createStrictValidator } from '../../../shared/utils/validation';
-import { Logger } from '../../../shared/utils/Logger';
+import { EventBus } from '@mxf-dev/core/events/EventBus';
+import { TaskEvents } from '@mxf-dev/core/events/event-definitions/TaskEvents';
+import { createTaskEventPayload, TaskEventPayload, TaskEventData, createBaseEventPayload } from '@mxf-dev/core/schemas/EventPayloadSchema';
+import { createStrictValidator } from '@mxf-dev/core/utils/validation';
+import { Logger } from '@mxf-dev/core/utils/Logger';
 import { TaskService } from '../services/TaskService';
 import { 
     CreateTaskRequest, 
     UpdateTaskRequest,
     TaskQueryFilters 
-} from '../../../shared/types/TaskTypes';
+} from '@mxf-dev/core/types/TaskTypes';
 
 // Global flag to ensure task handlers are only registered once
 let globalTaskHandlersRegistered = false;

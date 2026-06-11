@@ -3,14 +3,13 @@
  *
  * Tests the P8 enhancement: multi-layered memory architecture with
  * surprise-based encoding, memory strata transitions, compression,
- * retention gates, and SERC dual-loop coordination.
+ * and retention gates.
  *
  * Key Components Tested:
  * - StratumManager: Memory lifecycle across temporal scales
  * - SurpriseCalculator: Titans-style surprise detection with momentum
  * - MemoryCompressor: Memory consolidation and compression
  * - RetentionGateService: Adaptive weight decay and retention gates
- * - SERCOrchestrator: Self-Evolving Reasoning Cycle dual-loop structure
  */
 
 import { TestSDK, createTestSDK } from '../../utils/TestSDK';
@@ -18,11 +17,10 @@ import { waitFor, sleep } from '../../utils/waitFor';
 import { MEMORY_TEST_AGENT_CONFIG, TIMEOUTS, generateTestId } from '../../utils/TestFixtures';
 
 // Import services directly for unit-style integration tests
-import { StratumManager, STRATUM_UPDATE_FREQUENCIES, DEFAULT_DECAY_RATES, STRATUM_CAPACITY } from '../../../src/shared/services/StratumManager';
-import { SurpriseCalculator, Prediction, Outcome, SurpriseSignal } from '../../../src/shared/services/SurpriseCalculator';
-import { MemoryCompressor, CompressionLevel, CompressionResult } from '../../../src/shared/services/MemoryCompressor';
-import { RetentionGateService, RetentionPolicy, DecayResult, RetentionStatistics } from '../../../src/shared/services/RetentionGateService';
-import { SERCOrchestrator, AgentMode, VerificationTuple, RepairInstruction, ProcessReward, SERCContext } from '../../../src/shared/services/SERCOrchestrator';
+import { StratumManager, STRATUM_UPDATE_FREQUENCIES, DEFAULT_DECAY_RATES, STRATUM_CAPACITY } from '@mxf-dev/core/services/StratumManager';
+import { SurpriseCalculator, Prediction, Outcome, SurpriseSignal } from '@mxf-dev/core/services/SurpriseCalculator';
+import { MemoryCompressor, CompressionLevel, CompressionResult } from '@mxf-dev/core/services/MemoryCompressor';
+import { RetentionGateService, RetentionPolicy, DecayResult, RetentionStatistics } from '@mxf-dev/core/services/RetentionGateService';
 import {
     MemoryEntry,
     MemoryStratum,
@@ -34,7 +32,7 @@ import {
     MemoryRetrievalResult,
     MemoryConsolidation,
     ConsolidationType
-} from '../../../src/shared/types/MemoryStrataTypes';
+} from '@mxf-dev/core/types/MemoryStrataTypes';
 
 describe('P8: Nested Learning / Continuum Memory System', () => {
     // Service instances (singletons)
@@ -42,7 +40,6 @@ describe('P8: Nested Learning / Continuum Memory System', () => {
     let surpriseCalculator: SurpriseCalculator;
     let memoryCompressor: MemoryCompressor;
     let retentionGate: RetentionGateService;
-    let sercOrchestrator: SERCOrchestrator;
 
     // Test identifiers
     const testAgentId = generateTestId('agent');
@@ -98,7 +95,6 @@ describe('P8: Nested Learning / Continuum Memory System', () => {
         surpriseCalculator = SurpriseCalculator.getInstance();
         memoryCompressor = MemoryCompressor.getInstance();
         retentionGate = RetentionGateService.getInstance();
-        sercOrchestrator = SERCOrchestrator.getInstance();
 
         // Initialize all services
         stratumManager.initialize(defaultConfig);
@@ -110,15 +106,6 @@ describe('P8: Nested Learning / Continuum Memory System', () => {
         });
         memoryCompressor.initialize({ enabled: true });
         retentionGate.initialize({ enabled: true });
-        sercOrchestrator.initialize({
-            enabled: true,
-            confidenceThreshold: 0.7,
-            repairMaxRetries: 3,
-            outerLoopFrequency: 5,
-            verificationEnabled: true,
-            selfRepairEnabled: true,
-            surpriseThreshold: 0.5
-        });
     });
 
     afterAll(() => {
@@ -126,7 +113,6 @@ describe('P8: Nested Learning / Continuum Memory System', () => {
         stratumManager.clear('agent', testAgentId);
         stratumManager.clear('channel', testChannelId);
         surpriseCalculator.clear(testAgentId);
-        sercOrchestrator.clear(testAgentId);
     });
 
     // =========================================================================
@@ -1313,431 +1299,6 @@ describe('P8: Nested Learning / Continuum Memory System', () => {
     });
 
     // =========================================================================
-    // SERCOrchestrator Tests
-    // =========================================================================
-    describe('SERCOrchestrator', () => {
-        const localAgentId = generateTestId('serc-agent');
-        const localChannelId = generateTestId('serc-channel');
-
-        afterAll(() => {
-            sercOrchestrator.clear(localAgentId);
-        });
-
-        describe('Initialization', () => {
-            it('should be enabled after initialization', () => {
-                expect(sercOrchestrator.isEnabled()).toBe(true);
-            });
-        });
-
-        describe('Inner Loop Management', () => {
-            it('should start inner loop and create context', async () => {
-                const context: SERCContext = await sercOrchestrator.startInnerLoop(
-                    localAgentId,
-                    localChannelId
-                );
-
-                expect(context).toBeDefined();
-                expect(context.agentId).toBe(localAgentId);
-                expect(context.channelId).toBe(localChannelId);
-                expect(context.cycleNumber).toBe(1);
-                expect(context.innerLoopCount).toBe(1);
-                expect(context.mode).toBe(AgentMode.Solver);
-            });
-
-            it('should increment cycle and inner loop counts', async () => {
-                const context1 = await sercOrchestrator.startInnerLoop(localAgentId, localChannelId);
-                const context2 = await sercOrchestrator.startInnerLoop(localAgentId, localChannelId);
-
-                expect(context2.cycleNumber).toBe(context1.cycleNumber + 1);
-                expect(context2.innerLoopCount).toBe(context1.innerLoopCount + 1);
-            });
-        });
-
-        describe('Dual-Loop Coordination (Solver/Verifier Modes)', () => {
-            const modeAgentId = generateTestId('mode-agent');
-            const modeChannelId = generateTestId('mode-channel');
-
-            beforeAll(async () => {
-                await sercOrchestrator.startInnerLoop(modeAgentId, modeChannelId);
-            });
-
-            afterAll(() => {
-                sercOrchestrator.clear(modeAgentId);
-            });
-
-            it('should start in Solver mode', () => {
-                const context = sercOrchestrator.getContext(modeAgentId);
-                expect(context?.mode).toBe(AgentMode.Solver);
-            });
-
-            it('should switch to Verifier mode', () => {
-                sercOrchestrator.switchToVerifierMode(modeAgentId);
-
-                const context = sercOrchestrator.getContext(modeAgentId);
-                expect(context?.mode).toBe(AgentMode.Verifier);
-            });
-
-            it('should switch back to Solver mode', () => {
-                sercOrchestrator.switchToSolverMode(modeAgentId);
-
-                const context = sercOrchestrator.getContext(modeAgentId);
-                expect(context?.mode).toBe(AgentMode.Solver);
-            });
-        });
-
-        describe('Surprise Signal Processing', () => {
-            const surpriseAgentId = generateTestId('surprise-serc-agent');
-            const surpriseChannelId = generateTestId('surprise-serc-channel');
-
-            beforeAll(async () => {
-                await sercOrchestrator.startInnerLoop(surpriseAgentId, surpriseChannelId);
-            });
-
-            afterAll(() => {
-                sercOrchestrator.clear(surpriseAgentId);
-            });
-
-            it('should process surprise signal during Observation phase', async () => {
-                const outcome: Outcome = {
-                    id: generateTestId('outcome'),
-                    agentId: surpriseAgentId,
-                    content: 'Unexpected user behavior detected',
-                    actualOutcome: { unexpected: true },
-                    timestamp: new Date()
-                };
-
-                const signal = await sercOrchestrator.processSurpriseSignal(
-                    surpriseAgentId,
-                    outcome
-                );
-
-                expect(signal).toBeDefined();
-                expect(typeof signal.effectiveSurprise).toBe('number');
-
-                const context = sercOrchestrator.getContext(surpriseAgentId);
-                expect(context?.surpriseSignal).toBeDefined();
-            });
-
-            it('should process surprise with prediction', async () => {
-                const prediction: Prediction = {
-                    id: generateTestId('prediction'),
-                    agentId: surpriseAgentId,
-                    content: 'User will complete task successfully',
-                    predictedOutcome: { success: true },
-                    confidence: 0.8,
-                    timestamp: new Date()
-                };
-
-                const outcome: Outcome = {
-                    id: generateTestId('outcome'),
-                    agentId: surpriseAgentId,
-                    content: 'Task failed unexpectedly',
-                    actualOutcome: { success: false },
-                    timestamp: new Date(),
-                    predictionId: prediction.id
-                };
-
-                const signal = await sercOrchestrator.processSurpriseSignal(
-                    surpriseAgentId,
-                    outcome,
-                    prediction
-                );
-
-                expect(signal).toBeDefined();
-            });
-        });
-
-        describe('Verification Generation', () => {
-            const verifyAgentId = generateTestId('verify-agent');
-            const verifyChannelId = generateTestId('verify-channel');
-
-            beforeAll(async () => {
-                await sercOrchestrator.startInnerLoop(verifyAgentId, verifyChannelId);
-            });
-
-            afterAll(() => {
-                sercOrchestrator.clear(verifyAgentId);
-            });
-
-            it('should generate verification tuple', async () => {
-                const verification: VerificationTuple = await sercOrchestrator.generateVerification(
-                    verifyAgentId,
-                    'Agent analyzed the user request and determined the appropriate action',
-                    [{ tool: 'search', result: 'found' }]
-                );
-
-                expect(verification).toBeDefined();
-                expect(typeof verification.score).toBe('number');
-                expect(typeof verification.confidence).toBe('number');
-                expect(verification.critique).toBeDefined();
-            });
-
-            it('should include tool verifications when provided', async () => {
-                const toolResults = [
-                    { tool: 'search', result: 'found 10 results' },
-                    { tool: 'validate', result: 'passed' }
-                ];
-
-                const verification = await sercOrchestrator.generateVerification(
-                    verifyAgentId,
-                    'Reasoning trace with tool usage',
-                    toolResults
-                );
-
-                expect(verification.toolVerifications).toBeDefined();
-                expect(verification.toolVerifications?.length).toBe(2);
-            });
-
-            it('should update context with verification', async () => {
-                await sercOrchestrator.generateVerification(
-                    verifyAgentId,
-                    'Test reasoning',
-                    []
-                );
-
-                const context = sercOrchestrator.getContext(verifyAgentId);
-                expect(context?.verification).toBeDefined();
-            });
-        });
-
-        describe('Self-Repair Mechanism', () => {
-            const repairAgentId = generateTestId('repair-agent');
-            const repairChannelId = generateTestId('repair-channel');
-
-            beforeAll(async () => {
-                await sercOrchestrator.startInnerLoop(repairAgentId, repairChannelId);
-            });
-
-            afterAll(() => {
-                sercOrchestrator.clear(repairAgentId);
-            });
-
-            it('should not trigger repair when confidence is high', async () => {
-                // Generate high confidence verification
-                await sercOrchestrator.generateVerification(
-                    repairAgentId,
-                    'High quality reasoning',
-                    [{ tool: 'verify', result: 'passed' }]
-                );
-
-                const shouldRepair = sercOrchestrator.shouldTriggerRepair(repairAgentId);
-                // Repair triggers when confidence < 0.7
-                // With tool results, confidence is typically high
-                expect(typeof shouldRepair).toBe('boolean');
-            });
-
-            it('should generate repair instruction when needed', async () => {
-                const repair: RepairInstruction = await sercOrchestrator.generateRepairInstruction(
-                    repairAgentId,
-                    1
-                );
-
-                expect(repair).toBeDefined();
-                expect(repair.action).toBeDefined();
-                expect(['PATCH', 'NO_CHANGE']).toContain(repair.action);
-                expect(repair.justification).toBeDefined();
-            });
-
-            it('should include target step in repair instruction', async () => {
-                const repair = await sercOrchestrator.generateRepairInstruction(
-                    repairAgentId,
-                    3
-                );
-
-                if (repair.action === 'PATCH') {
-                    expect(repair.targetStep).toBe(3);
-                    expect(repair.patchType).toBeDefined();
-                }
-            });
-        });
-
-        describe('Process Reward Calculation', () => {
-            const rewardAgentId = generateTestId('reward-agent');
-            const rewardChannelId = generateTestId('reward-channel');
-
-            beforeAll(async () => {
-                await sercOrchestrator.startInnerLoop(rewardAgentId, rewardChannelId);
-
-                // Process a surprise signal
-                const outcome: Outcome = {
-                    id: generateTestId('outcome'),
-                    agentId: rewardAgentId,
-                    content: 'Observation for reward calculation',
-                    actualOutcome: {},
-                    timestamp: new Date()
-                };
-                await sercOrchestrator.processSurpriseSignal(rewardAgentId, outcome);
-
-                // Generate verification
-                await sercOrchestrator.generateVerification(
-                    rewardAgentId,
-                    'Reasoning for reward',
-                    [{ tool: 'test', result: 'passed' }]
-                );
-            });
-
-            afterAll(() => {
-                sercOrchestrator.clear(rewardAgentId);
-            });
-
-            it('should calculate process reward', () => {
-                const reward: ProcessReward = sercOrchestrator.calculateProcessReward(rewardAgentId);
-
-                expect(reward).toBeDefined();
-                expect(typeof reward.surpriseScore).toBe('number');
-                expect(typeof reward.confidenceScore).toBe('number');
-                expect(typeof reward.toolVerificationScore).toBe('number');
-                expect(typeof reward.repairCost).toBe('number');
-                expect(typeof reward.promotionScore).toBe('number');
-            });
-
-            it('should have promotion score based on components', () => {
-                const reward = sercOrchestrator.calculateProcessReward(rewardAgentId);
-
-                // Promotion score is weighted combination of components
-                expect(reward.promotionScore).toBeDefined();
-                expect(reward.promotionScore).toBeLessThanOrEqual(1);
-            });
-        });
-
-        describe('Memory Promotion Decision', () => {
-            const promoAgentId = generateTestId('promo-agent');
-            const promoChannelId = generateTestId('promo-channel');
-
-            beforeAll(async () => {
-                await sercOrchestrator.startInnerLoop(promoAgentId, promoChannelId);
-            });
-
-            afterAll(() => {
-                sercOrchestrator.clear(promoAgentId);
-            });
-
-            it('should determine if memory should be promoted', () => {
-                const result = sercOrchestrator.shouldPromoteMemory(
-                    promoAgentId,
-                    MemoryStratum.Working
-                );
-
-                expect(result).toBeDefined();
-                expect(typeof result.shouldPromote).toBe('boolean');
-                if (result.shouldPromote) {
-                    expect(result.targetStratum).toBeDefined();
-                }
-            });
-
-            it('should suggest correct target stratum for Working memory', () => {
-                const result = sercOrchestrator.shouldPromoteMemory(
-                    promoAgentId,
-                    MemoryStratum.Working
-                );
-
-                if (result.shouldPromote) {
-                    expect(result.targetStratum).toBe(MemoryStratum.ShortTerm);
-                }
-            });
-
-            it('should suggest correct target stratum for ShortTerm memory', () => {
-                const result = sercOrchestrator.shouldPromoteMemory(
-                    promoAgentId,
-                    MemoryStratum.ShortTerm
-                );
-
-                if (result.shouldPromote) {
-                    expect([MemoryStratum.Episodic, MemoryStratum.LongTerm]).toContain(result.targetStratum);
-                }
-            });
-        });
-
-        describe('Outer Loop / Knowledge Consolidation', () => {
-            const outerAgentId = generateTestId('outer-agent');
-            const outerChannelId = generateTestId('outer-channel');
-
-            beforeAll(async () => {
-                // Initialize stratum for this agent
-                stratumManager.initialize(defaultConfig);
-
-                // Add some test memories
-                for (let i = 0; i < 3; i++) {
-                    await stratumManager.addMemory('agent', outerAgentId, MemoryStratum.Working, {
-                        stratum: MemoryStratum.Working,
-                        content: `Outer loop test memory ${i}`,
-                        contentType: 'text',
-                        importance: MemoryImportance.Low,
-                        tags: [],
-                        source: { type: 'observation', agentId: outerAgentId },
-                        context: { agentId: outerAgentId, timestamp: new Date() },
-                        relatedMemories: []
-                    });
-                }
-            });
-
-            afterAll(() => {
-                sercOrchestrator.clear(outerAgentId);
-                stratumManager.clear('agent', outerAgentId);
-            });
-
-            it('should determine when outer loop should run', async () => {
-                // Start multiple inner loops
-                for (let i = 0; i < 5; i++) {
-                    await sercOrchestrator.startInnerLoop(outerAgentId, outerChannelId);
-                }
-
-                const shouldRun = sercOrchestrator.shouldRunOuterLoop(outerAgentId);
-                expect(shouldRun).toBe(true);
-            });
-
-            it('should run outer loop consolidation', async () => {
-                await sercOrchestrator.runOuterLoop(outerAgentId, outerChannelId);
-
-                // After outer loop, inner loop count should be reset
-                const context = sercOrchestrator.getContext(outerAgentId);
-                expect(context?.innerLoopCount).toBe(0);
-            });
-
-            it('should apply decay during outer loop', async () => {
-                const statsBefore = stratumManager.getStatistics('agent', outerAgentId);
-
-                await sercOrchestrator.runOuterLoop(outerAgentId, outerChannelId);
-
-                // Decay is probabilistic, so just verify it ran without error
-                const statsAfter = stratumManager.getStatistics('agent', outerAgentId);
-                expect(statsAfter).toBeDefined();
-            });
-        });
-
-        describe('Context Management', () => {
-            const ctxAgentId = generateTestId('ctx-agent');
-            const ctxChannelId = generateTestId('ctx-channel');
-
-            afterAll(() => {
-                sercOrchestrator.clear(ctxAgentId);
-            });
-
-            it('should get context for agent', async () => {
-                await sercOrchestrator.startInnerLoop(ctxAgentId, ctxChannelId);
-
-                const context = sercOrchestrator.getContext(ctxAgentId);
-
-                expect(context).toBeDefined();
-                expect(context?.agentId).toBe(ctxAgentId);
-            });
-
-            it('should return undefined for non-existent agent', () => {
-                const context = sercOrchestrator.getContext('non-existent-agent');
-                expect(context).toBeUndefined();
-            });
-
-            it('should clear context for agent', async () => {
-                await sercOrchestrator.startInnerLoop(ctxAgentId, ctxChannelId);
-                expect(sercOrchestrator.getContext(ctxAgentId)).toBeDefined();
-
-                sercOrchestrator.clear(ctxAgentId);
-                expect(sercOrchestrator.getContext(ctxAgentId)).toBeUndefined();
-            });
-        });
-    });
-
-    // =========================================================================
     // Integration: Full Memory Lifecycle
     // =========================================================================
     describe('Full Memory Lifecycle Integration', () => {
@@ -1747,15 +1308,10 @@ describe('P8: Nested Learning / Continuum Memory System', () => {
         afterAll(() => {
             stratumManager.clear('agent', lifecycleAgentId);
             surpriseCalculator.clear(lifecycleAgentId);
-            sercOrchestrator.clear(lifecycleAgentId);
         });
 
-        it('should complete full memory lifecycle from Working to promotion', async () => {
-            // 1. Start SERC cycle
-            const context = await sercOrchestrator.startInnerLoop(lifecycleAgentId, lifecycleChannelId);
-            expect(context.mode).toBe(AgentMode.Solver);
-
-            // 2. Add memory to Working stratum
+        it('should complete full memory lifecycle from Working through surprise, retention, and promotion', async () => {
+            // 1. Add memory to Working stratum
             const memory = await stratumManager.addMemory(
                 'agent',
                 lifecycleAgentId,
@@ -1773,7 +1329,7 @@ describe('P8: Nested Learning / Continuum Memory System', () => {
             );
             expect(memory.id).toBeDefined();
 
-            // 3. Calculate surprise
+            // 2. Calculate surprise via the live SurpriseCalculator
             const outcome: Outcome = {
                 id: generateTestId('outcome'),
                 agentId: lifecycleAgentId,
@@ -1781,37 +1337,20 @@ describe('P8: Nested Learning / Continuum Memory System', () => {
                 actualOutcome: { unexpected: true },
                 timestamp: new Date()
             };
-            const surprise = await sercOrchestrator.processSurpriseSignal(lifecycleAgentId, outcome);
+            const surprise = await surpriseCalculator.calculateSurprise(outcome);
             expect(surprise.effectiveSurprise).toBeGreaterThanOrEqual(0);
 
-            // 4. Generate verification
-            const verification = await sercOrchestrator.generateVerification(
-                lifecycleAgentId,
-                'Observed authentication pattern change',
-                []
-            );
-            expect(verification.confidence).toBeGreaterThan(0);
-
-            // 5. Calculate retention score
+            // 3. Calculate retention score from the surprise signal
             const retentionScore = retentionGate.calculateRetentionScore(
                 memory,
                 surprise.effectiveSurprise
             );
             expect(retentionScore).toBeGreaterThan(0);
 
-            // 6. Check if should promote
-            const promotionDecision = sercOrchestrator.shouldPromoteMemory(
-                lifecycleAgentId,
-                MemoryStratum.Working
-            );
-            expect(typeof promotionDecision.shouldPromote).toBe('boolean');
-
-            // 7. If promoting, compress and transition
-            if (promotionDecision.shouldPromote && promotionDecision.targetStratum) {
-                const compressed = await memoryCompressor.compressMemory(
-                    memory,
-                    promotionDecision.targetStratum
-                );
+            // 4. Promote on high retention: compress and transition to Episodic
+            if (retentionScore > 0.5) {
+                const targetStratum = MemoryStratum.Episodic;
+                const compressed = await memoryCompressor.compressMemory(memory, targetStratum);
                 expect(compressed.content).toBeDefined();
 
                 const transitioned = await stratumManager.transitionMemory(
@@ -1819,18 +1358,13 @@ describe('P8: Nested Learning / Continuum Memory System', () => {
                     lifecycleAgentId,
                     memory.id,
                     MemoryStratum.Working,
-                    promotionDecision.targetStratum,
+                    targetStratum,
                     'Promoted due to high surprise and retention score'
                 );
                 expect(transitioned).toBe(true);
             }
 
-            // 8. Complete outer loop if needed
-            if (sercOrchestrator.shouldRunOuterLoop(lifecycleAgentId)) {
-                await sercOrchestrator.runOuterLoop(lifecycleAgentId, lifecycleChannelId);
-            }
-
-            // Verify final state
+            // 5. Verify final state
             const stats = stratumManager.getStatistics('agent', lifecycleAgentId);
             expect(stats).toBeDefined();
         });
@@ -1942,23 +1476,5 @@ describe('P8: Nested Learning / Continuum Memory System', () => {
             });
         });
 
-        describe('SERCOrchestrator Edge Cases', () => {
-            it('should handle mode switch for non-existent agent', () => {
-                // Should not throw, just log warning
-                expect(() => {
-                    sercOrchestrator.switchToVerifierMode('non-existent-agent');
-                }).not.toThrow();
-            });
-
-            it('should handle verification for agent without context', async () => {
-                await expect(
-                    sercOrchestrator.generateVerification(
-                        'no-context-agent',
-                        'reasoning',
-                        []
-                    )
-                ).rejects.toThrow();
-            });
-        });
     });
 });

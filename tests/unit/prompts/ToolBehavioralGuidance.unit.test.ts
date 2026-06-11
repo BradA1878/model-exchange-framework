@@ -5,7 +5,7 @@
  * including default registrations, custom guidance, and reset behavior.
  */
 
-import { ToolBehavioralGuidance, ToolGuidance } from '../../../src/shared/prompts/ToolBehavioralGuidance';
+import { ToolBehavioralGuidance, ToolGuidance } from '@mxf-dev/core/prompts/ToolBehavioralGuidance';
 
 describe('ToolBehavioralGuidance', () => {
     let guidance: ToolBehavioralGuidance;

@@ -6,12 +6,12 @@
  * serialization. All MongoDB operations are mocked — no database required.
  */
 
-import { UserMemoryService, UserMemoryRecallResult } from '@mxf/shared/services/UserMemoryService';
-import { UserMemory, UserMemoryType, STALENESS_THRESHOLDS } from '@mxf/shared/models/userMemory';
+import { UserMemoryService, UserMemoryRecallResult } from '@mxf-dev/core/services/UserMemoryService';
+import { UserMemory, UserMemoryType, STALENESS_THRESHOLDS } from '@mxf-dev/core/models/userMemory';
 
 // ─── Mock Meilisearch (always returns null — forces MongoDB fallback) ────────
 
-jest.mock('@mxf/shared/services/MxfMeilisearchService', () => ({
+jest.mock('@mxf-dev/core/services/MxfMeilisearchService', () => ({
     MxfMeilisearchService: {
         getInstance: () => ({
             isEnabled: () => false
@@ -21,7 +21,7 @@ jest.mock('@mxf/shared/services/MxfMeilisearchService', () => ({
 
 // ─── Mock Logger to silence output during tests ─────────────────────────────
 
-jest.mock('@mxf/shared/utils/Logger', () => ({
+jest.mock('@mxf-dev/core/utils/Logger', () => ({
     Logger: jest.fn().mockImplementation(() => ({
         info: jest.fn(),
         warn: jest.fn(),

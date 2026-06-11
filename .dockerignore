@@ -1,12 +1,11 @@
 # Node modules
 node_modules
 npm-debug.log
-dashboard/node_modules
 
 # TypeScript build output
 dist
 dist-sdk
-*.tsbuildinfo
+**/*.tsbuildinfo
 
 # Environment files
 .env
@@ -55,5 +54,11 @@ build-config
 examples
 
 # Dashboard build output
-dashboard/dist
-dashboard/node_modules
+
+# Workspace and desktop build artifacts
+packages/core/dist
+packages/sdk/dist
+src/desktop/node_modules
+src/desktop/src-tauri/target
+src/desktop/dist
+examples/twenty-questions/client/node_modules

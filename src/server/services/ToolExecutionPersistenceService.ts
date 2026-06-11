@@ -14,8 +14,8 @@
  * limitations under the License.
  *
  * @author Brad Anderson <BradA1878@pm.me>
- * @repository https://github.com/BradA1878/model-exchange-framework
- * @documentation https://brada1878.github.io/model-exchange-framework/
+ * @repository https://github.com/mxf-dev/mxf
+ * @documentation https://mxf-dev.github.io/mxf/
  */
 
 /**
@@ -25,10 +25,10 @@
  * for auditing, analytics, and dashboard display.
  */
 
-import { EventBus } from '../../shared/events/EventBus';
-import { McpEvents } from '../../shared/events/event-definitions/McpEvents';
-import { McpToolExecution, IMcpToolExecution, McpToolExecutionStatus, McpToolSource } from '../../shared/models/mcpToolExecution';
-import { Logger } from '../../shared/utils/Logger';
+import { EventBus } from '@mxf-dev/core/events/EventBus';
+import { McpEvents } from '@mxf-dev/core/events/event-definitions/McpEvents';
+import { McpToolExecution, IMcpToolExecution, McpToolExecutionStatus, McpToolSource } from '@mxf-dev/core/models/mcpToolExecution';
+import { Logger } from '@mxf-dev/core/utils/Logger';
 import { v4 as uuidv4 } from 'uuid';
 
 // Create logger instance

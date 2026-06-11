@@ -17,6 +17,7 @@
  * @author Brad Anderson <BradA1878@pm.me>
  */
 
+import { createLogger } from '../utils/logger';
 import { useEffect, useRef, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { SidecarBridge } from '../services/SidecarBridge';
@@ -24,6 +25,8 @@ import { useAppState, generateMessageId } from '../state/appState';
 import { saveSession } from '../services/SessionHistory';
 import { describeToolCall } from '../services/toolDescriptions';
 import type { SessionRecord } from '../services/SessionHistory';
+
+const logger = createLogger('useSession');
 
 /**
  * Hook that manages the full session lifecycle via the sidecar bridge.
@@ -198,7 +201,7 @@ export function useSession() {
                 // the activity card already indicates what happened.
                 // Only show results that contain meaningful text output
                 // (e.g., file contents, search results, shell output).
-                bridge.on('tool:result', (data) => {
+                bridge.on('tool:result', (_data) => {
                     // Mark the corresponding activity card as completed
                     if (lastToolCallMessageId) {
                         updateMessage(lastToolCallMessageId, { activityStatus: 'completed' });
@@ -532,7 +535,7 @@ export function useSession() {
         try {
             await bridge.call('confirmationResponse', { requestId, approved });
         } catch (err: unknown) {
-            console.error('Confirmation response failed:', err);
+            logger.error('Confirmation response failed', err);
         }
     }, []);
 
@@ -544,7 +547,7 @@ export function useSession() {
         try {
             await bridge.call('userInputResponse', { requestId, value });
         } catch (err: unknown) {
-            console.error('User input response failed:', err);
+            logger.error('User input response failed', err);
         }
     }, []);
 

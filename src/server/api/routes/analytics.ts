@@ -14,8 +14,8 @@
  * limitations under the License.
  *
  * @author Brad Anderson <BradA1878@pm.me>
- * @repository https://github.com/BradA1878/model-exchange-framework
- * @documentation https://brada1878.github.io/model-exchange-framework/
+ * @repository https://github.com/mxf-dev/mxf
+ * @documentation https://mxf-dev.github.io/mxf/
  */
 
 /**
@@ -36,10 +36,10 @@ import {
 import { authenticateUser, requireAdmin } from '../middleware/auth';
 import validationAnalyticsRoutes from './validationAnalytics';
 import mongoose from 'mongoose';
-import { Logger } from '../../../shared/utils/Logger';
-import { ValidationPerformanceService } from '../../../shared/services/ValidationPerformanceService';
+import { Logger } from '@mxf-dev/core/utils/Logger';
+import { ValidationPerformanceService } from '@mxf-dev/core/services/ValidationPerformanceService';
 import { AgentService } from '../../socket/services/AgentService';
-import { UserRole } from '../../../shared/models/user';
+import { UserRole } from '@mxf-dev/core/models/user';
 
 // Create logger instance for analytics routes
 const logger = new Logger('error', 'AnalyticsRoutes', 'server');

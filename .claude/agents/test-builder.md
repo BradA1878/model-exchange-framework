@@ -24,7 +24,7 @@ You are a test writing specialist focused on creating comprehensive tests for MX
 - **Dependencies**: None (no server, no database)
 
 ```typescript
-import { functionToTest } from '@mxf/shared/path/to/module';
+import { functionToTest } from '@mxf-dev/core/path/to/module';
 
 describe('FunctionName', () => {
     it('handles valid input', () => {
@@ -46,7 +46,7 @@ describe('FunctionName', () => {
 
 ```typescript
 import fc from 'fast-check';
-import { functionToTest } from '@mxf/shared/path/to/module';
+import { functionToTest } from '@mxf-dev/core/path/to/module';
 
 describe('FunctionName Property Tests', () => {
     it('is idempotent', () => {

@@ -1,6 +1,9 @@
 # MXF Dashboard Documentation
 
-> ⚠️ **Status: In Development** - The MXF Dashboard is currently under active development. Some features may be incomplete or subject to change.
+> 📦 **The dashboard ships as its own repo + npm package** —
+> [mxf-dev/dashboard](https://github.com/mxf-dev/dashboard) /
+> [`@mxf-dev/dashboard`](https://www.npmjs.com/package/@mxf-dev/dashboard). Run it
+> against any MXF server with `npx @mxf-dev/dashboard --api-url <server>`.
 
 The MXF Dashboard is a modern web application built with Vue 3, Vuetify, TypeScript, and Pinia. It provides a user-friendly interface for managing channels, agents, tasks, memory, and analytics in the Model Exchange Framework.
 
@@ -71,15 +74,16 @@ graph TD;
 
 ## Developer Guide
 
-- **Run Dashboard:**
+- **Run it (prebuilt, against any server):**
     ```bash
-    cd dashboard
-    pnpm install
-    pnpm dev
+    npx @mxf-dev/dashboard --api-url http://localhost:3001   # serves on :4173
     ```
-- **Dev server:** http://localhost:3002 (auto-proxies API)
-- **Main entry:** `dashboard/src/App.vue`
-- **Router:** `dashboard/src/router/index.ts`
+- **Develop it (clone the dashboard repo):**
+    ```bash
+    git clone https://github.com/mxf-dev/dashboard
+    cd dashboard && npm install && npm run dev               # vite dev on :3002
+    ```
+- **Main entry:** `src/App.vue` · **Router:** `src/router/index.ts` (in the dashboard repo)
 - **State:** `dashboard/src/stores/`
 - **API config:** `dashboard/src/plugins/axios.ts`
 

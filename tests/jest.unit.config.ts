@@ -16,7 +16,13 @@ const config: Config = {
         '/tests/integration/'
     ],
     moduleNameMapper: {
-        '^@mxf/(.*)$': '<rootDir>/src/$1',
+        // Workspace packages resolve to TS source so jest uses a single module graph.
+        '^@mxf-dev/core$': '<rootDir>/packages/core/src/index.ts',
+        '^@mxf-dev/core/(.*)$': '<rootDir>/packages/core/src/$1',
+        '^@mxf-dev/sdk$': '<rootDir>/packages/sdk/src/index.ts',
+        '^@mxf-dev/sdk/(.*)$': '<rootDir>/packages/sdk/src/$1',
+        // NodeNext ESM emits .js suffixes on relative imports inside packages.
+        '^(\\.{1,2}/.*)\\.js$': '$1',
         '^@tests/(.*)$': '<rootDir>/tests/$1'
     },
     transform: {
@@ -31,11 +37,11 @@ const config: Config = {
     verbose: true,
     // Coverage configuration for unit tests
     collectCoverageFrom: [
-        'src/shared/schemas/**/*.ts',
-        'src/shared/protocols/mcp/McpToolCallParser.ts',
-        'src/shared/protocols/mcp/McpToolSchema.ts',
-        'src/shared/utils/validation.ts',
-        'src/shared/types/TaskTypes.ts',
+        'packages/core/src/schemas/**/*.ts',
+        'packages/core/src/protocols/mcp/McpToolCallParser.ts',
+        'packages/core/src/protocols/mcp/McpToolSchema.ts',
+        'packages/core/src/utils/validation.ts',
+        'packages/core/src/types/TaskTypes.ts',
         'src/server/api/controllers/**/*.ts',
         '!src/**/*.d.ts',
         '!src/**/index.ts',

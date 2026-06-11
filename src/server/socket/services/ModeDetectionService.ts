@@ -14,8 +14,8 @@
  * limitations under the License.
  *
  * @author Brad Anderson <BradA1878@pm.me>
- * @repository https://github.com/BradA1878/model-exchange-framework
- * @documentation https://brada1878.github.io/model-exchange-framework/
+ * @repository https://github.com/mxf-dev/mxf
+ * @documentation https://mxf-dev.github.io/mxf/
  */
 
 /**
@@ -27,10 +27,10 @@
  * - Parallel Work Mode: Expects context updates, minimal interpretation needed
  */
 
-import { Logger } from '../../../shared/utils/Logger';
-import { createStrictValidator } from '../../../shared/utils/validation';
-import { EventBus } from '../../../shared/events/EventBus';
-import { AgentEvents, MessageEvents, SystemEvents } from '../../../shared/events/EventNames';
+import { Logger } from '@mxf-dev/core/utils/Logger';
+import { createStrictValidator } from '@mxf-dev/core/utils/validation';
+import { EventBus } from '@mxf-dev/core/events/EventBus';
+import { AgentEvents, MessageEvents, SystemEvents } from '@mxf-dev/core/events/EventNames';
 // ActionHistoryService removed - action history tracking moved to SDK side for proper client/server separation
 // Local interface for basic action history data structure needed for mode detection
 interface ActionHistoryEntry {
@@ -131,7 +131,27 @@ export class ModeDetectionService {
 
             // Get recent channel activity if not provided
             const history = agentHistory || await this.getChannelActivity(channelId);
-            
+
+            // No activity data means no detection: classifying an empty
+            // history produced confident-looking default modes from nothing.
+            if (history.length === 0) {
+                logger.warn(`Mode detection for ${channelId}: no activity history available (server-side activity querying is not implemented) — returning explicit low-confidence default`);
+                return {
+                    mode: OperatingMode.TASK_EXECUTION,
+                    confidence: 0,
+                    reasoning: 'No activity history available — defaulting to task execution with zero confidence',
+                    adaptationStrategy: this.getDefaultStrategy(),
+                    contextFactors: {
+                        recentToolCalls: 0,
+                        recentMessages: 0,
+                        recentContextUpdates: 0,
+                        activeAgentCount: 0,
+                        taskComplexity: 'low',
+                        coordinationLevel: 'none'
+                    }
+                };
+            }
+
             // Analyze activity patterns
             const activityAnalysis = this.analyzeActivityPatterns(history);
             

@@ -4,9 +4,9 @@
  */
 
 import fc from 'fast-check';
-import { QValueManager } from '@mxf/shared/services/QValueManager';
-import { UtilityScorerService } from '@mxf/shared/services/UtilityScorerService';
-import { MemoryCandidate } from '@mxf/shared/types/MemoryUtilityTypes';
+import { QValueManager } from '@mxf-dev/core/services/QValueManager';
+import { UtilityScorerService } from '@mxf-dev/core/services/UtilityScorerService';
+import { MemoryCandidate } from '@mxf-dev/core/types/MemoryUtilityTypes';
 
 describe('Q-Value Property Tests', () => {
     let qValueManager: QValueManager;

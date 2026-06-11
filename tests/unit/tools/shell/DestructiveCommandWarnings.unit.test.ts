@@ -7,7 +7,7 @@ import {
     getDestructiveWarnings,
     hasDestructiveWarnings,
     DestructiveWarning
-} from '@mxf/shared/protocols/mcp/tools/shell/DestructiveCommandWarnings';
+} from '@mxf-dev/core/protocols/mcp/tools/shell/DestructiveCommandWarnings';
 
 // ---------------------------------------------------------------------------
 // Git — danger level

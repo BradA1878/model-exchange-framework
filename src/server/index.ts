@@ -14,8 +14,8 @@
  * limitations under the License.
  *
  * @author Brad Anderson <BradA1878@pm.me>
- * @repository https://github.com/BradA1878/model-exchange-framework
- * @documentation https://brada1878.github.io/model-exchange-framework/
+ * @repository https://github.com/mxf-dev/mxf
+ * @documentation https://mxf-dev.github.io/mxf/
  */
 
 import cors from 'cors';
@@ -23,19 +23,22 @@ import express from 'express';
 import http from 'http';
 import { Server as socketIo } from 'socket.io';
 import dotenv from 'dotenv';
+import OpenAI from 'openai';
+import { requireEnv } from '@mxf-dev/core/utils/env';
+import { stopAllActiveDemos } from './api/controllers/demoController';
 dotenv.config();
 import { connectToDatabase } from './socket/services/DatabaseService';
 import { SocketService } from './socket/services/SocketService';
 import { ChannelService } from './socket/services/ChannelService';
 import { AgentService } from './socket/services/AgentService';
 import { ControlLoopService } from './socket/services/ControlLoopService';
-import { ChannelContextService } from '../shared/services/ChannelContextService';
+import { ChannelContextService } from './services/ChannelContextService';
 import { ServerReflectionService } from './socket/services/ServerReflectionService';
-import { MemoryService } from '../shared/services/MemoryService';
+import { MemoryService } from '@mxf-dev/core/services/MemoryService';
 import { MemoryPersistenceService } from './api/services/MemoryPersistenceService';
-import { Logger } from '../shared/utils/Logger';
+import { Logger } from '@mxf-dev/core/utils/Logger';
 import apiRoutes from './api/routes';
-import { DEFAULT_SERVER_CONFIG } from '../sdk/config';
+import { DEFAULT_SERVER_CONFIG } from '@mxf-dev/core/config/ServerConfig';
 import { authenticateDual } from './api/middleware/dualAuth';
 import { McpSocketExecutor } from './socket/services/McpSocketExecutor'; // Import McpSocketExecutor
 import { ServerHybridMcpService } from './api/services/ServerHybridMcpService';
@@ -44,23 +47,47 @@ import { TaskService } from './socket/services/TaskService';
 import { McpService } from './socket/services/McpService';
 import { ModeDetectionService } from './socket/services/ModeDetectionService';
 import { SystemLlmServiceManager } from './socket/services/SystemLlmServiceManager';
-import { allMxfMcpTools } from '../shared/protocols/mcp/tools/index'; // Import MXF tools
+import { allMxfMcpTools } from './mcp/tools/index'; // Import MXF tools
 import { McpToolRegistry } from './api/services/McpToolRegistry'; // Import McpToolRegistry
 import { firstValueFrom } from 'rxjs';
-import { MxfMeilisearchService, EmbeddingGenerator } from '../shared/services/MxfMeilisearchService';
-import { CodeExecutionSandboxService } from '../shared/services/CodeExecutionSandboxService';
+import { MxfMeilisearchService, EmbeddingGenerator } from '@mxf-dev/core/services/MxfMeilisearchService';
+import { CodeExecutionSandboxService } from '@mxf-dev/core/services/CodeExecutionSandboxService';
 import { ToolExecutionPersistenceService } from './services/ToolExecutionPersistenceService';
-import { QValueManager } from '../shared/services/QValueManager';
-import { RewardSignalProcessor } from '../shared/services/RewardSignalProcessor';
-import { UtilityScorerService } from '../shared/services/UtilityScorerService';
-import { OrparMemoryCoordinator } from '../shared/services/orpar-memory/OrparMemoryCoordinator';
-import { MxfMLService } from '../shared/services/MxfMLService';
-import { PredictiveAnalyticsService } from '../shared/services/PredictiveAnalyticsService';
+import { QValueManager } from '@mxf-dev/core/services/QValueManager';
+import { RewardSignalProcessor } from '@mxf-dev/core/services/RewardSignalProcessor';
+import { UtilityScorerService } from '@mxf-dev/core/services/UtilityScorerService';
+import { OrparMemoryCoordinator } from '@mxf-dev/core/services/orpar-memory/OrparMemoryCoordinator';
+import { MxfMLService } from '@mxf-dev/core/services/MxfMLService';
+import { PredictiveAnalyticsService } from '@mxf-dev/core/services/PredictiveAnalyticsService';
 
 /**
  * Initialize logger with appropriate context
  */
 const logger = new Logger('debug', 'Server', 'server');
+
+// Fail fast on fatal process-level errors — never limp along with corrupted state.
+process.on('uncaughtException', (error: Error) => {
+    logger.error('Uncaught exception — shutting down', error);
+    process.exit(1);
+});
+process.on('unhandledRejection', (reason: unknown) => {
+    logger.error(`Unhandled promise rejection — shutting down: ${reason instanceof Error ? reason.stack : String(reason)}`);
+    process.exit(1);
+});
+
+// Demo child processes must never outlive the server.
+process.on('SIGINT', () => {
+    stopAllActiveDemos();
+    process.exit(0);
+});
+process.on('SIGTERM', () => {
+    stopAllActiveDemos();
+    process.exit(0);
+});
+
+// Startup configuration validation: fail before any service initializes.
+requireEnv('JWT_SECRET', 'Set a strong secret in .env — it signs and verifies all user JWTs.');
+requireEnv('MONGODB_URI', 'Set the MongoDB connection string in .env.');
 
 /**
  * Public API endpoints that don't require authentication
@@ -169,11 +196,10 @@ const initializeServer = async () => {
                             'X-Title': `${baseTitle} (Meilisearch)`
                         };
 
-                        const OpenAI = require('openai').default;
                         const client = new OpenAI({
                             apiKey: process.env.OPENROUTER_API_KEY,
                             baseURL: 'https://openrouter.ai/api/v1',
-                            headers: headers
+                            defaultHeaders: headers
                         });
 
                         const response = await client.embeddings.create({
@@ -195,7 +221,6 @@ const initializeServer = async () => {
                             throw new Error('OPENAI_API_KEY not set');
                         }
 
-                        const OpenAI = require('openai').default;
                         const client = new OpenAI({
                             apiKey: process.env.OPENAI_API_KEY
                         });
@@ -433,17 +458,17 @@ const initializeServer = async () => {
         const toolCount = (server as any)._mxfToolCount || 0;
 
         server.listen(PORT, () => {
-            console.info('╔════════════════════════════════════════════════════════════════╗');
-            console.info('║              MXF Server Ready                                  ║');
-            console.info('╠════════════════════════════════════════════════════════════════╣');
-            console.info(`║  Port:           ${PORT}`.padEnd(66) + '║');
-            console.info(`║  Tools Loaded:   ${toolCount}`.padEnd(66) + '║');
-            console.info(`║  Environment:    ${process.env.NODE_ENV || 'development'}`.padEnd(66) + '║');
-            console.info('╚════════════════════════════════════════════════════════════════╝');
+            logger.info('╔════════════════════════════════════════════════════════════════╗');
+            logger.info('║              MXF Server Ready                                  ║');
+            logger.info('╠════════════════════════════════════════════════════════════════╣');
+            logger.info(`║  Port:           ${PORT}`.padEnd(66) + '║');
+            logger.info(`║  Tools Loaded:   ${toolCount}`.padEnd(66) + '║');
+            logger.info(`║  Environment:    ${process.env.NODE_ENV || 'development'}`.padEnd(66) + '║');
+            logger.info('╚════════════════════════════════════════════════════════════════╝');
         });
         
     } catch (error) {
-        console.error('❌ Server initialization failed:', error);
+        logger.error('❌ Server initialization failed:', error);
         process.exit(1);
     }
 };

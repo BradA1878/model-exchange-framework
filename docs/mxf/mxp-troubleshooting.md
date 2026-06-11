@@ -453,7 +453,7 @@ export class MXP2PerformanceDiagnostics {
 
 3. **Test Encryption/Decryption**:
    ```typescript
-   import { MxpEncryption } from '@mxf/shared';
+   import { MxpEncryption } from '@mxf-dev/core';
    
    async function testEncryption() {
      const testMessage = { version: '1.0', type: 'test', payload: { op: 'ping' } };
@@ -540,7 +540,7 @@ export class MXP2PerformanceDiagnostics {
 
 1. **Test WebSocket Connection**:
    ```typescript
-   import { MxfSDK } from '@mxf/sdk';
+   import { MxfSDK } from '@mxf-dev/sdk';
    
    // Test connection to MXF server with Personal Access Token (recommended)
    const sdk = new MxfSDK({
@@ -745,7 +745,7 @@ export class MXP2PerformanceDiagnostics {
 
 2. **Runtime Configuration**:
    ```typescript
-   import { Logger } from '@mxf/shared';
+   import { Logger } from '@mxf-dev/core';
    
    Logger.setLevel('debug');
    Logger.enableCategory('mxp');

@@ -16,12 +16,9 @@ The Model Exchange Framework (MXF) is a platform for building autonomous multi-a
 - **ORPAR Control Loop**: Structured cognitive cycle for intelligent decision-making
 - **TensorFlow.js Integration**: On-device ML models for error prediction, anomaly detection, and more (opt-in)
 
-> **Note on SDK Imports**: This documentation uses `@mxf/sdk` as the import path for code examples. Since MXF is currently a monorepo (not published to npm), use relative paths when working within the repository:
-> ```typescript
-> // Instead of: import { MxfSDK } from '@mxf/sdk';
-> // Use:        import { MxfSDK } from '../../src/sdk/index';
-> ```
-> See the examples in `/examples` for working import patterns.
+> **SDK install**: the SDK is published to npm — `npm install @mxf-dev/sdk`
+> (or `bun add @mxf-dev/sdk`) — and imported as `import { MxfSDK } from '@mxf-dev/sdk'`.
+> See `/examples` for working patterns.
 
 ## Prerequisites
 
@@ -51,13 +48,13 @@ The Model Exchange Framework (MXF) is a platform for building autonomous multi-a
 
 ### Option A: Docker Deployment (Recommended)
 
-**This deploys the complete MXF stack: Server + MongoDB + Meilisearch + Redis + Dashboard**
+**This deploys the MXF stack: Server + MongoDB + Meilisearch + Redis** (the dashboard is a separate package — `npx @mxf-dev/dashboard`)
 
 #### 1. Clone Repository
 
 ```bash
-git clone https://github.com/BradA1878/model-exchange-framework
-cd model-exchange-framework
+git clone https://github.com/mxf-dev/mxf
+cd mxf
 ```
 
 #### 2. Configure Environment
@@ -110,7 +107,7 @@ bun run docker:health
 #### 4. Access Services
 
 - **MXF Server**: `http://localhost:3001`
-- **Dashboard**: `http://localhost:5173`
+- **Dashboard** (separate package, `npx @mxf-dev/dashboard`): `http://localhost:4173`
 - **Meilisearch**: `http://localhost:7700`
 - **MongoDB**: `localhost:27017`
 - **Redis**: `localhost:6379`
@@ -126,8 +123,8 @@ bun run docker:health
 
 ```bash
 # Clone the repository
-git clone https://github.com/BradA1878/model-exchange-framework
-cd model-exchange-framework
+git clone https://github.com/mxf-dev/mxf
+cd mxf
 
 # Install Bun (fast package manager and runtime)
 curl -fsSL https://bun.sh/install | bash
@@ -331,10 +328,10 @@ Q-value weighted memory retrieval where memories are ranked by learned utility s
 ### 1. Install the SDK (If Using as Package)
 
 ```bash
-npm install @mxf/sdk
+npm install @mxf-dev/sdk
 ```
 
-**Note**: Currently, the SDK is part of the monorepo. Use the built SDK from `src/sdk/`.
+**Note**: `@mxf-dev/sdk` pulls in `@mxf-dev/core` automatically. To build the SDK from source instead, see the [contributing guide](https://github.com/mxf-dev/mxf).
 
 ### 2. Set Up Your Environment
 
@@ -369,13 +366,13 @@ Use the SDK CLI to set up your workspace:
 
 ```bash
 # Create a channel (using PAT authentication)
-bun run sdk:cli -- channel:create \
+bun run mxf channel:create \
   --id getting-started \
   --name "Getting Started Channel" \
   --access-token $MXF_DEMO_ACCESS_TOKEN
 
 # Generate agent keys
-bun run sdk:cli -- key:generate \
+bun run mxf key:generate \
   --channel getting-started \
   --agents hello-agent,ai-assistant \
   --access-token $MXF_DEMO_ACCESS_TOKEN \
@@ -406,8 +403,8 @@ The CLI will create a `credentials.json` file with your agent keys:
 **IMPORTANT**: All agents must be created through `MxfSDK` - you cannot instantiate agents directly.
 
 ```typescript
-import { MxfSDK, Events } from '@mxf/sdk';
-import type { MxfAgent } from '@mxf/sdk';
+import { MxfSDK, Events } from '@mxf-dev/sdk';
+import type { MxfAgent } from '@mxf-dev/sdk';
 
 // 1. Initialize the SDK with domain key and Personal Access Token
 const sdk = new MxfSDK({
@@ -449,7 +446,7 @@ await agent.channelService.sendMessage('Hello from my first agent!');
 Create an intelligent agent with full LLM capabilities:
 
 ```typescript
-import { MxfSDK, Events } from '@mxf/sdk';
+import { MxfSDK, Events } from '@mxf-dev/sdk';
 
 const sdk = new MxfSDK({
     serverUrl: 'http://localhost:3001',
@@ -531,7 +528,7 @@ await restrictedAgent.connect();
 ### Create Specialized Agents
 
 ```typescript
-import { MxfSDK, Events } from '@mxf/sdk';
+import { MxfSDK, Events } from '@mxf-dev/sdk';
 
 // Initialize SDK once for all agents
 const sdk = new MxfSDK({
@@ -642,16 +639,16 @@ await pmAgent.channelService.createTask({
 
 > ⚠️ **Note:** The Dashboard is currently in development. Some features may be incomplete.
 
-MXF includes a Vue 3 dashboard for management:
+MXF has a Vue 3 dashboard, published as its own package — run it against your
+server with no clone or build:
 
 ```bash
-# Start the dashboard (in a separate terminal)
-cd dashboard
-npm install
-bun run dev
+# In a separate terminal
+npx @mxf-dev/dashboard --api-url http://localhost:3001
 ```
 
-Access the dashboard at `http://localhost:5173`
+Access the dashboard at `http://localhost:4173`. It lives in its own repo:
+[mxf-dev/dashboard](https://github.com/mxf-dev/dashboard).
 
 ### Dashboard Features
 
@@ -673,7 +670,7 @@ The SDK provides two ways to listen to events:
 Listen to events across all channels the agent participates in:
 
 ```typescript
-import { MxfSDK, Events } from '@mxf/sdk';
+import { MxfSDK, Events } from '@mxf-dev/sdk';
 
 const sdk = new MxfSDK({ /* ... */ });
 await sdk.connect();
@@ -752,7 +749,7 @@ monitor.on(Events.Task.COMPLETED, (payload) => {
 Enable token and bandwidth optimization:
 
 ```typescript
-import { MxpConfigManager, SecurityLevel } from './src/shared/mxp/MxpConfigManager';
+import { MxpConfigManager, SecurityLevel } from '@mxf-dev/core/mxp/MxpConfigManager';
 
 const mxpManager = MxpConfigManager.getInstance();
 
@@ -792,7 +789,7 @@ mxpManager.setAgentConfig('special-agent', {
 ### Task Assignment
 
 ```typescript
-import { MxfSDK, Events } from '@mxf/sdk';
+import { MxfSDK, Events } from '@mxf-dev/sdk';
 
 const sdk = new MxfSDK({ /* ... */ });
 await sdk.connect();
@@ -984,7 +981,7 @@ echo $AGENT_API_KEY
 
 ```typescript
 // Enable framework logging for debugging
-import { enableClientLogging } from '../../src/shared/utils/Logger';
+import { enableClientLogging } from '@mxf-dev/core/utils/Logger';
 enableClientLogging('debug');
 
 // Create agent with debug logging
@@ -1022,8 +1019,8 @@ echo $XAI_API_KEY
 ### SDK Usage
 
 1. **Single SDK Instance**: Create one `MxfSDK` instance per application, reuse for all agents
-2. **Proper Imports**: Only import from `@mxf/sdk`, never from internal paths
-3. **Type Safety**: Use TypeScript types: `import type { MxfAgent } from '@mxf/sdk'`
+2. **Proper Imports**: Only import from `@mxf-dev/sdk`, never from internal paths
+3. **Type Safety**: Use TypeScript types: `import type { MxfAgent } from '@mxf-dev/sdk'`
 4. **Agent Creation**: Always create agents via `sdk.createAgent()`, never directly
 5. **Connection Management**: Connect SDK once, then create and connect individual agents
 
@@ -1065,7 +1062,7 @@ echo $XAI_API_KEY
 ## Support & Resources
 
 - **Documentation**: [Full documentation](./index.md)
-- **GitHub Issues**: [Report bugs](https://github.com/BradA1878/model-exchange-framework/issues)
+- **GitHub Issues**: [Report bugs](https://github.com/mxf-dev/mxf/issues)
 - **Examples**: Check `/examples` directory
 
 ## Quick Reference
@@ -1078,8 +1075,8 @@ bun run start:dev        # Development server
 bun run build           # Build for production
 bun run start           # Production server
 
-# Dashboard
-cd dashboard && bun run dev
+# Dashboard (separate package)
+npx @mxf-dev/dashboard --api-url http://localhost:3001
 
 # Demos (20 available — see Running Example Demos section above)
 bun run demo:first-contact
@@ -1147,24 +1144,24 @@ OLLAMA_BASE_URL         # or Ollama endpoint
 
 ```typescript
 // SDK (ONLY entry point)
-import { MxfSDK } from '@mxf/sdk';
+import { MxfSDK } from '@mxf-dev/sdk';
 
 // Events for listening
-import { Events } from '@mxf/sdk';
+import { Events } from '@mxf-dev/sdk';
 
 // Types (for type annotations)
-import type { MxfAgent } from '@mxf/sdk';
-import type { AgentCreationConfig, TaskConfig } from '@mxf/sdk';
-import type { PublicEventName } from '@mxf/sdk';
+import type { MxfAgent } from '@mxf-dev/sdk';
+import type { AgentCreationConfig, TaskConfig } from '@mxf-dev/sdk';
+import type { PublicEventName } from '@mxf-dev/sdk';
 
 // MXP 2.0 Configuration
-import { MxpConfigManager, SecurityLevel } from '@mxf/sdk';
+import { MxpConfigManager, SecurityLevel } from '@mxf-dev/sdk';
 
 // LLM Provider Types
-import { LlmProviderType } from '@mxf/sdk';
+import { LlmProviderType } from '@mxf-dev/sdk';
 
 // Connection Status
-import { ConnectionStatus } from '@mxf/sdk';
+import { ConnectionStatus } from '@mxf-dev/sdk';
 ```
 
 ---

@@ -14,8 +14,8 @@
  * limitations under the License.
  *
  * @author Brad Anderson <BradA1878@pm.me>
- * @repository https://github.com/BradA1878/model-exchange-framework
- * @documentation https://brada1878.github.io/model-exchange-framework/
+ * @repository https://github.com/mxf-dev/mxf
+ * @documentation https://mxf-dev.github.io/mxf/
  */
 
 /**
@@ -25,24 +25,24 @@
  * Leverages existing planning tools and memory infrastructure
  */
 
-import { Logger } from '../../../shared/utils/Logger';
-import { EventBus } from '../../../shared/events/EventBus';
-import { Events } from '../../../shared/events/EventNames';
-import { TaskEvents } from '../../../shared/events/event-definitions/TaskEvents';
+import { Logger } from '@mxf-dev/core/utils/Logger';
+import { EventBus } from '@mxf-dev/core/events/EventBus';
+import { Events } from '@mxf-dev/core/events/EventNames';
+import { TaskEvents } from '@mxf-dev/core/events/event-definitions/TaskEvents';
 import { 
     TaskCompletionConfig, 
     TaskMonitoringState, 
     CompletionStrategyType,
     TaskCompletionEvent 
-} from '../../../shared/types/TaskCompletionTypes';
-import { TaskDocument } from '../../../shared/models/task';
+} from '@mxf-dev/core/types/TaskCompletionTypes';
+import { TaskDocument } from '@mxf-dev/core/models/task';
 import { SystemLlmService } from './SystemLlmService';
 import { SystemLlmServiceManager } from './SystemLlmServiceManager';
-import { MemoryService } from '../../../shared/services/MemoryService';
+import { MemoryService } from '@mxf-dev/core/services/MemoryService';
 import { lastValueFrom } from 'rxjs';
-import { createTaskEventPayload } from '../../../shared/schemas/EventPayloadSchema';
+import { createTaskEventPayload } from '@mxf-dev/core/schemas/EventPayloadSchema';
 import { v4 as uuidv4 } from 'uuid';
-import { PromptInput } from '../../../shared/types/LlmTypes';
+import { PromptInput } from '@mxf-dev/core/types/LlmTypes';
 
 export class TaskCompletionMonitoringService {
     private static instance: TaskCompletionMonitoringService;

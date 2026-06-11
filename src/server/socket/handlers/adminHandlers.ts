@@ -14,8 +14,8 @@
  * limitations under the License.
  *
  * @author Brad Anderson <BradA1878@pm.me>
- * @repository https://github.com/BradA1878/model-exchange-framework
- * @documentation https://brada1878.github.io/model-exchange-framework/
+ * @repository https://github.com/mxf-dev/mxf
+ * @documentation https://mxf-dev.github.io/mxf/
  */
 
 /**
@@ -30,14 +30,14 @@
  * for use by agents/SDK without requiring HTTP calls.
  */
 
-import { Logger } from '../../../shared/utils/Logger';
-import { EventBus } from '../../../shared/events/EventBus';
-import { Events } from '../../../shared/events/EventNames';
-import { BaseEventPayload, createBaseEventPayload } from '../../../shared/schemas/EventPayloadSchema';
+import { Logger } from '@mxf-dev/core/utils/Logger';
+import { EventBus } from '@mxf-dev/core/events/EventBus';
+import { Events } from '@mxf-dev/core/events/EventNames';
+import { BaseEventPayload, createBaseEventPayload } from '@mxf-dev/core/schemas/EventPayloadSchema';
 import { ChannelService } from '../services/ChannelService';
 import channelKeyService from '../services/ChannelKeyService';
-import { IChannelKey } from '../../../shared/models/channelKey';
-import { createStrictValidator } from '../../../shared/utils/validation';
+import { IChannelKey } from '@mxf-dev/core/models/channelKey';
+import { createStrictValidator } from '@mxf-dev/core/utils/validation';
 import { v4 as uuidv4 } from 'uuid';
 
 // Create module logger and validator

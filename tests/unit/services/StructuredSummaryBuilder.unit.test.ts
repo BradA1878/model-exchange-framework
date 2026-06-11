@@ -4,8 +4,8 @@
  * conversation history, prompt formatting, and token estimation.
  */
 
-import { StructuredSummaryBuilder } from '../../../src/shared/services/StructuredSummaryBuilder';
-import { ConversationMessage } from '../../../src/shared/interfaces/ConversationMessage';
+import { StructuredSummaryBuilder } from '@mxf-dev/core/services/StructuredSummaryBuilder';
+import { ConversationMessage } from '@mxf-dev/core/interfaces/ConversationMessage';
 
 /** Helper to create a ConversationMessage */
 function msg(role: ConversationMessage['role'], content: string, metadata?: Record<string, any>): ConversationMessage {

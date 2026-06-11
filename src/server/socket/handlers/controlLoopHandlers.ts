@@ -14,8 +14,8 @@
  * limitations under the License.
  *
  * @author Brad Anderson <BradA1878@pm.me>
- * @repository https://github.com/BradA1878/model-exchange-framework
- * @documentation https://brada1878.github.io/model-exchange-framework/
+ * @repository https://github.com/mxf-dev/mxf
+ * @documentation https://mxf-dev.github.io/mxf/
  */
 
 /**
@@ -27,12 +27,12 @@
  */
 
 import { Socket } from 'socket.io';
-import { EventBus } from '../../../shared/events/EventBus';
-import { Events } from '../../../shared/events/EventNames';
-import { ControlLoopEvents } from '../../../shared/events/event-definitions/ControlLoopEvents';
-import { createStrictValidator } from '../../../shared/utils/validation';
-import { Logger } from '../../../shared/utils/Logger';
-import { ControlLoopEventPayload } from '../../../shared/schemas/EventPayloadSchema';
+import { EventBus } from '@mxf-dev/core/events/EventBus';
+import { Events } from '@mxf-dev/core/events/EventNames';
+import { ControlLoopEvents } from '@mxf-dev/core/events/event-definitions/ControlLoopEvents';
+import { createStrictValidator } from '@mxf-dev/core/utils/validation';
+import { Logger } from '@mxf-dev/core/utils/Logger';
+import { ControlLoopEventPayload } from '@mxf-dev/core/schemas/EventPayloadSchema';
 
 // Create module logger
 const moduleLogger = new Logger('info', 'ControlLoopHandlers', 'server');

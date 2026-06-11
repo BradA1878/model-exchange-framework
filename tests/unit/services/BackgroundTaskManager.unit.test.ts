@@ -9,19 +9,19 @@
  */
 
 // Mock EventBus before any imports that reference it
-jest.mock('../../../src/shared/events/EventBus', () => ({
+jest.mock('@mxf-dev/core/events/EventBus', () => ({
     EventBus: {
         server: { emit: jest.fn() }
     }
 }));
 
-jest.mock('../../../src/shared/schemas/ShellExecutionEventPayloads', () => ({
+jest.mock('@mxf-dev/core/schemas/ShellExecutionEventPayloads', () => ({
     createShellExecutionProgressPayload: jest.fn(() => ({})),
     createShellBackgroundStartedPayload: jest.fn(() => ({})),
     createShellBackgroundCompletedPayload: jest.fn(() => ({}))
 }));
 
-import { BackgroundTaskManager } from '../../../src/shared/services/BackgroundTaskManager';
+import { BackgroundTaskManager } from '@mxf-dev/core/services/BackgroundTaskManager';
 
 /** Helper: wait for a task to leave the 'running' state */
 function waitForCompletion(manager: BackgroundTaskManager, taskId: string, timeoutMs = 5000): Promise<void> {

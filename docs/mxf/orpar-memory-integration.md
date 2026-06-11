@@ -184,7 +184,7 @@ bun run dev
 ### Listening for Events
 
 ```typescript
-import { EventBus } from '@mxf/shared/events/EventBus';
+import { EventBus } from '@mxf-dev/core/events/EventBus';
 
 // Monitor surprise decisions
 EventBus.server.on('orpar_memory:surprise_decision', (payload) => {
@@ -209,7 +209,7 @@ EventBus.server.on('orpar_memory:consolidation_triggered', (payload) => {
 ### Custom Phase Configuration
 
 ```typescript
-import { PhaseStrataRouter } from '@mxf/shared/services/orpar-memory/PhaseStrataRouter';
+import { PhaseStrataRouter } from '@mxf-dev/core/services/orpar-memory/PhaseStrataRouter';
 
 // Customize strata routing for a specific use case
 const router = PhaseStrataRouter.getInstance();
@@ -313,4 +313,4 @@ RETRIEVAL_LAMBDA_REASONING=0.3
 
 ---
 
-For questions or contributions, please refer to the [GitHub repository](https://github.com/BradA1878/model-exchange-framework).
+For questions or contributions, please refer to the [GitHub repository](https://github.com/mxf-dev/mxf).

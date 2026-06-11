@@ -5,15 +5,15 @@
  */
 
 import { Subscription } from 'rxjs';
-import { EventBus } from '@mxf/shared/events/EventBus';
-import { Events } from '@mxf/shared/events/EventNames';
+import { EventBus } from '@mxf-dev/core/events/EventBus';
+import { Events } from '@mxf-dev/core/events/EventNames';
 
 // ── Mock: EventBus.client ──
 // Follow the pattern from MxfChannelMonitor.unit.test.ts — track emitted events
 // so tests can verify observability events are fired correctly.
 const emittedEvents: Array<{ event: string; payload: any }> = [];
 
-jest.mock('@mxf/shared/events/EventBus', () => {
+jest.mock('@mxf-dev/core/events/EventBus', () => {
     return {
         EventBus: {
             client: {
@@ -29,14 +29,14 @@ jest.mock('@mxf/shared/events/EventBus', () => {
 // ── Mock: ClientExecutableManifest ──
 // Control the allowlist gate per-test via mockIsClientExecutable.
 const mockIsClientExecutable = jest.fn<boolean, [string]>();
-jest.mock('@mxf/shared/protocols/mcp/ClientExecutableManifest', () => ({
+jest.mock('@mxf-dev/core/protocols/mcp/ClientExecutableManifest', () => ({
     isClientExecutable: (name: string) => mockIsClientExecutable(name),
 }));
 
 // ── Mock: DateTimeTools ──
 // Provide a minimal mock set of datetime tools for loadInternalTools tests.
 const mockDateTimeHandler = jest.fn().mockResolvedValue({ iso: '2026-01-01T00:00:00Z' });
-jest.mock('@mxf/shared/protocols/mcp/tools/DateTimeTools', () => ({
+jest.mock('@mxf-dev/core/protocols/mcp/tools/DateTimeTools', () => ({
     dateTimeTools: [
         {
             name: 'datetime_now',
@@ -72,7 +72,7 @@ jest.mock('@mxf/shared/protocols/mcp/tools/DateTimeTools', () => ({
 }));
 
 // ── Mock: Logger ──
-jest.mock('@mxf/shared/utils/Logger', () => ({
+jest.mock('@mxf-dev/core/utils/Logger', () => ({
     Logger: jest.fn().mockImplementation(() => ({
         info: jest.fn(),
         debug: jest.fn(),
@@ -82,7 +82,7 @@ jest.mock('@mxf/shared/utils/Logger', () => ({
 }));
 
 // Import after mocks are set up
-import { ClientToolExecutor } from '@mxf/sdk/services/ClientToolExecutor';
+import { ClientToolExecutor } from '@mxf-dev/sdk/services/ClientToolExecutor';
 
 // ── Test Helpers ──
 

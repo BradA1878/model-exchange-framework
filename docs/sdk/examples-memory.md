@@ -15,7 +15,7 @@ MXF supports two memory scopes:
 ## Example 1: Basic Memory Operations
 
 ```typescript
-import { MxfSDK, MemoryScope } from '@mxf/sdk';
+import { MxfSDK, MemoryScope } from '@mxf-dev/sdk';
 import credentials from './credentials.json';
 
 const sdk = new MxfSDK({
@@ -115,7 +115,7 @@ console.log('Project status (from agent2):', status);
 ## Example 3: Memory Event Listening
 
 ```typescript
-import { Events } from '@mxf/sdk';
+import { Events } from '@mxf-dev/sdk';
 
 // Listen to memory updates
 agent.on(Events.Memory.UPDATE_RESULT, (payload) => {

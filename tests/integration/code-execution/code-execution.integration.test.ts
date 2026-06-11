@@ -25,8 +25,8 @@ import {
     CODE_EXECUTION_EXPECTED,
     TIMEOUTS
 } from '../../utils/TestFixtures';
-import { CodeExecutionSandboxService } from '@mxf/shared/services/CodeExecutionSandboxService';
-import { ContainerPoolManager } from '@mxf/shared/services/ContainerPoolManager';
+import { CodeExecutionSandboxService } from '@mxf-dev/core/services/CodeExecutionSandboxService';
+import { ContainerPoolManager } from '@mxf-dev/core/services/ContainerPoolManager';
 
 describe('Code Execution Integration Tests', () => {
     let testSdk: TestSDK;
@@ -251,23 +251,38 @@ describe('Code Execution Integration Tests', () => {
         }, TIMEOUTS.long);
     });
 
+    // The sandbox runs inside a locked-down Docker container (no network,
+    // read-only fs, all capabilities dropped, non-root). The container — NOT
+    // static validation — is the security boundary, so validateCode only hard-
+    // blocks patterns that can break the executor harness itself; eval/require
+    // are allowed and process-spawning is surfaced as an informational warning.
     describe('Security Validation', () => {
-        it('should block eval()', () => {
+        it('hard-blocks prototype pollution attempts', () => {
+            const validation = sandbox.validateCode('obj.__proto__.polluted = true');
+            expect(validation.safe).toBe(false);
+            expect(validation.issues.some(i => i.type === 'error' && i.message.includes('Prototype pollution'))).toBe(true);
+        });
+
+        it('hard-blocks constructor bracket access', () => {
+            const validation = sandbox.validateCode('const fn = obj.constructor ["constructor"]("return 1"); fn();');
+            expect(validation.safe).toBe(false);
+            expect(validation.issues.some(i => i.type === 'error' && i.message.includes('Constructor access'))).toBe(true);
+        });
+
+        it('allows eval — the container, not validation, is the isolation boundary', () => {
             const validation = sandbox.validateCode(CODE_EXECUTION_INPUTS.dangerousEval.code);
-            expect(validation.safe).toBe(false);
-            expect(validation.issues.some(i => i.message.includes('eval'))).toBe(true);
+            expect(validation.safe).toBe(true);
         });
 
-        it('should block require()', () => {
+        it('allows require — only built-in modules in the image are reachable', () => {
             const validation = sandbox.validateCode(CODE_EXECUTION_INPUTS.dangerousRequire.code);
-            expect(validation.safe).toBe(false);
-            expect(validation.issues.some(i => i.message.includes('require'))).toBe(true);
+            expect(validation.safe).toBe(true);
         });
 
-        it('should block Bun.spawn', () => {
+        it('surfaces Bun.spawn as an informational warning (capabilities are dropped in-container)', () => {
             const validation = sandbox.validateCode(CODE_EXECUTION_INPUTS.dangerousBunSpawn.code);
-            expect(validation.safe).toBe(false);
-            expect(validation.issues.some(i => i.message.includes('Bun.spawn'))).toBe(true);
+            expect(validation.safe).toBe(true);
+            expect(validation.issues.some(i => i.type === 'warning' && i.message.includes('Bun.spawn'))).toBe(true);
         });
     });
 
@@ -289,7 +304,9 @@ describe('Code Execution Integration Tests', () => {
         });
 
         it('should return error details for validation failures', () => {
-            const code = 'eval("test")';
+            // Use a genuinely-blocked pattern (prototype pollution) — eval is
+            // intentionally allowed under the container-isolation model.
+            const code = 'target.__proto__.isAdmin = true';
             const validation = sandbox.validateCode(code);
 
             expect(validation.safe).toBe(false);

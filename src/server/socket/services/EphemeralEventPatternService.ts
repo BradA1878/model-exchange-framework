@@ -14,25 +14,25 @@
  * limitations under the License.
  *
  * @author Brad Anderson <BradA1878@pm.me>
- * @repository https://github.com/BradA1878/model-exchange-framework
- * @documentation https://brada1878.github.io/model-exchange-framework/
+ * @repository https://github.com/mxf-dev/mxf
+ * @documentation https://mxf-dev.github.io/mxf/
  */
 
-import { EventBus } from '../../../shared/events/EventBus';
-import { Events } from '../../../shared/events/EventNames';
+import { EventBus } from '@mxf-dev/core/events/EventBus';
+import { Events } from '@mxf-dev/core/events/EventNames';
 import { SystemLlmService } from './SystemLlmService';
 import { SystemLlmServiceManager } from './SystemLlmServiceManager';
-import { Logger } from '../../../shared/utils/Logger';
-import { createStrictValidator } from '../../../shared/utils/validation';
-import { ControlLoopEvents } from '../../../shared/events/event-definitions/ControlLoopEvents';
-import { MessageEvents } from '../../../shared/events/event-definitions/MessageEvents';
-import { AgentEvents } from '../../../shared/events/event-definitions/AgentEvents';
-import { ChannelMessage } from '../../../shared/schemas/MessageSchemas';
-import { ChannelId, AgentId } from '../../../shared/types/ChannelContext';
-import { ControlLoopEventPayload } from '../../../shared/schemas/EventPayloadSchema';
-import { BaseEventPayload, MessageEventData } from '../../../shared/schemas/EventPayloadSchema';
-import { AgentEventPayload } from '../../../shared/schemas/EventPayloadSchema';
-import { SystemEvents } from '../../../shared/events/event-definitions/SystemEvents';
+import { Logger } from '@mxf-dev/core/utils/Logger';
+import { createStrictValidator } from '@mxf-dev/core/utils/validation';
+import { ControlLoopEvents } from '@mxf-dev/core/events/event-definitions/ControlLoopEvents';
+import { MessageEvents } from '@mxf-dev/core/events/event-definitions/MessageEvents';
+import { AgentEvents } from '@mxf-dev/core/events/event-definitions/AgentEvents';
+import { ChannelMessage } from '@mxf-dev/core/schemas/MessageSchemas';
+import { ChannelId, AgentId } from '@mxf-dev/core/types/ChannelContext';
+import { ControlLoopEventPayload } from '@mxf-dev/core/schemas/EventPayloadSchema';
+import { BaseEventPayload, MessageEventData } from '@mxf-dev/core/schemas/EventPayloadSchema';
+import { AgentEventPayload } from '@mxf-dev/core/schemas/EventPayloadSchema';
+import { SystemEvents } from '@mxf-dev/core/events/event-definitions/SystemEvents';
 
 /**
  * Pattern detection interface for ephemeral event triggers

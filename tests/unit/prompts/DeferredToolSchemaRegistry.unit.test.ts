@@ -5,7 +5,7 @@
  * generation, and threshold-based behavior.
  */
 
-import { DeferredToolSchemaRegistry } from '../../../src/shared/prompts/DeferredToolSchemaRegistry';
+import { DeferredToolSchemaRegistry } from '@mxf-dev/core/prompts/DeferredToolSchemaRegistry';
 
 describe('DeferredToolSchemaRegistry', () => {
     let registry: DeferredToolSchemaRegistry;

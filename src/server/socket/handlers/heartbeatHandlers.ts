@@ -14,8 +14,8 @@
  * limitations under the License.
  *
  * @author Brad Anderson <BradA1878@pm.me>
- * @repository https://github.com/BradA1878/model-exchange-framework
- * @documentation https://brada1878.github.io/model-exchange-framework/
+ * @repository https://github.com/mxf-dev/mxf
+ * @documentation https://mxf-dev.github.io/mxf/
  */
 
 /**
@@ -26,12 +26,12 @@
  */
 
 import { Socket } from 'socket.io';
-import { AgentConnectionStatus } from '../../../shared/types/AgentTypes';
-import { EventBus } from '../../../shared/events/EventBus';
-import { AgentEvents, AgentPayloads } from '../../../shared/events/EventNames';
-import { createStrictValidator } from '../../../shared/utils/validation';
-import { createBaseEventPayload } from '../../../shared/schemas/EventPayloadSchema';
-import logger from '../../../shared/utils/Logger';
+import { AgentConnectionStatus } from '@mxf-dev/core/types/AgentTypes';
+import { EventBus } from '@mxf-dev/core/events/EventBus';
+import { AgentEvents, AgentPayloads } from '@mxf-dev/core/events/EventNames';
+import { createStrictValidator } from '@mxf-dev/core/utils/validation';
+import { createBaseEventPayload } from '@mxf-dev/core/schemas/EventPayloadSchema';
+import logger from '@mxf-dev/core/utils/Logger';
 
 // Create module logger
 const moduleLogger = logger.child('HeartbeatHandlers');

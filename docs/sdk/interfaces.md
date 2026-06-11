@@ -635,8 +635,8 @@ interface ChannelMcpServerConfig {
 ## Usage Example
 
 ```typescript
-import { MxfSDK, Events } from '@mxf/sdk';
-import type { MxfAgent } from '@mxf/sdk';
+import { MxfSDK, Events } from '@mxf-dev/sdk';
+import type { MxfAgent } from '@mxf-dev/sdk';
 
 // Initialize SDK with access token (recommended)
 const sdk = new MxfSDK({

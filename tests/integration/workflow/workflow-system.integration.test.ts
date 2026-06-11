@@ -30,7 +30,7 @@ import {
     WorkflowRetryPolicy,
     WorkflowCondition,
     WorkflowExecutionResult
-} from '../../../src/shared/types/WorkflowTypes';
+} from '@mxf-dev/core/types/WorkflowTypes';
 
 /**
  * Helper to create a basic workflow definition for testing

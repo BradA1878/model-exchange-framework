@@ -671,7 +671,7 @@ For a 1000-message conversation:
 
 ## Implementation Files
 
-**Core**: `src/shared/mxp/ContextCompressionEngine.ts`
-**Scoring**: `src/shared/prompts/MemoryPromptInjector.ts`
-**Builder**: `src/sdk/services/MxfStructuredPromptBuilder.ts`
-**Registry**: `src/shared/prompts/PromptSegmentRegistry.ts`
+**Core**: `packages/core/src/mxp/ContextCompressionEngine.ts`
+**Scoring**: `packages/core/src/prompts/MemoryPromptInjector.ts`
+**Builder**: `packages/sdk/src/services/MxfStructuredPromptBuilder.ts`
+**Registry**: `packages/core/src/prompts/PromptSegmentRegistry.ts`

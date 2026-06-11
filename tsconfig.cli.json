@@ -10,8 +10,6 @@
   "include": [
     "src/cli/tui/**/*",
     "src/cli/services/**/*",
-    "src/cli/utils/**/*",
-    "src/sdk/**/*",
-    "src/shared/**/*"
+    "src/cli/utils/**/*"
   ]
 }

@@ -26,14 +26,14 @@ The backbone of MXF, providing:
 - Proactive validation and auto-correction services
 - Authentication and authorization
 
-### 2. **SDK Layer** (`/src/sdk`)
+### 2. **SDK Layer** (`packages/sdk/src` — published as `@mxf-dev/sdk`)
 Client libraries for agent development:
 - `MxfClient`: Base class for agent connectivity
 - `MxfAgent`: LLM-powered agent with AI capabilities
 - Event handlers for various agent behaviors
 - Memory and tool management interfaces
 
-### 3. **Shared Components** (`/src/shared`)
+### 3. **Shared Components** (`packages/core/src` — published as `@mxf-dev/core`)
 Common code between server and SDK:
 - TypeScript interfaces and types
 - Event definitions and EventBus
@@ -314,4 +314,4 @@ The MXF architecture is designed to evolve:
 4. See [SDK Documentation](../sdk/index.md) for agent development
 5. Visit [Dashboard Guide](../dashboard/index.md) for UI documentation
 
-For questions or contributions, please refer to the [GitHub repository](https://github.com/BradA1878/model-exchange-framework).
+For questions or contributions, please refer to the [GitHub repository](https://github.com/mxf-dev/mxf).

@@ -14,8 +14,8 @@
  * limitations under the License.
  *
  * @author Brad Anderson <BradA1878@pm.me>
- * @repository https://github.com/BradA1878/model-exchange-framework
- * @documentation https://brada1878.github.io/model-exchange-framework/
+ * @repository https://github.com/mxf-dev/mxf
+ * @documentation https://mxf-dev.github.io/mxf/
  */
 
 /**
@@ -26,12 +26,12 @@
  */
 
 import { Request, Response } from 'express';
-import { createStrictValidator } from '../../../shared/utils/validation';
-import { Logger } from '../../../shared/utils/Logger';
+import { createStrictValidator } from '@mxf-dev/core/utils/validation';
+import { Logger } from '@mxf-dev/core/utils/Logger';
 import { McpToolRegistry } from '../services/McpToolRegistry';
 import { McpSocketExecutor } from '../../socket/services/McpSocketExecutor';
-import { McpToolDefinition, McpToolHandlerContext, McpToolHandlerResult, McpToolResultContent } from '../../../shared/protocols/mcp/McpServerTypes';
-import { McpToolInput } from '../../../shared/protocols/mcp/IMcpClient';
+import { McpToolDefinition, McpToolHandlerContext, McpToolHandlerResult, McpToolResultContent } from '@mxf-dev/core/protocols/mcp/McpServerTypes';
+import { McpToolInput } from '@mxf-dev/core/protocols/mcp/IMcpClient';
 import { v4 as uuidv4 } from 'uuid';
 
 // Create validator for MCP controller
@@ -77,8 +77,16 @@ export const getCapabilities = async (req: Request, res: Response): Promise<void
  */
 export const listTools = async (req: Request, res: Response): Promise<void> => {
     try {
-        // Get filter from query params
-        const filter = req.query.filter as string | undefined;
+        // Get filter from query params — fail fast on junk input.
+        const rawFilter = req.query.filter;
+        if (rawFilter !== undefined && (typeof rawFilter !== 'string' || rawFilter.length > 200)) {
+            res.status(400).json({
+                success: false,
+                message: 'filter must be a string of at most 200 characters'
+            });
+            return;
+        }
+        const filter = rawFilter as string | undefined;
         
         // Get tools from registry
         McpToolRegistry.getInstance().listTools(filter).subscribe({

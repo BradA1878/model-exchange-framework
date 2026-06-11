@@ -7,8 +7,8 @@ import {
   encodeToon,
   encodeForPrompt,
   decodeToon,
-} from '@mxf/shared/utils/toon/encoder';
-import { EncodeOptions } from '@mxf/shared/utils/toon/types';
+} from '@mxf-dev/core/utils/toon/encoder';
+import { EncodeOptions } from '@mxf-dev/core/utils/toon/types';
 
 describe('TOON Encoder', () => {
   describe('encodeToon', () => {

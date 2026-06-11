@@ -14,13 +14,14 @@
  * limitations under the License.
  *
  * @author Brad Anderson <BradA1878@pm.me>
- * @repository https://github.com/BradA1878/model-exchange-framework
- * @documentation https://brada1878.github.io/model-exchange-framework/
+ * @repository https://github.com/mxf-dev/mxf
+ * @documentation https://mxf-dev.github.io/mxf/
  */
 
 import mongoose from 'mongoose';
+import { requireEnv } from '@mxf-dev/core/utils/env';
 import dotenv from 'dotenv';
-import { Logger } from '../../../shared/utils/Logger';
+import { Logger } from '@mxf-dev/core/utils/Logger';
 
 dotenv.config();
 
@@ -32,7 +33,7 @@ const logger = new Logger('info', 'DatabaseService', 'server');
  * @returns A promise that resolves when the connection is established
  */
 export const connectToDatabase = async (): Promise<typeof mongoose> => {
-    const connectionString = process.env.MONGODB_URI || 'mongodb://localhost:27017/mxf';
+    const connectionString = requireEnv('MONGODB_URI', 'Set the MongoDB connection string in .env.');
     
     try {
         mongoose.connection.on('connected', () => {

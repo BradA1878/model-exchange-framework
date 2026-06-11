@@ -28,7 +28,7 @@
  * 5. Unregisters the server
  */
 
-import { MxfSDK, LlmProviderType } from '../../src/sdk';
+import { MxfSDK, LlmProviderType } from '@mxf-dev/sdk';
 import { join } from 'path';
 import dotenv from 'dotenv';
 

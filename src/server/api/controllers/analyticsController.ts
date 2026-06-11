@@ -14,8 +14,8 @@
  * limitations under the License.
  *
  * @author Brad Anderson <BradA1878@pm.me>
- * @repository https://github.com/BradA1878/model-exchange-framework
- * @documentation https://brada1878.github.io/model-exchange-framework/
+ * @repository https://github.com/mxf-dev/mxf
+ * @documentation https://mxf-dev.github.io/mxf/
  */
 
 /**
@@ -25,8 +25,8 @@
  */
 
 import { Request, Response } from 'express';
-import { createStrictValidator } from '../../../shared/utils/validation';
-import { Logger } from '../../../shared/utils/Logger';
+import { createStrictValidator } from '@mxf-dev/core/utils/validation';
+import { Logger } from '@mxf-dev/core/utils/Logger';
 
 // Create logger instance for analytics controller
 const logger = new Logger('error', 'AnalyticsController', 'server');
@@ -55,28 +55,12 @@ export const getAgentPerformance = async (req: Request, res: Response): Promise<
         const user = (req as any).user;
         validateAuthenticatedUser(user);
 
-        const { agentId } = req.params;
-        const { timeRange = '24h' } = req.query;
-
-        // Return real data or zeros - no mock data
-        const performanceData = {
-            agentId: agentId || 'all',
-            timeRange,
-            performance: {
-                tasksCompleted: 0,
-                averageResponseTime: 0,
-                successRate: 0,
-                errorCount: 0,
-                cpuUsage: 0,
-                memoryUsage: 0
-            },
-            chartData: [],
-            timestamp: new Date().toISOString()
-        };
-
-        res.json({
-            success: true,
-            data: performanceData
+        // Not implemented: returning success with all-zero metrics would
+        // disguise missing functionality as real measurement (project rule:
+        // no smoke and mirrors). Wire real aggregations or keep this 501.
+        res.status(501).json({
+            success: false,
+            message: 'Agent performance analytics is not implemented yet'
         });
     } catch (error: any) {
         logger.error('Error fetching agent performance:', error);
@@ -98,23 +82,12 @@ export const getChannelActivity = async (req: Request, res: Response): Promise<v
         const user = (req as any).user;
         validateAuthenticatedUser(user);
 
-        const { channelId } = req.params;
-        const { timeRange = '24h' } = req.query;
-
-        // Return real data or zeros - no mock data
-        const channelData = {
-            channels: [],
-            timeRange,
-            totalMetrics: {
-                totalMessages: 0,
-                totalActiveUsers: 0,
-                averageMessagesPerChannel: 0
-            }
-        };
-
-        res.json({
-            success: true,
-            data: channelData
+        // Not implemented: returning success with all-zero metrics would
+        // disguise missing functionality as real measurement (project rule:
+        // no smoke and mirrors). Wire real aggregations or keep this 501.
+        res.status(501).json({
+            success: false,
+            message: 'Channel activity analytics is not implemented yet'
         });
     } catch (error: any) {
         logger.error('Error fetching channel activity:', error);
@@ -135,27 +108,12 @@ export const getTaskCompletionAnalytics = async (req: Request, res: Response): P
         const user = (req as any).user;
         validateAuthenticatedUser(user);
 
-        const { startDate, endDate } = req.query;
-
-        // Return real data or zeros - no mock data
-        const taskData = {
-            completionMetrics: {
-                totalTasks: 0,
-                completedTasks: 0,
-                failedTasks: 0,
-                averageCompletionTime: 0,
-                completionRate: 0
-            },
-            timeRange: {
-                startDate: startDate || new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
-                endDate: endDate || new Date().toISOString()
-            },
-            dailyBreakdown: []
-        };
-
-        res.json({
-            success: true,
-            data: taskData
+        // Not implemented: returning success with all-zero metrics would
+        // disguise missing functionality as real measurement (project rule:
+        // no smoke and mirrors). Wire real aggregations or keep this 501.
+        res.status(501).json({
+            success: false,
+            message: 'Task completion analytics is not implemented yet'
         });
     } catch (error: any) {
         logger.error('Error fetching task completion analytics:', error);

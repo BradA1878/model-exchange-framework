@@ -14,8 +14,8 @@
  */
 
 import { useEffect, useRef, useCallback, type Dispatch } from 'react';
-import { Events } from '../../../sdk/index';
-import type { MxfChannelMonitor } from '../../../sdk/index';
+import { Events } from '@mxf-dev/sdk';
+import type { MxfChannelMonitor } from '@mxf-dev/sdk';
 import type { AppAction } from '../state';
 import type { AppState } from '../state';
 import { checkContextThresholds, checkBudget } from '../services/CostTracker';

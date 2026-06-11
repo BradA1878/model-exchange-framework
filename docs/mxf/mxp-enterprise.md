@@ -21,12 +21,12 @@ This section documents **real, implemented code** that exists in the MXF framewo
 
 ### 1. Configuration Management System ✅ IMPLEMENTED
 
-**File**: `/src/shared/mxp/MxpConfigManager.ts`
+**File**: `/packages/core/src/mxp/MxpConfigManager.ts`
 
 MXP 2.0 provides a configuration management system with granular control:
 
 ```typescript
-import { MxpConfigManager, SecurityLevel } from '@mxf/sdk';
+import { MxpConfigManager, SecurityLevel } from '@mxf-dev/sdk';
 
 const mxpManager = MxpConfigManager.getInstance();
 
@@ -75,12 +75,12 @@ export enum SecurityLevel {
 
 ### 2. Token Optimization Engine ✅ IMPLEMENTED
 
-**File**: `/src/shared/mxp/MxpTokenOptimizer.ts`
+**File**: `/packages/core/src/mxp/MxpTokenOptimizer.ts`
 
 Intelligent token reduction system with 6 optimization strategies:
 
 ```typescript
-import { MxpTokenOptimizer } from '@mxf/sdk';
+import { MxpTokenOptimizer } from '@mxf-dev/sdk';
 
 const optimizer = new MxpTokenOptimizer(mxpConfig);
 
@@ -123,12 +123,12 @@ console.log(result.tokenOptimization);
 
 ### 3. Bandwidth Optimization System ✅ IMPLEMENTED
 
-**File**: `/src/shared/services/MxfMessageAggregator.ts`
+**File**: `/packages/core/src/services/MxfMessageAggregator.ts`
 
 Enhanced message aggregation with bandwidth optimization:
 
 ```typescript
-import { MxfMessageAggregator } from '@mxf/sdk';
+import { MxfMessageAggregator } from '@mxf-dev/sdk';
 
 // Create aggregator with MXP enhancements
 const aggregator = new MxfMessageAggregator(
@@ -165,12 +165,12 @@ aggregator.enableMxpEnhancement(mxpConfig);
 
 ### 4. Encryption System ✅ IMPLEMENTED
 
-**File**: `/src/shared/utils/MxpEncryption.ts`
+**File**: `/packages/core/src/utils/MxpEncryption.ts`
 
 Production-grade AES-256-GCM encryption:
 
 ```typescript
-import { MxpEncryption } from '@mxf/sdk';
+import { MxpEncryption } from '@mxf-dev/sdk';
 
 const encryption = MxpEncryption.getInstance();
 
@@ -207,12 +207,12 @@ MXP_ENCRYPTION_ENABLED=true
 
 ### 5. Event System ✅ IMPLEMENTED
 
-**File**: `/src/shared/events/event-definitions/MxpEvents.ts`
+**File**: `/packages/core/src/events/event-definitions/MxpEvents.ts`
 
 Comprehensive event tracking for monitoring and analytics:
 
 ```typescript
-import { Events, EventBus } from '@mxf/sdk';
+import { Events, EventBus } from '@mxf-dev/sdk';
 
 // Listen to optimization events
 EventBus.server.on(Events.Mxp.TOKEN_OPTIMIZATION_COMPLETE, (data) => {
@@ -262,7 +262,7 @@ EventBus.server.on(Events.Mxp.SECURITY_LEVEL_CHANGED, (data) => {
 
 ### 6. Type System ✅ IMPLEMENTED
 
-**File**: `/src/shared/types/MxpTypes.ts`
+**File**: `/packages/core/src/types/MxpTypes.ts`
 
 Comprehensive TypeScript types for enterprise development:
 
@@ -442,7 +442,7 @@ MXP 2.0 integrates seamlessly with existing MXF services:
 // EXAMPLE IMPLEMENTATION - Not included in framework
 // File: src/custom/executive-reporting.ts (you create this)
 
-import { MxpConfigManager, Events, EventBus } from '@mxf/sdk';
+import { MxpConfigManager, Events, EventBus } from '@mxf-dev/sdk';
 
 export class MxpExecutiveReporting {
     private stats = {
@@ -493,7 +493,7 @@ export class MxpExecutiveReporting {
 // EXAMPLE IMPLEMENTATION - Not included in framework
 // File: src/custom/vault-integration.ts (you create this)
 
-import { MxpEncryption } from '@mxf/sdk';
+import { MxpEncryption } from '@mxf-dev/sdk';
 import * as vault from 'node-vault';
 
 export class MxpVaultIntegration {
@@ -540,7 +540,7 @@ export class MxpVaultIntegration {
 // EXAMPLE IMPLEMENTATION - Not included in framework
 // File: src/custom/gdpr-compliance.ts (you create this)
 
-import { MxpConfigManager, SecurityLevel } from '@mxf/sdk';
+import { MxpConfigManager, SecurityLevel } from '@mxf-dev/sdk';
 
 export class GdprComplianceMxp {
     async configureForEuDataResidency(channelId: string) {
@@ -624,7 +624,7 @@ The following are **potential future additions** to MXP 2.0 based on enterprise 
 ### Minimal Setup (Using Defaults)
 
 ```typescript
-import { MxpConfigManager } from '@mxf/sdk';
+import { MxpConfigManager } from '@mxf-dev/sdk';
 
 const mxpManager = MxpConfigManager.getInstance();
 
@@ -637,7 +637,7 @@ const config = mxpManager.getEffectiveConfig('my-channel');
 ### Production Setup
 
 ```typescript
-import { MxpConfigManager, SecurityLevel } from '@mxf/sdk';
+import { MxpConfigManager, SecurityLevel } from '@mxf-dev/sdk';
 
 const mxpManager = MxpConfigManager.getInstance();
 
@@ -663,7 +663,7 @@ mxpManager.createChannelConfig('production-channel', {
 ### Monitoring Optimization
 
 ```typescript
-import { Events, EventBus } from '@mxf/sdk';
+import { Events, EventBus } from '@mxf-dev/sdk';
 
 // Monitor real-time optimizations
 EventBus.server.on(Events.Mxp.TOKEN_OPTIMIZATION_COMPLETE, (data) => {

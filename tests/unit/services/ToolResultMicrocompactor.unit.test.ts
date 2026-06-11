@@ -4,8 +4,8 @@
  * recent messages, idempotency, and immutability of input.
  */
 
-import { ToolResultMicrocompactor } from '../../../src/sdk/services/ToolResultMicrocompactor';
-import { ConversationMessage } from '../../../src/shared/interfaces/ConversationMessage';
+import { ToolResultMicrocompactor } from '@mxf-dev/sdk/services/ToolResultMicrocompactor';
+import { ConversationMessage } from '@mxf-dev/core/interfaces/ConversationMessage';
 
 /** Helper to create a ConversationMessage with sensible defaults */
 function msg(overrides: Partial<ConversationMessage> & { role: ConversationMessage['role']; content: string }): ConversationMessage {

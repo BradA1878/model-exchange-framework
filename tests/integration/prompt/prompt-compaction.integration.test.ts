@@ -20,19 +20,19 @@ import {
     PromptSegmentRegistry,
     PromptSegment,
     SegmentContext
-} from '../../../src/shared/prompts/PromptSegmentRegistry';
+} from '@mxf-dev/core/prompts/PromptSegmentRegistry';
 import {
     PromptCompactionConfig,
     loadPromptCompactionConfig,
     validatePromptCompactionConfig,
     getDefaultPromptCompactionConfig
-} from '../../../src/shared/config/PromptCompactionConfig';
+} from '@mxf-dev/core/config/PromptCompactionConfig';
 import {
     estimateTokens,
     estimateTokensForArray,
     estimateTokensForMessages,
     clearTokenEstimateCache
-} from '../../../src/shared/utils/TokenEstimator';
+} from '@mxf-dev/core/utils/TokenEstimator';
 
 describe('Prompt Auto-Compaction System', () => {
     let testSdk: TestSDK;
@@ -845,18 +845,17 @@ You are a specialized agent with unique capabilities.`;
         });
 
         it('should validate all constraints together', () => {
+            // Start from a complete valid config (the type has grown many
+            // fields since this test was written) and override only the ones
+            // under test with invalid values.
             const multipleInvalidConfig: PromptCompactionConfig = {
-                enabled: true,
-                residualsEnabled: true,
-                tieredEnabled: true,
-                budgetEnabled: true,
+                ...getDefaultPromptCompactionConfig(),
                 residualThreshold: 200, // Invalid
                 residualMaxPercent: 2.0, // Invalid
                 tier0Size: 100, // Invalid (>= tier1)
                 tier1Size: 50, // Invalid (>= tier2)
                 tier2Size: 25, // Invalid
                 defaultTokenBudget: -1, // Invalid
-                condensedMode: false,
                 maxSystemPromptTokens: -100 // Invalid
             };
 

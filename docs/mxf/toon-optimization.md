@@ -683,7 +683,7 @@ const formatted = optimizer.optimizeObservations(observations);
 
 ## Implementation Files
 
-**Core**: `src/shared/utils/toon/`
+**Core**: `packages/core/src/utils/toon/`
 - `encoder.ts` - Encoding/decoding logic
 - `eligibility.ts` - Eligibility evaluation
 - `formatter.ts` - Message formatting

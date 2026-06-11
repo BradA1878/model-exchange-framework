@@ -54,7 +54,7 @@ This demo showcases:
 - Node.js 18+ and npm
 - **Running MXF server** (see main project README):
   ```bash
-  cd /path/to/model-exchange-framework-private
+  cd /path/to/mxf
   bun run dev  # Starts on port 3001
   ```
 - OpenRouter API key (for LLM providers)

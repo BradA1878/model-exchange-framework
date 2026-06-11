@@ -24,7 +24,7 @@ This demo showcases:
 ### 1. SDK Initialization and Authentication
 
 ```typescript
-import { MxfSDK } from '@mxf/sdk';
+import { MxfSDK } from '@mxf-dev/sdk';
 
 const sdk = new MxfSDK({
     username: 'demo-user',

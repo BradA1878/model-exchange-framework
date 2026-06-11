@@ -24,20 +24,20 @@ import {
     DatabaseAdapterFactory,
     DatabaseConfig,
     RepositoryBundle
-} from '../../../src/shared/database/DatabaseAdapterFactory';
+} from '@mxf-dev/core/database/DatabaseAdapterFactory';
 
-import { IAgentEntity } from '../../../src/shared/repositories/interfaces/IAgentRepository';
-import { IChannelEntity } from '../../../src/shared/repositories/interfaces/IChannelRepository';
-import { ITaskEntity, TaskStatus, TaskPriority } from '../../../src/shared/repositories/interfaces/ITaskRepository';
+import { IAgentEntity } from '@mxf-dev/core/repositories/interfaces/IAgentRepository';
+import { IChannelEntity } from '@mxf-dev/core/repositories/interfaces/IChannelRepository';
+import { ITaskEntity, TaskStatus, TaskPriority } from '@mxf-dev/core/repositories/interfaces/ITaskRepository';
 import {
     IAgentMemory,
     IChannelMemory,
     IRelationshipMemory,
     MemoryScope,
     MemoryPersistenceLevel
-} from '../../../src/shared/repositories/interfaces/IMemoryRepository';
-import { FilterOptions } from '../../../src/shared/repositories/types/FilterTypes';
-import { PaginationOptions } from '../../../src/shared/repositories/types/PaginationTypes';
+} from '@mxf-dev/core/repositories/interfaces/IMemoryRepository';
+import { FilterOptions } from '@mxf-dev/core/repositories/types/FilterTypes';
+import { PaginationOptions } from '@mxf-dev/core/repositories/types/PaginationTypes';
 
 describe('Database Abstraction Layer', () => {
     let testSdk: TestSDK;
@@ -196,8 +196,10 @@ describe('Database Abstraction Layer', () => {
                     connectionString: 'postgresql://localhost/test'
                 });
 
+                // Only mongodb is supported; the type union was narrowed so
+                // anything else hits the default branch and fails loudly.
                 expect(() => DatabaseAdapterFactory.create()).toThrow(
-                    'PostgreSQL adapter not yet implemented'
+                    'Unknown database type: postgresql'
                 );
 
                 // Reset and re-initialize with MongoDB for other tests

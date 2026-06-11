@@ -4,7 +4,7 @@
  * Reusable test data and configurations for integration tests.
  */
 
-import { LlmProviderType } from '../../src/sdk/index';
+import { LlmProviderType } from '@mxf-dev/sdk';
 import type { TestAgentConfig, TestChannelConfig } from './TestSDK';
 
 // =============================================================================

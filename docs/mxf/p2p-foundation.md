@@ -218,7 +218,7 @@ const recommendations = await reputationService.recommend({
 All P2P features are disabled by default via `P2PConfig`:
 
 ```typescript
-// src/shared/config/P2PConfig.ts
+// packages/core/src/config/P2PConfig.ts
 export class P2PConfig {
   // Master switch for all P2P features
   static P2P_ENABLED = process.env.P2P_ENABLED === 'true'; // Default: false
@@ -501,4 +501,4 @@ When P2P features are disabled (default):
 
 **Disclaimer:** P2P Decentralization Foundation is an experimental feature not intended for production use. All features are disabled by default. Enable only in controlled research/development environments. For production systems, use standard centralized MXF architecture.
 
-For questions or contributions related to P2P features, please refer to the [GitHub repository](https://github.com/BradA1878/model-exchange-framework).
+For questions or contributions related to P2P features, please refer to the [GitHub repository](https://github.com/mxf-dev/mxf).

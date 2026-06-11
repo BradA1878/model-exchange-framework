@@ -14,8 +14,8 @@
  * limitations under the License.
  *
  * @author Brad Anderson <BradA1878@pm.me>
- * @repository https://github.com/BradA1878/model-exchange-framework
- * @documentation https://brada1878.github.io/model-exchange-framework/
+ * @repository https://github.com/mxf-dev/mxf
+ * @documentation https://mxf-dev.github.io/mxf/
  */
 
 /**
@@ -24,11 +24,13 @@
  * Handles bulk operations for agents, channels, and tasks
  */
 
+import { createBaseEventPayload } from '@mxf-dev/core/schemas/EventPayloadSchema';
+import { v4 as uuidv4 } from 'uuid';
 import { Request, Response } from 'express';
-import { Logger } from '../../../shared/utils/Logger';
-import { createStrictValidator } from '../../../shared/utils/validation';
-import { BulkEvents } from '../../../shared/events/event-definitions/BulkEvents';
-import { EventBus } from '../../../shared/events/EventBus';
+import { Logger } from '@mxf-dev/core/utils/Logger';
+import { createStrictValidator } from '@mxf-dev/core/utils/validation';
+import { BulkEvents } from '@mxf-dev/core/events/event-definitions/BulkEvents';
+import { EventBus } from '@mxf-dev/core/events/EventBus';
 import {
     BulkAgentCreateRequest,
     BulkChannelCreateRequest,
@@ -40,7 +42,7 @@ import {
     BulkOperationResult,
     BulkOperationProgress,
     BulkOperationStatus
-} from '../../../shared/events/event-definitions/BulkEvents';
+} from '@mxf-dev/core/events/event-definitions/BulkEvents';
 import { ChannelService } from '../../socket/services/ChannelService';
 import { TaskService } from '../../socket/services/TaskService';
 
@@ -97,7 +99,7 @@ class BulkOperationsService {
      * Execute bulk create operation
      */
     public async executeBulkCreate(request: BulkCreateRequest, requestedBy: string): Promise<BulkOperationResult> {
-        const operationId = `bulk_create_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        const operationId = `bulk_create_${uuidv4()}`;
         
         const result: BulkOperationResult = {
             operationId,
@@ -121,13 +123,18 @@ class BulkOperationsService {
                               request.entityType === 'channel' ? BulkEvents.CHANNELS_BULK_CREATE_STARTED :
                               BulkEvents.TASKS_BULK_CREATE_STARTED;
         
-        EventBus.server.emit(startEventName, {
-            operationId,
-            entityType: request.entityType,
-            totalItems: request.items.length,
-            requestedBy,
-            timestamp: new Date()
-        });
+        EventBus.server.emit(startEventName, createBaseEventPayload(
+            startEventName,
+            requestedBy ?? 'system',
+            'global',
+            {
+                operationId,
+                entityType: request.entityType,
+                totalItems: request.items.length,
+                requestedBy,
+                timestamp: Date.now()
+            }
+        ));
 
 
         try {
@@ -141,11 +148,16 @@ class BulkOperationsService {
                                      request.entityType === 'channel' ? BulkEvents.CHANNELS_BULK_CREATE_COMPLETED :
                                      BulkEvents.TASKS_BULK_CREATE_COMPLETED;
             
-            EventBus.server.emit(completeEventName, {
-                operationId,
-                result,
-                timestamp: new Date()
-            });
+            EventBus.server.emit(completeEventName, createBaseEventPayload(
+                completeEventName,
+                requestedBy ?? 'system',
+                'global',
+                {
+                    operationId,
+                    result,
+                    timestamp: Date.now()
+                }
+            ));
 
         } catch (error) {
             result.status = 'failed';
@@ -164,11 +176,16 @@ class BulkOperationsService {
                                  request.entityType === 'channel' ? BulkEvents.CHANNELS_BULK_CREATE_FAILED :
                                  BulkEvents.TASKS_BULK_CREATE_FAILED;
             
-            EventBus.server.emit(failEventName, {
-                operationId,
-                error: error instanceof Error ? error.message : 'Unknown error',
-                timestamp: new Date()
-            });
+            EventBus.server.emit(failEventName, createBaseEventPayload(
+                failEventName,
+                requestedBy ?? 'system',
+                'global',
+                {
+                    operationId,
+                    error: error instanceof Error ? error.message : 'Unknown error',
+                    timestamp: Date.now()
+                }
+            ));
 
             logger.error(`Bulk create operation failed`, { operationId, error });
         }
@@ -180,7 +197,7 @@ class BulkOperationsService {
      * Execute bulk update operation
      */
     public async executeBulkUpdate(request: BulkUpdateRequest, requestedBy: string): Promise<BulkOperationResult> {
-        const operationId = `bulk_update_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        const operationId = `bulk_update_${uuidv4()}`;
         
         const result: BulkOperationResult = {
             operationId,
@@ -203,13 +220,18 @@ class BulkOperationsService {
         const startEventName = request.entityType === 'agent' ? BulkEvents.AGENTS_BULK_UPDATE_STARTED :
                               BulkEvents.TASKS_BULK_UPDATE_STARTED;
         
-        EventBus.server.emit(startEventName, {
-            operationId,
-            entityType: request.entityType,
-            totalItems: request.items.length,
-            requestedBy,
-            timestamp: new Date()
-        });
+        EventBus.server.emit(startEventName, createBaseEventPayload(
+            startEventName,
+            requestedBy ?? 'system',
+            'global',
+            {
+                operationId,
+                entityType: request.entityType,
+                totalItems: request.items.length,
+                requestedBy,
+                timestamp: Date.now()
+            }
+        ));
 
 
         try {
@@ -222,11 +244,16 @@ class BulkOperationsService {
             const completeEventName = request.entityType === 'agent' ? BulkEvents.AGENTS_BULK_UPDATE_COMPLETED :
                                      BulkEvents.TASKS_BULK_UPDATE_COMPLETED;
             
-            EventBus.server.emit(completeEventName, {
-                operationId,
-                result,
-                timestamp: new Date()
-            });
+            EventBus.server.emit(completeEventName, createBaseEventPayload(
+                completeEventName,
+                requestedBy ?? 'system',
+                'global',
+                {
+                    operationId,
+                    result,
+                    timestamp: Date.now()
+                }
+            ));
 
         } catch (error) {
             result.status = 'failed';
@@ -244,11 +271,16 @@ class BulkOperationsService {
             const failEventName = request.entityType === 'agent' ? BulkEvents.AGENTS_BULK_UPDATE_FAILED :
                                  BulkEvents.TASKS_BULK_UPDATE_FAILED;
             
-            EventBus.server.emit(failEventName, {
-                operationId,
-                error: error instanceof Error ? error.message : 'Unknown error',
-                timestamp: new Date()
-            });
+            EventBus.server.emit(failEventName, createBaseEventPayload(
+                failEventName,
+                requestedBy ?? 'system',
+                'global',
+                {
+                    operationId,
+                    error: error instanceof Error ? error.message : 'Unknown error',
+                    timestamp: Date.now()
+                }
+            ));
 
             logger.error(`Bulk update operation failed`, { operationId, error });
         }
@@ -260,7 +292,7 @@ class BulkOperationsService {
      * Execute bulk delete operation
      */
     public async executeBulkDelete(request: BulkDeleteRequest, requestedBy: string): Promise<BulkOperationResult> {
-        const operationId = `bulk_delete_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        const operationId = `bulk_delete_${uuidv4()}`;
         
         const result: BulkOperationResult = {
             operationId,
@@ -284,13 +316,18 @@ class BulkOperationsService {
                               request.entityType === 'channel' ? BulkEvents.CHANNELS_BULK_DELETE_STARTED :
                               'bulk:tasks:delete:started'; // No bulk task delete event defined
         
-        EventBus.server.emit(startEventName, {
-            operationId,
-            entityType: request.entityType,
-            totalItems: request.ids.length,
-            requestedBy,
-            timestamp: new Date()
-        });
+        EventBus.server.emit(startEventName, createBaseEventPayload(
+            startEventName,
+            requestedBy ?? 'system',
+            'global',
+            {
+                operationId,
+                entityType: request.entityType,
+                totalItems: request.ids.length,
+                requestedBy,
+                timestamp: Date.now()
+            }
+        ));
 
 
         try {
@@ -304,11 +341,16 @@ class BulkOperationsService {
                                      request.entityType === 'channel' ? BulkEvents.CHANNELS_BULK_DELETE_COMPLETED :
                                      'bulk:tasks:delete:completed'; // No bulk task delete event defined
             
-            EventBus.server.emit(completeEventName, {
-                operationId,
-                result,
-                timestamp: new Date()
-            });
+            EventBus.server.emit(completeEventName, createBaseEventPayload(
+                completeEventName,
+                requestedBy ?? 'system',
+                'global',
+                {
+                    operationId,
+                    result,
+                    timestamp: Date.now()
+                }
+            ));
 
         } catch (error) {
             result.status = 'failed';
@@ -327,11 +369,16 @@ class BulkOperationsService {
                                  request.entityType === 'channel' ? BulkEvents.CHANNELS_BULK_DELETE_FAILED :
                                  'bulk:tasks:delete:failed'; // No bulk task delete event defined
             
-            EventBus.server.emit(failEventName, {
-                operationId,
-                error: error instanceof Error ? error.message : 'Unknown error',
-                timestamp: new Date()
-            });
+            EventBus.server.emit(failEventName, createBaseEventPayload(
+                failEventName,
+                requestedBy ?? 'system',
+                'global',
+                {
+                    operationId,
+                    error: error instanceof Error ? error.message : 'Unknown error',
+                    timestamp: Date.now()
+                }
+            ));
 
             logger.error(`Bulk delete operation failed`, { operationId, error });
         }
@@ -367,7 +414,7 @@ class BulkOperationsService {
                         throw new Error('Agent creation not supported through bulk operations. Agents connect through socket authentication.');
                     case 'channel':
                         // Extract channel details from item
-                        const channelId = item.id || `channel_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+                        const channelId = item.id || `channel_${uuidv4()}`;
                         const channelName = item.name || 'Bulk Created Channel';
                         const channelCreatedBy = item.createdBy || 'system';
                         createdItem = await channelService.createChannel(channelId, channelName, channelCreatedBy, item.metadata);

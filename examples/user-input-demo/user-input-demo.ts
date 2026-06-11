@@ -23,12 +23,12 @@
  * Run with: bun run demo:user-input
  */
 
-import { MxfSDK, Events, LlmProviderType } from '../../src/sdk/index';
-import type { MxfAgent, MxfChannelMonitor } from '../../src/sdk/index';
+import { MxfSDK, Events, LlmProviderType } from '@mxf-dev/sdk';
+import type { MxfAgent, MxfChannelMonitor } from '@mxf-dev/sdk';
 import type {
     UserInputRequestData, UserInputResponseValue,
     TextInputConfig, SelectInputConfig, MultiSelectInputConfig, ConfirmInputConfig
-} from '../../src/sdk/index';
+} from '@mxf-dev/sdk';
 import prompts from 'prompts';
 import dotenv from 'dotenv';
 

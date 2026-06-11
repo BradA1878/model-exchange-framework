@@ -14,8 +14,8 @@
  * limitations under the License.
  *
  * @author Brad Anderson <BradA1878@pm.me>
- * @repository https://github.com/BradA1878/model-exchange-framework
- * @documentation https://brada1878.github.io/model-exchange-framework/
+ * @repository https://github.com/mxf-dev/mxf
+ * @documentation https://mxf-dev.github.io/mxf/
  */
 
 /**
@@ -26,42 +26,42 @@
  * following the three-service separation of concerns pattern.
  */
 
-import { EventBus } from '../../../shared/events/EventBus';
+import { EventBus } from '@mxf-dev/core/events/EventBus';
 import { 
     Events, 
     ChannelEvents,
     ControlLoopEvents,
     MessageEvents,
     AgentEvents
-} from '../../../shared/events/EventNames';
+} from '@mxf-dev/core/events/EventNames';
 import { v4 as uuidv4 } from 'uuid';
 
 import { ControlLoop } from '../implementations/ControlLoop';
-import { Logger } from '../../../shared/utils/Logger';
-import { createStrictValidator } from '../../../shared/utils/validation';
+import { Logger } from '@mxf-dev/core/utils/Logger';
+import { createStrictValidator } from '@mxf-dev/core/utils/validation';
 import { 
     ControlLoopEventPayload,
     ControlLoopSpecificData
-} from '../../../shared/schemas/EventPayloadSchema';
-import { AgentId } from '../../../shared/types/Agent';
+} from '@mxf-dev/core/schemas/EventPayloadSchema';
+import { AgentId } from '@mxf-dev/core/types/Agent';
 import {
     ChannelId
-} from '../../../shared/types/ChannelContext';
+} from '@mxf-dev/core/types/ChannelContext';
 import {
     ControlLoopConfig,
     Reasoning,
     Plan
-} from '../../../shared/models/controlLoop';
+} from '@mxf-dev/core/models/controlLoop';
 import { SystemLlmService } from './SystemLlmService';
 import { SystemLlmServiceManager } from './SystemLlmServiceManager';
 import { lastValueFrom } from 'rxjs';
 
 // Phase 2: Enhanced Memory Architecture and Agent Performance Tracking
-import { PatternMemoryService } from '../../../shared/services/PatternMemoryService';
-import { AgentPerformanceService } from '../../../shared/services/AgentPerformanceService';
+import { PatternMemoryService } from '../../services/PatternMemoryService';
+import { AgentPerformanceService } from '@mxf-dev/core/services/AgentPerformanceService';
 
 // Phase 2.5: MongoDB Lens MCP Server Integration
-import { McpToolHandlerContext, McpToolHandlerResult } from '../../../shared/protocols/mcp/McpServerTypes';
+import { McpToolHandlerContext, McpToolHandlerResult } from '@mxf-dev/core/protocols/mcp/McpServerTypes';
 
 // Create a validator for the service
 const validator = createStrictValidator('ControlLoopService');

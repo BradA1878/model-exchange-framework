@@ -18,10 +18,10 @@
  */
 
 import { EventEmitter } from 'events';
-import { LspServerManager } from '../../../src/shared/services/lsp/LspServerManager';
-import { LspDocumentManager } from '../../../src/shared/services/lsp/LspDocumentManager';
-import { LspProtocolAdapter } from '../../../src/shared/services/lsp/LspProtocolAdapter';
-import { LSP_CONSTANTS } from '../../../src/shared/constants/EnhancementConstants';
+import { LspServerManager } from '@mxf-dev/core/services/lsp/LspServerManager';
+import { LspDocumentManager } from '@mxf-dev/core/services/lsp/LspDocumentManager';
+import { LspProtocolAdapter } from '@mxf-dev/core/services/lsp/LspProtocolAdapter';
+import { LSP_CONSTANTS } from '@mxf-dev/core/constants/EnhancementConstants';
 import {
   LspConfig,
   LspHealthStatus,
@@ -33,8 +33,8 @@ import {
   LspDiagnostic,
   LspDiagnosticSeverity,
   LspTextDocumentContentChangeEvent,
-} from '../../../src/shared/types/LspTypes';
-import { ILspConnection } from '../../../src/shared/services/lsp/interfaces/ILspConnection';
+} from '@mxf-dev/core/types/LspTypes';
+import { ILspConnection } from '@mxf-dev/core/services/lsp/interfaces/ILspConnection';
 
 // Mock child_process module to prevent actual server spawning
 jest.mock('child_process', () => ({

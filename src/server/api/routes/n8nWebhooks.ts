@@ -14,8 +14,8 @@
  * limitations under the License.
  *
  * @author Brad Anderson <BradA1878@pm.me>
- * @repository https://github.com/BradA1878/model-exchange-framework
- * @documentation https://brada1878.github.io/model-exchange-framework/
+ * @repository https://github.com/mxf-dev/mxf
+ * @documentation https://mxf-dev.github.io/mxf/
  */
 
 /**
@@ -32,16 +32,16 @@
  */
 
 import { Router, Request, Response } from 'express';
-import { createStrictValidator } from '../../../shared/utils/validation';
-import { Logger } from '../../../shared/utils/Logger';
+import { createStrictValidator } from '@mxf-dev/core/utils/validation';
+import { Logger } from '@mxf-dev/core/utils/Logger';
 import { TaskService } from '../../socket/services/TaskService';
-import { EventBus } from '../../../shared/events/EventBus';
-import { Events } from '../../../shared/events/EventNames';
-import { createBaseEventPayload, createTaskEventPayload } from '../../../shared/schemas/EventPayloadSchema';
+import { EventBus } from '@mxf-dev/core/events/EventBus';
+import { Events } from '@mxf-dev/core/events/EventNames';
+import { createBaseEventPayload, createTaskEventPayload } from '@mxf-dev/core/schemas/EventPayloadSchema';
 import { 
     CreateTaskRequest, 
     TaskPriority 
-} from '../../../shared/types/TaskTypes';
+} from '@mxf-dev/core/types/TaskTypes';
 
 const router = Router();
 const logger = new Logger('debug', 'N8nWebhooks', 'server');

@@ -12,9 +12,9 @@
  */
 
 import { v4 as uuidv4 } from 'uuid';
-import { MxfSDK, Events, LlmProviderType } from '../../sdk/index';
-import type { MxfAgent, MxfChannelMonitor } from '../../sdk/index';
-import { CORE_MXF_TOOLS } from '../../shared/constants/CoreTools';
+import { MxfSDK, Events, LlmProviderType } from '@mxf-dev/sdk';
+import type { MxfAgent, MxfChannelMonitor } from '@mxf-dev/sdk';
+import { CORE_MXF_TOOLS } from '@mxf-dev/core/constants/CoreTools';
 import { logSuccess, logError, logInfo, logWarning, logHeader, logStep } from '../utils/output';
 import chalk from 'chalk';
 

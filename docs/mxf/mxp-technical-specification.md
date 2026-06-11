@@ -224,7 +224,7 @@ Real-time performance tracking and cost calculation with comprehensive metrics.
 MXP 2.0 uses the `MxpConfigManager` for granular feature control:
 
 ```typescript
-import { MxpConfigManager, SecurityLevel } from '@mxf/mxp';
+import { MxpConfigManager, SecurityLevel } from '@mxf-dev/core/mxp';
 
 const mxpManager = MxpConfigManager.getInstance();
 

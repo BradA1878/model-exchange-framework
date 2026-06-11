@@ -37,7 +37,7 @@ MxpConfigManager follows the singleton pattern and manages configurations at two
 ### Getting the Singleton Instance
 
 ```typescript
-import { MxpConfigManager } from './src/shared/mxp/MxpConfigManager';
+import { MxpConfigManager } from '@mxf-dev/core/mxp/MxpConfigManager';
 
 const mxpManager = MxpConfigManager.getInstance();
 ```
@@ -47,7 +47,7 @@ const mxpManager = MxpConfigManager.getInstance();
 #### Create Channel Configuration
 
 ```typescript
-import { SecurityLevel } from './src/shared/types/MxpTypes';
+import { SecurityLevel } from '@mxf-dev/core/types/MxpTypes';
 
 // Create configuration with selective features
 const config = mxpManager.createChannelConfig('my-channel', {
@@ -681,7 +681,7 @@ import {
     MxpOptimizationResult,
     ContextCompressionResult,
     MessageTemplate
-} from './src/shared/types/MxpTypes';
+} from '@mxf-dev/core/types/MxpTypes';
 
 // Type-safe configuration
 const config: MxpConfig = mxpManager.getEffectiveConfig('channel-1');
@@ -702,4 +702,4 @@ const strategy: TokenOptimizationStrategy = 'context_compression';
 
 ---
 
-For questions or issues with MxpConfigManager, refer to the source code at `/src/shared/mxp/MxpConfigManager.ts`.
+For questions or issues with MxpConfigManager, refer to the source code at `/packages/core/src/mxp/MxpConfigManager.ts`.

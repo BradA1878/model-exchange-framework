@@ -22,18 +22,18 @@ import {
     PromptTemplateReplacer,
     TemplateContext,
     PROMPT_TEMPLATES
-} from '../../../src/shared/utils/PromptTemplateReplacer';
+} from '@mxf-dev/core/utils/PromptTemplateReplacer';
 import {
     MemoryPromptInjector,
     MemoryEntry,
     MemoryInjectionConfig
-} from '../../../src/shared/prompts/MemoryPromptInjector';
+} from '@mxf-dev/core/prompts/MemoryPromptInjector';
 import {
     PromptConfig,
     DEFAULT_PROMPT_CONFIG,
     getPromptConfig
-} from '../../../src/shared/config/PromptConfig';
-import { MxfLayeredPromptAssembler } from '../../../src/sdk/services/MxfLayeredPromptAssembler';
+} from '@mxf-dev/core/config/PromptConfig';
+import { MxfLayeredPromptAssembler } from '@mxf-dev/sdk/services/MxfLayeredPromptAssembler';
 
 describe('MCP Prompts Integration (P5)', () => {
     let testSdk: TestSDK;

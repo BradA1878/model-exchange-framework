@@ -3,14 +3,18 @@
 
 ## Installation
 
-The MXF SDK is part of the monorepo and should be built from source:
+Install the SDK from npm:
 
 ```bash
-# Clone the repository
-git clone https://github.com/BradA1878/model-exchange-framework.git
-cd model-exchange-framework
+npm install @mxf-dev/sdk    # or: bun add @mxf-dev/sdk
+# (@mxf-dev/core is pulled in automatically)
+```
 
-# Install dependencies
+To build from source instead (for contributing):
+
+```bash
+git clone https://github.com/mxf-dev/mxf.git
+cd mxf
 npm install
 
 # Build the project
@@ -190,7 +194,7 @@ Use the SDK CLI interactive setup (recommended):
 
 ```bash
 # Run interactive setup
-bun run sdk:cli -- setup:interactive
+bun run mxf setup:interactive
 
 # Follow the prompts:
 # ✔ User email: dev-user@company.com
@@ -208,14 +212,14 @@ Or use manual commands:
 
 ```bash
 # Create a channel
-bun run sdk:cli -- channel:create \
+bun run mxf channel:create \
   --id my-channel \
   --name "My Channel" \
   --email dev-user@company.com \
   --password secure-password-123
 
 # Generate agent keys (saved to .env)
-bun run sdk:cli -- key:generate \
+bun run mxf key:generate \
   --channel my-channel \
   --agents agent1,agent2,agent3 \
   --email dev-user@company.com \
@@ -242,8 +246,8 @@ MXF_MY_CHANNEL_AGENT3_SECRET_KEY="secret-rst345"
 ### 4. Initialize SDK and Create Agent
 
 ```typescript
-import { MxfSDK, Events } from '@mxf/sdk';
-import type { MxfAgent } from '@mxf/sdk';
+import { MxfSDK, Events } from '@mxf-dev/sdk';
+import type { MxfAgent } from '@mxf-dev/sdk';
 import dotenv from 'dotenv';
 
 // Load credentials from .env file
@@ -377,7 +381,7 @@ Create `setup-config.json`:
 ```bash
 # Create user, channel, and generate all keys in one command
 # Credentials are written to .env file
-bun run sdk:cli -- setup \
+bun run mxf setup \
   --config setup-config.json \
   --output .env
 
@@ -385,7 +389,7 @@ bun run sdk:cli -- setup \
 # ${MXF_USER_PASSWORD} will be replaced with the actual env var value
 ```
 
-**Note:** The interactive setup (`bun run sdk:cli -- setup:interactive`) is recommended for most use cases. Use config files for automation only.
+**Note:** The interactive setup (`bun run mxf setup:interactive`) is recommended for most use cases. Use config files for automation only.
 
 ## Authentication Errors
 
@@ -459,7 +463,7 @@ const sdk = new MxfSDK({
 **Solution**:
 ```bash
 # Regenerate agent keys via CLI
-bun run sdk:cli -- key:generate \
+bun run mxf key:generate \
   --channel your-channel \
   --agents your-agent-id \
   --email your@email.com \
@@ -472,7 +476,7 @@ bun run sdk:cli -- key:generate \
 ### Connection Errors
 
 ```typescript
-import { Events } from '@mxf/sdk';
+import { Events } from '@mxf-dev/sdk';
 
 // Handle connection errors
 agent.on(Events.Agent.ERROR, (payload) => {
@@ -544,7 +548,7 @@ MXF_SERVER_URL=https://mxf.yourcompany.com
 ### Testing Authentication
 
 ```typescript
-import { MxfSDK, Events } from '@mxf/sdk';
+import { MxfSDK, Events } from '@mxf-dev/sdk';
 
 // Test SDK connection and agent creation
 async function testAuthentication(): Promise<void> {
@@ -629,13 +633,13 @@ DELETE /api/tokens/:tokenId
 
 ```bash
 # Channel management
-bun run sdk:cli -- channel:create --id <id> --name <name> --email <email> --password <password>
+bun run mxf channel:create --id <id> --name <name> --email <email> --password <password>
 
 # Key generation
-bun run sdk:cli -- key:generate --channel <id> --agents <agent1,agent2> --email <email> --password <password> [--output <file>]
+bun run mxf key:generate --channel <id> --agents <agent1,agent2> --email <email> --password <password> [--output <file>]
 
 # Automated setup
-bun run sdk:cli -- setup --config <file> [--output <file>]
+bun run mxf setup --config <file> [--output <file>]
 ```
 
 ## Next Steps

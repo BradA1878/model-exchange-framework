@@ -13,6 +13,11 @@ jest.setTimeout(60000);
 // Ensure required environment variables
 beforeAll(async () => {
     // Set default test credentials if not provided
+    // Auth middleware fail-fast validation requires a secret; tests provide
+    // a fixture value only when the environment has none (real .env wins).
+    if (!process.env.JWT_SECRET) {
+        process.env.JWT_SECRET = 'test-jwt-secret-for-tests-only';
+    }
     if (!process.env.MXF_DEMO_USERNAME) {
         process.env.MXF_DEMO_USERNAME = 'demo-user';
     }

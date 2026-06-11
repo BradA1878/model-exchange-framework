@@ -12,7 +12,7 @@ import { TestSDK, createTestSDK } from '../../utils/TestSDK';
 import { waitFor, sleep } from '../../utils/waitFor';
 import { EventCapture, createEventCapture } from '../../utils/eventHelpers';
 import { COMMUNICATION_AGENT_CONFIG, TIMEOUTS, TEST_MESSAGES } from '../../utils/TestFixtures';
-import { Events } from '../../../src/shared/events/EventNames';
+import { Events } from '@mxf-dev/core/events/EventNames';
 
 describe('Channel Communication', () => {
     let testSdk: TestSDK;

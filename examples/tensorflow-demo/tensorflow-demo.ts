@@ -25,9 +25,9 @@
  * ```
  */
 
-import { MxfSDK, Events, LlmProviderType } from '../../src/sdk/index';
-import type { MxfAgent, MxfChannelMonitor } from '../../src/sdk/index';
-import { TensorFlowEvents } from '../../src/shared/events/event-definitions/TensorFlowEvents';
+import { MxfSDK, Events, LlmProviderType } from '@mxf-dev/sdk';
+import type { MxfAgent, MxfChannelMonitor } from '@mxf-dev/sdk';
+import { TensorFlowEvents } from '@mxf-dev/core/events/event-definitions/TensorFlowEvents';
 import dotenv from 'dotenv';
 
 dotenv.config();

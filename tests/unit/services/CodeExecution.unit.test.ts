@@ -9,7 +9,7 @@
  * all capabilities dropped, non-root user).
  */
 
-import { CodeExecutionSandboxService } from '@mxf/shared/services/CodeExecutionSandboxService';
+import { CodeExecutionSandboxService } from '@mxf-dev/core/services/CodeExecutionSandboxService';
 
 describe('CodeExecutionSandboxService Unit Tests', () => {
     let sandbox: CodeExecutionSandboxService;

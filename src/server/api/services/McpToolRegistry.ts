@@ -14,8 +14,8 @@
  * limitations under the License.
  *
  * @author Brad Anderson <BradA1878@pm.me>
- * @repository https://github.com/BradA1878/model-exchange-framework
- * @documentation https://brada1878.github.io/model-exchange-framework/
+ * @repository https://github.com/mxf-dev/mxf
+ * @documentation https://mxf-dev.github.io/mxf/
  */
 
 /**
@@ -27,15 +27,15 @@
 
 import { Observable, of, throwError, from, firstValueFrom } from 'rxjs';
 import { map, mergeMap, catchError, switchMap } from 'rxjs/operators';
-import { createStrictValidator } from '../../../shared/utils/validation';
-import { Logger } from '../../../shared/utils/Logger';
-import { McpToolDefinition, McpToolHandlerContext, McpToolHandlerResult } from '../../../shared/protocols/mcp/McpServerTypes';
-import { Events } from '../../../shared/events/EventNames';
-import { EventBus } from '../../../shared/events/EventBus';
-import { createMcpTool, findMcpToolByName, updateMcpTool, deleteMcpTool, listAllMcpTools } from '../../../shared/models/mcpTool';
-import { createMcpToolRegistryChangedPayload, createBaseEventPayload, createMcpToolCallPayload } from '../../../shared/schemas/EventPayloadSchema';
-import { mxfMcpToolRegistry } from '../../../shared/protocols/mcp/tools/index';
-import { McpToolDocumentationService } from '../../../shared/services/McpToolDocumentationService';
+import { createStrictValidator } from '@mxf-dev/core/utils/validation';
+import { Logger } from '@mxf-dev/core/utils/Logger';
+import { McpToolDefinition, McpToolHandlerContext, McpToolHandlerResult } from '@mxf-dev/core/protocols/mcp/McpServerTypes';
+import { Events } from '@mxf-dev/core/events/EventNames';
+import { EventBus } from '@mxf-dev/core/events/EventBus';
+import { createMcpTool, findMcpToolByName, updateMcpTool, deleteMcpTool, listAllMcpTools } from '@mxf-dev/core/models/mcpTool';
+import { createMcpToolRegistryChangedPayload, createBaseEventPayload, createMcpToolCallPayload } from '@mxf-dev/core/schemas/EventPayloadSchema';
+import { mxfMcpToolRegistry } from '../../mcp/tools/index';
+import { McpToolDocumentationService } from '@mxf-dev/core/services/McpToolDocumentationService';
 
 // Create validator for tool registry
 const validate = createStrictValidator('McpToolRegistry');
@@ -60,6 +60,16 @@ export interface ExtendedMcpToolDefinition extends McpToolDefinition {
  * in a provider-agnostic way.
  */
 export class McpToolRegistry {
+    /**
+     * Late-bound supplier of external (hybrid) tools. Registered by
+     * ServerHybridMcpService so neither class imports the other.
+     */
+    private externalToolsProvider: (() => any[]) | null = null;
+
+    public registerExternalToolsProvider(provider: () => any[]): void {
+        this.externalToolsProvider = provider;
+    }
+
     private static instance: McpToolRegistry | null = null;
     private logger: Logger;
     private tools: Map<string, ExtendedMcpToolDefinition> = new Map();
@@ -662,16 +672,14 @@ export class McpToolRegistry {
             // Get internal tools
             const internalTools = Array.from(this.tools.values());
             
-            // Get external tools from hybrid registry if available
+            // External tools come from the hybrid service via late-bound provider
+            // registration (set in ServerHybridMcpService's constructor) — a static
+            // import here would create a genuine McpToolRegistry <-> hybrid cycle,
+            // and dynamic require() is banned. No provider registered simply means
+            // the hybrid feature is not active.
             let allTools = internalTools;
-            try {
-                // Import ServerHybridMcpService dynamically to avoid circular dependencies
-                const { ServerHybridMcpService } = require('./ServerHybridMcpService');
-                const hybridService = ServerHybridMcpService.getInstance();
-                const hybridRegistry = hybridService.getHybridRegistry();
-                
-                // Get external tools and convert them to ExtendedMcpToolDefinition format
-                const externalTools = hybridRegistry.getExternalTools().map((tool: any) => ({
+            if (this.externalToolsProvider) {
+                const externalTools = this.externalToolsProvider().map((tool: any) => ({
                     name: tool.name,
                     description: tool.description,
                     inputSchema: tool.inputSchema,
@@ -684,15 +692,14 @@ export class McpToolRegistry {
                 
                 // Combine internal and external tools
                 allTools = [...internalTools, ...externalTools];
-                
-                //;
-            } catch (error) {
-                // If hybrid service is not available, just use internal tools
             }
             
             // Apply filter if provided
             if (filter) {
-                const regex = new RegExp(filter, 'i');
+                // Treat the user-supplied filter as a literal substring — raw
+                // input in new RegExp() allows regex injection / ReDoS.
+                const escaped = filter.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                const regex = new RegExp(escaped, 'i');
                 return of(allTools.filter(tool => regex.test(tool.name)));
             }
             

@@ -14,8 +14,8 @@
  * limitations under the License.
  *
  * @author Brad Anderson <BradA1878@pm.me>
- * @repository https://github.com/BradA1878/model-exchange-framework
- * @documentation https://brada1878.github.io/model-exchange-framework/
+ * @repository https://github.com/mxf-dev/mxf
+ * @documentation https://mxf-dev.github.io/mxf/
  */
 
 /**
@@ -26,15 +26,16 @@
  * and index documents with vector search support.
  */
 
-import { Logger } from '../../../shared/utils/Logger';
-import { EventBus } from '../../../shared/events/EventBus';
-import { MxfMeilisearchService } from '../../../shared/services/MxfMeilisearchService';
+import { MeilisearchEvents } from '@mxf-dev/core/events/event-definitions/MeilisearchEvents';
+import { Logger } from '@mxf-dev/core/utils/Logger';
+import { EventBus } from '@mxf-dev/core/events/EventBus';
+import { MxfMeilisearchService } from '@mxf-dev/core/services/MxfMeilisearchService';
 import {
     createMeilisearchIndexEventPayload,
     createMeilisearchBackfillEventPayload,
     MeilisearchIndexEventData,
     MeilisearchBackfillEventData
-} from '../../../shared/schemas/EventPayloadSchema';
+} from '@mxf-dev/core/schemas/EventPayloadSchema';
 import { v4 as uuidv4 } from 'uuid';
 
 const logger = new Logger('debug', 'MeilisearchHandlers', 'server');
@@ -58,7 +59,7 @@ export const setupMeilisearchHandlers = (): void => {
      * Handle single message indexing requests from SDK
      * Event: meilisearch:index:request
      */
-    EventBus.server.on('meilisearch:index:request', async (payload) => {
+    EventBus.server.on(MeilisearchEvents.INDEX_REQUEST, async (payload) => {
         const operationId = payload.data?.operationId || uuidv4();
         const startTime = Date.now();
 
@@ -151,7 +152,7 @@ export const setupMeilisearchHandlers = (): void => {
      * Handle batch backfill indexing requests from SDK
      * Event: meilisearch:backfill:request
      */
-    EventBus.server.on('meilisearch:backfill:request', async (payload) => {
+    EventBus.server.on(MeilisearchEvents.BACKFILL_REQUEST, async (payload) => {
         const operationId = payload.data?.operationId || uuidv4();
         const startTime = Date.now();
         let indexedCount = 0;

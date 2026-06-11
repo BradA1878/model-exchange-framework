@@ -14,8 +14,8 @@
  * limitations under the License.
  *
  * @author Brad Anderson <BradA1878@pm.me>
- * @repository https://github.com/BradA1878/model-exchange-framework
- * @documentation https://brada1878.github.io/model-exchange-framework/
+ * @repository https://github.com/mxf-dev/mxf
+ * @documentation https://mxf-dev.github.io/mxf/
  */
 
 /**
@@ -32,14 +32,14 @@
  * - Monitoring and metrics support
  */
 
-import { Logger } from '../../../shared/utils/Logger';
-import { ChannelId } from '../../../shared/types/ChannelContext';
+import { Logger } from '@mxf-dev/core/utils/Logger';
+import { ChannelId } from '@mxf-dev/core/types/ChannelContext';
 import { SystemLlmService, SystemLlmServiceConfig } from './SystemLlmService';
-import { EventBus } from '../../../shared/events/EventBus';
-import { Events } from '../../../shared/events/EventNames';
-import { LlmProviderType } from '../../../shared/protocols/mcp/LlmProviders';
-import { HybridMcpService } from '../../../shared/protocols/mcp/services/HybridMcpService';
-import { ConfigManager } from '../../../sdk/config/ConfigManager';
+import { EventBus } from '@mxf-dev/core/events/EventBus';
+import { Events } from '@mxf-dev/core/events/EventNames';
+import { LlmProviderType } from '@mxf-dev/core/protocols/mcp/LlmProviders';
+import { HybridMcpService } from '../../mcp/services/HybridMcpService';
+import { ConfigManager } from '@mxf-dev/core/config/ConfigManager';
 
 const logger = new Logger('debug', 'SystemLlmServiceManager', 'server');
 

@@ -13,8 +13,8 @@ import {
     orparActTool,
     orparReflectTool,
     ORPAR_TOOL_NAMES
-} from '@mxf/shared/protocols/mcp/tools/OrparTools';
-import { OrparEvents } from '@mxf/shared/events/event-definitions/OrparEvents';
+} from '@mxf-dev/core/protocols/mcp/tools/OrparTools';
+import { OrparEvents } from '@mxf-dev/core/events/event-definitions/OrparEvents';
 
 describe('ORPAR Property Tests', () => {
     // Clean state between tests
@@ -441,7 +441,7 @@ describe('ORPAR Property Tests', () => {
 
     describe('Memory Leak Prevention', () => {
         it('clearAllAgentOrparStates should remove all states for an agent', async () => {
-            const { clearAllAgentOrparStates } = await import('@mxf/shared/protocols/mcp/tools/OrparTools');
+            const { clearAllAgentOrparStates } = await import('@mxf-dev/core/protocols/mcp/tools/OrparTools');
 
             const agentId = 'multi-channel-agent';
             const channels = ['channel-1', 'channel-2', 'channel-3'];

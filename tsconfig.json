@@ -11,7 +11,10 @@
     "sourceMap": true,
     "baseUrl": ".",
     "paths": {
-      "*": ["node_modules/*"]
+      "@mxf-dev/core": ["packages/core/src/index.ts"],
+      "@mxf-dev/core/*": ["packages/core/src/*"],
+      "@mxf-dev/sdk": ["packages/sdk/src/index.ts"],
+      "@mxf-dev/sdk/*": ["packages/sdk/src/*"]
     },
     "rootDir": "src",
     "noEmitOnError": true,
@@ -21,6 +24,10 @@
   },
   "include": [
     "src/**/*"
+  ],
+  "references": [
+    { "path": "./packages/core" },
+    { "path": "./packages/sdk" }
   ],
   "exclude": [
     "node_modules",

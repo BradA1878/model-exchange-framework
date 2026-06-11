@@ -94,3 +94,9 @@ temp/
 src/desktop/src-tauri/target/
 src/desktop/node_modules/
 src/desktop/dist/
+
+# Build artifacts and npm lockfile (bun.lock is authoritative)
+*.tsbuildinfo
+package-lock.json
+packages/core/dist/
+packages/sdk/dist/

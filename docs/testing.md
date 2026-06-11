@@ -119,7 +119,7 @@ Unit tests are fast, deterministic tests for pure functions with no external dep
 
 ```typescript
 // tests/unit/schemas/MessageSchemas.unit.test.ts
-import { createMessageMetadata, ContentFormat } from '@mxf/shared/schemas/MessageSchemas';
+import { createMessageMetadata, ContentFormat } from '@mxf-dev/core/schemas/MessageSchemas';
 
 describe('createMessageMetadata', () => {
     it('generates unique message IDs', () => {
@@ -148,9 +148,9 @@ Controller unit tests verify API controller logic in isolation by mocking depend
 
 ```typescript
 // tests/unit/controllers/agentController.unit.test.ts
-import * as agentController from '@mxf/server/api/controllers/agentController';
+import * as agentController from 'src/server/api/controllers/agentController';
 
-jest.mock('@mxf/shared/models/agent');
+jest.mock('@mxf-dev/core/models/agent');
 
 describe('agentController.getAllAgents', () => {
     it('returns agents with success response', async () => {
@@ -192,7 +192,7 @@ Property-based tests use [fast-check](https://fast-check.dev/) to verify that in
 ```typescript
 // tests/property/messages.property.test.ts
 import fc from 'fast-check';
-import { determineContentFormat, ContentFormat } from '@mxf/shared/schemas/MessageSchemas';
+import { determineContentFormat, ContentFormat } from '@mxf-dev/core/schemas/MessageSchemas';
 
 describe('determineContentFormat', () => {
     it('is idempotent', () => {
@@ -449,8 +449,8 @@ See `stryker.config.json` for configuration. Key settings:
 ```json
 {
   "mutate": [
-    "src/shared/schemas/**/*.ts",
-    "src/shared/utils/validation.ts"
+    "packages/core/src/schemas/**/*.ts",
+    "packages/core/src/utils/validation.ts"
   ],
   "testRunner": "jest",
   "thresholds": {

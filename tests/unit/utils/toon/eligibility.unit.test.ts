@@ -7,8 +7,8 @@ import {
   evaluateEligibility,
   extractEligibleArrays,
   mightBeEligible,
-} from '@mxf/shared/utils/toon/eligibility';
-import { EligibilityOptions } from '@mxf/shared/utils/toon/types';
+} from '@mxf-dev/core/utils/toon/eligibility';
+import { EligibilityOptions } from '@mxf-dev/core/utils/toon/types';
 
 describe('TOON Eligibility Evaluator', () => {
   describe('evaluateEligibility', () => {

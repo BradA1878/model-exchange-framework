@@ -14,8 +14,8 @@
  * limitations under the License.
  *
  * @author Brad Anderson <BradA1878@pm.me>
- * @repository https://github.com/BradA1878/model-exchange-framework
- * @documentation https://brada1878.github.io/model-exchange-framework/
+ * @repository https://github.com/mxf-dev/mxf
+ * @documentation https://mxf-dev.github.io/mxf/
  */
 
 /**
@@ -36,9 +36,9 @@
  * - Channel-level override via channel.settings.toonOptimization
  */
 
-import { formatMessagePayload, mightBeEligible, recordEncoding, recordError } from '../../../shared/utils/toon';
-import { Logger } from '../../../shared/utils/Logger';
-import { ChannelId } from '../../../shared/types/ChannelContext';
+import { formatMessagePayload, mightBeEligible, recordEncoding, recordError } from '@mxf-dev/core/utils/toon';
+import { Logger } from '@mxf-dev/core/utils/Logger';
+import { ChannelId } from '@mxf-dev/core/types/ChannelContext';
 
 const logger = new Logger('debug', 'ToonMessageMiddleware', 'server');
 

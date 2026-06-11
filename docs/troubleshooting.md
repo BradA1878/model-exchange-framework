@@ -425,7 +425,7 @@ MXF provides a unified Logger utility for both server and client (SDK) component
 
 ### Logger Configuration
 
-The Logger is located at `src/shared/utils/Logger.ts` and supports separate server/client logging pathways.
+The Logger is located at `packages/core/src/utils/Logger.ts` and supports separate server/client logging pathways.
 
 **Default Configuration (logging disabled):**
 ```typescript
@@ -453,7 +453,7 @@ import {
     disableClientLogging,
     enableServerLogging,
     disableServerLogging
-} from '../../src/shared/utils/Logger';
+} from '@mxf-dev/core/utils/Logger';
 
 // Enable client logging (SDK/agent side)
 enableClientLogging();           // Default: 'debug' level
@@ -473,7 +473,7 @@ disableServerLogging();
 For more control, use `configureLogging()`:
 
 ```typescript
-import { configureLogging } from '../../src/shared/utils/Logger';
+import { configureLogging } from '@mxf-dev/core/utils/Logger';
 
 // Enable both server and client logging
 configureLogging({
@@ -511,7 +511,7 @@ Available log levels (from most to least severe):
 ### Using the Logger
 
 ```typescript
-import { Logger, logger } from '../../src/shared/utils/Logger';
+import { Logger, logger } from '@mxf-dev/core/utils/Logger';
 
 // Use the default singleton logger (server target)
 logger.info('Server started');
@@ -547,7 +547,7 @@ For demos, keep logging disabled by default. Enable only when debugging:
 
 ```typescript
 // At the top of your demo file, before any other imports
-import { enableClientLogging } from '../../src/shared/utils/Logger';
+import { enableClientLogging } from '@mxf-dev/core/utils/Logger';
 
 // Enable logging only when needed
 if (process.env.DEBUG_DEMO) {
@@ -576,8 +576,8 @@ DEBUG_DEMO=true bun run demo:your-demo
 
 If you're still experiencing issues:
 
-1. **Check existing issues:** [GitHub Issues](https://github.com/BradA1878/model-exchange-framework/issues)
-2. **Ask the community:** [GitHub Discussions](https://github.com/BradA1878/model-exchange-framework/discussions)
+1. **Check existing issues:** [GitHub Issues](https://github.com/mxf-dev/mxf/issues)
+2. **Ask the community:** [GitHub Discussions](https://github.com/mxf-dev/mxf/discussions)
 3. **Review documentation:** [Full Documentation](./index.md)
 
 When reporting issues, include:

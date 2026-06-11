@@ -12,8 +12,8 @@ import {
   exportMetricsJson,
   getMetricsSummary,
   createContextCollector,
-} from '@mxf/shared/utils/toon/metrics';
-import { EncodeResult } from '@mxf/shared/utils/toon/types';
+} from '@mxf-dev/core/utils/toon/metrics';
+import { EncodeResult } from '@mxf-dev/core/utils/toon/types';
 
 describe('TOON Metrics Tracker', () => {
   beforeEach(() => {

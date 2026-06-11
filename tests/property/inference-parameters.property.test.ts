@@ -11,7 +11,7 @@ import {
     estimateCost,
     validateProfileAgainstGovernance,
     mergeWithDefaults
-} from '@mxf/shared/constants/DefaultPhaseProfiles';
+} from '@mxf-dev/core/constants/DefaultPhaseProfiles';
 import {
     PhaseParameterProfile,
     OrparPhase,
@@ -19,7 +19,7 @@ import {
     ResetParameterScope,
     InferenceParameterResponse,
     InferenceParameterRequestStatus
-} from '@mxf/shared/types/InferenceParameterTypes';
+} from '@mxf-dev/core/types/InferenceParameterTypes';
 
 // Custom arbitraries for inference parameter types
 const orparPhaseArb = fc.constantFrom<OrparPhase>(

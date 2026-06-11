@@ -174,7 +174,7 @@ console.log(`✅ Agent ${agent.agentId} connected and ready!`);
 To make game tools available to agents, register them as MCP tools:
 
 ```typescript
-import { McpToolRegistry } from '../../src/shared/protocols/mcp/McpToolRegistry';
+import { McpToolRegistry } from '@mxf-dev/core/protocols/mcp/McpToolRegistry';
 import { GameTools } from '../src/mcp/GameTools';
 
 // Get game tools instance

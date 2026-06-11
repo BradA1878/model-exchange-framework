@@ -22,7 +22,13 @@ const config: Config = {
     globalSetup: '<rootDir>/tests/setup/globalSetup.ts',
     globalTeardown: '<rootDir>/tests/setup/globalTeardown.ts',
     moduleNameMapper: {
-        '^@mxf/(.*)$': '<rootDir>/src/$1',
+        // Workspace packages resolve to TS source so jest uses a single module graph.
+        '^@mxf-dev/core$': '<rootDir>/packages/core/src/index.ts',
+        '^@mxf-dev/core/(.*)$': '<rootDir>/packages/core/src/$1',
+        '^@mxf-dev/sdk$': '<rootDir>/packages/sdk/src/index.ts',
+        '^@mxf-dev/sdk/(.*)$': '<rootDir>/packages/sdk/src/$1',
+        // NodeNext ESM emits .js suffixes on relative imports inside packages.
+        '^(\\.{1,2}/.*)\\.js$': '$1',
         '^@tests/(.*)$': '<rootDir>/tests/$1'
     },
     transform: {

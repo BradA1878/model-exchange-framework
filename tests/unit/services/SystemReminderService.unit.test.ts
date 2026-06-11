@@ -4,7 +4,7 @@
  * cooldown enforcement, priority ordering, token budget, and reset behavior.
  */
 
-import { SystemReminderService, ReminderContext, ReminderTrigger, SystemReminder } from '../../../src/sdk/services/SystemReminderService';
+import { SystemReminderService, ReminderContext, ReminderTrigger, SystemReminder } from '@mxf-dev/sdk/services/SystemReminderService';
 
 /** Helper to build a minimal ReminderContext */
 function makeContext(overrides: Partial<ReminderContext> = {}): ReminderContext {

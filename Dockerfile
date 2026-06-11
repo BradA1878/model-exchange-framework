@@ -1,17 +1,22 @@
 # Multi-stage build for MXF Server
 # Build stage uses Bun for fast package installation
-FROM oven/bun:1.1-slim AS builder
+FROM oven/bun:1.3-slim AS builder
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y python3 make g++ && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Copy package files
+# Copy workspace manifests first so the dependency layer caches until a
+# manifest changes. --frozen-lockfile needs every workspace package.json.
 COPY package.json bun.lock* bun.lockb* ./
+COPY packages/core/package.json packages/core/
+COPY packages/sdk/package.json packages/sdk/
 
-# Install dependencies using Bun (fast)
-RUN bun install --frozen-lockfile
+# Install dependencies using Bun. --ignore-scripts: the build stage only needs
+# tsc; skipping postinstalls avoids esbuild's binary version check (dev-only
+# dep with two resolved versions) and the ink ansi patch (TUI, not built here).
+RUN bun install --frozen-lockfile --ignore-scripts
 
 # Copy source code
 COPY . .
@@ -20,7 +25,7 @@ COPY . .
 RUN bun run build
 
 # Production stage uses Bun for consistent runtime
-FROM oven/bun:1.1-slim
+FROM oven/bun:1.3-slim
 
 # Install runtime dependencies for Puppeteer
 RUN apt-get update && apt-get install -y \
@@ -36,15 +41,21 @@ ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 
 WORKDIR /app
 
-# Copy package files and lockfile from builder
+# Copy package files and lockfile from builder. scripts/ must precede install:
+# the repo postinstall runs scripts/patch-ansi-styles.js.
 COPY package.json bun.lock* bun.lockb* ./
+COPY packages/core/package.json packages/core/
+COPY packages/sdk/package.json packages/sdk/
+COPY scripts ./scripts
 
 # Install production dependencies with Bun
 RUN bun install --production --frozen-lockfile
 
-# Copy built application from builder
+# Copy built application and workspace packages from builder. The app dist
+# resolves @mxf-dev/core and @mxf-dev/sdk through the workspace symlinks; Bun's
+# 'bun' export condition runs the package TS sources directly.
 COPY --from=builder /app/dist ./dist
-COPY --from=builder /app/src/shared ./src/shared
+COPY --from=builder /app/packages ./packages
 
 # Create necessary directories
 RUN mkdir -p /app/logs /app/uploads

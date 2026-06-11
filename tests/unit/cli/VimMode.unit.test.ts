@@ -5,7 +5,7 @@
  * in normal/insert modes, multi-key sequences (dd), and toggle behavior.
  */
 
-import { VimModeService } from '@mxf/cli/tui/services/VimMode';
+import { VimModeService } from '../../../src/cli/tui/services/VimMode';
 
 describe('VimModeService Unit Tests', () => {
     let vim: VimModeService;

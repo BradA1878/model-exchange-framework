@@ -3,10 +3,10 @@
  * Tests DAG building, dependency management, and cache operations
  */
 
-import { TaskDagService } from '@mxf/shared/services/dag/TaskDagService';
-import { resetDagConfig, updateDagConfig } from '@mxf/shared/config/dag.config';
-import { ChannelTask, TaskStatus } from '@mxf/shared/types/TaskTypes';
-import { DagErrorCode } from '@mxf/shared/types/DagTypes';
+import { TaskDagService } from '@mxf-dev/core/services/dag/TaskDagService';
+import { resetDagConfig, updateDagConfig } from '@mxf-dev/core/config/dag.config';
+import { ChannelTask, TaskStatus } from '@mxf-dev/core/types/TaskTypes';
+import { DagErrorCode } from '@mxf-dev/core/types/DagTypes';
 
 /**
  * Helper to create a test task

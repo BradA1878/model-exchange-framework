@@ -14,8 +14,8 @@
  * limitations under the License.
  *
  * @author Brad Anderson <BradA1878@pm.me>
- * @repository https://github.com/BradA1878/model-exchange-framework
- * @documentation https://brada1878.github.io/model-exchange-framework/
+ * @repository https://github.com/mxf-dev/mxf
+ * @documentation https://mxf-dev.github.io/mxf/
  */
 
 /**
@@ -28,9 +28,10 @@
 
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
-import { User, UserRole } from '../../../shared/models/user';
-import { Logger } from '../../../shared/utils/Logger';
-import { createStrictValidator } from '../../../shared/utils/validation';
+import { requireEnv } from '@mxf-dev/core/utils/env';
+import { User, UserRole } from '@mxf-dev/core/models/user';
+import { Logger } from '@mxf-dev/core/utils/Logger';
+import { createStrictValidator } from '@mxf-dev/core/utils/validation';
 import KeyAuthHelper from '../../utils/keyAuthHelper';
 
 // Initialize logger
@@ -104,7 +105,7 @@ const tryJwtAuthentication = async (req: Request): Promise<{ success: boolean; u
         const token = authHeader.split(' ')[1];
         
         // Verify token
-        const secret = process.env.JWT_SECRET || 'default_jwt_secret_for_dev';
+        const secret = requireEnv('JWT_SECRET', 'Set a strong secret in .env — it signs and verifies all user JWTs.');
         const decoded = jwt.verify(token, secret) as any;
         
         // Check if token contains userId

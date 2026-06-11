@@ -11,7 +11,7 @@ import {
     Relationship,
     DEFAULT_ENTITY_UTILITY,
     EntityUtility,
-} from '@mxf/shared/types/KnowledgeGraphTypes';
+} from '@mxf-dev/core/types/KnowledgeGraphTypes';
 
 /**
  * Create a test entity

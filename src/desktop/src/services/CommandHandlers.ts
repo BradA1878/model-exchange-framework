@@ -12,6 +12,9 @@
  * @author Brad Anderson <BradA1878@pm.me>
  */
 
+import { listSessions, loadSession, formatSessionList } from './SessionHistory';
+import { VimModeService } from './VimMode';
+import { formatCostSummary } from './CostTracker';
 import { registerCommand, getRegisteredCommands } from './CommandRegistry';
 import type { CommandContext } from './CommandRegistry';
 import { useAppState, generateMessageId } from '../state/appState';
@@ -373,7 +376,6 @@ registerCommand({
     usage: '/cost',
     handler: async () => {
         const state = useAppState.getState();
-        const { formatCostSummary } = await import('./CostTracker');
         addSystemMessage(formatCostSummary(state.costData));
     },
 });
@@ -516,7 +518,6 @@ registerCommand({
     description: 'Toggle vim keybindings',
     usage: '/vim',
     handler: async () => {
-        const { VimModeService } = await import('./VimMode');
         const vim = VimModeService.getInstance();
         vim.toggle();
         useAppState.getState().toggleVim();
@@ -872,7 +873,6 @@ registerCommand({
     description: 'Show session history or load a session',
     usage: '/history [load <id>]',
     handler: async (args: string) => {
-        const { listSessions, loadSession, formatSessionList } = await import('./SessionHistory');
         const parts = args.trim().split(/\s+/);
         const subcommand = parts[0]?.toLowerCase() || '';
 

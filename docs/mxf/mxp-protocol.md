@@ -188,7 +188,7 @@ interface AnalyticsConfig {
 ### MxpConfigManager Usage
 
 ```typescript
-import { MxpConfigManager, SecurityLevel } from '@mxf/mxp';
+import { MxpConfigManager, SecurityLevel } from '@mxf-dev/core/mxp';
 
 const mxpManager = MxpConfigManager.getInstance();
 

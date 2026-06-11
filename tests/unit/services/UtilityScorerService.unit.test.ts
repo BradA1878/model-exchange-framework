@@ -3,8 +3,8 @@
  * Tests composite scoring formula, phase-specific lambda selection, and normalization
  */
 
-import { UtilityScorerService } from '@mxf/shared/services/UtilityScorerService';
-import { MemoryCandidate, DEFAULT_PHASE_LAMBDAS } from '@mxf/shared/types/MemoryUtilityTypes';
+import { UtilityScorerService } from '@mxf-dev/core/services/UtilityScorerService';
+import { MemoryCandidate, DEFAULT_PHASE_LAMBDAS } from '@mxf-dev/core/types/MemoryUtilityTypes';
 
 describe('UtilityScorerService Unit Tests', () => {
     let scorer: UtilityScorerService;

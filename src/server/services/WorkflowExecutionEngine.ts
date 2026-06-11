@@ -14,7 +14,7 @@
  * limitations under the License.
  *
  * @author Brad Anderson <BradA1878@pm.me>
- * @repository https://github.com/BradA1878/model-exchange-framework
+ * @repository https://github.com/mxf-dev/mxf
  */
 
 /**
@@ -26,10 +26,11 @@
  * Feature flag: WORKFLOW_SYSTEM_ENABLED
  */
 
-import { Logger } from '../../shared/utils/Logger';
-import { EventBus } from '../../shared/events/EventBus';
-import { Events } from '../../shared/events/EventNames';
-import { createBaseEventPayload } from '../../shared/schemas/EventPayloadSchema';
+import { v4 as uuidv4 } from 'uuid';
+import { Logger } from '@mxf-dev/core/utils/Logger';
+import { EventBus } from '@mxf-dev/core/events/EventBus';
+import { Events } from '@mxf-dev/core/events/EventNames';
+import { createBaseEventPayload } from '@mxf-dev/core/schemas/EventPayloadSchema';
 import {
     WorkflowDefinition,
     WorkflowExecutionContext,
@@ -37,7 +38,7 @@ import {
     WorkflowState,
     WorkflowStatus,
     WorkflowTemplate
-} from '../../shared/types/WorkflowTypes';
+} from '@mxf-dev/core/types/WorkflowTypes';
 
 // System agent ID for workflow engine operations
 const WORKFLOW_ENGINE_AGENT_ID = 'system:workflow-engine';
@@ -155,7 +156,7 @@ export class WorkflowExecutionEngine {
             return null;
         }
 
-        const executionId = `exec-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        const executionId = `exec-${uuidv4()}`;
 
         const context: WorkflowExecutionContext = {
             workflowId,
@@ -357,7 +358,7 @@ export class WorkflowExecutionEngine {
         }
 
         // Create workflow definition
-        const workflowId = `wf-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        const workflowId = `wf-${uuidv4()}`;
         const now = new Date();
 
         const workflow: WorkflowDefinition = {

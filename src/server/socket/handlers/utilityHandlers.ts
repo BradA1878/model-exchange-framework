@@ -14,8 +14,8 @@
  * limitations under the License.
  *
  * @author Brad Anderson <BradA1878@pm.me>
- * @repository https://github.com/BradA1878/model-exchange-framework
- * @documentation https://brada1878.github.io/model-exchange-framework/
+ * @repository https://github.com/mxf-dev/mxf
+ * @documentation https://mxf-dev.github.io/mxf/
  */
 
 /**
@@ -26,9 +26,9 @@
  */
 
 import { Socket } from 'socket.io';
-import { EventBus } from '../../../shared/events/EventBus';
-import { createStrictValidator } from '../../../shared/utils/validation';
-import logger from '../../../shared/utils/Logger';
+import { EventBus } from '@mxf-dev/core/events/EventBus';
+import { createStrictValidator } from '@mxf-dev/core/utils/validation';
+import logger from '@mxf-dev/core/utils/Logger';
 
 // Create module logger
 const moduleLogger = logger.child('UtilityHandlers');

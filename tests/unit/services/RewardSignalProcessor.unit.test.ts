@@ -3,9 +3,9 @@
  * Tests reward mapping correctness and batch attribution
  */
 
-import { RewardSignalProcessor } from '@mxf/shared/services/RewardSignalProcessor';
-import { QValueManager } from '@mxf/shared/services/QValueManager';
-import { TaskOutcome, DEFAULT_REWARD_MAPPING } from '@mxf/shared/types/MemoryUtilityTypes';
+import { RewardSignalProcessor } from '@mxf-dev/core/services/RewardSignalProcessor';
+import { QValueManager } from '@mxf-dev/core/services/QValueManager';
+import { TaskOutcome, DEFAULT_REWARD_MAPPING } from '@mxf-dev/core/types/MemoryUtilityTypes';
 
 describe('RewardSignalProcessor Unit Tests', () => {
     let rewardProcessor: RewardSignalProcessor;

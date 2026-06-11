@@ -10,7 +10,7 @@ import {
     getCompactionThreshold,
     registerModelContextLimit,
     listModelContextLimits,
-} from '../../../src/shared/config/ModelContextLimits';
+} from '@mxf-dev/core/config/ModelContextLimits';
 
 describe('ModelContextLimits', () => {
     describe('getContextLimit', () => {

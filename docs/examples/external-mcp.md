@@ -88,7 +88,7 @@ await server.connect(transport);
 ### 2. Register via SDK
 
 ```typescript
-import { MxfSDK } from '@mxf/sdk';
+import { MxfSDK } from '@mxf-dev/sdk';
 
 const sdk = new MxfSDK({
     serverUrl: 'http://localhost:3001',

@@ -17,8 +17,8 @@ The event system provides:
 ## Import Events
 
 ```typescript
-import { MxfSDK, Events } from '@mxf/sdk';
-import type { MxfAgent } from '@mxf/sdk';
+import { MxfSDK, Events } from '@mxf-dev/sdk';
+import type { MxfAgent } from '@mxf-dev/sdk';
 ```
 
 ## Event Listening Patterns
@@ -53,7 +53,7 @@ agent.channelService.off(Events.Message.AGENT_MESSAGE);
 Monitor ALL events from ALL agents in a channel without creating an agent:
 
 ```typescript
-import { MxfSDK, Events } from '@mxf/sdk';
+import { MxfSDK, Events } from '@mxf-dev/sdk';
 
 // Initialize SDK with access token (recommended)
 const sdk = new MxfSDK({
@@ -95,7 +95,7 @@ monitor.on(Events.Task.COMPLETED, (payload) => {
 Events related to agent status and lifecycle:
 
 ```typescript
-import { Events } from '@mxf/sdk';
+import { Events } from '@mxf-dev/sdk';
 
 // Agent connected
 agent.on(Events.Agent.CONNECTED, (payload) => {
@@ -141,7 +141,7 @@ agent.on(Events.Agent.ALLOWED_TOOLS_UPDATED, (payload) => {
 Events for agent and channel messaging:
 
 ```typescript
-import { Events } from '@mxf/sdk';
+import { Events } from '@mxf-dev/sdk';
 
 // Agent-to-agent messages
 agent.on(Events.Message.AGENT_MESSAGE, (payload) => {
@@ -175,7 +175,7 @@ agent.on(Events.Message.MESSAGE_SEND_FAILED, (payload) => {
 Task lifecycle and progress tracking:
 
 ```typescript
-import { Events } from '@mxf/sdk';
+import { Events } from '@mxf-dev/sdk';
 
 // Task created
 agent.on(Events.Task.CREATED, (payload) => {
@@ -212,7 +212,7 @@ agent.on(Events.Task.FAILED, (payload) => {
 Memory CRUD operations across different scopes:
 
 ```typescript
-import { Events } from '@mxf/sdk';
+import { Events } from '@mxf-dev/sdk';
 
 // Memory created
 agent.on(Events.Memory.CREATE_RESULT, (payload) => {
@@ -241,7 +241,7 @@ agent.on(Events.Memory.DELETE_RESULT, (payload) => {
 ORPAR cognitive cycle events:
 
 ```typescript
-import { Events } from '@mxf/sdk';
+import { Events } from '@mxf-dev/sdk';
 
 // Observation phase
 agent.on(Events.ControlLoop.OBSERVATION, (payload) => {
@@ -274,7 +274,7 @@ agent.on(Events.ControlLoop.REFLECTION, (payload) => {
 Model Context Protocol tool execution:
 
 ```typescript
-import { Events } from '@mxf/sdk';
+import { Events } from '@mxf-dev/sdk';
 
 // Tool called
 agent.on(Events.Mcp.TOOL_CALL, (payload) => {
@@ -303,7 +303,7 @@ agent.on(Events.Mcp.TOOL_REGISTERED, (payload) => {
 Channel management and participation:
 
 ```typescript
-import { Events } from '@mxf/sdk';
+import { Events } from '@mxf-dev/sdk';
 
 // Agent joined channel
 agent.on(Events.Channel.AGENT_JOINED, (payload) => {
@@ -385,7 +385,7 @@ All available events organized by category:
 Events for the multi-layer compaction pipeline:
 
 ```typescript
-import { Events } from '@mxf/sdk';
+import { Events } from '@mxf-dev/sdk';
 
 // Microcompaction applied (tool result trimming, no LLM call)
 agent.on(Events.Compaction.MICROCOMPACTION_APPLIED, (payload) => {
@@ -425,7 +425,7 @@ See [Compaction Pipeline](../mxf/compaction-pipeline.md) for full documentation.
 Events for shell command execution lifecycle:
 
 ```typescript
-import { Events } from '@mxf/sdk';
+import { Events } from '@mxf-dev/sdk';
 
 // Shell command started
 agent.on(Events.Shell.SHELL_EXECUTION_STARTED, (payload) => {

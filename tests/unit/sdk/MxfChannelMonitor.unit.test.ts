@@ -4,11 +4,11 @@
  */
 
 import { Subject, Subscription } from 'rxjs';
-import { EventBus } from '@mxf/shared/events/EventBus';
-import { MxfChannelMonitor } from '@mxf/sdk/MxfChannelMonitor';
+import { EventBus } from '@mxf-dev/core/events/EventBus';
+import { MxfChannelMonitor } from '@mxf-dev/sdk/MxfChannelMonitor';
 
 // Mock EventBus.client
-jest.mock('@mxf/shared/events/EventBus', () => {
+jest.mock('@mxf-dev/core/events/EventBus', () => {
     const mockSubject = new Subject<any>();
     const subscriptions: Map<string, ((payload: any) => void)[]> = new Map();
 

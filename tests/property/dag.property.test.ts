@@ -9,8 +9,8 @@ import {
     TaskDagNode,
     TaskDagEdge,
     TopologicalResult,
-} from '@mxf/shared/types/DagTypes';
-import { TaskStatus } from '@mxf/shared/types/TaskTypes';
+} from '@mxf-dev/core/types/DagTypes';
+import { TaskStatus } from '@mxf-dev/core/types/TaskTypes';
 import {
     topologicalSort,
     detectCycle,
@@ -19,7 +19,7 @@ import {
     computeDagStats,
     isTaskReady,
     getBlockingTasks,
-} from '@mxf/shared/services/dag/algorithms/TopologicalSort';
+} from '@mxf-dev/core/services/dag/algorithms/TopologicalSort';
 
 /**
  * Helper to create an empty DAG

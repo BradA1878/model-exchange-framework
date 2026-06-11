@@ -15,7 +15,7 @@ import {
     MessageMetadata,
     ChannelMessage,
     AgentMessage
-} from '@mxf/shared/schemas/MessageSchemas';
+} from '@mxf-dev/core/schemas/MessageSchemas';
 
 describe('MessageSchemas', () => {
     describe('createMessageMetadata', () => {

@@ -8,7 +8,7 @@
 import { Request, Response } from 'express';
 
 // Mock dependencies before importing controller
-jest.mock('../../../src/shared/models/agent', () => ({
+jest.mock('@mxf-dev/core/models/agent', () => ({
     Agent: {
         find: jest.fn(),
         findOne: jest.fn(),
@@ -18,13 +18,13 @@ jest.mock('../../../src/shared/models/agent', () => ({
     }
 }));
 
-jest.mock('../../../src/shared/models/memory', () => ({
+jest.mock('@mxf-dev/core/models/memory', () => ({
     AgentMemory: {
         deleteMany: jest.fn()
     }
 }));
 
-jest.mock('../../../src/shared/utils/Logger', () => ({
+jest.mock('@mxf-dev/core/utils/Logger', () => ({
     Logger: jest.fn().mockImplementation(() => ({
         info: jest.fn(),
         warn: jest.fn(),
@@ -33,7 +33,7 @@ jest.mock('../../../src/shared/utils/Logger', () => ({
     }))
 }));
 
-jest.mock('../../../src/shared/utils/validation', () => ({
+jest.mock('@mxf-dev/core/utils/validation', () => ({
     createStrictValidator: jest.fn().mockReturnValue({
         assertIsObject: jest.fn(),
         assertIsNonEmptyString: jest.fn(),
@@ -44,7 +44,7 @@ jest.mock('../../../src/shared/utils/validation', () => ({
     })
 }));
 
-jest.mock('../../../src/shared/events/EventBus', () => ({
+jest.mock('@mxf-dev/core/events/EventBus', () => ({
     EventBus: {
         server: {
             emit: jest.fn()
@@ -52,8 +52,8 @@ jest.mock('../../../src/shared/events/EventBus', () => ({
     }
 }));
 
-import { Agent } from '../../../src/shared/models/agent';
-import { AgentMemory } from '../../../src/shared/models/memory';
+import { Agent } from '@mxf-dev/core/models/agent';
+import { AgentMemory } from '@mxf-dev/core/models/memory';
 import {
     getAgents,
     getAgentById,

@@ -128,9 +128,9 @@ RETRIEVAL_LAMBDA_REFLECTION=0.6
 ### Programmatic Configuration
 
 ```typescript
-import { QValueManager } from '@mxf/shared/services/QValueManager';
-import { UtilityScorerService } from '@mxf/shared/services/UtilityScorerService';
-import { RewardSignalProcessor } from '@mxf/shared/services/RewardSignalProcessor';
+import { QValueManager } from '@mxf-dev/core/services/QValueManager';
+import { UtilityScorerService } from '@mxf-dev/core/services/UtilityScorerService';
+import { RewardSignalProcessor } from '@mxf-dev/core/services/RewardSignalProcessor';
 
 // Initialize with custom config
 QValueManager.getInstance().initialize({

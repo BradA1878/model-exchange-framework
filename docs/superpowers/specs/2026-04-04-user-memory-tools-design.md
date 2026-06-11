@@ -33,7 +33,7 @@ Four types, borrowed from memdir's taxonomy:
 
 ## Data Model
 
-New Mongoose model: `src/shared/models/userMemory.ts`
+New Mongoose model: `packages/core/src/models/userMemory.ts`
 
 ```typescript
 {
@@ -61,7 +61,7 @@ New Mongoose model: `src/shared/models/userMemory.ts`
 
 ## UserMemoryService
 
-New singleton: `src/shared/services/UserMemoryService.ts`
+New singleton: `packages/core/src/services/UserMemoryService.ts`
 
 Follows MXF's `getInstance()` pattern.
 
@@ -141,7 +141,7 @@ private async withWriteLock<T>(userId: string, fn: () => Promise<T>): Promise<T>
 
 ## MCP Tools
 
-New file: `src/shared/protocols/mcp/tools/UserMemoryTools.ts`
+New file: `packages/core/src/protocols/mcp/tools/UserMemoryTools.ts`
 
 ### `user_memory_save`
 
@@ -233,16 +233,16 @@ Same save guidelines, focused on project and feedback types.
 
 | File | Purpose |
 |------|---------|
-| `src/shared/models/userMemory.ts` | Mongoose model + TypeScript interfaces |
-| `src/shared/services/UserMemoryService.ts` | Singleton — CRUD, search, staleness, write lock, auto-recall |
-| `src/shared/protocols/mcp/tools/UserMemoryTools.ts` | 4 MCP tools (save, recall, forget, shake) |
+| `packages/core/src/models/userMemory.ts` | Mongoose model + TypeScript interfaces |
+| `packages/core/src/services/UserMemoryService.ts` | Singleton — CRUD, search, staleness, write lock, auto-recall |
+| `packages/core/src/protocols/mcp/tools/UserMemoryTools.ts` | 4 MCP tools (save, recall, forget, shake) |
 
 ### Modified Files (8)
 
 | File | Changes |
 |------|---------|
-| `src/shared/constants/ToolNames.ts` | Add `USER_MEMORY_TOOLS` namespace |
-| `src/shared/protocols/mcp/tools/index.ts` | Import + export + register user memory tools |
+| `packages/core/src/constants/ToolNames.ts` | Add `USER_MEMORY_TOOLS` namespace |
+| `packages/core/src/protocols/mcp/tools/index.ts` | Import + export + register user memory tools |
 | `src/cli/tui/services/InteractiveSessionManager.ts` | Auto-inject session context on connect |
 | `src/cli/tui/agents/built-in/concierge.md` | Add 4 tools + user memory instructions |
 | `src/cli/tui/agents/built-in/planner.md` | Add save + recall + instructions |

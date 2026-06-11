@@ -14,8 +14,8 @@
  * limitations under the License.
  *
  * @author Brad Anderson <BradA1878@pm.me>
- * @repository https://github.com/BradA1878/model-exchange-framework
- * @documentation https://brada1878.github.io/model-exchange-framework/
+ * @repository https://github.com/mxf-dev/mxf
+ * @documentation https://mxf-dev.github.io/mxf/
  */
 
 /**
@@ -30,19 +30,19 @@
  * This service runs server-side and follows existing MCP patterns.
  */
 
-import { Logger } from '../../../shared/utils/Logger';
-import { createStrictValidator } from '../../../shared/utils/validation';
-import { ExternalMcpServerManager } from '../../../shared/protocols/mcp/services/ExternalMcpServerManager';
+import { Logger } from '@mxf-dev/core/utils/Logger';
+import { createStrictValidator } from '@mxf-dev/core/utils/validation';
+import { ExternalMcpServerManager } from '@mxf-dev/core/protocols/mcp/services/ExternalMcpServerManager';
 import { 
     EXTERNAL_SERVER_CONFIGS, 
     getAutoStartConfigs
-} from '../../../shared/protocols/mcp/services/ExternalServerConfigs';
-import type { ExternalServerConfig } from '../../../shared/protocols/mcp/services/ExternalMcpServerManager';
-import { HybridMcpToolRegistry } from '../../../shared/protocols/mcp/services/HybridMcpToolRegistry';
+} from '@mxf-dev/core/protocols/mcp/services/ExternalServerConfigs';
+import type { ExternalServerConfig } from '@mxf-dev/core/protocols/mcp/services/ExternalMcpServerManager';
+import { HybridMcpToolRegistry } from '../../mcp/services/HybridMcpToolRegistry';
 import { McpToolRegistry } from './McpToolRegistry';
 import { firstValueFrom } from 'rxjs';
-import { EventBus } from '../../../shared/events/EventBus';
-import { McpEvents } from '../../../shared/events/event-definitions/McpEvents';
+import { EventBus } from '@mxf-dev/core/events/EventBus';
+import { McpEvents } from '@mxf-dev/core/events/event-definitions/McpEvents';
 import fs from 'fs';
 import path from 'path';
 
@@ -121,6 +121,9 @@ export class ServerHybridMcpService {
         // Initialize components
         this.externalServerManager = new ExternalMcpServerManager();
         this.hybridRegistry = new HybridMcpToolRegistry(McpToolRegistry.getInstance(), this.externalServerManager);
+        // Late-bound provider: lets McpToolRegistry list external tools without
+        // importing this class (would be a static import cycle).
+        McpToolRegistry.getInstance().registerExternalToolsProvider(() => this.hybridRegistry.getExternalTools());
 
         // Expose hybrid registry globally for tools_recommend tool
         (global as any).hybridMcpToolRegistry = this.hybridRegistry;

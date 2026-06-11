@@ -14,8 +14,8 @@
  * limitations under the License.
  *
  * @author Brad Anderson <BradA1878@pm.me>
- * @repository https://github.com/BradA1878/model-exchange-framework
- * @documentation https://brada1878.github.io/model-exchange-framework/
+ * @repository https://github.com/mxf-dev/mxf
+ * @documentation https://mxf-dev.github.io/mxf/
  */
 
 /**
@@ -24,13 +24,14 @@
  * Handles configuration management operations
  */
 
+import { v4 as uuidv4 } from 'uuid';
 import { Request, Response } from 'express';
-import { Logger } from '../../../shared/utils/Logger';
-import { createStrictValidator } from '../../../shared/utils/validation';
-import { EventBus } from '../../../shared/events/EventBus';
-import { ConfigEvents, type AgentTemplate, type ChannelTemplate, type DeploymentConfiguration, type EnvironmentConfiguration, type TemplateType, type ConfigSyncRequest } from '../../../shared/events/event-definitions/ConfigEvents';
-import { LlmProviderType } from '../../../shared/protocols/mcp/LlmProviders';
-import { createBaseEventPayload } from '../../../shared/schemas/EventPayloadSchema';
+import { Logger } from '@mxf-dev/core/utils/Logger';
+import { createStrictValidator } from '@mxf-dev/core/utils/validation';
+import { EventBus } from '@mxf-dev/core/events/EventBus';
+import { ConfigEvents, type AgentTemplate, type ChannelTemplate, type DeploymentConfiguration, type EnvironmentConfiguration, type TemplateType, type ConfigSyncRequest } from '@mxf-dev/core/events/event-definitions/ConfigEvents';
+import { LlmProviderType } from '@mxf-dev/core/protocols/mcp/LlmProviders';
+import { createBaseEventPayload } from '@mxf-dev/core/schemas/EventPayloadSchema';
 
 const logger = new Logger('debug', 'ConfigController', 'server');
 const validator = createStrictValidator('ConfigController');
@@ -216,7 +217,7 @@ class ConfigService {
      * Create new configuration template
      */
     public async createTemplate(templateData: Partial<ConfigTemplate>, createdBy: string): Promise<ConfigTemplate> {
-        const templateId = `template_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        const templateId = `template_${uuidv4()}`;
         
         let template: ConfigTemplate;
         
@@ -298,7 +299,7 @@ class ConfigService {
             'CONFIG',
             {
                 template,
-                timestamp: new Date()
+                timestamp: Date.now()
             },
             { source: 'ConfigService' }
         ));
@@ -353,7 +354,7 @@ class ConfigService {
                 templateId,
                 template: updated,
                 updatedBy,
-                timestamp: new Date()
+                timestamp: Date.now()
             },
             { source: 'ConfigService' }
         ));
@@ -380,7 +381,7 @@ class ConfigService {
             {
                 templateId,
                 deletedBy,
-                timestamp: new Date()
+                timestamp: Date.now()
             },
             { source: 'ConfigService' }
         ));
@@ -405,7 +406,7 @@ class ConfigService {
      * Create deployment configuration
      */
     public async createDeploymentConfig(configData: Partial<DeploymentConfiguration>, createdBy: string): Promise<DeploymentConfiguration> {
-        const configId = `deploy_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        const configId = `deploy_${uuidv4()}`;
         
         const config: DeploymentConfiguration = {
             configId,
@@ -467,8 +468,10 @@ class ConfigService {
             'SYSTEM',
             'CONFIG',
             {
-                config,
-                timestamp: new Date()
+                configId,
+                configuration: config,
+                updatedBy: 'SYSTEM',
+                timestamp: Date.now()
             },
             { source: 'ConfigService' }
         ));
@@ -504,9 +507,9 @@ class ConfigService {
             'CONFIG',
             {
                 configId,
-                config: updated,
+                configuration: updated,
                 updatedBy,
-                timestamp: new Date()
+                timestamp: Date.now()
             },
             { source: 'ConfigService' }
         ));
@@ -551,10 +554,10 @@ class ConfigService {
             'SYSTEM',
             'CONFIG',
             {
-                environmentId: envId,
-                config: updated,
+                environment: envId,
+                configuration: updated,
                 updatedBy,
-                timestamp: new Date()
+                timestamp: Date.now()
             },
             { source: 'ConfigService' }
         ));
@@ -574,7 +577,7 @@ class ConfigService {
             'CONFIG',
             {
                 request,
-                timestamp: new Date()
+                timestamp: Date.now()
             },
             { source: 'ConfigService' }
         ));
@@ -621,8 +624,8 @@ class ConfigService {
                 'CONFIG',
                 {
                     syncId: request.syncId,
-                    source: request.source,
-                    timestamp: new Date()
+                    result: { source: request.source, target: request.target },
+                    timestamp: Date.now()
                 },
                 { source: 'ConfigService' }
             ));
@@ -637,7 +640,7 @@ class ConfigService {
                     syncId: request.syncId,
                     source: request.source,
                     error: error instanceof Error ? error.message : 'Unknown error',
-                    timestamp: new Date()
+                    timestamp: Date.now()
                 },
                 { source: 'ConfigService' }
             ));
@@ -996,7 +999,7 @@ export const syncConfiguration = async (req: Request, res: Response): Promise<vo
         validateString(source, 'source');
         validateString(target, 'target');
         
-        const syncId = `sync_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        const syncId = `sync_${uuidv4()}`;
         
         const request: ConfigSyncRequest = {
             syncId,

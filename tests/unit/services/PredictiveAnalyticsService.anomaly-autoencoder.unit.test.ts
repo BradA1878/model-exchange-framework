@@ -6,12 +6,12 @@
  * - runParameterAnomalyDetection(): TF.js dispatch path, heuristic fallback, error handling
  * - calculateHeuristicIsolationScore(): distance-based scoring, edge cases
  * - trainAnomalyDetectionModel(): unsupervised training (input=output), model save, ready flag
- * - updateAnomalyHeuristicMetadata(): metadata update with simulated accuracy
+ * - updateAnomalyHeuristicMetadata(): metadata update with null accuracy (unmeasured)
  * - cleanup(): resets tfAnomalyAutoencoderReady flag
  * - detectParameterAnomaly(): receives agentId and channelId parameters
  */
 
-import { MxfModelType, ModelStatus, TrainingMetrics, ReconstructionResult } from '@mxf/shared/types/TensorFlowTypes';
+import { MxfModelType, ModelStatus, TrainingMetrics, ReconstructionResult } from '@mxf-dev/core/types/TensorFlowTypes';
 
 // ---------------------------------------------------------------------------
 // Mocks — must be declared before importing the service under test
@@ -20,7 +20,7 @@ import { MxfModelType, ModelStatus, TrainingMetrics, ReconstructionResult } from
 // Track all EventBus.server.emit calls
 const mockServerEmit = jest.fn();
 
-jest.mock('@mxf/shared/events/EventBus', () => ({
+jest.mock('@mxf-dev/core/events/EventBus', () => ({
     EventBus: {
         server: {
             emit: mockServerEmit,
@@ -35,7 +35,7 @@ const mockGetEnhancedPatterns = jest.fn().mockResolvedValue({
     shared: [],
 });
 
-jest.mock('@mxf/shared/services/PatternLearningService', () => ({
+jest.mock('@mxf-dev/core/services/PatternLearningService', () => ({
     PatternLearningService: {
         getInstance: jest.fn(() => ({
             getEnhancedPatterns: mockGetEnhancedPatterns,
@@ -55,7 +55,7 @@ const mockPredictWithReconstruction = jest.fn();
 const mockTrain = jest.fn();
 const mockIsEnabled = jest.fn().mockReturnValue(true);
 
-jest.mock('@mxf/shared/services/MxfMLService', () => ({
+jest.mock('@mxf-dev/core/services/MxfMLService', () => ({
     MxfMLService: {
         getInstance: jest.fn(() => ({
             isEnabled: mockIsEnabled,
@@ -75,7 +75,7 @@ jest.mock('@mxf/shared/services/MxfMLService', () => ({
 // TensorFlow config mocks — control the TF enabled state per test
 let tensorFlowEnabled = false;
 
-jest.mock('@mxf/shared/config/tensorflow.config', () => ({
+jest.mock('@mxf-dev/core/config/tensorflow.config', () => ({
     isTensorFlowEnabled: jest.fn(() => tensorFlowEnabled),
     getTensorFlowConfig: jest.fn(() => ({
         enabled: tensorFlowEnabled,
@@ -85,7 +85,7 @@ jest.mock('@mxf/shared/config/tensorflow.config', () => ({
 }));
 
 // Mock Logger to suppress output during tests
-jest.mock('@mxf/shared/utils/Logger', () => ({
+jest.mock('@mxf-dev/core/utils/Logger', () => ({
     Logger: jest.fn().mockImplementation(() => ({
         info: jest.fn(),
         warn: jest.fn(),
@@ -103,8 +103,8 @@ jest.mock('uuid', () => ({
 // Import after mocks are set up
 // ---------------------------------------------------------------------------
 
-import { PredictiveAnalyticsService } from '@mxf/shared/services/PredictiveAnalyticsService';
-import { TensorFlowEvents } from '@mxf/shared/events/event-definitions/TensorFlowEvents';
+import { PredictiveAnalyticsService } from '@mxf-dev/core/services/PredictiveAnalyticsService';
+import { TensorFlowEvents } from '@mxf-dev/core/events/event-definitions/TensorFlowEvents';
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -721,12 +721,12 @@ describe('PredictiveAnalyticsService — Anomaly Autoencoder (Phase 3)', () => {
             );
             expect(autoencoderTrainCalls).toHaveLength(0);
 
-            // Model metadata should have been updated via updateAnomalyHeuristicMetadata
+            // Model metadata should have been updated via updateAnomalyHeuristicMetadata.
+            // Heuristics have no measured validation accuracy — null, never fabricated.
             const metadata = service.getModelMetadata();
             const anomalyMeta = metadata.find(m => m.type === 'isolation_forest');
             expect(anomalyMeta).toBeDefined();
-            expect(anomalyMeta!.accuracy).toBeGreaterThanOrEqual(0.8);
-            expect(anomalyMeta!.accuracy).toBeLessThanOrEqual(0.85);
+            expect(anomalyMeta!.accuracy).toBeNull();
         });
 
         it('should update model metadata with real training metrics from TF.js', async () => {
@@ -809,7 +809,7 @@ describe('PredictiveAnalyticsService — Anomaly Autoencoder (Phase 3)', () => {
     // updateAnomalyHeuristicMetadata()
     // =========================================================================
     describe('updateAnomalyHeuristicMetadata()', () => {
-        it('should update anomaly detection model metadata with simulated accuracy', () => {
+        it('should mark heuristic anomaly metadata as unmeasured (null accuracy)', () => {
             service = getService();
 
             (service as any).updateAnomalyHeuristicMetadata();
@@ -817,9 +817,8 @@ describe('PredictiveAnalyticsService — Anomaly Autoencoder (Phase 3)', () => {
             const metadata = service.getModelMetadata();
             const anomalyMeta = metadata.find(m => m.type === 'isolation_forest');
             expect(anomalyMeta).toBeDefined();
-            // Accuracy should be in range [0.8, 0.85)
-            expect(anomalyMeta!.accuracy).toBeGreaterThanOrEqual(0.8);
-            expect(anomalyMeta!.accuracy).toBeLessThan(0.86);
+            // Heuristic mode never fabricates an accuracy number.
+            expect(anomalyMeta!.accuracy).toBeNull();
             expect(anomalyMeta!.trainedAt).toBeGreaterThan(0);
         });
     });

@@ -14,8 +14,8 @@
  * limitations under the License.
  *
  * @author Brad Anderson <BradA1878@pm.me>
- * @repository https://github.com/BradA1878/model-exchange-framework
- * @documentation https://brada1878.github.io/model-exchange-framework/
+ * @repository https://github.com/mxf-dev/mxf
+ * @documentation https://mxf-dev.github.io/mxf/
  */
 
 /**
@@ -25,21 +25,21 @@
  */
 
 import { Socket } from 'socket.io';
-import { ISocketService } from '../../../shared/interfaces/SocketServiceInterface';
+import { ISocketService } from '@mxf-dev/core/interfaces/SocketServiceInterface';
 import {
     Events,
     CoreSocketEvents,
     ControlLoopEvents,
     OrparEvents,
     SOCKET_RESERVED_EVENTS
-} from '../../../shared/events/EventNames';
-import { clearAgentOrparState } from '../../../shared/protocols/mcp/tools/OrparTools';
-import { TaskEvents } from '../../../shared/events/event-definitions/TaskEvents';
-import { UserInputEvents } from '../../../shared/events/event-definitions/UserInputEvents';
-import { UserInputRequestManager } from '../../../shared/services/UserInputRequestManager';
-import { createStrictValidator } from '../../../shared/utils/validation';
-import { logger , Logger } from '../../../shared/utils/Logger';
-import { EventBus } from '../../../shared/events/EventBus';
+} from '@mxf-dev/core/events/EventNames';
+import { clearAgentOrparState } from '@mxf-dev/core/protocols/mcp/tools/OrparTools';
+import { TaskEvents } from '@mxf-dev/core/events/event-definitions/TaskEvents';
+import { UserInputEvents } from '@mxf-dev/core/events/event-definitions/UserInputEvents';
+import { UserInputRequestManager } from '@mxf-dev/core/services/UserInputRequestManager';
+import { createStrictValidator } from '@mxf-dev/core/utils/validation';
+import { logger , Logger } from '@mxf-dev/core/utils/Logger';
+import { EventBus } from '@mxf-dev/core/events/EventBus';
 import { v4 as uuidv4 } from 'uuid'; 
 import {
     BaseEventPayload,
@@ -58,12 +58,12 @@ import {
     ChannelEventData,
     TaskEventData,
     ConnectionEventData
-} from '../../../shared/schemas/EventPayloadSchema';
-import { AgentId, ChannelId } from '../../../shared/types/ChannelContext'; 
-import { ChannelActionType } from '../../../shared/events/event-definitions/ChannelEvents';
-import { MxpMiddleware } from '../../../shared/middleware/MxpMiddleware';
-import { isMxpMessage } from '../../../shared/schemas/MxpProtocolSchemas';
-import { MxpEventForwardingEnhancer } from '../../../shared/mxp/MxpEventForwardingEnhancer';
+} from '@mxf-dev/core/schemas/EventPayloadSchema';
+import { AgentId, ChannelId } from '@mxf-dev/core/types/ChannelContext'; 
+import { ChannelActionType } from '@mxf-dev/core/events/event-definitions/ChannelEvents';
+import { MxpMiddleware } from '@mxf-dev/core/middleware/MxpMiddleware';
+import { isMxpMessage } from '@mxf-dev/core/schemas/MxpProtocolSchemas';
+import { MxpEventForwardingEnhancer } from '@mxf-dev/core/mxp/MxpEventForwardingEnhancer';
 
 // Create a module-specific logger
 const moduleLogger = new Logger('debug', 'EventForwardingHandlers', 'server');

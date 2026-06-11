@@ -30,7 +30,7 @@ This guide covers deploying the complete MXF stack with Meilisearch semantic sea
 │  ┌──────────────────────────────────────────────────┐       │
 │  │                                                    │       │
 │  │              MXF Dashboard (Vue.js)                │       │
-│  │                  Port: 5173                        │       │
+│  │              Port: 4173 (npx, separate)            │       │
 │  │                                                    │       │
 │  └────────────────────────────────────────────────────┘       │
 │                                                               │
@@ -53,7 +53,7 @@ This guide covers deploying the complete MXF stack with Meilisearch semantic sea
 ```bash
 # Clone the repository
 git clone <your-repo>
-cd model-exchange-framework
+cd mxf
 
 # Copy environment template
 cp .env.example .env
@@ -154,7 +154,7 @@ docker-compose logs mxf-server | grep Meilisearch
 | **mongodb** | 27017 | Database for persistence |
 | **meilisearch** | 7700 | Semantic search engine |
 | **redis** | 6379 | Caching layer |
-| **mxf-dashboard** | 5173 | Vue.js frontend |
+| **dashboard** (separate: `npx @mxf-dev/dashboard`) | 4173 | Vue.js frontend |
 
 ### Meilisearch Configuration
 
@@ -270,7 +270,7 @@ const patterns = await mxfClient.executeTool('memory_search_patterns', {
 
 ### From Dashboard
 
-Navigate to: `http://localhost:5173/memory-search`
+Navigate to the dashboard (`npx @mxf-dev/dashboard --api-url <server>`, served on `http://localhost:4173`) → memory search
 
 ## 🔒 Security Considerations
 

@@ -7,8 +7,8 @@
 import {
     PostCompactionRestorer,
     RestorationArtifact,
-} from '../../../src/sdk/services/PostCompactionRestorer';
-import { ConversationMessage } from '../../../src/shared/interfaces/ConversationMessage';
+} from '@mxf-dev/sdk/services/PostCompactionRestorer';
+import { ConversationMessage } from '@mxf-dev/core/interfaces/ConversationMessage';
 
 /** Helper to create a restoration artifact with sensible defaults */
 function makeArtifact(

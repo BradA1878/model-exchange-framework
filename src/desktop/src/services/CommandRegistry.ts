@@ -8,6 +8,7 @@
  * @author Brad Anderson <BradA1878@pm.me>
  */
 
+import { useAppState, generateMessageId } from '../state/appState';
 import type { SidecarBridge } from './SidecarBridge';
 
 /** Context passed to slash command handlers */
@@ -59,7 +60,6 @@ export async function executeCommand(input: string, context: CommandContext): Pr
     const command = commands.get(name.toLowerCase());
     if (!command) {
         // Import here to avoid circular dependency at module load time
-        const { useAppState, generateMessageId } = await import('../state/appState');
         useAppState.getState().addMessage({
             id: generateMessageId(),
             type: 'error',

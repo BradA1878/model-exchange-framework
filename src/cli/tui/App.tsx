@@ -52,7 +52,7 @@ import { ToolPermissionService } from './services/ToolPermissionService';
 import './commands/handlers';
 
 import { estimateCost } from './services/CostTracker';
-import { disableClientLogging } from '../../shared/utils/Logger';
+import { disableClientLogging } from '@mxf-dev/core/utils/Logger';
 import { ConfigService } from '../services/ConfigService';
 import { HealthChecker } from '../services/HealthChecker';
 import { logError, logInfo, logSuccess } from '../utils/output';

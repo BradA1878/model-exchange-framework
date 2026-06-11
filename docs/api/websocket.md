@@ -13,7 +13,7 @@ ws://localhost:3001/socket.io/
 ### Connection Parameters
 
 ```typescript
-import { MxfSDK } from '@mxf/sdk';
+import { MxfSDK } from '@mxf-dev/sdk';
 
 // Initialize SDK with Personal Access Token (recommended)
 const sdk = new MxfSDK({
@@ -47,7 +47,7 @@ const agent = sdk.createAgent({
 4. Agent emits confirmation events
 
 ```typescript
-import { MxfSDK, Events } from '@mxf/sdk';
+import { MxfSDK, Events } from '@mxf-dev/sdk';
 
 // Initialize SDK with Personal Access Token (recommended)
 const sdk = new MxfSDK({
@@ -705,7 +705,7 @@ function sendMessage(message) {
 ### Using MXF SDK
 
 ```typescript
-import { MxfSDK, Events } from '@mxf/sdk';
+import { MxfSDK, Events } from '@mxf-dev/sdk';
 
 const testConnection = async (): Promise<void> => {
     // Initialize SDK with Personal Access Token (recommended)

@@ -39,7 +39,7 @@ Control SystemLLM behavior at the channel level:
 ### Getting the Singleton Instance
 
 ```typescript
-import { ConfigManager } from './src/sdk/config/ConfigManager';
+import { ConfigManager } from '@mxf-dev/sdk/config/ConfigManager';
 
 const configManager = ConfigManager.getInstance();
 ```
@@ -338,8 +338,8 @@ configManager.updateConfig({
 The ConfigManager is integrated into MxfAgent and automatically configures agent behavior:
 
 ```typescript
-import { MxfSDK } from './src/sdk/MxfSDK';
-import { ConfigManager } from './src/sdk/config/ConfigManager';
+import { MxfSDK } from '@mxf-dev/sdk/MxfSDK';
+import { ConfigManager } from '@mxf-dev/sdk/config/ConfigManager';
 
 // Configure before creating agents
 const configManager = ConfigManager.getInstance();
@@ -367,7 +367,7 @@ import {
     FeatureToggle,
     ConfigUpdateEvent,
     FeatureStateChangeEvent
-} from './src/sdk/config/ConfigManager';
+} from '@mxf-dev/sdk/config/ConfigManager';
 
 // Type-safe configuration
 const config: SdkConfig = configManager.getConfig();
@@ -384,7 +384,7 @@ const feature: FeatureToggle | null = configManager.getFeature('mcp_integration'
 The `PromptCompactionConfig` controls the multi-layer compaction pipeline. All flags default to `false` and can be enabled via environment variables or programmatically.
 
 ```typescript
-import { PromptCompactionConfig } from './src/shared/config/PromptCompactionConfig';
+import { PromptCompactionConfig } from '@mxf-dev/core/config/PromptCompactionConfig';
 
 // Check if a feature is enabled
 const config = PromptCompactionConfig.getInstance();
@@ -424,4 +424,4 @@ See [Compaction Pipeline](../mxf/compaction-pipeline.md) and [Prompting Enhancem
 
 ---
 
-For questions or issues with ConfigManager, refer to the source code at `/src/sdk/config/ConfigManager.ts`.
+For questions or issues with ConfigManager, refer to the source code at `/packages/sdk/src/config/ConfigManager.ts`.

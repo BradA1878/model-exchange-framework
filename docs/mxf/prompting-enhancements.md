@@ -8,13 +8,13 @@ All features are behind feature flags (default `false`) for safe, incremental ro
 
 **Source files:**
 
-- `src/shared/prompts/ToolBehavioralGuidance.ts`
-- `src/shared/prompts/DeferredToolSchemaRegistry.ts`
-- `src/shared/prompts/DynamicContextProvider.ts`
-- `src/shared/prompts/PromptSegmentRegistry.ts`
-- `src/shared/prompts/MxfAgentSystemPrompt.ts`
-- `src/sdk/managers/MxfSystemPromptManager.ts`
-- `src/shared/config/PromptCompactionConfig.ts`
+- `packages/core/src/prompts/ToolBehavioralGuidance.ts`
+- `packages/core/src/prompts/DeferredToolSchemaRegistry.ts`
+- `packages/core/src/prompts/DynamicContextProvider.ts`
+- `packages/core/src/prompts/PromptSegmentRegistry.ts`
+- `packages/core/src/prompts/MxfAgentSystemPrompt.ts`
+- `packages/sdk/src/managers/MxfSystemPromptManager.ts`
+- `packages/core/src/config/PromptCompactionConfig.ts`
 
 ## Tool Behavioral Guidance
 
@@ -187,7 +187,7 @@ This segment is registered alongside other default segments (ORPAR cycle, collab
 
 ## Configuration
 
-All feature flags are defined in `src/shared/config/PromptCompactionConfig.ts` and loaded from environment variables. Every flag defaults to `false`.
+All feature flags are defined in `packages/core/src/config/PromptCompactionConfig.ts` and loaded from environment variables. Every flag defaults to `false`.
 
 | Feature | Env Var | Default | Description |
 |---------|---------|---------|-------------|

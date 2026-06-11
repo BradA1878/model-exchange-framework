@@ -59,7 +59,7 @@ The MXF framework automatically handles the conversion:
    }
    ```
 
-2. **OpenRouterMcpClient** (in `src/shared/protocols/mcp/providers/OpenRouterMcpClient.ts`) automatically converts this to:
+2. **OpenRouterMcpClient** (in `packages/core/src/protocols/mcp/providers/OpenRouterMcpClient.ts`) automatically converts this to:
    ```typescript
    {
      type: 'function',
@@ -78,7 +78,7 @@ The MXF framework automatically handles the conversion:
    }
    ```
 
-3. **OpenRouterMessageAdapter** (in `src/shared/protocols/mcp/converters/adapters/OpenRouterMessageAdapter.ts`) handles:
+3. **OpenRouterMessageAdapter** (in `packages/core/src/protocols/mcp/converters/adapters/OpenRouterMessageAdapter.ts`) handles:
    - Converting tool calls from OpenAI format to MCP format
    - Reordering tool results to immediately follow tool calls (OpenAI requirement)
    - Preserving `tool_call_id` and `tool_calls` fields
@@ -206,7 +206,7 @@ All tools respect fog of war limitations:
 
 1. MXF server running:
    ```bash
-   cd /path/to/model-exchange-framework-private
+   cd /path/to/mxf
    bun run dev
    ```
 
@@ -385,8 +385,8 @@ LLM receives tool result in conversation and continues reasoning.
 - [MCP Protocol Specification](https://spec.modelcontextprotocol.io/)
 - [OpenRouter API Documentation](https://openrouter.ai/docs)
 - [MXF External MCP Example](../../external-mcp-registration/)
-- [OpenRouterMcpClient Source](../../../src/shared/protocols/mcp/providers/OpenRouterMcpClient.ts)
-- [OpenRouterMessageAdapter Source](../../../src/shared/protocols/mcp/converters/adapters/OpenRouterMessageAdapter.ts)
+- [OpenRouterMcpClient Source](../../../packages/core/src/protocols/mcp/providers/OpenRouterMcpClient.ts)
+- [OpenRouterMessageAdapter Source](../../../packages/core/src/protocols/mcp/converters/adapters/OpenRouterMessageAdapter.ts)
 
 ## Next Steps
 

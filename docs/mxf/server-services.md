@@ -263,7 +263,7 @@ const result = await systemLlm.processWithSchema(prompt, schema);
 **Usage:**
 ```typescript
 import { SystemLlmServiceManager } from './src/server/socket/services/SystemLlmServiceManager';
-import { LlmProviderType } from './src/shared/protocols/mcp/LlmProviders';
+import { LlmProviderType } from '@mxf-dev/core/protocols/mcp/LlmProviders';
 
 const manager = SystemLlmServiceManager.getInstance();
 

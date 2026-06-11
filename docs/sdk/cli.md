@@ -15,7 +15,7 @@ The CLI is included with the MXF SDK and available via npm scripts:
 
 ```bash
 # Run SDK CLI
-bun run sdk:cli -- <command> [options]
+bun run mxf <command> [options]
 ```
 
 ## Quick Start
@@ -23,7 +23,7 @@ bun run sdk:cli -- <command> [options]
 The **recommended way** to set up a new project is using the interactive setup:
 
 ```bash
-bun run sdk:cli -- setup:interactive
+bun run mxf setup:interactive
 ```
 
 This will prompt you for:
@@ -41,7 +41,7 @@ Create a user account.
 
 **Usage:**
 ```bash
-bun run sdk:cli -- user:create \
+bun run mxf user:create \
   --email <email> \
   --password <password> \
   [--username <username>] \
@@ -56,7 +56,7 @@ bun run sdk:cli -- user:create \
 
 **Example:**
 ```bash
-bun run sdk:cli -- user:create \
+bun run mxf user:create \
   --email developer@company.com \
   --password secure-password-123 \
   --username dev-user
@@ -75,7 +75,7 @@ Create a new channel.
 
 **Usage:**
 ```bash
-bun run sdk:cli -- channel:create \
+bun run mxf channel:create \
   --id <channel-id> \
   --name <channel-name> \
   --email <user-email> \
@@ -96,7 +96,7 @@ bun run sdk:cli -- channel:create \
 
 **Example:**
 ```bash
-bun run sdk:cli -- channel:create \
+bun run mxf channel:create \
   --id dev-channel \
   --name "Development Channel" \
   --description "Channel for development testing" \
@@ -118,7 +118,7 @@ Generate agent keys for a channel.
 
 **Usage:**
 ```bash
-bun run sdk:cli -- key:generate \
+bun run mxf key:generate \
   --channel <channel-id> \
   --agents <agent-ids> \
   --email <user-email> \
@@ -137,7 +137,7 @@ bun run sdk:cli -- key:generate \
 
 **Example:**
 ```bash
-bun run sdk:cli -- key:generate \
+bun run mxf key:generate \
   --channel dev-channel \
   --agents agent1,agent2,agent3 \
   --email developer@company.com \
@@ -176,12 +176,12 @@ Interactive setup that prompts for all configuration. This is the **easiest way*
 
 **Usage:**
 ```bash
-bun run sdk:cli -- setup:interactive [--output <file>] [--api-url <url>]
+bun run mxf setup:interactive [--output <file>] [--api-url <url>]
 ```
 
 **Alias:**
 ```bash
-bun run sdk:cli -- init
+bun run mxf init
 ```
 
 **Options:**
@@ -190,7 +190,7 @@ bun run sdk:cli -- init
 
 **Interactive Prompts:**
 ```bash
-$ bun run sdk:cli -- setup:interactive
+$ bun run mxf setup:interactive
 
 🚀 MXF Interactive Setup
 This will create a user account, channel, and agent keys.
@@ -232,7 +232,7 @@ Complete automated setup from a configuration file (for scripting/automation).
 
 **Usage:**
 ```bash
-bun run sdk:cli -- setup \
+bun run mxf setup \
   --config <config-file> \
   [--output <output-file>] \
   [--api-url <url>]
@@ -270,7 +270,7 @@ Create `setup-config.json`:
 
 **Example:**
 ```bash
-bun run sdk:cli -- setup \
+bun run mxf setup \
   --config setup-config.json \
   --output .env
 ```
@@ -298,7 +298,7 @@ Quick setup using interactive mode:
 
 ```bash
 # Run interactive setup
-bun run sdk:cli -- setup:interactive
+bun run mxf setup:interactive
 
 # Answer the prompts
 # All credentials are automatically saved to .env file
@@ -328,7 +328,7 @@ cat > setup-config.json << EOF
 EOF
 
 # 2. Run automated setup
-bun run sdk:cli -- setup \
+bun run mxf setup \
   --config setup-config.json \
   --output .env
 
@@ -341,7 +341,7 @@ Generate keys for new agents in an existing channel:
 
 ```bash
 # Generate keys for new agents
-bun run sdk:cli -- key:generate \
+bun run mxf key:generate \
   --channel project-alpha \
   --agents new-agent1,new-agent2 \
   --email developer@company.com \
@@ -355,21 +355,21 @@ Set up separate channels for different environments:
 
 ```bash
 # Development environment
-bun run sdk:cli -- channel:create \
+bun run mxf channel:create \
   --id dev-channel \
   --name "Development" \
   --email dev@company.com \
   --password dev-password
 
 # Staging environment
-bun run sdk:cli -- channel:create \
+bun run mxf channel:create \
   --id staging-channel \
   --name "Staging" \
   --email dev@company.com \
   --password dev-password
 
 # Production environment
-bun run sdk:cli -- channel:create \
+bun run mxf channel:create \
   --id prod-channel \
   --name "Production" \
   --email ops@company.com \
@@ -388,7 +388,7 @@ MXF_USER_EMAIL=developer@company.com
 MXF_USER_PASSWORD=your-secure-password
 
 # Use in commands
-bun run sdk:cli -- channel:create \
+bun run mxf channel:create \
   --id my-channel \
   --name "My Channel" \
   --email $MXF_USER_EMAIL \
@@ -427,7 +427,7 @@ Regularly rotate agent keys:
 
 ```bash
 # Generate new keys for agents
-bun run sdk:cli -- key:generate \
+bun run mxf key:generate \
   --channel my-channel \
   --agents agent1,agent2 \
   --email developer@company.com \
@@ -476,7 +476,7 @@ bun run sdk:cli -- key:generate \
 curl http://localhost:3001/health
 
 # Specify correct API URL
-bun run sdk:cli -- channel:create \
+bun run mxf channel:create \
   --id my-channel \
   --name "My Channel" \
   --email your@email.com \
@@ -503,7 +503,7 @@ export MXF_USER_EMAIL="your@email.com"
 After running setup, credentials are available from environment variables:
 
 ```typescript
-import { MxfSDK } from '@mxf/sdk';
+import { MxfSDK } from '@mxf-dev/sdk';
 import dotenv from 'dotenv';
 
 // Load credentials from .env file

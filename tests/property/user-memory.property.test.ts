@@ -9,12 +9,12 @@
  */
 
 import fc from 'fast-check';
-import { STALENESS_THRESHOLDS, UserMemoryType } from '@mxf/shared/models/userMemory';
-import { UserMemoryService } from '@mxf/shared/services/UserMemoryService';
+import { STALENESS_THRESHOLDS, UserMemoryType } from '@mxf-dev/core/models/userMemory';
+import { UserMemoryService } from '@mxf-dev/core/services/UserMemoryService';
 
 // ─── Mock Meilisearch ───────────────────────────────────────────────────────
 
-jest.mock('@mxf/shared/services/MxfMeilisearchService', () => ({
+jest.mock('@mxf-dev/core/services/MxfMeilisearchService', () => ({
     MxfMeilisearchService: {
         getInstance: () => ({
             isEnabled: () => false
@@ -22,7 +22,7 @@ jest.mock('@mxf/shared/services/MxfMeilisearchService', () => ({
     }
 }));
 
-jest.mock('@mxf/shared/utils/Logger', () => ({
+jest.mock('@mxf-dev/core/utils/Logger', () => ({
     Logger: jest.fn().mockImplementation(() => ({
         info: jest.fn(),
         warn: jest.fn(),

@@ -25,7 +25,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { execFile } from 'child_process';
-import { loggerWithTags } from '../../../shared/utils/Logger';
+import { loggerWithTags } from '@mxf-dev/core/utils/Logger';
 
 /** Logger for hook execution events */
 const log = loggerWithTags('ToolHookService');

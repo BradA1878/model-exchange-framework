@@ -11,7 +11,7 @@
  * Usage: npx ts-node src/server/cli/generate-mxp-key.ts
  */
 
-import { MxpEncryption } from '../../shared/utils/MxpEncryption';
+import { MxpEncryption } from '@mxf-dev/core/utils/MxpEncryption';
 import * as crypto from 'crypto';
 
 // Generate a secure key

@@ -9,7 +9,7 @@ import {
     Entity,
     Relationship,
     DEFAULT_ENTITY_UTILITY,
-} from '@mxf/shared/types/KnowledgeGraphTypes';
+} from '@mxf-dev/core/types/KnowledgeGraphTypes';
 
 /**
  * Conflicting relationship types map (matches service implementation)

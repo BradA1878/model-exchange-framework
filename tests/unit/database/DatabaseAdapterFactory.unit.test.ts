@@ -14,12 +14,12 @@
  * limitations under the License.
  *
  * @author Brad Anderson <BradA1878@pm.me>
- * @repository https://github.com/BradA1878/model-exchange-framework
- * @documentation https://brada1878.github.io/model-exchange-framework/
+ * @repository https://github.com/mxf-dev/mxf
+ * @documentation https://mxf-dev.github.io/mxf/
  */
 
 import { describe, it, expect, beforeEach } from '@jest/globals';
-import { DatabaseAdapterFactory } from '../../../src/shared/database/DatabaseAdapterFactory';
+import { DatabaseAdapterFactory } from '@mxf-dev/core/database/DatabaseAdapterFactory';
 
 /**
  * Unit tests for DatabaseAdapterFactory.
@@ -139,34 +139,34 @@ describe('DatabaseAdapterFactory Unit Tests', () => {
     describe('Unsupported Database Types', () => {
         it('should throw error for PostgreSQL (not implemented)', () => {
             DatabaseAdapterFactory.initialize({
-                type: 'postgresql' as any,
+                type: 'postgresql' as any as any,
                 connectionString: 'postgresql://localhost/test'
             });
 
             expect(() => DatabaseAdapterFactory.create()).toThrow(
-                'PostgreSQL adapter not yet implemented'
+                'Unknown database type'
             );
         });
 
         it('should throw error for SQLite (not implemented)', () => {
             DatabaseAdapterFactory.initialize({
-                type: 'sqlite' as any,
+                type: 'sqlite' as any as any,
                 connectionString: 'sqlite://test.db'
             });
 
             expect(() => DatabaseAdapterFactory.create()).toThrow(
-                'SQLite adapter not yet implemented'
+                'Unknown database type'
             );
         });
 
         it('should throw error for MySQL (not implemented)', () => {
             DatabaseAdapterFactory.initialize({
-                type: 'mysql' as any,
+                type: 'mysql' as any as any,
                 connectionString: 'mysql://localhost/test'
             });
 
             expect(() => DatabaseAdapterFactory.create()).toThrow(
-                'MySQL adapter not yet implemented'
+                'Unknown database type'
             );
         });
 

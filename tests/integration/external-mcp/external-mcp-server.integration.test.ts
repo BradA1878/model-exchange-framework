@@ -14,7 +14,7 @@ import { TestSDK, createTestSDK } from '../../utils/TestSDK';
 import { waitFor, sleep } from '../../utils/waitFor';
 import { EventCapture, createEventCapture } from '../../utils/eventHelpers';
 import { TOOL_TEST_AGENT_CONFIG, TIMEOUTS } from '../../utils/TestFixtures';
-import { Events } from '../../../src/shared/events/EventNames';
+import { Events } from '@mxf-dev/core/events/EventNames';
 
 describe('External MCP Server', () => {
     let testSdk: TestSDK;

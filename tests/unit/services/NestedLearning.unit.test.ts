@@ -1,19 +1,18 @@
 /**
  * Unit tests for Nested Learning / Continuum Memory System components
- * Tests StratumManager, SurpriseCalculator, MemoryCompressor, RetentionGateService, and SERCOrchestrator
+ * Tests StratumManager, SurpriseCalculator, MemoryCompressor, and RetentionGateService
  */
 
-import { StratumManager } from '@mxf/shared/services/StratumManager';
-import { SurpriseCalculator, Prediction, Outcome } from '@mxf/shared/services/SurpriseCalculator';
-import { MemoryCompressor, CompressionLevel } from '@mxf/shared/services/MemoryCompressor';
-import { RetentionGateService } from '@mxf/shared/services/RetentionGateService';
-import { SERCOrchestrator, AgentMode } from '@mxf/shared/services/SERCOrchestrator';
+import { StratumManager } from '@mxf-dev/core/services/StratumManager';
+import { SurpriseCalculator, Prediction, Outcome } from '@mxf-dev/core/services/SurpriseCalculator';
+import { MemoryCompressor, CompressionLevel } from '@mxf-dev/core/services/MemoryCompressor';
+import { RetentionGateService } from '@mxf-dev/core/services/RetentionGateService';
 import {
   MemoryStratum,
   MemoryImportance,
   MemoryEntry,
   MemoryStrataConfig
-} from '@mxf/shared/types/MemoryStrataTypes';
+} from '@mxf-dev/core/types/MemoryStrataTypes';
 
 describe('Nested Learning Components', () => {
   const testAgentId = 'test-agent-123';
@@ -407,96 +406,4 @@ describe('Nested Learning Components', () => {
     });
   });
 
-  describe('SERCOrchestrator', () => {
-    let sercOrchestrator: SERCOrchestrator;
-
-    beforeEach(() => {
-      sercOrchestrator = SERCOrchestrator.getInstance();
-      sercOrchestrator.initialize({
-        enabled: true,
-        confidenceThreshold: 0.7,
-        repairMaxRetries: 3,
-        outerLoopFrequency: 5,
-        verificationEnabled: true,
-        selfRepairEnabled: true,
-        surpriseThreshold: 0.5
-      });
-    });
-
-    afterEach(() => {
-      sercOrchestrator.clear(testAgentId);
-    });
-
-    it('should initialize and enable SERC', () => {
-      expect(sercOrchestrator.isEnabled()).toBe(true);
-    });
-
-    it('should start inner loop and create context', async () => {
-      const context = await sercOrchestrator.startInnerLoop(testAgentId, testChannelId);
-
-      expect(context.agentId).toBe(testAgentId);
-      expect(context.channelId).toBe(testChannelId);
-      expect(context.mode).toBe(AgentMode.Solver);
-      expect(context.cycleNumber).toBe(1);
-    });
-
-    it('should switch between Solver and Verifier modes', async () => {
-      await sercOrchestrator.startInnerLoop(testAgentId, testChannelId);
-
-      let context = sercOrchestrator.getContext(testAgentId);
-      expect(context?.mode).toBe(AgentMode.Solver);
-
-      sercOrchestrator.switchToVerifierMode(testAgentId);
-      context = sercOrchestrator.getContext(testAgentId);
-      expect(context?.mode).toBe(AgentMode.Verifier);
-
-      sercOrchestrator.switchToSolverMode(testAgentId);
-      context = sercOrchestrator.getContext(testAgentId);
-      expect(context?.mode).toBe(AgentMode.Solver);
-    });
-
-    it('should process surprise signal', async () => {
-      await sercOrchestrator.startInnerLoop(testAgentId, testChannelId);
-
-      const outcome: Outcome = {
-        id: 'out-123',
-        agentId: testAgentId,
-        content: 'Test outcome',
-        actualOutcome: 'result',
-        timestamp: new Date()
-      };
-
-      const surpriseSignal = await sercOrchestrator.processSurpriseSignal(testAgentId, outcome);
-
-      expect(surpriseSignal.effectiveSurprise).toBeDefined();
-
-      const context = sercOrchestrator.getContext(testAgentId);
-      expect(context?.surpriseSignal).toBeDefined();
-    });
-
-    it('should generate verification tuple', async () => {
-      await sercOrchestrator.startInnerLoop(testAgentId, testChannelId);
-
-      const verification = await sercOrchestrator.generateVerification(
-        testAgentId,
-        'Test reasoning',
-        ['tool-result-1']
-      );
-
-      expect(verification.score).toBeDefined();
-      expect(verification.confidence).toBeDefined();
-      expect(verification.critique).toBeDefined();
-    });
-
-    it('should determine if outer loop should run', async () => {
-      await sercOrchestrator.startInnerLoop(testAgentId, testChannelId);
-
-      for (let i = 0; i < 4; i++) {
-        expect(sercOrchestrator.shouldRunOuterLoop(testAgentId)).toBe(false);
-        await sercOrchestrator.startInnerLoop(testAgentId, testChannelId);
-      }
-
-      expect(sercOrchestrator.shouldRunOuterLoop(testAgentId)).toBe(true);
-    });
-  });
 });

@@ -21,7 +21,7 @@ The MXF SDK now supports **dynamic external MCP server registration**, allowing 
 ### Basic Registration (stdio)
 
 ```typescript
-import { MxfSDK } from '@mxf/sdk';
+import { MxfSDK } from '@mxf-dev/sdk';
 
 const sdk = new MxfSDK({
     serverUrl: 'http://localhost:3001',
@@ -495,7 +495,7 @@ SDK                           Server
 
 ```typescript
 // Server code modification required
-// File: src/shared/protocols/mcp/services/ExternalServerConfigs.ts
+// File: packages/core/src/protocols/mcp/services/ExternalServerConfigs.ts
 
 export const MY_SERVER_CONFIG: ExternalServerConfig = {
     id: 'my-server',

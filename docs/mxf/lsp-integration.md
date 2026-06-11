@@ -498,4 +498,4 @@ class LspServerManager {
 
 ---
 
-For questions or contributions related to LSP integration, please refer to the [GitHub repository](https://github.com/BradA1878/model-exchange-framework).
+For questions or contributions related to LSP integration, please refer to the [GitHub repository](https://github.com/mxf-dev/mxf).

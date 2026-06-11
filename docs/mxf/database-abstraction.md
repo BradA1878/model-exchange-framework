@@ -632,7 +632,7 @@ class ListService {
 ### Step 1: Create Base Repository
 
 ```typescript
-// src/shared/database/adapters/postgresql/PostgreBaseRepository.ts
+// packages/core/src/database/adapters/postgresql/PostgreBaseRepository.ts
 import { Model } from 'sequelize';
 import { IBaseRepository } from '../../../repositories/interfaces/IBaseRepository';
 import { FilterOptions, PaginationOptions, PaginatedResult } from '../../../repositories/types';
@@ -716,7 +716,7 @@ export abstract class PostgreBaseRepository<T, CreateDTO = Partial<T>, UpdateDTO
 ### Step 2: Implement Domain Repositories
 
 ```typescript
-// src/shared/database/adapters/postgresql/PostgreAgentRepository.ts
+// packages/core/src/database/adapters/postgresql/PostgreAgentRepository.ts
 import { Agent } from '../../../models/agent';
 import { IAgentEntity, IAgentRepository } from '../../../repositories/interfaces/IAgentRepository';
 import { PostgreBaseRepository } from './PostgreBaseRepository';
@@ -803,11 +803,11 @@ DB_POOL_MAX_LIFETIME=3600000                     # Max connection lifetime
 - Efficient indexing
 
 **Files**:
-- `src/shared/database/adapters/mongodb/MongoBaseRepository.ts`
-- `src/shared/database/adapters/mongodb/MongoAgentRepository.ts`
-- `src/shared/database/adapters/mongodb/MongoChannelRepository.ts`
-- `src/shared/database/adapters/mongodb/MongoTaskRepository.ts`
-- `src/shared/database/adapters/mongodb/MongoMemoryRepository.ts`
+- `packages/core/src/database/adapters/mongodb/MongoBaseRepository.ts`
+- `packages/core/src/database/adapters/mongodb/MongoAgentRepository.ts`
+- `packages/core/src/database/adapters/mongodb/MongoChannelRepository.ts`
+- `packages/core/src/database/adapters/mongodb/MongoTaskRepository.ts`
+- `packages/core/src/database/adapters/mongodb/MongoMemoryRepository.ts`
 
 ### PostgreSQL (Planned)
 
@@ -882,8 +882,8 @@ DB_POOL_MAX_LIFETIME=3600000                     # Max connection lifetime
 
 ## Implementation Files
 
-**Factory**: `src/shared/database/DatabaseAdapterFactory.ts`
-**Interfaces**: `src/shared/repositories/interfaces/`
-**MongoDB Adapter**: `src/shared/database/adapters/mongodb/`
-**Type Definitions**: `src/shared/repositories/types/`
+**Factory**: `packages/core/src/database/DatabaseAdapterFactory.ts`
+**Interfaces**: `packages/core/src/repositories/interfaces/`
+**MongoDB Adapter**: `packages/core/src/database/adapters/mongodb/`
+**Type Definitions**: `packages/core/src/repositories/types/`
 **Tests**: `tests/unit/database/` and `tests/integration/repositories/`

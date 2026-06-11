@@ -20,7 +20,7 @@
 
 import { useEffect, useRef, useCallback, type Dispatch } from 'react';
 import type { InteractiveSessionManager } from '../services/InteractiveSessionManager';
-import type { UserInputRequestData } from '../../../sdk/index';
+import type { UserInputRequestData } from '@mxf-dev/sdk';
 import type { AppAction } from '../state';
 import { ToolPermissionService } from '../services/ToolPermissionService';
 

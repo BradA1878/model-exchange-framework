@@ -8,7 +8,7 @@ import {
     isReadOnlyCommand,
     CommandCategory,
     CommandClassification
-} from '@mxf/shared/protocols/mcp/tools/shell/CommandClassification';
+} from '@mxf-dev/core/protocols/mcp/tools/shell/CommandClassification';
 
 // ---------------------------------------------------------------------------
 // READ commands

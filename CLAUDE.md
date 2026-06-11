@@ -21,16 +21,17 @@
 
 **All events MUST follow these patterns. No exceptions.**
 
-- **Event names**: Import from `src/shared/events/EventNames.ts`
-- **Payload helpers**: Import from `src/shared/schemas/EventPayloadSchema.ts`
-- **New event types**: Create in `src/shared/events/event-definitions/`
+- **Event names**: Import from `packages/core/src/events/EventNames.ts`
+- **Payload helpers**: Import from `packages/core/src/schemas/EventPayloadSchema.ts`
+- **New event types**: Create in `packages/core/src/events/event-definitions/`
 - **ALWAYS use EventBus.client or EventBus.server** - NEVER emit/listen directly on the socket
 - Never use string literals for event names or raw object payloads without helpers
 
 ```typescript
-// ✅ CORRECT
-import { Events } from '../../../events/EventNames';
-import { createPlanStepCompletedEventPayload } from '../../../schemas/EventPayloadSchema';
+// ✅ CORRECT (consumer code: server/cli/desktop/tests/examples)
+import { Events } from '@mxf-dev/core/events/EventNames';
+import { createPlanStepCompletedEventPayload } from '@mxf-dev/core/schemas/EventPayloadSchema';
+// Inside packages/core itself, use relative imports with .js extensions (ESM).
 
 EventBus.server.emit(
     Events.Plan.PLAN_STEP_COMPLETED,
@@ -80,7 +81,7 @@ bun run mxf config path               # Show config file path
 
 CLI source: `src/cli/`
 
-**Runtime:** Bun for package management and server execution. Jest for testing. Dashboard (`dashboard/`) uses npm separately.
+**Runtime:** Bun for package management and server execution. Jest for testing. The dashboard lives in its own repo + npm package (mxf-dev/dashboard, `@mxf-dev/dashboard`) — run it with `npx @mxf-dev/dashboard --api-url <server>`.
 
 ### Testing
 
@@ -110,8 +111,6 @@ bun run test:mutation                                      # Mutation testing
 ### Other Commands
 
 ```bash
-cd dashboard && bun run dev    # Dashboard dev server
-bun run build:dashboard        # Build dashboard
 bun run cleanup:db             # Clean database
 bun run docker:up              # Full stack deploy
 bun run docker:down            # Stop services
@@ -123,11 +122,14 @@ bun run docker:down            # Stop services
 
 MXF is a multi-agent collaboration system built with TypeScript, Bun, Socket.IO, and MongoDB.
 
-### Layer Structure
+### Layer Structure (Bun workspaces)
 
-- **SDK** (`src/sdk/`): Agent client (`MxfClient.ts`), modular handlers, managers, services
-- **Server** (`src/server/`): Socket.IO real-time services, REST API, dual auth (JWT for users, API keys for agents)
-- **Shared** (`src/shared/`): 100+ MCP tools in `protocols/mcp/tools/`, EventBus (RxJS-based), models, services, types, config
+- **@mxf-dev/core** (`packages/core/src/`): the publishable foundation — 160+ MCP tools in `protocols/mcp/tools/`, EventBus (RxJS-based), models, services, types, config, ConfigManager. ESM-only (NodeNext, `.js` extensions on relative imports). Depends on npm only — never on src/** or @mxf-dev/sdk.
+- **@mxf-dev/sdk** (`packages/sdk/src/`): the publishable agent client (`MxfSDK.ts`, `MxfClient.ts`, `MxfAgent.ts`, handlers, managers, services). Depends only on @mxf-dev/core.
+- **Server** (`src/server/`): Socket.IO real-time services, REST API, dual auth (JWT for users, API keys for agents). Also hosts the 10 server-coupled MCP tools + HybridMcp services in `src/server/mcp/` and ChannelContext/PatternMemory services. Depends on @mxf-dev/core only.
+- **CLI** (`src/cli/`): the `mxf` CLI + Ink TUI + admin provisioning commands (`user:create`, `channel:create`, `key:generate`, `setup`, `setup:interactive`).
+- The dashboard lives in its own repo (mxf-dev/dashboard); desktop (`src/desktop/`) stays in-repo; the desktop sidecar (`src/desktop/sidecar/bridge.ts`) runs from the repo root and resolves the packages via workspace symlinks.
+- Versioning: packages are lockstep (publish core first; `workspace:*` pins exact at publish). Root package.json version is the app/mirror cadence only.
 
 ### Key Concepts
 
@@ -137,14 +139,14 @@ MXF is a multi-agent collaboration system built with TypeScript, Bun, Socket.IO,
 - **Task Management**: `pending` → `assigned` → `in_progress` → `completed`
 - **Memory**: Three scopes (Agent, Channel, Relationship), multi-level caching, semantic search via Meilisearch
 - **MULS**: Memory Utility Learning System — Q-value weighted retrieval with ORPAR phase-specific lambdas
-- **ORPAR-Memory Integration** (flag: `ORPAR_MEMORY_INTEGRATION_ENABLED`): Phase-to-strata routing, surprise-driven re-observation, phase-weighted rewards, cycle consolidation. Located in `src/shared/services/orpar-memory/`
+- **ORPAR-Memory Integration** (flag: `ORPAR_MEMORY_INTEGRATION_ENABLED`): Phase-to-strata routing, surprise-driven re-observation, phase-weighted rewards, cycle consolidation. Located in `packages/core/src/services/orpar-memory/`
 - **TensorFlow.js** (flag: `TENSORFLOW_ENABLED`): `MxfMLService` singleton with lazy import. Models: DENSE_CLASSIFIER, AUTOENCODER, LSTM, DQN, REGRESSION, EMBEDDING, TRANSE. Consumers get `number[]` from inference, never tensors. Graceful degradation to heuristics. Events in `TensorFlowEvents.ts`.
 
 ### Development Guidelines
 
-- Tools must follow `McpTool` interface in `src/shared/types/toolTypes.ts`
+- Tools must follow `McpTool` interface in `packages/core/src/types/toolTypes.ts`
 - Events must be added to `EventNames.ts` with handlers
-- Use `Logger` from `src/shared/utils/Logger.ts`
+- Use `Logger` from `packages/core/src/utils/Logger.ts`
 - All services use singleton `getInstance()` pattern
 - Test files in `tests/` — use existing tests as templates
 
@@ -154,7 +156,8 @@ MXF is a multi-agent collaboration system built with TypeScript, Bun, Socket.IO,
 MONGODB_URI, JWT_SECRET, AGENT_API_KEY, OPENROUTER_API_KEY, PORT (default: 3001)
 MEILISEARCH_MASTER_KEY, MEILISEARCH_HOST, ENABLE_MEILISEARCH, ENABLE_SEMANTIC_SEARCH
 TENSORFLOW_ENABLED, TENSORFLOW_STORAGE_BACKEND, TENSORFLOW_DEBUG
+MXP_ENCRYPTION_KEY, MXP_ENCRYPTION_SALT (REQUIRED together — opting into MXP encryption without a unique salt fails fast; generate with `openssl rand -hex 16`)
 ORPAR_MEMORY_INTEGRATION_ENABLED, MEMORY_UTILITY_LEARNING_ENABLED
 ```
 
-See `.env.example` or config files in `src/shared/config/` for full variable listings and defaults.
+See `.env.example` or config files in `packages/core/src/config/` for full variable listings and defaults.

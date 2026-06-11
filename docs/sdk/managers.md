@@ -34,7 +34,7 @@ Manages MCP client connections for accessing external tools and resources.
 ### Usage
 
 ```typescript
-import { MxfMcpClientManager } from './src/sdk/managers/MxfMcpClientManager';
+import { MxfMcpClientManager } from '@mxf-dev/sdk/managers/MxfMcpClientManager';
 
 // Typically used within MxfAgent, but can be used standalone
 const mcpManager = new MxfMcpClientManager(agentId, config);
@@ -76,7 +76,7 @@ Manages conversation history with intelligent deduplication and memory scoping.
 ### Usage
 
 ```typescript
-import { MxfMemoryManager } from './src/sdk/managers/MxfMemoryManager';
+import { MxfMemoryManager } from '@mxf-dev/sdk/managers/MxfMemoryManager';
 
 // Create memory manager for an agent
 const memoryManager = new MxfMemoryManager(agentId, channelId);
@@ -167,7 +167,7 @@ Manages system prompts and tool documentation for LLM interactions.
 ### Usage
 
 ```typescript
-import { MxfSystemPromptManager } from './src/sdk/managers/MxfSystemPromptManager';
+import { MxfSystemPromptManager } from '@mxf-dev/sdk/managers/MxfSystemPromptManager';
 
 // Create system prompt manager
 const promptManager = new MxfSystemPromptManager(agentConfig);
@@ -345,7 +345,7 @@ Coordinates task execution and result handling for agents.
 ### Usage
 
 ```typescript
-import { MxfTaskExecutionManager } from './src/sdk/managers/MxfTaskExecutionManager';
+import { MxfTaskExecutionManager } from '@mxf-dev/sdk/managers/MxfTaskExecutionManager';
 
 // Create task execution manager
 const taskManager = new MxfTaskExecutionManager(agentId, socketConnection);
@@ -631,12 +631,12 @@ try {
 All managers are fully typed for TypeScript safety:
 
 ```typescript
-import { MxfMcpClientManager } from './src/sdk/managers/MxfMcpClientManager';
-import { MxfMemoryManager } from './src/sdk/managers/MxfMemoryManager';
-import { MxfSystemPromptManager } from './src/sdk/managers/MxfSystemPromptManager';
-import { MxfTaskExecutionManager } from './src/sdk/managers/MxfTaskExecutionManager';
-import { ConversationMessage } from './src/shared/interfaces/ConversationMessage';
-import { Task } from './src/shared/interfaces/TaskInterfaces';
+import { MxfMcpClientManager } from '@mxf-dev/sdk/managers/MxfMcpClientManager';
+import { MxfMemoryManager } from '@mxf-dev/sdk/managers/MxfMemoryManager';
+import { MxfSystemPromptManager } from '@mxf-dev/sdk/managers/MxfSystemPromptManager';
+import { MxfTaskExecutionManager } from '@mxf-dev/sdk/managers/MxfTaskExecutionManager';
+import { ConversationMessage } from '@mxf-dev/core/interfaces/ConversationMessage';
+import { Task } from '@mxf-dev/core/interfaces/TaskInterfaces';
 ```
 
 ## Related Documentation
@@ -651,7 +651,7 @@ import { Task } from './src/shared/interfaces/TaskInterfaces';
 ---
 
 For source code reference:
-- `/src/sdk/managers/MxfMcpClientManager.ts`
-- `/src/sdk/managers/MxfMemoryManager.ts`
-- `/src/sdk/managers/MxfSystemPromptManager.ts`
-- `/src/sdk/managers/MxfTaskExecutionManager.ts`
+- `/packages/sdk/src/managers/MxfMcpClientManager.ts`
+- `/packages/sdk/src/managers/MxfMemoryManager.ts`
+- `/packages/sdk/src/managers/MxfSystemPromptManager.ts`
+- `/packages/sdk/src/managers/MxfTaskExecutionManager.ts`

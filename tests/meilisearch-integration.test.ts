@@ -17,10 +17,10 @@
  * NODE_ENV=test ts-node tests/meilisearch-integration.test.ts
  */
 
-import { MxfSDK, Events, LlmProviderType, MxfChannelMonitor, ConfigManager } from '../src/sdk/index';
-import type { AgentCreationConfig, MxfAgent } from '../src/sdk/index';
+import { MxfSDK, Events, LlmProviderType, MxfChannelMonitor, ConfigManager } from '@mxf-dev/sdk';
+import type { AgentCreationConfig, MxfAgent } from '@mxf-dev/sdk';
 import dotenv from 'dotenv';
-import { enableClientLogging } from '../src/shared/utils/Logger';
+import { enableClientLogging } from '@mxf-dev/core/utils/Logger';
 
 dotenv.config();
 

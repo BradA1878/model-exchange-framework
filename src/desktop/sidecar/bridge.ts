@@ -24,11 +24,11 @@
 import { InteractiveSessionManager } from '../../cli/tui/services/InteractiveSessionManager';
 import { getEnabledAgentDefinitions, getAgentMaps } from '../../cli/tui/agents/AgentDefinitions';
 import { loadAll, loadBuiltIn } from '../../cli/tui/agents/AgentLoader';
-import { Events } from '../../sdk/index';
-import { disableClientLogging } from '../../shared/utils/Logger';
+import { Events } from '@mxf-dev/sdk';
+import { disableClientLogging } from '@mxf-dev/core/utils/Logger';
 import { ConfigService } from '../../cli/services/ConfigService';
 import type { TuiConfig } from '../../cli/tui/types';
-import type { MxfChannelMonitor } from '../../sdk/index';
+import type { MxfChannelMonitor } from '@mxf-dev/sdk';
 import readline from 'readline';
 
 // Suppress SDK console logging — we communicate via structured JSON only

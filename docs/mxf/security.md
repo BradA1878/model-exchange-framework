@@ -22,8 +22,8 @@ This section details the security model and best practices in MXF.
 
 ## Data Validation & Fail-Fast
 
-- Shared validation utilities in `src/shared/utils/validation.ts` assert input integrity.
-- Request schemas defined in `src/shared/schemas/MessageSchemas.ts`.
+- Shared validation utilities in `packages/core/src/utils/validation.ts` assert input integrity.
+- Request schemas defined in `packages/core/src/schemas/MessageSchemas.ts`.
 - Errors return standardized responses with HTTP status codes.
 
 ## Encryption & Storage

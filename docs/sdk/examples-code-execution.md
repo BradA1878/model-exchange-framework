@@ -19,7 +19,7 @@ Complete examples showing how to use the `code_execute` tool for various use cas
 ### Example 1: Filter and Transform Array
 
 ```typescript
-import { MxfSDK } from '@mxf/sdk';
+import { MxfSDK } from '@mxf-dev/sdk';
 
 // Initialize SDK
 const sdk = new MxfSDK({
@@ -840,8 +840,8 @@ const safeResult = await validateAndExecute(agent, myCode);
 ### Example 13: Data Processing Pipeline
 
 ```typescript
-import { MxfSDK } from '@mxf/sdk';
-import type { MxfAgent } from '@mxf/sdk';
+import { MxfSDK } from '@mxf-dev/sdk';
+import type { MxfAgent } from '@mxf-dev/sdk';
 
 async function processUserFeedback(agent: MxfAgent) {
     console.log('Starting feedback processing pipeline...\n');

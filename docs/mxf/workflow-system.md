@@ -24,7 +24,7 @@ import {
   WorkflowDefinition,
   WorkflowStep,
   WorkflowState
-} from '@mxf/shared/types/WorkflowTypes';
+} from '@mxf-dev/core/types/WorkflowTypes';
 ```
 
 ## Usage Examples
@@ -34,8 +34,8 @@ import {
 Perfect for data processing pipelines and multi-step validation:
 
 ```typescript
-import { SequentialWorkflowAgent } from '@mxf/sdk/agents';
-import { WorkflowDefinition } from '@mxf/shared/types/WorkflowTypes';
+import { SequentialWorkflowAgent } from '@mxf-dev/sdk/agents';
+import { WorkflowDefinition } from '@mxf-dev/core/types/WorkflowTypes';
 
 const workflow: WorkflowDefinition = {
   id: 'data-processing-pipeline',
@@ -93,7 +93,7 @@ console.log('Workflow completed:', result.success);
 Optimal for concurrent API calls and multi-source data fetching:
 
 ```typescript
-import { ParallelWorkflowAgent } from '@mxf/sdk/agents';
+import { ParallelWorkflowAgent } from '@mxf-dev/sdk/agents';
 
 const workflow: WorkflowDefinition = {
   id: 'multi-source-fetch',
@@ -155,7 +155,7 @@ console.log('Execution groups:', plan);
 Ideal for batch processing and iterative operations:
 
 ```typescript
-import { LoopWorkflowAgent } from '@mxf/sdk/agents';
+import { LoopWorkflowAgent } from '@mxf-dev/sdk/agents';
 
 const workflow: WorkflowDefinition = {
   id: 'batch-processor',
@@ -358,7 +358,7 @@ const state = agent.getWorkflowState();
 ### Performance Evaluation
 
 ```typescript
-import { EvaluationService } from '@mxf/server/services/EvaluationService';
+import { EvaluationService } from 'src/server/services/EvaluationService';
 
 const evaluationService = EvaluationService.getInstance();
 
@@ -398,7 +398,7 @@ interface PerformanceMetrics {
 Server-side workflow orchestration:
 
 ```typescript
-import { WorkflowExecutionEngine } from '@mxf/server/services/WorkflowExecutionEngine';
+import { WorkflowExecutionEngine } from 'src/server/services/WorkflowExecutionEngine';
 
 const engine = WorkflowExecutionEngine.getInstance();
 
@@ -468,7 +468,7 @@ const workflow = engine.createWorkflowFromTemplate(
 Integrate external AI framework tools:
 
 ```typescript
-import { FrameworkAdapter } from '@mxf/shared/adapters/FrameworkAdapter';
+import { FrameworkAdapter } from '@mxf-dev/core/adapters/FrameworkAdapter';
 
 class LangChainAdapter extends FrameworkAdapter {
   readonly frameworkName = 'langchain';
@@ -504,7 +504,7 @@ class LangChainAdapter extends FrameworkAdapter {
 Workflow system emits events for monitoring:
 
 ```typescript
-import { Events } from '@mxf/shared/events/EventNames';
+import { Events } from '@mxf-dev/core/events/EventNames';
 
 eventBus.on(Events.Workflow.WORKFLOW_STARTED, (data) => {
   console.log('Workflow started:', data.workflowId);

@@ -4,7 +4,7 @@
 
 The MXF Interactive CLI is a persistent terminal UI session launched with `bun run mxf`. Built with [Ink](https://github.com/vadimdemedes/ink) (React for CLIs), it provides a rich interface for multi-agent task orchestration directly from the terminal. You type natural language tasks, and the built-in agent team (Planner, Operator, Executor, Reviewer) decomposes and executes them using MXF's ORPAR control loop and MCP tool system.
 
-**How it differs from the SDK CLI (`bun run sdk:cli`):** The SDK CLI is a developer tool for managing individual agent connections, channels, and raw MCP tool calls against a running server. The Interactive CLI is the user-facing orchestration layer -- it manages agent lifecycles, task delegation, cost tracking, session persistence, and confirmation prompts automatically.
+**How it differs from the admin commands (`bun run mxf user:create`, `channel:create`, `key:generate`, `setup`):** The admin commands are provisioning tools that talk HTTP to a running server. The Interactive CLI is the user-facing orchestration layer -- it manages agent lifecycles, task delegation, cost tracking, session persistence, and confirmation prompts automatically.
 
 Key capabilities:
 

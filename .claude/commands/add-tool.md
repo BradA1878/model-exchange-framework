@@ -8,7 +8,7 @@ Workflow for adding a new MCP tool to MXF.
 
 **Workflow:**
 1. Determine tool category (meta, agent, coordination, memory, etc.)
-2. Create tool file in `src/shared/protocols/mcp/tools/<Category>/`
+2. Create tool file in `packages/core/src/protocols/mcp/tools/<Category>/`
 3. Implement tool following the McpTool interface:
    - name, description, parameters, execute function
 4. Register tool in the category's index

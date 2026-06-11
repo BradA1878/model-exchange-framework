@@ -9,7 +9,7 @@ import {
     createWarningValidator,
     createSilentValidator,
     ValidationMode
-} from '@mxf/shared/utils/validation';
+} from '@mxf-dev/core/utils/validation';
 
 describe('Validation Framework', () => {
     describe('createStrictValidator (hard mode)', () => {

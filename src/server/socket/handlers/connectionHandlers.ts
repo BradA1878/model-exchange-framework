@@ -14,8 +14,8 @@
  * limitations under the License.
  *
  * @author Brad Anderson <BradA1878@pm.me>
- * @repository https://github.com/BradA1878/model-exchange-framework
- * @documentation https://brada1878.github.io/model-exchange-framework/
+ * @repository https://github.com/mxf-dev/mxf
+ * @documentation https://mxf-dev.github.io/mxf/
  */
 
 /**
@@ -26,7 +26,7 @@
  */
 
 import { Server as SocketServer, Socket } from 'socket.io';
-import { EventBus } from '../../../shared/events/EventBus';
+import { EventBus } from '@mxf-dev/core/events/EventBus';
 import {
     AgentEvents,
     CoreSocketEvents,
@@ -34,12 +34,12 @@ import {
     ChannelEvents,
     ChannelActionTypes,
     AuthEvents
-} from '../../../shared/events/EventNames';
-import { ControlLoopEvents } from '../../../shared/events/event-definitions/ControlLoopEvents';
-import { OrparEvents } from '../../../shared/events/event-definitions/OrparEvents';
-import { AgentConnectionStatus } from '../../../shared/types/AgentTypes';
-import { createStrictValidator } from '../../../shared/utils/validation';
-import logger from '../../../shared/utils/Logger';
+} from '@mxf-dev/core/events/EventNames';
+import { ControlLoopEvents } from '@mxf-dev/core/events/event-definitions/ControlLoopEvents';
+import { OrparEvents } from '@mxf-dev/core/events/event-definitions/OrparEvents';
+import { AgentConnectionStatus } from '@mxf-dev/core/types/AgentTypes';
+import { createStrictValidator } from '@mxf-dev/core/utils/validation';
+import logger from '@mxf-dev/core/utils/Logger';
 import { handleSocketAuthentication, sendAuthResponse } from './authenticationHandlers';
 import { setupControlLoopHandlers } from './controlLoopHandlers';
 import { setupMcpEventHandlers } from './mcpEventHandlers';
@@ -47,12 +47,12 @@ import { setupSocketToEventBusForwarding } from './eventForwardingHandlers';
 import { setupMcpSocketToEventBusForwarding } from './eventForwardingHandlers';
 import { 
     createBaseEventPayload 
-} from '../../../shared/schemas/EventPayloadSchema';
+} from '@mxf-dev/core/schemas/EventPayloadSchema';
 import { registerTaskHandlers } from './taskHandlers';
 import { 
     getNormalizedChannelName 
 } from './utilityHandlers';
-import { ISocketService } from '../../../shared/interfaces/SocketServiceInterface';
+import { ISocketService } from '@mxf-dev/core/interfaces/SocketServiceInterface';
 import { AgentService } from '../services/AgentService';
 import { setupChannelContextEventBusHandlers } from './channelContextHandlers';
 import { setupAdminEventHandlers } from './adminHandlers';

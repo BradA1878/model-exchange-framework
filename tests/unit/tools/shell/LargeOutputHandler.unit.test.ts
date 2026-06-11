@@ -12,10 +12,10 @@ import {
     DEFAULT_LARGE_OUTPUT_CONFIG,
     LargeOutputConfig,
     ProcessedOutput
-} from '@mxf/shared/protocols/mcp/tools/shell/LargeOutputHandler';
+} from '@mxf-dev/core/protocols/mcp/tools/shell/LargeOutputHandler';
 
 // Mock the ShellOutput model to avoid MongoDB dependency
-jest.mock('@mxf/shared/models/shellOutput', () => ({
+jest.mock('@mxf-dev/core/models/shellOutput', () => ({
     ShellOutput: {
         create: jest.fn().mockResolvedValue({}),
         findOne: jest.fn().mockResolvedValue(null),
@@ -220,7 +220,7 @@ describe('processOutput — metrics always present', () => {
 describe('processOutput — persistence failure fallback', () => {
     it('returns truncated inline output when MongoDB create fails', async () => {
         // Override the mock to throw
-        const { ShellOutput } = require('@mxf/shared/models/shellOutput');
+        const { ShellOutput } = require('@mxf-dev/core/models/shellOutput');
         ShellOutput.create.mockRejectedValueOnce(new Error('MongoDB connection failed'));
 
         const config: Partial<LargeOutputConfig> = { maxInlineSize: 10 };

@@ -11,7 +11,7 @@
 import { TestSDK, createTestSDK } from '../../utils/TestSDK';
 import { waitFor, sleep, waitForEvent } from '../../utils/waitFor';
 import { TOOL_TEST_AGENT_CONFIG, TIMEOUTS } from '../../utils/TestFixtures';
-import { Events } from '../../../src/sdk/index';
+import { Events } from '@mxf-dev/sdk';
 
 describe('Dynamic Tool Updates', () => {
     let testSdk: TestSDK;

@@ -35,7 +35,7 @@ import {
     exportMetricsJson,
     getMetricsSummary,
     createContextCollector,
-} from '../../../src/shared/utils/toon';
+} from '@mxf-dev/core/utils/toon';
 import {
     ToonMessageMiddleware,
     getToonMiddleware,
@@ -928,7 +928,10 @@ data[3]{id,name,status}:
                 const middleware = new ToonMessageMiddleware();
                 const config = middleware.getConfig();
 
-                expect(config.enabled).toBe(true);
+                // 'enabled' defaults from TOON_OPTIMIZATION_ENABLED (on unless
+                // explicitly 'false'), so derive the expectation from the env
+                // rather than hardcoding it — the other defaults are fixed.
+                expect(config.enabled).toBe(process.env.TOON_OPTIMIZATION_ENABLED !== 'false');
                 expect(config.minArrayLength).toBe(5);
                 expect(config.minScore).toBe(0.8);
                 expect(config.delimiter).toBe(',');

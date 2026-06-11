@@ -45,6 +45,7 @@ import { registerRunCommand } from './commands/run';
 import { registerHistoryCommand } from './commands/history';
 import { registerResumeCommand } from './commands/resume';
 import { registerUpdateCommand } from './commands/update';
+import { registerAdminCommands } from './commands/admin';
 
 import { existsSync } from 'fs';
 import { spawn } from 'child_process';
@@ -121,6 +122,7 @@ registerConfigCommand(program);
 registerHistoryCommand(program);
 registerResumeCommand(program);
 registerUpdateCommand(program);
+registerAdminCommands(program);
 
 // Default action: launch interactive session.
 // Tries to launch the Tauri desktop app if available, falls back to terminal TUI.

@@ -14,8 +14,8 @@
  * limitations under the License.
  *
  * @author Brad Anderson <BradA1878@pm.me>
- * @repository https://github.com/BradA1878/model-exchange-framework
- * @documentation https://brada1878.github.io/model-exchange-framework/
+ * @repository https://github.com/mxf-dev/mxf
+ * @documentation https://mxf-dev.github.io/mxf/
  */
 
 /**
@@ -38,13 +38,13 @@ import { Server as SocketServer, Socket } from 'socket.io';
 import { 
     Events,
     CoreSocketEvents
-} from '../../../shared/events/EventNames';
-import { AgentConnectionStatus } from '../../../shared/types/AgentTypes';
-import { EventBus } from '../../../shared/events/EventBus';
-import logger from '../../../shared/utils/Logger';
-import { createStrictValidator } from '../../../shared/utils/validation';
+} from '@mxf-dev/core/events/EventNames';
+import { AgentConnectionStatus } from '@mxf-dev/core/types/AgentTypes';
+import { EventBus } from '@mxf-dev/core/events/EventBus';
+import logger from '@mxf-dev/core/utils/Logger';
+import { createStrictValidator } from '@mxf-dev/core/utils/validation';
 import { AgentService } from './AgentService';
-import { ISocketService, AgentSocketInfo as IAgentSocketInfo } from '../../../shared/interfaces/SocketServiceInterface';
+import { ISocketService, AgentSocketInfo as IAgentSocketInfo } from '@mxf-dev/core/interfaces/SocketServiceInterface';
 import { setupEventBusToSocketForwarding } from '../handlers/eventForwardingHandlers';
 import { handleConnection } from '../handlers/connectionHandlers';
 import { createAuthMiddleware } from '../handlers/authenticationHandlers';

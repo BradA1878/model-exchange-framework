@@ -3,8 +3,8 @@
  * Tests Q-value storage, EMA updates, normalization, and cache behavior
  */
 
-import { QValueManager } from '@mxf/shared/services/QValueManager';
-import { DEFAULT_MEMORY_UTILITY_CONFIG } from '@mxf/shared/types/MemoryUtilityTypes';
+import { QValueManager } from '@mxf-dev/core/services/QValueManager';
+import { DEFAULT_MEMORY_UTILITY_CONFIG } from '@mxf-dev/core/types/MemoryUtilityTypes';
 
 describe('QValueManager Unit Tests', () => {
     let qValueManager: QValueManager;

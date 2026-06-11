@@ -9,7 +9,7 @@ See [Basic Examples](examples-basic.md#prerequisites) for setup instructions.
 ## Example 1: Basic Task Creation and Assignment
 
 ```typescript
-import { MxfSDK, Events } from '@mxf/sdk';
+import { MxfSDK, Events } from '@mxf-dev/sdk';
 import credentials from './credentials.json';
 
 const sdk = new MxfSDK({

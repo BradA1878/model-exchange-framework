@@ -14,30 +14,31 @@
  * limitations under the License.
  *
  * @author Brad Anderson <BradA1878@pm.me>
- * @repository https://github.com/BradA1878/model-exchange-framework
- * @documentation https://brada1878.github.io/model-exchange-framework/
+ * @repository https://github.com/mxf-dev/mxf
+ * @documentation https://mxf-dev.github.io/mxf/
  */
 
+import { v4 as uuidv4 } from 'uuid';
 import { EventEmitter } from 'events';
-import { Logger } from '../../../shared/utils/Logger';
-import { createStrictValidator } from '../../../shared/utils/validation';
-import { EventBus } from '../../../shared/events/EventBus';
-import { Events } from '../../../shared/events/EventNames';
-import { ServerEventBus } from '../../../shared/events/ServerEventBus';
-import { EventName, ChannelActionTypes, ChannelActionType } from '../../../shared/events/EventNames';
-import { MessagePersistFailedPayload, MessageSendFailedPayload } from '../../../shared/events/event-definitions/MessageEvents';
-import { ChannelEventData, MessageEventData, BaseEventPayload, createMessageEventPayload, createMessagePersistFailedEventPayload, createMessageSendFailedEventPayload, createChannelEventPayload, createChannelMessageEventPayload } from '../../../shared/schemas/EventPayloadSchema'; 
-import { ChannelMessage, ContentFormat, MessageMetadata, ContentWrapper, createChannelMessage } from '../../../shared/schemas/MessageSchemas'; 
-import { ChannelId, AgentId } from '../../../shared/types/ChannelContext';
-import { ChannelContextMessageOperations } from '../../../shared/services/ChannelContextMessageOperations';
+import { Logger } from '@mxf-dev/core/utils/Logger';
+import { createStrictValidator } from '@mxf-dev/core/utils/validation';
+import { EventBus } from '@mxf-dev/core/events/EventBus';
+import { Events } from '@mxf-dev/core/events/EventNames';
+import { ServerEventBus } from '@mxf-dev/core/events/ServerEventBus';
+import { EventName, ChannelActionTypes, ChannelActionType } from '@mxf-dev/core/events/EventNames';
+import { MessagePersistFailedPayload, MessageSendFailedPayload } from '@mxf-dev/core/events/event-definitions/MessageEvents';
+import { ChannelEventData, MessageEventData, BaseEventPayload, createMessageEventPayload, createMessagePersistFailedEventPayload, createMessageSendFailedEventPayload, createChannelEventPayload, createChannelMessageEventPayload } from '@mxf-dev/core/schemas/EventPayloadSchema'; 
+import { ChannelMessage, ContentFormat, MessageMetadata, ContentWrapper, createChannelMessage } from '@mxf-dev/core/schemas/MessageSchemas'; 
+import { ChannelId, AgentId } from '@mxf-dev/core/types/ChannelContext';
+import { ChannelContextMessageOperations } from '@mxf-dev/core/services/ChannelContextMessageOperations';
 import { Server } from 'socket.io'; 
-import { IChannel } from '../../../shared/interfaces/Channel'; 
+import { IChannel } from '@mxf-dev/core/interfaces/Channel'; 
 import { lastValueFrom } from 'rxjs';
-import { Channel } from '../../../shared/models/channel';
+import { Channel } from '@mxf-dev/core/models/channel';
 import { McpService } from './McpService';
 // Import shared config events (NOT from SDK - that's client-side only)
-import { ConfigEvents, ChannelSystemLlmChangeEvent } from '../../../shared/events/event-definitions/ConfigEvents';
-import { ConfigManager } from '../../../sdk/config/ConfigManager';
+import { ConfigEvents, ChannelSystemLlmChangeEvent } from '@mxf-dev/core/events/event-definitions/ConfigEvents';
+import { ConfigManager } from '@mxf-dev/core/config/ConfigManager';
 
 /**
  * ChannelService manages channel lifecycle and interactions.
@@ -291,7 +292,7 @@ export class ChannelService extends EventEmitter {
 
         // Listen for channel MCP server registration events to persist to database
         // This runs alongside ExternalMcpServerManager's handler (which starts the process)
-        const { McpEvents } = require('../../../shared/events/event-definitions/McpEvents');
+        const { McpEvents } = require('@mxf-dev/core/events/event-definitions/McpEvents');
 
         this.eventBus.on(McpEvents.CHANNEL_SERVER_REGISTER, async (payload: any) => {
             try {
@@ -1329,7 +1330,7 @@ export class ChannelService extends EventEmitter {
             
             // Convert ChannelMessage (from schemas) to ChannelMessage (from types) for operations
             const convertedMessages = messages.map(msg => ({
-                messageId: msg.metadata?.messageId || `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                messageId: msg.metadata?.messageId || `msg_${uuidv4()}`,
                 content: typeof msg.content?.data === 'string' ? msg.content.data : JSON.stringify(msg.content?.data || ''),
                 senderId: msg.senderId,
                 timestamp: msg.metadata?.timestamp || Date.now(),

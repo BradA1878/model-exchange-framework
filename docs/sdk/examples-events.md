@@ -16,7 +16,7 @@ MXF provides two ways to listen to events:
 ## Example 1: Basic Event Listening
 
 ```typescript
-import { MxfSDK, Events } from '@mxf/sdk';
+import { MxfSDK, Events } from '@mxf-dev/sdk';
 import credentials from './credentials.json';
 
 const sdk = new MxfSDK({
@@ -174,7 +174,7 @@ agent.on(Events.Channel.UPDATED, (payload) => {
 ## Example 7: Comprehensive Event Handler
 
 ```typescript
-import { MxfSDK, Events } from '@mxf/sdk';
+import { MxfSDK, Events } from '@mxf-dev/sdk';
 
 class EventMonitor {
     private agent: MxfAgent;

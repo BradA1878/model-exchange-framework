@@ -18,7 +18,7 @@
  * Run with: npm run demo:mcp-prompts
  */
 
-import { MxfSDK } from '../../src/sdk/MxfSDK';
+import { MxfSDK } from '@mxf-dev/sdk/MxfSDK';
 import dotenv from 'dotenv';
 
 dotenv.config();

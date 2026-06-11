@@ -12,7 +12,7 @@ bun run rebuild            # Clean + build
 bun run lint               # ESLint
 ```
 
-**Runtime:** Bun (not Node). The package manager is also Bun. The dashboard (`dashboard/`) uses npm separately.
+**Runtime:** Bun (not Node). The package manager is also Bun. The dashboard is a separate project/repo (mxf-dev/dashboard, `@mxf-dev/dashboard`).
 
 **Do NOT start the MXF server in a background process.** The server has SystemLLM enabled which uses LLM credits via OpenRouter. Always let the developer start/stop the server manually.
 
@@ -56,7 +56,7 @@ tests/
 ├── property/     # Property-based tests (fast-check)
 ├── utils/        # Test utilities
 └── setup/        # Test setup files
-dashboard/        # Vue 3 + Vuetify dashboard (separate npm project)
+# dashboard moved to its own repo: mxf-dev/dashboard (@mxf-dev/dashboard)
 examples/         # Demo scripts (run via `bun run demo:<name>`)
 ```
 
@@ -64,22 +64,22 @@ examples/         # Demo scripts (run via `bun run demo:<name>`)
 
 - **TypeScript strict mode.** All code is TypeScript.
 - **Singleton pattern:** All services use `getInstance()`.
-- **Logging:** Use `Logger` from `src/shared/utils/Logger.ts`. Never use `console.log`.
+- **Logging:** Use `Logger` from `packages/core/src/utils/Logger.ts`. Never use `console.log`.
 - **No TODOs in code.** Complete the work.
 - **No fallbacks, timeouts, or simulation.** Fail fast with validation.
 - **Clean break refactoring.** When refactoring, don't leave backwards-compatibility shims.
 
 ### MCP Tools
 
-Tools follow the `McpTool` interface defined in `src/shared/types/toolTypes.ts`. Tool implementations live in `src/shared/protocols/mcp/tools/`. Use existing tools as templates when adding new ones.
+Tools follow the `McpTool` interface defined in `packages/core/src/types/toolTypes.ts`. Tool implementations live in `packages/core/src/protocols/mcp/tools/`. Use existing tools as templates when adding new ones.
 
 ### Event System
 
 All events must follow this pattern — no exceptions:
 
-- Event names: import from `src/shared/events/EventNames.ts`
-- Payload helpers: import from `src/shared/schemas/EventPayloadSchema.ts`
-- New event definitions: create in `src/shared/events/event-definitions/`
+- Event names: import from `packages/core/src/events/EventNames.ts`
+- Payload helpers: import from `packages/core/src/schemas/EventPayloadSchema.ts`
+- New event definitions: create in `packages/core/src/events/event-definitions/`
 - Always use `EventBus.client` or `EventBus.server` — never emit/listen directly on the socket
 - Never use string literals for event names or raw object payloads
 
@@ -110,7 +110,7 @@ Adding a new event type requires three changes: (1) definition in `event-definit
 
 ## Environment Variables
 
-Required variables (see `.env.example` or `src/shared/config/` for full listings):
+Required variables (see `.env.example` or `packages/core/src/config/` for full listings):
 
 ```
 MONGODB_URI, JWT_SECRET, AGENT_API_KEY, OPENROUTER_API_KEY, PORT (default: 3001)

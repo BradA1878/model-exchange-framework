@@ -20,7 +20,7 @@
  * Run with: npm run demo:memory-strata
  */
 
-import { MxfSDK } from '../../src/sdk/MxfSDK';
+import { MxfSDK } from '@mxf-dev/sdk/MxfSDK';
 import dotenv from 'dotenv';
 
 dotenv.config();

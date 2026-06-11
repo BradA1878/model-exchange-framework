@@ -14,8 +14,8 @@
  * limitations under the License.
  *
  * @author Brad Anderson <BradA1878@pm.me>
- * @repository https://github.com/BradA1878/model-exchange-framework
- * @documentation https://brada1878.github.io/model-exchange-framework/
+ * @repository https://github.com/mxf-dev/mxf
+ * @documentation https://mxf-dev.github.io/mxf/
  */
 
 /**
@@ -26,20 +26,20 @@
  */
 
 import { Router, Request, Response } from 'express';
-import { createStrictValidator } from '../../../shared/utils/validation';
-import { Logger } from '../../../shared/utils/Logger';
+import { createStrictValidator } from '@mxf-dev/core/utils/validation';
+import { Logger } from '@mxf-dev/core/utils/Logger';
 import { TaskService } from '../../socket/services/TaskService';
-import { EventBus } from '../../../shared/events/EventBus';
-import { TaskEvents } from '../../../shared/events/event-definitions/TaskEvents';
-import { createTaskEventPayload, createTaskAssignmentEventPayload } from '../../../shared/schemas/EventPayloadSchema';
-import { Task } from '../../../shared/models/task';
+import { EventBus } from '@mxf-dev/core/events/EventBus';
+import { TaskEvents } from '@mxf-dev/core/events/event-definitions/TaskEvents';
+import { createTaskEventPayload, createTaskAssignmentEventPayload } from '@mxf-dev/core/schemas/EventPayloadSchema';
+import { Task } from '@mxf-dev/core/models/task';
 import { 
     CreateTaskRequest, 
     UpdateTaskRequest, 
     TaskQueryFilters,
     TaskPriority,
     TaskStatus 
-} from '../../../shared/types/TaskTypes';
+} from '@mxf-dev/core/types/TaskTypes';
 
 // Extend Request interface for authentication properties
 interface AuthenticatedRequest extends Request {

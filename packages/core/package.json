@@ -1,0 +1,84 @@
+{
+  "name": "@mxf-dev/core",
+  "version": "1.0.0",
+  "description": "Model Exchange Framework core: events, schemas, types, services, and protocol contracts",
+  "type": "module",
+  "license": "Apache-2.0",
+  "author": "Brad Anderson <BradA1878@pm.me>",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mxf-dev/mxf",
+    "directory": "packages/core"
+  },
+  "engines": {
+    "node": ">=20.19",
+    "bun": ">=1.2"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "bun": "./src/index.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./*": {
+      "types": "./dist/*.d.ts",
+      "bun": "./src/*.ts",
+      "import": "./dist/*.js",
+      "default": "./dist/*.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "rm -rf dist tsconfig.tsbuildinfo",
+    "prepublishOnly": "bun run clean && bun run build"
+  },
+  "dependencies": {
+    "@google/genai": "^0.9.0",
+    "@msgpack/msgpack": "^3.1.2",
+    "ajv": "^8.17.1",
+    "ajv-formats": "^3.0.1",
+    "bcrypt": "^5.1.1",
+    "dockerode": "^4.0.2",
+    "meilisearch": "^0.53.0",
+    "mongoose": "^8.10.2",
+    "openai": "^4.95.1",
+    "puppeteer": "^24.11.2",
+    "rxjs": "^7.8.2",
+    "uuid": "^9.0.1",
+    "zod": "^3.24.3"
+  },
+  "peerDependencies": {
+    "@tensorflow/tfjs": "^4.22.0",
+    "socket.io": "^4.7.2"
+  },
+  "peerDependenciesMeta": {
+    "@tensorflow/tfjs": {
+      "optional": true
+    },
+    "socket.io": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@tensorflow/tfjs": "^4.22.0",
+    "@types/bcrypt": "^5.0.2",
+    "@types/dockerode": "^3.3.24",
+    "@types/node": "^20.10.5",
+    "socket.io": "^4.7.2",
+    "typescript": "^5.2.2"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

@@ -10,12 +10,12 @@
  */
 
 import dotenv from 'dotenv';
-import { MxfSDK, LlmProviderType } from '../../src/sdk';
+import { MxfSDK, LlmProviderType } from '@mxf-dev/sdk';
 import { GameServer } from './server/server/GameServer';
 import { Team, CommanderRole, TurnSummary, GameAction } from './server/types/game';
 import { join } from 'path';
 import mongoose from 'mongoose';
-import { enableClientLogging } from '../../src/shared/utils/Logger';
+import { enableClientLogging } from '@mxf-dev/core/utils/Logger';
 import gameConfig from './game.config';
 
 // Load environment variables
@@ -494,7 +494,7 @@ async function connectAgents() {
 
     console.log('🗑️  Step 5: Cleaning up old agent memory from previous runs...\n');
 
-    const { AgentMemory } = require('../../src/shared/models/memory');
+    const { AgentMemory } = require('@mxf-dev/core/models/memory');
     let totalDeleted = 0;
 
     for (const commander of COMMANDERS) {
@@ -598,7 +598,7 @@ async function connectAgents() {
     
     console.log('📡 Setting up messaging event listeners for dashboard...\n');
     
-    const { Events } = await import('../../src/shared/events/EventNames');
+    const { Events } = await import('@mxf-dev/core/events/EventNames');
     const gameServerUrl = process.env.GAME_SERVER_URL || 'http://localhost:3002';
     
     // Use channel-level listener for task assignments (avoids duplicates from per-agent listeners)
@@ -746,7 +746,7 @@ async function connectAgents() {
             console.log('🗑️  Cleaning up agent memory from MongoDB...');
 
             // Delete agent memory via MongoDB directly (since API doesn't expose this)
-            const { AgentMemory } = require('../../src/shared/models/memory');
+            const { AgentMemory } = require('@mxf-dev/core/models/memory');
             for (const commander of COMMANDERS) {
                 try {
                     const result = await AgentMemory.deleteMany({ agentId: commander.id });
@@ -825,8 +825,8 @@ async function connectAgents() {
     console.log('🔍 Setting up agent activity monitoring...\n');
     
     // Import task events for monitoring
-    const { TaskEvents } = await import('../../src/shared/events/event-definitions/TaskEvents');
-    const { EventBus } = await import('../../src/shared/events/EventBus');
+    const { TaskEvents } = await import('@mxf-dev/core/events/event-definitions/TaskEvents');
+    const { EventBus } = await import('@mxf-dev/core/events/EventBus');
     
     // Monitor task assignments reaching agents - with detailed payload logging
     EventBus.client.on(TaskEvents.ASSIGNED, (payload: any) => {

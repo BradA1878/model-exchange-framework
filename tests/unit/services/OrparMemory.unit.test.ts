@@ -8,8 +8,8 @@
  * - CycleConsolidationTrigger: Consolidation rule evaluation
  */
 
-import { MemoryStratum } from '@mxf/shared/types/MemoryStrataTypes';
-import { OrparPhase, MemoryUsageRecord } from '@mxf/shared/types/MemoryUtilityTypes';
+import { MemoryStratum } from '@mxf-dev/core/types/MemoryStrataTypes';
+import { OrparPhase, MemoryUsageRecord } from '@mxf-dev/core/types/MemoryUtilityTypes';
 import {
     DEFAULT_PHASE_STRATA_MAPPINGS,
     DEFAULT_PHASE_WEIGHTS,
@@ -20,11 +20,11 @@ import {
     CycleOutcome,
     SurpriseThresholds,
     ConsolidationRule
-} from '@mxf/shared/types/OrparMemoryIntegrationTypes';
-import { SurpriseDetection, SurpriseType } from '@mxf/shared/types/MemoryStrataTypes';
+} from '@mxf-dev/core/types/OrparMemoryIntegrationTypes';
+import { SurpriseDetection, SurpriseType } from '@mxf-dev/core/types/MemoryStrataTypes';
 
 // Mock dependencies
-jest.mock('@mxf/shared/events/EventBus', () => ({
+jest.mock('@mxf-dev/core/events/EventBus', () => ({
     EventBus: {
         server: {
             emit: jest.fn()
@@ -32,7 +32,7 @@ jest.mock('@mxf/shared/events/EventBus', () => ({
     }
 }));
 
-jest.mock('@mxf/shared/config/orpar-memory.config', () => ({
+jest.mock('@mxf-dev/core/config/orpar-memory.config', () => ({
     getOrparMemoryConfig: jest.fn(() => ({
         enabled: true,
         phaseStrataMappings: DEFAULT_PHASE_STRATA_MAPPINGS,
@@ -50,7 +50,7 @@ jest.mock('@mxf/shared/config/orpar-memory.config', () => ({
 }));
 
 // Need to import these after mocking
-import { DEFAULT_PHASE_STRATA_MAPPINGS as MAPPINGS } from '@mxf/shared/types/OrparMemoryIntegrationTypes';
+import { DEFAULT_PHASE_STRATA_MAPPINGS as MAPPINGS } from '@mxf-dev/core/types/OrparMemoryIntegrationTypes';
 
 describe('ORPAR-Memory Integration Unit Tests', () => {
     // =========================================================================

@@ -4,7 +4,7 @@
  */
 
 import fc from 'fast-check';
-import { CodeExecutionSandboxService } from '@mxf/shared/services/CodeExecutionSandboxService';
+import { CodeExecutionSandboxService } from '@mxf-dev/core/services/CodeExecutionSandboxService';
 import crypto from 'crypto';
 
 describe('Code Execution Property Tests', () => {

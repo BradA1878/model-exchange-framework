@@ -14,8 +14,8 @@
  * limitations under the License.
  *
  * @author Brad Anderson <BradA1878@pm.me>
- * @repository https://github.com/BradA1878/model-exchange-framework
- * @documentation https://brada1878.github.io/model-exchange-framework/
+ * @repository https://github.com/mxf-dev/mxf
+ * @documentation https://mxf-dev.github.io/mxf/
  */
 
 /**
@@ -26,14 +26,14 @@
  */
 
 import { v4 as uuidv4 } from 'uuid';
-import { Logger } from '../../../shared/utils/Logger';
-import { EventBus } from '../../../shared/events/EventBus';
-import { Events } from '../../../shared/events/EventNames';
-import { Plan, Reflection } from '../../../shared/types/ControlLoopTypes';
-import { reflectionService } from '../../../shared/services/ReflectionService';
-import { createStrictValidator } from '../../../shared/utils/validation';
-import { createControlLoopEventPayload, ControlLoopSpecificData, ControlLoopEventPayload } from '../../../shared/schemas/EventPayloadSchema';
-import { EnhancedReflection } from '../../../shared/types/ReflectionTypes';
+import { Logger } from '@mxf-dev/core/utils/Logger';
+import { EventBus } from '@mxf-dev/core/events/EventBus';
+import { Events } from '@mxf-dev/core/events/EventNames';
+import { Plan, Reflection } from '@mxf-dev/core/types/ControlLoopTypes';
+import { reflectionService } from '@mxf-dev/core/services/ReflectionService';
+import { createStrictValidator } from '@mxf-dev/core/utils/validation';
+import { createControlLoopEventPayload, ControlLoopSpecificData, ControlLoopEventPayload } from '@mxf-dev/core/schemas/EventPayloadSchema';
+import { EnhancedReflection } from '@mxf-dev/core/types/ReflectionTypes';
 
 export class ServerReflectionService {
     private logger: Logger;

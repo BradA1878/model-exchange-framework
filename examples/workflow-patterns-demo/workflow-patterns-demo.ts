@@ -25,8 +25,8 @@
  * Run with: npm run demo:workflow-patterns
  */
 
-import { MxfSDK, Events, LlmProviderType } from '../../src/sdk/index';
-import type { MxfAgent, MxfChannelMonitor } from '../../src/sdk/index';
+import { MxfSDK, Events, LlmProviderType } from '@mxf-dev/sdk';
+import type { MxfAgent, MxfChannelMonitor } from '@mxf-dev/sdk';
 import dotenv from 'dotenv';
 
 dotenv.config();

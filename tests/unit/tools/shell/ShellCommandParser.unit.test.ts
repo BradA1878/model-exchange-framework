@@ -8,7 +8,7 @@ import {
     parseCommand,
     extractEffectiveCommands,
     ParsedCommand
-} from '@mxf/shared/protocols/mcp/tools/shell/ShellCommandParser';
+} from '@mxf-dev/core/protocols/mcp/tools/shell/ShellCommandParser';
 
 // ---------------------------------------------------------------------------
 // Simple commands

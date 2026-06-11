@@ -85,8 +85,8 @@
  */
 
 // MxfSDK - Primary entry point
-import { MxfSDK, Events, LlmProviderType, MxpConfigManager, SecurityLevel, MxfChannelMonitor } from '../../src/sdk/index';
-import type { AgentCreationConfig, MxfAgent } from '../../src/sdk/index';
+import { MxfSDK, Events, LlmProviderType, MxpConfigManager, SecurityLevel, MxfChannelMonitor } from '@mxf-dev/sdk';
+import type { AgentCreationConfig, MxfAgent } from '@mxf-dev/sdk';
 
 // Demo utilities
 import './logging-config';

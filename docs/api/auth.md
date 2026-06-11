@@ -321,7 +321,7 @@ Personal Access Tokens are the **recommended** authentication method for SDK usa
 Once you have a PAT, use it with the SDK:
 
 ```typescript
-import { MxfSDK } from '@mxf/sdk';
+import { MxfSDK } from '@mxf-dev/sdk';
 
 const sdk = new MxfSDK({
     serverUrl: 'http://localhost:3001',

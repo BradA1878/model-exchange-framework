@@ -26,7 +26,7 @@ Channel-scoped MCP registration is ideal for:
 ### 1. Create the Channel
 
 ```typescript
-import { MxfSDK } from '@mxf/sdk';
+import { MxfSDK } from '@mxf-dev/sdk';
 
 const sdk = new MxfSDK({
     serverUrl: 'http://localhost:3001',

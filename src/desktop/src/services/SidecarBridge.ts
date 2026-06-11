@@ -13,7 +13,10 @@
  * @author Brad Anderson <BradA1878@pm.me>
  */
 
+import { createLogger } from '../utils/logger';
 import { Command } from '@tauri-apps/plugin-shell';
+
+const logger = createLogger('SidecarBridge');
 
 /** Event listener callback type */
 type EventListener = (data: Record<string, unknown>) => void;
@@ -74,19 +77,19 @@ export class SidecarBridge {
 
         // Handle stderr — log errors but don't crash
         this.command.stderr.on('data', (data: string) => {
-            console.error('[sidecar stderr]', data);
+            logger.error('sidecar stderr', data);
         });
 
         // Handle process close
         this.command.on('close', (data) => {
-            console.log('[sidecar] process exited with code', data.code);
+            logger.info('sidecar process exited', data.code);
             this.process = null;
             this.emit('status', { state: 'disconnected' });
         });
 
         // Handle process error
         this.command.on('error', (error: string) => {
-            console.error('[sidecar] process error:', error);
+            logger.error('sidecar process error', error);
             this.emit('error', { message: `Sidecar error: ${error}` });
         });
 
@@ -169,7 +172,7 @@ export class SidecarBridge {
                 try {
                     listener(data);
                 } catch (err) {
-                    console.error(`[sidecar] event listener error for ${event}:`, err);
+                    logger.error(`sidecar event listener error for ${event}`, err);
                 }
             }
         }
@@ -193,7 +196,7 @@ export class SidecarBridge {
             try {
                 message = JSON.parse(line);
             } catch {
-                console.warn('[sidecar] unparseable stdout:', line);
+                logger.warn('sidecar unparseable stdout', line);
                 continue;
             }
 

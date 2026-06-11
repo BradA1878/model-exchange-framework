@@ -3,7 +3,7 @@
  * Tests the rule-based entity and relationship extraction logic
  */
 
-import { EntityType, RelationshipType } from '@mxf/shared/types/KnowledgeGraphTypes';
+import { EntityType, RelationshipType } from '@mxf-dev/core/types/KnowledgeGraphTypes';
 
 /**
  * Test extraction patterns without service dependencies

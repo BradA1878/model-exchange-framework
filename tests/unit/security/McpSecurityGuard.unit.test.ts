@@ -10,7 +10,7 @@
  * read-only classification, warning propagation, and path restrictions.
  */
 
-import { McpSecurityGuard, SecurityContext, CommandValidationResult } from '../../../src/shared/protocols/mcp/security/McpSecurityGuard';
+import { McpSecurityGuard, SecurityContext, CommandValidationResult } from '@mxf-dev/core/protocols/mcp/security/McpSecurityGuard';
 
 describe('McpSecurityGuard', () => {
     const guard = new McpSecurityGuard('/tmp/test-project');
@@ -293,15 +293,11 @@ describe('McpSecurityGuard', () => {
 
         it('blocks write operations outside project directory', () => {
             const result = guard.validatePath('/var/log/something.log', 'write');
-            // On some platforms this hits a blocked path, on others it hits the
-            // "outside project directory" rule. Either way, it should be blocked.
-            // Unless it's a sensitive path with read-only access
-            if (result.allowed) {
-                // Must be a read-only sensitive path scenario
-                expect(true).toBe(true);
-            } else {
-                expect(result.reason).toBeDefined();
-            }
+            // Writes under /var/log must never be allowed: depending on the
+            // platform the guard hits either the blocked-path rule or the
+            // outside-project rule, but the OUTCOME contract is identical.
+            expect(result.allowed).toBe(false);
+            expect(result.reason).toBeDefined();
         });
 
         it('blocks delete operations outside project directory', () => {

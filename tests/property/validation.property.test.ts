@@ -9,7 +9,7 @@ import {
     createStrictValidator,
     createWarningValidator,
     createSilentValidator
-} from '@mxf/shared/utils/validation';
+} from '@mxf-dev/core/utils/validation';
 
 describe('Validation Property Tests', () => {
     describe('Type assertion consistency', () => {

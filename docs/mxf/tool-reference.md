@@ -403,7 +403,7 @@ Tools for planning and scheduling.
 All tool implementations are located in:
 
 ```
-src/shared/protocols/mcp/tools/
+packages/core/src/protocols/mcp/tools/
 ├── ActionValidationTools.ts
 ├── AgentCommunicationTools.ts
 ├── AnalyticsTools.ts

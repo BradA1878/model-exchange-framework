@@ -56,11 +56,11 @@
  */
 
 import dotenv from 'dotenv';
-import { MxfSDK, LlmProviderType } from '../../src/sdk';
+import { MxfSDK, LlmProviderType } from '@mxf-dev/sdk';
 import { GameServer } from './server/server/GameServer';
 import { join } from 'path';
 import mongoose from 'mongoose';
-import { enableClientLogging } from '../../src/shared/utils/Logger';
+import { enableClientLogging } from '@mxf-dev/core/utils/Logger';
 
 // Load environment variables from root .env
 dotenv.config({ path: join(__dirname, '../../.env') });
@@ -286,7 +286,7 @@ async function connectAgents() {
 
     console.log('🗑️  Step 5: Cleaning up old memory...\n');
 
-    const { AgentMemory } = require('../../src/shared/models/memory');
+    const { AgentMemory } = require('@mxf-dev/core/models/memory');
 
     for (const player of PLAYERS) {
         try {
@@ -435,7 +435,7 @@ async function connectAgents() {
 
     console.log('📡 Setting up event listeners...\n');
 
-    const { Events } = await import('../../src/shared/events/EventNames');
+    const { Events } = await import('@mxf-dev/core/events/EventNames');
     const gameServerUrl = `http://localhost:${gameServerPort}`;
 
     // Listen for thinking/reasoning (chain-of-thought output)
@@ -499,7 +499,7 @@ async function connectAgents() {
 
             // 3. Delete agent memory from MongoDB
             console.log('🗑️  Deleting agent memory...');
-            const { AgentMemory } = require('../../src/shared/models/memory');
+            const { AgentMemory } = require('@mxf-dev/core/models/memory');
             for (const player of PLAYERS) {
                 try {
                     const result = await AgentMemory.deleteMany({ agentId: player.id });
@@ -514,7 +514,7 @@ async function connectAgents() {
             // 4. Delete channel from MongoDB (prevents stale systemLlmEnabled settings)
             console.log('🗑️  Deleting channel from database...');
             try {
-                const { Channel } = require('../../src/shared/models/channel');
+                const { Channel } = require('@mxf-dev/core/models/channel');
                 const result = await Channel.deleteOne({ channelId: channelId });
                 if (result.deletedCount > 0) {
                     console.log(`   ✅ Deleted channel: ${channelId}`);

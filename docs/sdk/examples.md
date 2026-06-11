@@ -67,7 +67,7 @@ For complete working projects, see the [Example Projects](../examples/first-cont
 ### Agent Lifecycle
 
 ```typescript
-import { MxfSDK } from '@mxf/sdk';
+import { MxfSDK } from '@mxf-dev/sdk';
 
 // Initialize SDK with domain key
 const sdk = new MxfSDK({
@@ -97,7 +97,7 @@ await agent.connect();
 ### Event Handling
 
 ```typescript
-import { Events } from '@mxf/sdk';
+import { Events } from '@mxf-dev/sdk';
 
 // Listen for messages
 agent.on(Events.MESSAGE_RECEIVED, (message) => {

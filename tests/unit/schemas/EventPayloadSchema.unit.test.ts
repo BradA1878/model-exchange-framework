@@ -9,9 +9,9 @@ import {
     createChannelMessageEventPayload,
     createAgentMessageEventPayload,
     BaseEventPayload
-} from '@mxf/shared/schemas/EventPayloadSchema';
-import { Events } from '@mxf/shared/events/EventNames';
-import { createChannelMessage, createAgentMessage } from '@mxf/shared/schemas/MessageSchemas';
+} from '@mxf-dev/core/schemas/EventPayloadSchema';
+import { Events } from '@mxf-dev/core/events/EventNames';
+import { createChannelMessage, createAgentMessage } from '@mxf-dev/core/schemas/MessageSchemas';
 
 describe('EventPayloadSchema', () => {
     describe('createBaseEventPayload', () => {

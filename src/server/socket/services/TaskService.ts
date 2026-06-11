@@ -14,8 +14,8 @@
  * limitations under the License.
  *
  * @author Brad Anderson <BradA1878@pm.me>
- * @repository https://github.com/BradA1878/model-exchange-framework
- * @documentation https://brada1878.github.io/model-exchange-framework/
+ * @repository https://github.com/mxf-dev/mxf
+ * @documentation https://mxf-dev.github.io/mxf/
  */
 
 /**
@@ -25,14 +25,14 @@
 
 import { Observable, BehaviorSubject, combineLatest, timer, from, throwError } from 'rxjs';
 import { map, filter, switchMap, debounceTime, catchError } from 'rxjs/operators';
-import { Logger } from '../../../shared/utils/Logger';
-import { createStrictValidator } from '../../../shared/utils/validation';
-import { EventBus } from '../../../shared/events/EventBus';
-import { Events } from '../../../shared/events/EventNames';
+import { Logger } from '@mxf-dev/core/utils/Logger';
+import { createStrictValidator } from '@mxf-dev/core/utils/validation';
+import { EventBus } from '@mxf-dev/core/events/EventBus';
+import { Events } from '@mxf-dev/core/events/EventNames';
 import { SystemLlmService } from './SystemLlmService';
 import { SystemLlmServiceManager } from './SystemLlmServiceManager';
 import { AgentService } from './AgentService';
-import { ConfigManager } from '../../../sdk/config/ConfigManager';
+import { ConfigManager } from '@mxf-dev/core/config/ConfigManager';
 import { EphemeralEventPatternService } from './EphemeralEventPatternService';
 import { 
     ChannelTask, 
@@ -44,20 +44,20 @@ import {
     TaskAssignmentResult,
     TaskQueryFilters,
     AssignmentStrategy
-} from '../../../shared/types/TaskTypes';
-import { TaskEventData, createTaskEventPayload } from '../../../shared/schemas/EventPayloadSchema';
-import { AgentId } from '../../../shared/types/Agent';
-import { ChannelId } from '../../../shared/types/ChannelContext';
+} from '@mxf-dev/core/types/TaskTypes';
+import { TaskEventData, createTaskEventPayload } from '@mxf-dev/core/schemas/EventPayloadSchema';
+import { AgentId } from '@mxf-dev/core/types/Agent';
+import { ChannelId } from '@mxf-dev/core/types/ChannelContext';
 import { v4 as uuidv4 } from 'uuid';
-import { Agent } from '../../../shared/models/agent';
-import { Task, TaskDocument } from '../../../shared/models/task';
-import { TaskEvents } from '../../../shared/events/event-definitions/TaskEvents';
+import { Agent } from '@mxf-dev/core/models/agent';
+import { Task, TaskDocument } from '@mxf-dev/core/models/task';
+import { TaskEvents } from '@mxf-dev/core/events/event-definitions/TaskEvents';
 import { TaskCompletionMonitoringService } from './TaskCompletionMonitoringService';
-import { TaskCompletionConfig } from '../../../shared/types/TaskCompletionTypes';
-import { TaskDagService } from '../../../shared/services/dag/TaskDagService';
-import { isDagEnabled, isDagEnforcementEnabled } from '../../../shared/config/dag.config';
-import { DagEvents } from '../../../shared/events/event-definitions/DagEvents';
-import { createDagTaskBlockedPayload, createDagTaskDependenciesResolvedPayload } from '../../../shared/schemas/EventPayloadSchema';
+import { TaskCompletionConfig } from '@mxf-dev/core/types/TaskCompletionTypes';
+import { TaskDagService } from '@mxf-dev/core/services/dag/TaskDagService';
+import { isDagEnabled, isDagEnforcementEnabled } from '@mxf-dev/core/config/dag.config';
+import { DagEvents } from '@mxf-dev/core/events/event-definitions/DagEvents';
+import { createDagTaskBlockedPayload, createDagTaskDependenciesResolvedPayload } from '@mxf-dev/core/schemas/EventPayloadSchema';
 
 export class TaskService {
     private static instance: TaskService;

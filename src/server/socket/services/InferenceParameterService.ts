@@ -14,8 +14,8 @@
  * limitations under the License.
  *
  * @author Brad Anderson <BradA1878@pm.me>
- * @repository https://github.com/BradA1878/model-exchange-framework
- * @documentation https://brada1878.github.io/model-exchange-framework/
+ * @repository https://github.com/mxf-dev/mxf
+ * @documentation https://mxf-dev.github.io/mxf/
  */
 
 /**
@@ -34,12 +34,12 @@
  */
 
 import { v4 as uuidv4 } from 'uuid';
-import { Logger } from '../../../shared/utils/Logger';
-import { EventBus } from '../../../shared/events/EventBus';
-import { Events } from '../../../shared/events/EventNames';
-import { createBaseEventPayload } from '../../../shared/schemas/EventPayloadSchema';
-import { AgentId, ChannelId } from '../../../shared/types/ChannelContext';
-import { LlmProviderType } from '../../../shared/protocols/mcp/LlmProviders';
+import { Logger } from '@mxf-dev/core/utils/Logger';
+import { EventBus } from '@mxf-dev/core/events/EventBus';
+import { Events } from '@mxf-dev/core/events/EventNames';
+import { createBaseEventPayload } from '@mxf-dev/core/schemas/EventPayloadSchema';
+import { AgentId, ChannelId } from '@mxf-dev/core/types/ChannelContext';
+import { LlmProviderType } from '@mxf-dev/core/protocols/mcp/LlmProviders';
 import {
     PhaseParameterProfile,
     OrparPhaseProfiles,
@@ -54,7 +54,7 @@ import {
     ParameterResolutionContext,
     ParameterUsageMetrics,
     ParameterCostEstimate
-} from '../../../shared/types/InferenceParameterTypes';
+} from '@mxf-dev/core/types/InferenceParameterTypes';
 import {
     DEFAULT_PHASE_PROFILES,
     PROVIDER_PHASE_PROFILES,
@@ -65,7 +65,7 @@ import {
     estimateCost,
     validateProfileAgainstGovernance,
     mergeWithDefaults
-} from '../../../shared/constants/DefaultPhaseProfiles';
+} from '@mxf-dev/core/constants/DefaultPhaseProfiles';
 
 const logger = new Logger('debug', 'InferenceParameterService', 'server');
 

@@ -37,7 +37,7 @@ The ORPAR control loop provides structured decision-making:
 ### Usage
 
 ```typescript
-import { ControlLoopHandlers } from './src/sdk/handlers/ControlLoopHandlers';
+import { ControlLoopHandlers } from '@mxf-dev/sdk/handlers/ControlLoopHandlers';
 
 // Initialize control loop handlers
 const controlLoopHandlers = new ControlLoopHandlers(agent, config);
@@ -126,7 +126,7 @@ async function runORPARCycle(agent, objective) {
 ### Control Loop Events
 
 ```typescript
-import { Events } from '@mxf/sdk';
+import { Events } from '@mxf-dev/sdk';
 
 // Listen to control loop phases
 agent.on(Events.ControlLoop.OBSERVATION, (data) => {
@@ -173,7 +173,7 @@ Handles Model Context Protocol tool execution and management.
 ### Usage
 
 ```typescript
-import { McpToolHandlers } from './src/sdk/handlers/McpToolHandlers';
+import { McpToolHandlers } from '@mxf-dev/sdk/handlers/McpToolHandlers';
 
 // Execute a tool
 const result = await McpToolHandlers.executeTool({
@@ -278,7 +278,7 @@ Handles MCP resource operations (read, list, subscribe).
 ### Usage
 
 ```typescript
-import { McpResourceHandlers } from './src/sdk/handlers/McpResourceHandlers';
+import { McpResourceHandlers } from '@mxf-dev/sdk/handlers/McpResourceHandlers';
 
 // Read a resource
 const resource = await McpResourceHandlers.readResource({
@@ -326,7 +326,7 @@ enum MemoryScope {
 ### Usage
 
 ```typescript
-import { MemoryHandlers } from './src/sdk/handlers/MemoryHandlers';
+import { MemoryHandlers } from '@mxf-dev/sdk/handlers/MemoryHandlers';
 
 // Store agent memory
 await MemoryHandlers.storeMemory({
@@ -428,7 +428,7 @@ Handles agent-to-agent messaging and communication patterns.
 ### Usage
 
 ```typescript
-import { MessageHandlers } from './src/sdk/handlers/MessageHandlers';
+import { MessageHandlers } from '@mxf-dev/sdk/handlers/MessageHandlers';
 
 // Send direct message
 await MessageHandlers.sendMessage({
@@ -581,7 +581,7 @@ Handles task lifecycle management and execution.
 ### Usage
 
 ```typescript
-import { TaskHandlers } from './src/sdk/handlers/TaskHandlers';
+import { TaskHandlers } from '@mxf-dev/sdk/handlers/TaskHandlers';
 
 // Register task handler
 TaskHandlers.registerTaskHandler('agent-1', async (task) => {
@@ -858,7 +858,7 @@ import {
     MemoryHandlers,
     MessageHandlers,
     TaskHandlers
-} from './src/sdk/handlers';
+} from '@mxf-dev/sdk/handlers';
 ```
 
 ## Related Documentation
@@ -873,10 +873,10 @@ import {
 ---
 
 For source code reference:
-- `/src/sdk/handlers/ControlLoopHandlers.ts`
-- `/src/sdk/handlers/McpHandler.ts`
-- `/src/sdk/handlers/McpToolHandlers.ts`
-- `/src/sdk/handlers/McpResourceHandlers.ts`
-- `/src/sdk/handlers/MemoryHandlers.ts`
-- `/src/sdk/handlers/MessageHandlers.ts`
-- `/src/sdk/handlers/TaskHandlers.ts`
+- `/packages/sdk/src/handlers/ControlLoopHandlers.ts`
+- `/packages/sdk/src/handlers/McpHandler.ts`
+- `/packages/sdk/src/handlers/McpToolHandlers.ts`
+- `/packages/sdk/src/handlers/McpResourceHandlers.ts`
+- `/packages/sdk/src/handlers/MemoryHandlers.ts`
+- `/packages/sdk/src/handlers/MessageHandlers.ts`
+- `/packages/sdk/src/handlers/TaskHandlers.ts`

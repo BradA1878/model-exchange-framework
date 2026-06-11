@@ -14,8 +14,8 @@
  * limitations under the License.
  *
  * @author Brad Anderson <BradA1878@pm.me>
- * @repository https://github.com/BradA1878/model-exchange-framework
- * @documentation https://brada1878.github.io/model-exchange-framework/
+ * @repository https://github.com/mxf-dev/mxf
+ * @documentation https://mxf-dev.github.io/mxf/
  */
 
 /**
@@ -25,18 +25,19 @@
  * agents to register channels, verify ownership, and discover other agents.
  */
 
+import { McpEvents } from '@mxf-dev/core/events/event-definitions/McpEvents';
 import { Request, Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
-import { Channel } from '../../../shared/models/channel';
-import { createStrictValidator } from '../../../shared/utils/validation';
-import { Logger } from '../../../shared/utils/Logger';
-import { EventBus } from '../../../shared/events/EventBus';
-import { Events, ChannelActionTypes, ChannelActionType } from '../../../shared/events/EventNames';
+import { Channel } from '@mxf-dev/core/models/channel';
+import { createStrictValidator } from '@mxf-dev/core/utils/validation';
+import { Logger } from '@mxf-dev/core/utils/Logger';
+import { EventBus } from '@mxf-dev/core/events/EventBus';
+import { Events, ChannelActionTypes, ChannelActionType } from '@mxf-dev/core/events/EventNames';
 import { ChannelService } from '../../socket/services/ChannelService';
 import channelKeyService from '../../socket/services/ChannelKeyService';
-import { createChannelEventPayload } from '../../../shared/schemas/EventPayloadSchema';
+import { createChannelEventPayload } from '@mxf-dev/core/schemas/EventPayloadSchema';
 import { MemoryPersistenceService } from '../services/MemoryPersistenceService';
-import { MemoryScope } from '../../../shared/types/MemoryTypes';
+import { MemoryScope } from '@mxf-dev/core/types/MemoryTypes';
 import { firstValueFrom } from 'rxjs';
 
 // Create validator for this controller
@@ -1162,7 +1163,6 @@ export const registerChannelMcpServer = async (req: Request, res: Response): Pro
         const result = await channelService.registerChannelMcpServer(channelId, serverConfig, agentId);
 
         // Then emit event for ExternalMcpServerManager to start the server
-        const { McpEvents } = require('../../../shared/events/event-definitions/McpEvents');
         EventBus.server.emit(McpEvents.CHANNEL_SERVER_REGISTER, {
             eventId: require('uuid').v4(),
             eventType: McpEvents.CHANNEL_SERVER_REGISTER,
@@ -1224,7 +1224,6 @@ export const unregisterChannelMcpServer = async (req: Request, res: Response): P
         const result = await channelService.unregisterChannelMcpServer(channelId, serverId, agentId);
 
         // Then emit event for ExternalMcpServerManager to stop the server
-        const { McpEvents } = require('../../../shared/events/event-definitions/McpEvents');
         EventBus.server.emit(McpEvents.CHANNEL_SERVER_UNREGISTER, {
             eventId: require('uuid').v4(),
             eventType: McpEvents.CHANNEL_SERVER_UNREGISTER,

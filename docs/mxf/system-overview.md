@@ -161,7 +161,7 @@ Core business logic implemented as modular services:
   - Decoupled component communication
   - Event replay capabilities
 
-### 2. SDK (`/src/sdk`)
+### 2. SDK (`packages/sdk/src` — published as `@mxf-dev/sdk`)
 
 TypeScript SDK for building agents:
 
@@ -335,7 +335,7 @@ graph LR
 - System configuration
 - User and security management (Admin)
 
-### 5. Shared Components (`/src/shared`)
+### 5. Shared Components (`packages/core/src` — published as `@mxf-dev/core`)
 
 Common code between server and client:
 

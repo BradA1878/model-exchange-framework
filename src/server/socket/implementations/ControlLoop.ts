@@ -14,8 +14,8 @@
  * limitations under the License.
  *
  * @author Brad Anderson <BradA1878@pm.me>
- * @repository https://github.com/BradA1878/model-exchange-framework
- * @documentation https://brada1878.github.io/model-exchange-framework/
+ * @repository https://github.com/mxf-dev/mxf
+ * @documentation https://mxf-dev.github.io/mxf/
  */
 
 /**
@@ -42,28 +42,28 @@ import {
     PlanAction,
     ActionStatus,
     Reflection
-} from '../../../shared/models/controlLoop';
-import { AgentId } from '../../../shared/types/Agent';
+} from '@mxf-dev/core/models/controlLoop';
+import { AgentId } from '@mxf-dev/core/types/Agent';
 
 // Import event utilities
-import { EventBus } from '../../../shared/events/EventBus';
-import { Events } from '../../../shared/events/EventNames';
-import { ControlLoopEvents, ControlLoopPayloads } from '../../../shared/events/event-definitions/ControlLoopEvents';
+import { EventBus } from '@mxf-dev/core/events/EventBus';
+import { Events } from '@mxf-dev/core/events/EventNames';
+import { ControlLoopEvents, ControlLoopPayloads } from '@mxf-dev/core/events/event-definitions/ControlLoopEvents';
 import { 
     createControlLoopEventPayload,
     createTopicsExtractEventPayload,
     createSummaryGenerateEventPayload,
     TopicsExtractEventData,
     SummaryGenerateEventData
-} from '../../../shared/schemas/EventPayloadSchema';
-import { createStrictValidator } from '../../../shared/utils/validation';
-import { Logger } from '../../../shared/utils/Logger';
-import { ControlLoopSpecificData } from '../../../shared/schemas/EventPayloadSchema';
+} from '@mxf-dev/core/schemas/EventPayloadSchema';
+import { createStrictValidator } from '@mxf-dev/core/utils/validation';
+import { Logger } from '@mxf-dev/core/utils/Logger';
+import { ControlLoopSpecificData } from '@mxf-dev/core/schemas/EventPayloadSchema';
 import { SystemLlmService } from '../services/SystemLlmService';
 import { SystemLlmServiceManager } from '../services/SystemLlmServiceManager';
 import { lastValueFrom } from 'rxjs';
-import { OrparMemoryCoordinator } from '../../../shared/services/orpar-memory/OrparMemoryCoordinator';
-import { isOrparMemoryIntegrationEnabled } from '../../../shared/config/orpar-memory.config';
+import { OrparMemoryCoordinator } from '@mxf-dev/core/services/orpar-memory/OrparMemoryCoordinator';
+import { isOrparMemoryIntegrationEnabled } from '@mxf-dev/core/config/orpar-memory.config';
 
 // Create validators and loggers
 const validator = createStrictValidator('ControlLoop');
@@ -1642,36 +1642,6 @@ export class ControlLoop implements IControlLoop {
         }
     }
     
-    /**
-     * Emit an event through the event bus
-     * @param eventType Event type
-     * @param data Event data
-     * @deprecated Use direct EventBus.server.emit with standard payloads.
-     */
-    private emitEvent(eventType: string, data: any): void {
-        logger.warn(`ControlLoop.emitEvent method is deprecated. Use EventBus.server.emit with standard payloads directly.`);
-        try {
-            const channelId = this.getChannelId(); // Still need channelId if it's part of the generic payload
-            
-            // Construct a generic payload, as this method is deprecated and its original
-            // use of 'createControlLoopEventPayload' with 'event' phase was non-standard.
-            const genericPayload = {
-                loopId: this.loopId,
-                agentId: this.agentId,      // Kept for potential backward compatibility if some listener expects it
-                channelId: channelId,       // Kept for potential backward compatibility
-                timestamp: Date.now(),
-                eventData: data             // Use a more descriptive key for the original 'data'
-            };
-
-            EventBus.server.emit(
-                eventType,
-                genericPayload
-            );
-        } catch (error) {
-            logger.error(`Failed to emit event via deprecated emitEvent method: ${error}`);
-        }
-    }
-
     /**
      * Schedule a cycle if one is not already scheduled
      */

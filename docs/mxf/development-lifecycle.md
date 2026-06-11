@@ -7,8 +7,8 @@ This section outlines the typical development workflow and code structure for MX
 ```
 model-exchange-framework/
 ├── src/server/         # Backend API server (TypeScript, Express)
-├── src/sdk/            # MXF TypeScript SDK client
-├── src/shared/         # Shared utilities, tools, events, models
+├── packages/sdk/src/            # MXF TypeScript SDK client
+├── packages/core/src/         # Shared utilities, tools, events, models
 ├── dashboard/          # Vue 3 Dashboard application
 ├── examples/           # 20 demo applications
 ├── tests/              # Unit, property, integration, mutation tests
@@ -22,24 +22,24 @@ model-exchange-framework/
 - **Build:** `bun run build` compiles TypeScript to `dist/`
 - **Clean:** `bun run clean` removes build artifacts
 - **Rebuild:** `bun run rebuild` runs clean + build
-- **Validate:** Shared request/response schemas in `src/shared/schemas`
+- **Validate:** Shared request/response schemas in `packages/core/src/schemas`
 
 ## Dashboard
 
-- **Navigate:** `cd dashboard`
-- **Install:** `npm install`
-- **Dev Server:** `bun run dev` (http://localhost:5173)
-- **Build:** `bun run build` outputs to `dashboard/dist/`
-- **Type Check:** `bun run type-check`
-- **Lint:** `bun run lint`
+The dashboard is a separate repo + npm package
+([mxf-dev/dashboard](https://github.com/mxf-dev/dashboard) /
+[`@mxf-dev/dashboard`](https://www.npmjs.com/package/@mxf-dev/dashboard)).
+
+- **Run against this server:** `npx @mxf-dev/dashboard --api-url http://localhost:3001`
+- **Develop:** `git clone https://github.com/mxf-dev/dashboard && cd dashboard && npm install && npm run dev`
 
 ## SDK
 
-The SDK is part of the monorepo at `src/sdk/`. It is not published separately.
+The SDK lives at `packages/sdk/src/` in this repo and is published to npm as `@mxf-dev/sdk` (with `@mxf-dev/core`). Install it with `npm install @mxf-dev/sdk`.
 
 - **Build:** `bun run build` (builds the entire project including SDK)
 - **Test:** Integration tests via `bun run test:integration`
-- **CLI:** `bun run sdk:cli -- <command>` for channel/key management
+- **CLI:** `bun run mxf <command>` for channel/key management
 
 ## Testing
 

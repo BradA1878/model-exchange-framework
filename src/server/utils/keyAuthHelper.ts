@@ -14,8 +14,8 @@
  * limitations under the License.
  *
  * @author Brad Anderson <BradA1878@pm.me>
- * @repository https://github.com/BradA1878/model-exchange-framework
- * @documentation https://brada1878.github.io/model-exchange-framework/
+ * @repository https://github.com/mxf-dev/mxf
+ * @documentation https://mxf-dev.github.io/mxf/
  */
 
 /**
@@ -25,7 +25,8 @@
  * production and testing environments.
  */
 
-import { Logger } from '../../shared/utils/Logger';
+import * as crypto from 'crypto';
+import { Logger } from '@mxf-dev/core/utils/Logger';
 import channelKeyService from '../socket/services/ChannelKeyService';
 
 // Create a logger instance with appropriate context and tags
@@ -116,6 +117,20 @@ class KeyAuthHelper {
         }
         
         try {
+            // Bound the map: prune expired entries, then FIFO-evict so test
+            // suites cannot grow server memory without limit.
+            const now = Date.now();
+            for (const [id, data] of KeyAuthHelper.testKeys) {
+                if (data.expires && data.expires < now) {
+                    KeyAuthHelper.testKeys.delete(id);
+                }
+            }
+            const MAX_TEST_KEYS = 500;
+            while (KeyAuthHelper.testKeys.size >= MAX_TEST_KEYS) {
+                const oldest = KeyAuthHelper.testKeys.keys().next().value;
+                if (oldest === undefined) break;
+                KeyAuthHelper.testKeys.delete(oldest);
+            }
             KeyAuthHelper.testKeys.set(keyData.keyId, keyData);
             return true;
         } catch (error) {
@@ -132,8 +147,7 @@ class KeyAuthHelper {
      * @returns The created test key data
      */
     public async generateTestKey(agentId: string, channelId: string): Promise<TestKeyData> {
-        const crypto = require('crypto');
-        
+                
         // Create key ID in the proper format
         const keyId = `key_${crypto.randomBytes(8).toString('hex')}`;
         const secretKey = crypto.randomBytes(32).toString('base64');

@@ -2,7 +2,7 @@
  * Unit Tests for PromptSegmentRegistry (Phase 4)
  */
 
-import { PromptSegmentRegistry, PromptSegment, SegmentContext } from '../../../src/shared/prompts/PromptSegmentRegistry';
+import { PromptSegmentRegistry, PromptSegment, SegmentContext } from '@mxf-dev/core/prompts/PromptSegmentRegistry';
 
 describe('PromptSegmentRegistry (Phase 4)', () => {
     let registry: PromptSegmentRegistry;

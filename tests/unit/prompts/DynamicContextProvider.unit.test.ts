@@ -9,7 +9,7 @@ import {
     DynamicContextRegistry,
     DynamicContextProviderEntry,
     DynamicContextInput,
-} from '../../../src/shared/prompts/DynamicContextProvider';
+} from '@mxf-dev/core/prompts/DynamicContextProvider';
 
 /** Helper to create a minimal DynamicContextInput */
 function makeInput(overrides: Partial<DynamicContextInput> = {}): DynamicContextInput {

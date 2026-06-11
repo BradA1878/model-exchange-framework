@@ -132,21 +132,8 @@ services:
       retries: 3
       start_period: 60s
 
-  # MXF Dashboard - Vue.js frontend
-  mxf-dashboard:
-    build:
-      context: ./dashboard
-      dockerfile: Dockerfile
-    container_name: mxf-dashboard
-    restart: unless-stopped
-    environment:
-      VITE_API_URL: ${VITE_API_URL:-http://localhost:3001}
-    ports:
-      - "5173:80"
-    networks:
-      - mxf-network
-    depends_on:
-      - mxf-server
+  # The dashboard now lives in its own repo + npm package: mxf-dev/dashboard
+  # (run it with `npx @mxf-dev/dashboard --api-url <server>`).
 
   # n8n - Workflow automation
   n8n:

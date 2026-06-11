@@ -9,7 +9,7 @@ The `code_execute` tool enables agents to run JavaScript and TypeScript code in 
 ### Simple Execution
 
 ```typescript
-import { MxfSDK } from '@mxf/sdk';
+import { MxfSDK } from '@mxf-dev/sdk';
 
 // Initialize SDK with access token (recommended)
 const sdk = new MxfSDK({

@@ -14,8 +14,8 @@
  * limitations under the License.
  *
  * @author Brad Anderson <BradA1878@pm.me>
- * @repository https://github.com/BradA1878/model-exchange-framework
- * @documentation https://brada1878.github.io/model-exchange-framework/
+ * @repository https://github.com/mxf-dev/mxf
+ * @documentation https://mxf-dev.github.io/mxf/
  */
 
 import { Request, Response } from 'express';
@@ -23,7 +23,7 @@ import { spawn, ChildProcess } from 'child_process';
 import path from 'path';
 import fs from 'fs';
 import { Server as SocketIOServer } from 'socket.io';
-import { Logger } from '../../../shared/utils/Logger';
+import { Logger } from '@mxf-dev/core/utils/Logger';
 
 // Create logger instance for demo controller
 const logger = new Logger('info', 'DemoController', 'server');
@@ -50,9 +50,19 @@ export const startInterviewDemo = async (req: Request, res: Response): Promise<v
         
         
         // Use ts-node to execute the TypeScript file directly
+        // Least privilege: demos get process basics, MXF agent credentials,
+        // and LLM provider keys — never JWT_SECRET, MONGODB_URI, or the
+        // Meilisearch master key.
+        const DEMO_ENV_ALLOWLIST = /^(PATH|HOME|TMPDIR|NODE_ENV|PORT)$|^(MXF_|OPENROUTER_|OPENAI_|ANTHROPIC_|GOOGLE_|GEMINI_|XAI_|AZURE_)/;
+        const demoEnv: Record<string, string> = {};
+        for (const [name, value] of Object.entries(process.env)) {
+            if (value !== undefined && DEMO_ENV_ALLOWLIST.test(name)) {
+                demoEnv[name] = value;
+            }
+        }
         const demoProcess = spawn('npx', ['ts-node', demoPath], {
             cwd: projectRoot, // Set working directory to project root
-            env: { ...process.env },
+            env: demoEnv,
             stdio: ['pipe', 'pipe', 'pipe']
         });
         
@@ -183,5 +193,16 @@ export const getDemoStatus = async (req: Request, res: Response): Promise<void> 
             error: 'Failed to get demo status',
             details: error instanceof Error ? error.message : 'Unknown error'
         });
+    }
+};
+
+/**
+ * Terminates every demo child process. Wired into server shutdown so demo
+ * subprocesses never outlive the server.
+ */
+export const stopAllActiveDemos = (): void => {
+    for (const [demoId, demoProcess] of activeDemos) {
+        demoProcess.kill('SIGTERM');
+        activeDemos.delete(demoId);
     }
 };

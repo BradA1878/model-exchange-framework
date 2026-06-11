@@ -14,14 +14,14 @@
  * limitations under the License.
  *
  * @author Brad Anderson <BradA1878@pm.me>
- * @repository https://github.com/BradA1878/model-exchange-framework
- * @documentation https://brada1878.github.io/model-exchange-framework/
+ * @repository https://github.com/mxf-dev/mxf
+ * @documentation https://mxf-dev.github.io/mxf/
  */
 
 import { Request, Response } from 'express';
-import { DocumentModel, IDocument, DocumentStats, DocumentQueryFilters, DocumentType, DocumentStatus, DocumentFormat } from '../../../shared/models/document';
-import { Logger } from '../../../shared/utils/Logger';
-import { createStrictValidator } from '../../../shared/utils/validation';
+import { DocumentModel, IDocument, DocumentStats, DocumentQueryFilters, DocumentType, DocumentStatus, DocumentFormat } from '@mxf-dev/core/models/document';
+import { Logger } from '@mxf-dev/core/utils/Logger';
+import { createStrictValidator } from '@mxf-dev/core/utils/validation';
 import * as crypto from 'crypto';
 import * as path from 'path';
 import * as fs from 'fs/promises';

@@ -639,4 +639,4 @@ The Nested Learning System integrates with ORPAR through the ORPAR-Memory Integr
 
 ---
 
-For questions or contributions related to the Nested Learning System, please refer to the [GitHub repository](https://github.com/BradA1878/model-exchange-framework).
+For questions or contributions related to the Nested Learning System, please refer to the [GitHub repository](https://github.com/mxf-dev/mxf).

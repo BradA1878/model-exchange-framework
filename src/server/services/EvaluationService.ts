@@ -14,7 +14,7 @@
  * limitations under the License.
  *
  * @author Brad Anderson <BradA1878@pm.me>
- * @repository https://github.com/BradA1878/model-exchange-framework
+ * @repository https://github.com/mxf-dev/mxf
  */
 
 /**
@@ -26,8 +26,8 @@
  * Feature flag: WORKFLOW_SYSTEM_ENABLED
  */
 
-import { Logger } from '../../shared/utils/Logger';
-import { EventBus } from '../../shared/events/EventBus';
+import { Logger } from '@mxf-dev/core/utils/Logger';
+import { EventBus } from '@mxf-dev/core/events/EventBus';
 
 /**
  * Performance metrics for an agent

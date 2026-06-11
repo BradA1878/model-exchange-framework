@@ -20,11 +20,11 @@
 
 import crypto from 'crypto';
 import { v4 as uuidv4 } from 'uuid';
-import { MxfSDK, LlmProviderType, MxfChannelMonitor } from '../../../sdk/index';
-import type { MxfAgent, UserInputRequestData, UserInputResponseValue } from '../../../sdk/index';
+import { MxfSDK, LlmProviderType, MxfChannelMonitor } from '@mxf-dev/sdk';
+import type { MxfAgent, UserInputRequestData, UserInputResponseValue } from '@mxf-dev/sdk';
 import type { TuiConfig } from '../types';
 import type { AgentDefinition } from '../agents/AgentDefinitions';
-import { UserMemoryService } from '../../../shared/services/UserMemoryService';
+import { UserMemoryService } from '@mxf-dev/core/services/UserMemoryService';
 
 /** A connected agent with its credentials and definition */
 interface AgentConnection {

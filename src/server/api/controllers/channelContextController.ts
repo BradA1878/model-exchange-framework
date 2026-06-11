@@ -14,8 +14,8 @@
  * limitations under the License.
  *
  * @author Brad Anderson <BradA1878@pm.me>
- * @repository https://github.com/BradA1878/model-exchange-framework
- * @documentation https://brada1878.github.io/model-exchange-framework/
+ * @repository https://github.com/mxf-dev/mxf
+ * @documentation https://mxf-dev.github.io/mxf/
  */
 
 /**
@@ -27,16 +27,16 @@
 
 import { Request, Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
-import * as validation from '../../../shared/utils/validation';
-import { Logger } from '../../../shared/utils/Logger';
-import { EventBus } from '../../../shared/events/EventBus';
-import { Events, ChannelEvents, ChannelActionTypes } from '../../../shared/events/EventNames';
-import { ConversationTopic } from '../../../shared/types/ChannelContext';
-import { Channel } from '../../../shared/models/channel';
-import { ChannelContextService } from '../../../shared/services/ChannelContextService';
-import { createStrictValidator } from '../../../shared/utils/validation';
-import { ContentFormat, createChannelMessage } from '../../../shared/schemas/MessageSchemas';
-import { createChannelMessageEventPayload, createChannelEventPayload } from '../../../shared/schemas/EventPayloadSchema';
+import * as validation from '@mxf-dev/core/utils/validation';
+import { Logger } from '@mxf-dev/core/utils/Logger';
+import { EventBus } from '@mxf-dev/core/events/EventBus';
+import { Events, ChannelEvents, ChannelActionTypes } from '@mxf-dev/core/events/EventNames';
+import { ConversationTopic } from '@mxf-dev/core/types/ChannelContext';
+import { Channel } from '@mxf-dev/core/models/channel';
+import { ChannelContextService } from '../../services/ChannelContextService';
+import { createStrictValidator } from '@mxf-dev/core/utils/validation';
+import { ContentFormat, createChannelMessage } from '@mxf-dev/core/schemas/MessageSchemas';
+import { createChannelMessageEventPayload, createChannelEventPayload } from '@mxf-dev/core/schemas/EventPayloadSchema';
 
 // Create validator for this controller
 const validate = createStrictValidator('ChannelContextController');

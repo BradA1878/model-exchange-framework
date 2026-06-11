@@ -161,8 +161,8 @@ MXP 2.0 leverages the existing EventBus for real-time monitoring:
 
 ```typescript
 // mxp2-analytics-collector.ts
-import { EventBus } from '@mxf/core';
-import { MxpConfigManager } from '@mxf/mxp';
+import { EventBus } from '@mxf-dev/core';
+import { MxpConfigManager } from '@mxf-dev/core/mxp';
 
 export class MXP2AnalyticsCollector {
     private mxpManager = MxpConfigManager.getInstance();
@@ -821,7 +821,7 @@ receivers:
 ```typescript
 // mxp-alert-manager.ts
 import { EventEmitter } from 'events';
-import { MxpMiddleware } from '@mxf/shared';
+import { MxpMiddleware } from '@mxf-dev/core';
 
 interface AlertRule {
   name: string;

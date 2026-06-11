@@ -14,8 +14,8 @@
  * limitations under the License.
  *
  * @author Brad Anderson <BradA1878@pm.me>
- * @repository https://github.com/BradA1878/model-exchange-framework
- * @documentation https://brada1878.github.io/model-exchange-framework/
+ * @repository https://github.com/mxf-dev/mxf
+ * @documentation https://mxf-dev.github.io/mxf/
  */
 
 /**
@@ -25,13 +25,13 @@
  */
 
 import { Request, Response } from 'express';
-import { Agent } from '../../../shared/models/agent';
-import { createStrictValidator } from '../../../shared/utils/validation';
-import { Logger } from '../../../shared/utils/Logger';
-import { EventBus } from '../../../shared/events/EventBus';
-import { Events } from '../../../shared/events/EventNames';
+import { Agent } from '@mxf-dev/core/models/agent';
+import { createStrictValidator } from '@mxf-dev/core/utils/validation';
+import { Logger } from '@mxf-dev/core/utils/Logger';
+import { EventBus } from '@mxf-dev/core/events/EventBus';
+import { Events } from '@mxf-dev/core/events/EventNames';
 import { MemoryPersistenceService } from '../services/MemoryPersistenceService';
-import { MemoryScope } from '../../../shared/types/MemoryTypes';
+import { MemoryScope } from '@mxf-dev/core/types/MemoryTypes';
 import { firstValueFrom } from 'rxjs';
 
 // Create validator for this controller
@@ -41,6 +41,27 @@ const validate = createStrictValidator('AgentLifecycleController');
 const logger = new Logger('info', 'AgentLifecycleController', 'server');
 
 /**
+ * Validates the optional req.body.reason field: when present it must be a
+ * reasonable-length string (it lands in event payloads and logs). Returns the
+ * validated reason or the provided default; sends a 400 and returns null on
+ * invalid input.
+ */
+const validateReason = (req: Request, res: Response, defaultReason: string): string | null => {
+    const { reason } = (req.body ?? {}) as { reason?: unknown };
+    if (reason === undefined || reason === null) {
+        return defaultReason;
+    }
+    if (typeof reason !== 'string' || reason.trim() === '' || reason.length > 500) {
+        res.status(400).json({
+            success: false,
+            message: 'reason must be a non-empty string of at most 500 characters'
+        });
+        return null;
+    }
+    return reason;
+};
+
+/**
  * Restart an agent
  * 
  * @param req - Express request object
@@ -48,6 +69,10 @@ const logger = new Logger('info', 'AgentLifecycleController', 'server');
  */
 export const restartAgent = async (req: Request, res: Response): Promise<void> => {
     try {
+        const validatedReason_restart = validateReason(req, res, 'Manual restart');
+        if (validatedReason_restart === null) {
+            return;
+        }
         const { agentId } = req.params;
         validate.assertIsNonEmptyString(agentId);
         
@@ -65,7 +90,7 @@ export const restartAgent = async (req: Request, res: Response): Promise<void> =
         // Emit restart event
         const eventPayload = {
             agentId: agent.agentId,
-            reason: req.body.reason || 'Manual restart',
+            reason: validatedReason_restart,
             timestamp: new Date()
         };
         
@@ -98,6 +123,10 @@ export const restartAgent = async (req: Request, res: Response): Promise<void> =
  */
 export const shutdownAgent = async (req: Request, res: Response): Promise<void> => {
     try {
+        const validatedReason_shutdown = validateReason(req, res, 'Manual shutdown');
+        if (validatedReason_shutdown === null) {
+            return;
+        }
         const { agentId } = req.params;
         validate.assertIsNonEmptyString(agentId);
         
@@ -115,7 +144,7 @@ export const shutdownAgent = async (req: Request, res: Response): Promise<void> 
         // Emit shutdown event
         const eventPayload = {
             agentId: agent.agentId,
-            reason: req.body.reason || 'Manual shutdown',
+            reason: validatedReason_shutdown,
             timestamp: new Date()
         };
         
@@ -209,6 +238,10 @@ export const getAgentMetrics = async (req: Request, res: Response): Promise<void
  */
 export const pauseAgent = async (req: Request, res: Response): Promise<void> => {
     try {
+        const validatedReason_pause = validateReason(req, res, 'Manual pause');
+        if (validatedReason_pause === null) {
+            return;
+        }
         const { agentId } = req.params;
         validate.assertIsNonEmptyString(agentId);
         
@@ -226,7 +259,7 @@ export const pauseAgent = async (req: Request, res: Response): Promise<void> => 
         // Emit pause event
         const eventPayload = {
             agentId: agent.agentId,
-            reason: req.body.reason || 'Manual pause',
+            reason: validatedReason_pause,
             timestamp: new Date()
         };
         
@@ -264,6 +297,10 @@ export const pauseAgent = async (req: Request, res: Response): Promise<void> => 
  */
 export const resumeAgent = async (req: Request, res: Response): Promise<void> => {
     try {
+        const validatedReason_resume = validateReason(req, res, 'Manual resume');
+        if (validatedReason_resume === null) {
+            return;
+        }
         const { agentId } = req.params;
         validate.assertIsNonEmptyString(agentId);
         
@@ -281,7 +318,7 @@ export const resumeAgent = async (req: Request, res: Response): Promise<void> =>
         // Emit resume event
         const eventPayload = {
             agentId: agent.agentId,
-            reason: req.body.reason || 'Manual resume',
+            reason: validatedReason_resume,
             timestamp: new Date()
         };
         

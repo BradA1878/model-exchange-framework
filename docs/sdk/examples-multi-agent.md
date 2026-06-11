@@ -9,7 +9,7 @@ See [Basic Examples](examples-basic.md#prerequisites) for setup instructions.
 ## Example 1: Simple Multi-Agent Communication
 
 ```typescript
-import { MxfSDK, Events } from '@mxf/sdk';
+import { MxfSDK, Events } from '@mxf-dev/sdk';
 import credentials from './credentials.json';
 
 const sdk = new MxfSDK({
@@ -67,7 +67,7 @@ await agent2.channelService.sendMessage('Hello Agent 1!');
 ## Example 2: Coordinator-Worker Pattern
 
 ```typescript
-import { MxfSDK, Events } from '@mxf/sdk';
+import { MxfSDK, Events } from '@mxf-dev/sdk';
 
 const sdk = new MxfSDK({
     serverUrl: 'http://localhost:3001',

@@ -15,7 +15,7 @@ Key capabilities:
 - **Background task execution** -- long-running commands run asynchronously with streaming progress events and ring-buffer output accumulation
 - **Event-driven observability** -- eight event types track the full execution lifecycle via EventBus
 
-Source: `src/shared/protocols/mcp/tools/shell/`
+Source: `packages/core/src/protocols/mcp/tools/shell/`
 
 ## Architecture
 
@@ -55,7 +55,7 @@ flowchart TB
 
 ## Command Parser
 
-**Source:** `src/shared/protocols/mcp/tools/shell/ShellCommandParser.ts`
+**Source:** `packages/core/src/protocols/mcp/tools/shell/ShellCommandParser.ts`
 
 The `ShellCommandParser` is a recursive descent parser that replaces the original regex-based command extraction. It tokenizes shell strings character-by-character, respecting single and double quotes, backslash escapes, and operator boundaries.
 
@@ -96,7 +96,7 @@ The parser is designed to extract **too many** commands rather than miss any. If
 
 ## Command Classification
 
-**Source:** `src/shared/protocols/mcp/tools/shell/CommandClassification.ts`
+**Source:** `packages/core/src/protocols/mcp/tools/shell/CommandClassification.ts`
 
 Every command is classified by category and behavioral flags. This classification drives concurrency decisions (read-only commands can run in parallel) and output formatting (silent commands skip stdout display).
 
@@ -142,7 +142,7 @@ if (isReadOnlyCommand('git log --oneline -10')) {
 
 ## Destructive Command Warnings
 
-**Source:** `src/shared/protocols/mcp/tools/shell/DestructiveCommandWarnings.ts`
+**Source:** `packages/core/src/protocols/mcp/tools/shell/DestructiveCommandWarnings.ts`
 
 The destructive warnings module provides **purely advisory** warnings about dangerous commands. It does **not** block execution -- that responsibility belongs to McpSecurityGuard. Warnings are surfaced in tool results and emitted as `SHELL_DESTRUCTIVE_WARNING` events.
 
@@ -184,7 +184,7 @@ A single command can match multiple patterns. For example, `git push --force --n
 
 ## Semantic Exit Codes
 
-**Source:** `src/shared/protocols/mcp/tools/shell/CommandSemantics.ts`
+**Source:** `packages/core/src/protocols/mcp/tools/shell/CommandSemantics.ts`
 
 Without semantic exit code interpretation, agents would incorrectly classify many successful-but-empty results as errors. The `CommandSemantics` module maps per-command exit codes to human-readable meanings and distinguishes genuine errors from expected non-zero codes.
 
@@ -217,7 +217,7 @@ The `isSemanticNonZero` flag allows downstream consumers to distinguish between 
 
 ## Docker Sandbox
 
-**Source:** `src/shared/protocols/mcp/tools/shell/ShellSandbox.ts`
+**Source:** `packages/core/src/protocols/mcp/tools/shell/ShellSandbox.ts`
 
 The shell sandbox provides opt-in Docker container isolation for shell commands, using the same `ContainerExecutionManager` infrastructure as the code execution sandbox.
 
@@ -267,7 +267,7 @@ Sandbox mode is **opt-in** (`enabled: false` by default). When Docker is unavail
 
 ## Large Output Handling
 
-**Source:** `src/shared/protocols/mcp/tools/shell/LargeOutputHandler.ts`
+**Source:** `packages/core/src/protocols/mcp/tools/shell/LargeOutputHandler.ts`
 
 Commands can produce megabytes of output. The `LargeOutputHandler` prevents tool responses from becoming unwieldy by truncating large outputs and persisting the full content to MongoDB.
 
@@ -303,7 +303,7 @@ Agents use `shell_output_retrieve` with the `outputId` to fetch the full persist
 
 ## Background Tasks
 
-**Source:** `src/shared/services/BackgroundTaskManager.ts`
+**Source:** `packages/core/src/services/BackgroundTaskManager.ts`
 
 Long-running commands can be executed in the background via the `BackgroundTaskManager` singleton. The manager returns a `taskId` immediately and the agent polls for status using `shell_task_status`.
 
@@ -343,7 +343,7 @@ Status queries return a `BackgroundTaskInfo` with: `taskId`, `command`, `descrip
 
 ## Events
 
-**Source:** `src/shared/events/event-definitions/ShellExecutionEvents.ts`
+**Source:** `packages/core/src/events/event-definitions/ShellExecutionEvents.ts`
 
 Eight typed events track the full shell execution lifecycle. All events are emitted via `EventBus.server` and accessed under the `Events.Shell` namespace.
 

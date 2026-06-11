@@ -54,14 +54,18 @@ The SDK has **ONE** main entry point:
 
 ## Installation
 
-The SDK is part of the MXF monorepo and should be built from source:
+Install the SDK from npm:
 
 ```bash
-# Clone the repository
-git clone https://github.com/BradA1878/model-exchange-framework.git
-cd model-exchange-framework
+npm install @mxf-dev/sdk    # or: bun add @mxf-dev/sdk
+# (@mxf-dev/core is pulled in automatically)
+```
 
-# Install dependencies
+To build from source instead (for contributing):
+
+```bash
+git clone https://github.com/mxf-dev/mxf.git
+cd mxf
 npm install
 
 # Build the project
@@ -79,8 +83,8 @@ bun run build
 ### Step 1: Initialize SDK
 
 ```typescript
-import { MxfSDK, Events } from '@mxf/sdk';
-import type { MxfAgent } from '@mxf/sdk';
+import { MxfSDK, Events } from '@mxf-dev/sdk';
+import type { MxfAgent } from '@mxf-dev/sdk';
 
 // Initialize SDK with domain key and access token (recommended)
 const sdk = new MxfSDK({
@@ -97,14 +101,14 @@ await sdk.connect();
 
 ```bash
 # Create a channel
-bun run sdk:cli -- channel:create \
+bun run mxf channel:create \
   --id research-channel \
   --name "Research Channel" \
   --email your@email.com \
   --password your-password
 
 # Generate agent keys
-bun run sdk:cli -- key:generate \
+bun run mxf key:generate \
   --channel research-channel \
   --agents agent-123,llm-agent-001 \
   --email your@email.com \
@@ -143,7 +147,7 @@ agent.on(Events.Message.AGENT_MESSAGE, (payload) => {
 ### LLM-Powered Agent with Full Configuration
 
 ```typescript
-import { MxfSDK, Events } from '@mxf/sdk';
+import { MxfSDK, Events } from '@mxf-dev/sdk';
 
 // Initialize SDK with access token (recommended)
 const sdk = new MxfSDK({
@@ -327,7 +331,7 @@ const channelKeys = await agent.channelService.listMemoryKeys('channel');
 ### Task Handling
 
 ```typescript
-import { Events } from '@mxf/sdk';
+import { Events } from '@mxf-dev/sdk';
 
 // Create a task for agents
 await agent.channelService.createTask({
@@ -367,7 +371,7 @@ agent.on(Events.Task.PROGRESS_UPDATED, (payload) => {
 Agents automatically discover and use tools via LLM reasoning. Monitor tool usage via events:
 
 ```typescript
-import { Events } from '@mxf/sdk';
+import { Events } from '@mxf-dev/sdk';
 
 // Listen for tool calls
 agent.on(Events.Mcp.TOOL_CALL, (payload) => {
@@ -398,7 +402,7 @@ const restrictedAgent = await sdk.createAgent({
 The ORPAR control loop runs automatically in LLM-powered agents. Monitor via events:
 
 ```typescript
-import { Events } from '@mxf/sdk';
+import { Events } from '@mxf-dev/sdk';
 
 // Listen to control loop phases
 agent.on(Events.ControlLoop.OBSERVATION, (payload) => {
@@ -431,7 +435,7 @@ The SDK provides **two ways to listen to events** with a public events whitelist
 Listen to events across all channels the agent participates in:
 
 ```typescript
-import { Events } from '@mxf/sdk';
+import { Events } from '@mxf-dev/sdk';
 
 // Message events
 agent.on(Events.Message.AGENT_MESSAGE, (payload) => {
@@ -600,7 +604,7 @@ graph TB
 Create multiple agents from one SDK instance (efficient connection reuse):
 
 ```typescript
-import { MxfSDK, Events } from '@mxf/sdk';
+import { MxfSDK, Events } from '@mxf-dev/sdk';
 
 // Initialize SDK once with access token (recommended)
 const sdk = new MxfSDK({

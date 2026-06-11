@@ -8,7 +8,7 @@ import {
     interpretExitCode,
     extractExitCodeCommand,
     CommandSemanticResult
-} from '@mxf/shared/protocols/mcp/tools/shell/CommandSemantics';
+} from '@mxf-dev/core/protocols/mcp/tools/shell/CommandSemantics';
 
 // ---------------------------------------------------------------------------
 // extractExitCodeCommand

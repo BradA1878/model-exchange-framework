@@ -12,13 +12,13 @@ import {
     isTaskReady,
     getBlockingTasks,
     getTasksToUnblock,
-} from '@mxf/shared/services/dag/algorithms/TopologicalSort';
+} from '@mxf-dev/core/services/dag/algorithms/TopologicalSort';
 import {
     TaskDag,
     TaskDagNode,
     TaskDagEdge,
-} from '@mxf/shared/types/DagTypes';
-import { TaskStatus } from '@mxf/shared/types/TaskTypes';
+} from '@mxf-dev/core/types/DagTypes';
+import { TaskStatus } from '@mxf-dev/core/types/TaskTypes';
 
 /**
  * Helper to create a TaskDag for testing

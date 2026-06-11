@@ -24,13 +24,13 @@ Before running examples, ensure you have:
 
 ```bash
 # Generate credentials using SDK CLI
-bun run sdk:cli -- channel:create \
+bun run mxf channel:create \
   --id example-channel \
   --name "Example Channel" \
   --email your@email.com \
   --password your-password
 
-bun run sdk:cli -- key:generate \
+bun run mxf key:generate \
   --channel example-channel \
   --agents agent1,agent2,agent3 \
   --email your@email.com \
@@ -63,8 +63,8 @@ bun run server:cli -- demo:setup
 ### Minimal Agent Setup
 
 ```typescript
-import { MxfSDK, Events } from '@mxf/sdk';
-import type { MxfAgent } from '@mxf/sdk';
+import { MxfSDK, Events } from '@mxf-dev/sdk';
+import type { MxfAgent } from '@mxf-dev/sdk';
 import * as fs from 'fs';
 
 // Load credentials from SDK CLI output
@@ -103,7 +103,7 @@ console.log('✓ Agent connected');
 ### Example 1: LLM-Powered Assistant
 
 ```typescript
-import { MxfSDK, Events } from '@mxf/sdk';
+import { MxfSDK, Events } from '@mxf-dev/sdk';
 import credentials from './credentials.json';
 
 const sdk = new MxfSDK({
@@ -184,7 +184,7 @@ await restrictedAgent.connect();
 ### Example 3: Agent with Error Handling
 
 ```typescript
-import { MxfSDK, Events } from '@mxf/sdk';
+import { MxfSDK, Events } from '@mxf-dev/sdk';
 
 const sdk = new MxfSDK({
     serverUrl: 'http://localhost:3001',
@@ -236,7 +236,7 @@ await agent.connect();
 ### Example 4: Multiple Agents from Single SDK
 
 ```typescript
-import { MxfSDK } from '@mxf/sdk';
+import { MxfSDK } from '@mxf-dev/sdk';
 import credentials from './credentials.json';
 
 // Initialize SDK once

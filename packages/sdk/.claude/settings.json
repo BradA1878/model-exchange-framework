@@ -1,0 +1,40 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "CLAUDE_COMPONENT=sdk bash .claude/hooks/notify-umbrella.sh"
+          }
+        ]
+      }
+    ]
+  },
+  "permissions": {
+    "allow": [
+      "Read(/packages/sdk/src/**)",
+      "Edit(/packages/sdk/src/**)",
+      "Read(/packages/core/src/**)",
+      "Read(/tests/integration/agent/**)",
+      "Edit(/tests/integration/agent/**)",
+      "Read(/CLAUDE.md)",
+      "Read(/package.json)",
+      "Read(/tsconfig.json)",
+      "Bash(npm run:*)",
+      "Bash(npm test:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git add:*)"
+    ],
+    "deny": [
+      "Edit(/src/server/**)",
+      "Edit(/packages/core/src/**)",
+      "Edit(/dashboard/**)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(git checkout:*)"
+    ]
+  }
+}

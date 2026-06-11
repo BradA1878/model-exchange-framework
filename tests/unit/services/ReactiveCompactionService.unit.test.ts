@@ -5,7 +5,7 @@
  */
 
 /* Mock EventBus before any imports to prevent socket errors */
-jest.mock('../../../src/shared/events/EventBus', () => ({
+jest.mock('@mxf-dev/core/events/EventBus', () => ({
     EventBus: {
         client: { emit: jest.fn(), on: jest.fn(), off: jest.fn() },
         server: { emit: jest.fn(), on: jest.fn(), off: jest.fn() },
@@ -13,13 +13,13 @@ jest.mock('../../../src/shared/events/EventBus', () => ({
 }));
 
 /* Mock EventPayloadSchema to avoid deep dependency chains */
-jest.mock('../../../src/shared/schemas/EventPayloadSchema', () => ({
+jest.mock('@mxf-dev/core/schemas/EventPayloadSchema', () => ({
     createReactiveCompactionTriggeredPayload: jest.fn(() => ({})),
 }));
 
-import { ReactiveCompactionService } from '../../../src/sdk/services/ReactiveCompactionService';
-import { ConversationMessage } from '../../../src/shared/interfaces/ConversationMessage';
-import { EventBus } from '../../../src/shared/events/EventBus';
+import { ReactiveCompactionService } from '@mxf-dev/sdk/services/ReactiveCompactionService';
+import { ConversationMessage } from '@mxf-dev/core/interfaces/ConversationMessage';
+import { EventBus } from '@mxf-dev/core/events/EventBus';
 
 /** Helper to create a ConversationMessage with sensible defaults */
 function msg(

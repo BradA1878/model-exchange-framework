@@ -14,16 +14,16 @@
  * limitations under the License.
  *
  * @author Brad Anderson <BradA1878@pm.me>
- * @repository https://github.com/BradA1878/model-exchange-framework
- * @documentation https://brada1878.github.io/model-exchange-framework/
+ * @repository https://github.com/mxf-dev/mxf
+ * @documentation https://mxf-dev.github.io/mxf/
  */
 
 import { Request, Response } from 'express';
-import { Channel } from '../../../shared/models/channel';
-import { Agent } from '../../../shared/models/agent';
-import { Task } from '../../../shared/models/task';
-import { User } from '../../../shared/models/user';
-import { Logger } from '../../../shared/utils/Logger';
+import { Channel } from '@mxf-dev/core/models/channel';
+import { Agent } from '@mxf-dev/core/models/agent';
+import { Task } from '@mxf-dev/core/models/task';
+import { User } from '@mxf-dev/core/models/user';
+import { Logger } from '@mxf-dev/core/utils/Logger';
 
 // Dashboard Statistics Interface
 interface DashboardStats {

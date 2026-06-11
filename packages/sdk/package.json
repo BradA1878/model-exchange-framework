@@ -1,0 +1,61 @@
+{
+  "name": "@mxf-dev/sdk",
+  "version": "1.0.0",
+  "description": "Model Exchange Framework agent client SDK",
+  "type": "module",
+  "license": "Apache-2.0",
+  "author": "Brad Anderson <BradA1878@pm.me>",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mxf-dev/mxf",
+    "directory": "packages/sdk"
+  },
+  "engines": {
+    "node": ">=20.19",
+    "bun": ">=1.2"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "bun": "./src/index.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./*": {
+      "types": "./dist/*.d.ts",
+      "bun": "./src/*.ts",
+      "import": "./dist/*.js",
+      "default": "./dist/*.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "rm -rf dist tsconfig.tsbuildinfo",
+    "prepublishOnly": "bun run clean && bun run build"
+  },
+  "dependencies": {
+    "@mxf-dev/core": "workspace:*",
+    "axios": "^1.8.4",
+    "rxjs": "^7.8.2",
+    "socket.io-client": "^4.8.1",
+    "uuid": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.5",
+    "@types/uuid": "^9.0.8",
+    "typescript": "^5.2.2"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

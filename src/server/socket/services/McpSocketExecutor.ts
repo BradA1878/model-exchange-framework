@@ -14,8 +14,8 @@
  * limitations under the License.
  *
  * @author Brad Anderson <BradA1878@pm.me>
- * @repository https://github.com/BradA1878/model-exchange-framework
- * @documentation https://brada1878.github.io/model-exchange-framework/
+ * @repository https://github.com/mxf-dev/mxf
+ * @documentation https://mxf-dev.github.io/mxf/
  */
 
 /**
@@ -27,20 +27,20 @@
 
 import { Observable, from, of, throwError, firstValueFrom } from 'rxjs';
 import { map, mergeMap, catchError, tap } from 'rxjs/operators';
-import { createStrictValidator } from '../../../shared/utils/validation';
-import { Logger } from '../../../shared/utils/Logger';
-import { checkResultSize } from '../../../shared/utils/ToolPaginationUtils';
-import { McpToolHandlerContext, McpToolHandlerResult } from '../../../shared/protocols/mcp/McpServerTypes';
-import { Events } from '../../../shared/events/EventNames';
-import { EventBus } from '../../../shared/events/EventBus';
-import { validateToolInput, formatValidationError } from '../../../shared/protocols/mcp/McpToolSchema';
-import { createBaseEventPayload, createMcpToolCallPayload, createMcpToolErrorPayload, createMcpToolResultPayload, createMcpToolRegisterPayload } from '../../../shared/schemas/EventPayloadSchema';
+import { createStrictValidator } from '@mxf-dev/core/utils/validation';
+import { Logger } from '@mxf-dev/core/utils/Logger';
+import { checkResultSize } from '@mxf-dev/core/utils/ToolPaginationUtils';
+import { McpToolHandlerContext, McpToolHandlerResult } from '@mxf-dev/core/protocols/mcp/McpServerTypes';
+import { Events } from '@mxf-dev/core/events/EventNames';
+import { EventBus } from '@mxf-dev/core/events/EventBus';
+import { validateToolInput, formatValidationError } from '@mxf-dev/core/protocols/mcp/McpToolSchema';
+import { createBaseEventPayload, createMcpToolCallPayload, createMcpToolErrorPayload, createMcpToolResultPayload, createMcpToolRegisterPayload } from '@mxf-dev/core/schemas/EventPayloadSchema';
 import { McpToolRegistry, ExtendedMcpToolDefinition } from '../../api/services/McpToolRegistry';
 import { v4 as uuidv4 } from 'uuid';
-import { AutoCorrectionService } from '../../../shared/services/AutoCorrectionService';
+import { AutoCorrectionService } from '@mxf-dev/core/services/AutoCorrectionService';
 import { AgentService } from './AgentService';
-import { getCoreToolsArray } from '../../../shared/constants/CoreTools';
-import { normalizeOrparParameters } from '../../../shared/utils/ParameterNormalizer';
+import { getCoreToolsArray } from '@mxf-dev/core/constants/CoreTools';
+import { normalizeOrparParameters } from '@mxf-dev/core/utils/ParameterNormalizer';
 
 // Create validator for socket executor
 const validator = createStrictValidator('McpSocketExecutor');

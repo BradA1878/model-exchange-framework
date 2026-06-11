@@ -1226,7 +1226,7 @@ try {
 For monitoring tool execution, use the available public MCP events:
 
 ```typescript
-import { Events } from '@mxf/sdk';
+import { Events } from '@mxf-dev/sdk';
 
 // Monitor tool execution
 agent.on(Events.Mcp.TOOL_CALL, (data) => {

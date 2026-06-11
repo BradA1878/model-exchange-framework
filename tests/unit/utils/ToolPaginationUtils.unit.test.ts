@@ -11,11 +11,11 @@ import {
     RESULT_SIZE_THRESHOLDS,
     PaginatedResult,
     PaginationMetadata
-} from '@mxf/shared/utils/ToolPaginationUtils';
-import { Logger } from '@mxf/shared/utils/Logger';
+} from '@mxf-dev/core/utils/ToolPaginationUtils';
+import { Logger } from '@mxf-dev/core/utils/Logger';
 
 // Mock Logger
-jest.mock('@mxf/shared/utils/Logger', () => ({
+jest.mock('@mxf-dev/core/utils/Logger', () => ({
     Logger: jest.fn().mockImplementation(() => ({
         warn: jest.fn(),
         error: jest.fn(),

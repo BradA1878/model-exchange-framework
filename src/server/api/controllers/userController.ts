@@ -14,15 +14,16 @@
  * limitations under the License.
  *
  * @author Brad Anderson <BradA1878@pm.me>
- * @repository https://github.com/BradA1878/model-exchange-framework
- * @documentation https://brada1878.github.io/model-exchange-framework/
+ * @repository https://github.com/mxf-dev/mxf
+ * @documentation https://mxf-dev.github.io/mxf/
  */
 
 import { Request, Response } from 'express';
 import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
-import { User, UserRole } from '../../../shared/models/user';
-import { Logger } from '../../../shared/utils/Logger';
+import { User, UserRole } from '@mxf-dev/core/models/user';
+import { Logger } from '@mxf-dev/core/utils/Logger';
+import { requireEnv } from '@mxf-dev/core/utils/env';
 
 /**
  * User controller for handling user-related operations
@@ -37,7 +38,7 @@ const logger = new Logger('info', 'UserController', 'server');
  * @returns JWT token string
  */
 const generateToken = (userId: string, type: string, role: string): string => {
-    const secret = process.env.JWT_SECRET || 'default_jwt_secret_for_dev';
+    const secret = requireEnv('JWT_SECRET', 'Set a strong secret in .env — it signs and verifies all user JWTs.');
     return jwt.sign(
         { userId, type, role },
         secret,
@@ -418,6 +419,18 @@ export const userController = {
                 return;
             }
 
+            // Validate email format up front — magic link auto-creates a user,
+            // so a malformed address would otherwise fail Mongoose validation
+            // deep in save() and surface as a confusing 500.
+            const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+            if (typeof email !== 'string' || !EMAIL_PATTERN.test(email)) {
+                res.status(400).json({
+                    success: false,
+                    message: 'A valid email address is required'
+                });
+                return;
+            }
+
             // Find existing user or auto-create a new one
             let user = await User.findOne({ email });
             let isNewUser = false;
@@ -448,7 +461,7 @@ export const userController = {
             }
 
             // Generate magic link token (JWT with short expiry)
-            const secret = process.env.JWT_SECRET || 'default_jwt_secret_for_dev';
+            const secret = requireEnv('JWT_SECRET', 'Set a strong secret in .env — it signs and verifies all user JWTs.');
             const magicToken = jwt.sign(
                 { userId: user._id?.toString(), email: user.email, type: 'magic_link' },
                 secret,
@@ -493,7 +506,7 @@ export const userController = {
             }
             
             // Verify the magic link token
-            const secret = process.env.JWT_SECRET || 'default_jwt_secret_for_dev';
+            const secret = requireEnv('JWT_SECRET', 'Set a strong secret in .env — it signs and verifies all user JWTs.');
             let decoded: any;
             
             try {

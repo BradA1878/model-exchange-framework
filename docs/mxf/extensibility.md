@@ -5,7 +5,7 @@ MXF is designed for rapid extension and customization. You can extend the framew
 1. **Express API**
    - Add new routes in `src/server/api/routes`
    - Implement controllers in `src/server/api/controllers`
-   - Use shared validation and schemas (`src/shared/utils/validation.ts`, `src/shared/schemas/**/*.ts`)
+   - Use shared validation and schemas (`packages/core/src/utils/validation.ts`, `packages/core/src/schemas/**/*.ts`)
 
 2. **Dashboard**
    - Add new views/components in `dashboard/src/views`
@@ -24,4 +24,4 @@ MXF is designed for rapid extension and customization. You can extend the framew
    - Define new agent types or capabilities via configuration
    - Extend task assignment logic in `src/server/services/taskService.ts`
 
-> **Tip:** Follow DRY principles and use shared utilities in `src/shared` for consistent behavior and validation.
+> **Tip:** Follow DRY principles and use shared utilities in `packages/core/src` for consistent behavior and validation.

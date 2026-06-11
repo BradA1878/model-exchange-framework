@@ -5,8 +5,8 @@
  * Use this in integration tests to create channels and agents.
  */
 
-import { MxfSDK, MxfAgent, MxfChannelMonitor, LlmProviderType, ConfigManager } from '../../src/sdk/index';
-import type { AgentCreationConfig } from '../../src/sdk/index';
+import { MxfSDK, MxfAgent, MxfChannelMonitor, LlmProviderType, ConfigManager } from '@mxf-dev/sdk';
+import type { AgentCreationConfig } from '@mxf-dev/sdk';
 
 export interface TestSDKOptions {
     serverUrl?: string;

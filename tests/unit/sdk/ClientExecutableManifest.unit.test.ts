@@ -8,7 +8,7 @@ import {
     isClientExecutableServer,
     CLIENT_EXECUTABLE_INTERNAL_TOOLS,
     CLIENT_EXECUTABLE_EXTERNAL_SERVERS,
-} from '@mxf/shared/protocols/mcp/ClientExecutableManifest';
+} from '@mxf-dev/core/protocols/mcp/ClientExecutableManifest';
 
 describe('ClientExecutableManifest Unit Tests', () => {
 

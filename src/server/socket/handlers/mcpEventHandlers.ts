@@ -14,8 +14,8 @@
  * limitations under the License.
  *
  * @author Brad Anderson <BradA1878@pm.me>
- * @repository https://github.com/BradA1878/model-exchange-framework
- * @documentation https://brada1878.github.io/model-exchange-framework/
+ * @repository https://github.com/mxf-dev/mxf
+ * @documentation https://mxf-dev.github.io/mxf/
  */
 
 /**
@@ -27,10 +27,10 @@
  */
 
 import { Socket } from 'socket.io';
-import { Logger } from '../../../shared/utils/Logger';
-import { createStrictValidator } from '../../../shared/utils/validation';
-import { Events } from '../../../shared/events/EventNames';
-import { EventBus } from '../../../shared/events/EventBus';
+import { Logger } from '@mxf-dev/core/utils/Logger';
+import { createStrictValidator } from '@mxf-dev/core/utils/validation';
+import { Events } from '@mxf-dev/core/events/EventNames';
+import { EventBus } from '@mxf-dev/core/events/EventBus';
 import { McpSocketExecutor } from '../services/McpSocketExecutor';
 import { v4 as uuidv4 } from 'uuid';
 import {
@@ -40,8 +40,8 @@ import {
     createMcpResourceResultPayload,
     createMcpToolRegisteredPayload,
     McpToolCallCompletedLocalData
-} from '../../../shared/schemas/EventPayloadSchema';
-import { McpToolExecution } from '../../../shared/models/mcpToolExecution';
+} from '@mxf-dev/core/schemas/EventPayloadSchema';
+import { McpToolExecution } from '@mxf-dev/core/models/mcpToolExecution';
 
 // Constants
 const MCP_TOOL_EXECUTION_TIMEOUT_MS = 30000; // 30 seconds timeout for tool execution
@@ -164,27 +164,31 @@ export const setupMcpEventHandlers = (socket: Socket, agentId: string, channelId
                     
                     // Return a promise that resolves when we get the result back
                     return new Promise((resolve, reject) => {
-                        // Set up one-time listeners for the result
+                        // Single settle path: whichever of result/error/timeout
+                        // fires first clears the other two, so no timer or
+                        // EventBus subscription outlives the call.
+                        const cleanup = (): void => {
+                            clearTimeout(timeoutHandle);
+                            resultSubscription.unsubscribe();
+                            errorSubscription.unsubscribe();
+                        };
+
                         const resultSubscription = EventBus.server.on(Events.Mcp.TOOL_RESULT, (resultPayload: any) => {
                             if (resultPayload.data.callId === callId) {
-                                resultSubscription.unsubscribe();
-                                errorSubscription.unsubscribe();
+                                cleanup();
                                 resolve(resultPayload.data.result);
                             }
                         });
-                        
+
                         const errorSubscription = EventBus.server.on(Events.Mcp.TOOL_ERROR, (errorPayload: any) => {
                             if (errorPayload.data.callId === callId) {
-                                resultSubscription.unsubscribe();
-                                errorSubscription.unsubscribe();
+                                cleanup();
                                 reject(new Error(errorPayload.data.error));
                             }
                         });
-                        
-                        // Timeout after MCP_TOOL_EXECUTION_TIMEOUT_MS
-                        setTimeout(() => {
-                            resultSubscription.unsubscribe();
-                            errorSubscription.unsubscribe();
+
+                        const timeoutHandle = setTimeout(() => {
+                            cleanup();
                             reject(new Error(`Tool execution timeout for ${payload.data.toolName}`));
                         }, MCP_TOOL_EXECUTION_TIMEOUT_MS);
                     });

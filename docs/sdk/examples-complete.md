@@ -11,7 +11,7 @@ See [Basic Examples](examples-basic.md#prerequisites) for setup instructions.
 Complete customer support system with multiple specialized agents.
 
 ```typescript
-import { MxfSDK, Events, MemoryScope } from '@mxf/sdk';
+import { MxfSDK, Events, MemoryScope } from '@mxf-dev/sdk';
 import * as fs from 'fs';
 
 // Load credentials
@@ -125,7 +125,7 @@ console.log('✓ Customer support system running');
 Multi-stage data processing with specialized agents.
 
 ```typescript
-import { MxfSDK, Events } from '@mxf/sdk';
+import { MxfSDK, Events } from '@mxf-dev/sdk';
 
 const sdk = new MxfSDK({
     serverUrl: 'http://localhost:3001',
@@ -236,7 +236,7 @@ await collector.channelService.createTask({
 Monitor agent activity and system health.
 
 ```typescript
-import { MxfSDK, Events } from '@mxf/sdk';
+import { MxfSDK, Events } from '@mxf-dev/sdk';
 
 class MonitoringDashboard {
     private agents: Map<string, any> = new Map();
@@ -361,7 +361,7 @@ await dashboard.initialize();
 Self-organizing team that researches topics autonomously.
 
 ```typescript
-import { MxfSDK, Events, MemoryScope } from '@mxf/sdk';
+import { MxfSDK, Events, MemoryScope } from '@mxf-dev/sdk';
 
 async function createResearchTeam() {
     const sdk = new MxfSDK({

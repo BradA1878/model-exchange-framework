@@ -240,7 +240,7 @@ Complete containerization with orchestrated services:
 - **MongoDB**: Primary database for persistence (Port 27017)
 - **Meilisearch**: Semantic search engine (Port 7700)
 - **Redis**: High-performance caching layer (Port 6379)
-- **Dashboard**: Vue.js management interface (Port 5173)
+- **Dashboard**: Vue.js management interface — separate package, `npx @mxf-dev/dashboard` (Port 4173)
 - **n8n** (Optional): Workflow automation platform (Port 5678) - requires self-hosted or n8n Cloud
 
 📖 **[Docker Deployment Guide →](./deployment.md)**
@@ -306,14 +306,14 @@ Four core manager classes and five handler categories:
 **Option A: Docker Deployment (Recommended for Production)**
 
 ```bash
-git clone https://github.com/BradA1878/model-exchange-framework
-cd model-exchange-framework
+git clone https://github.com/mxf-dev/mxf
+cd mxf
 
 # Configure environment
 cp .env.example .env
 # Edit .env with your API keys and secrets
 
-# Deploy full stack (MXF + MongoDB + Meilisearch + Redis + Dashboard)
+# Deploy the stack (MXF + MongoDB + Meilisearch + Redis); dashboard is separate (npx @mxf-dev/dashboard)
 bun run docker:up
 
 # Check service health
@@ -325,8 +325,8 @@ bun run docker:health
 **Option B: Local Development**
 
 ```bash
-git clone https://github.com/BradA1878/model-exchange-framework
-cd model-exchange-framework
+git clone https://github.com/mxf-dev/mxf
+cd mxf
 bun install
 bun run build
 bun run start
@@ -335,8 +335,8 @@ bun run start
 ### Your First Agent
 
 ```typescript
-// Import from the SDK (use relative path within the monorepo)
-import { MxfSDK, LlmProviderType } from './src/sdk/index';
+// Install with: npm install @mxf-dev/sdk
+import { MxfSDK, LlmProviderType } from '@mxf-dev/sdk';
 
 // Initialize SDK with Personal Access Token (recommended)
 const sdk = new MxfSDK({
@@ -481,7 +481,7 @@ handler: async (input, context): Promise<McpToolHandlerResult> => {
 ## Support & Resources
 
 - **📖 Full Documentation**: Browse sections above
-- **💻 GitHub Repository**: [Create an issue](https://github.com/BradA1878/model-exchange-framework/issues)
+- **💻 GitHub Repository**: [Create an issue](https://github.com/mxf-dev/mxf/issues)
 - **🎯 Examples**: See [Example Projects](./examples/first-contact.md) documentation
 - **📝 Getting Started**: [Complete guide](./getting-started.md)
 
