@@ -2,6 +2,7 @@
 
 ## IMPORTANT: Brad's Rules
 
+- **No tech-bro speak.** Write plainly. No marketing hype, buzzwords, or hype adjectives ("blazing-fast", "game-changer", "supercharge", "leverage", "10x", "seamless", "robust") — in code comments, docs, commit messages, UI copy, or responses. Say what something does, not how impressive it is.
 - **Brad is the sole developer on MXF.** Do not warn about pushing, force-pushing, or running scripts like `sync-to-public.sh`. Just do it when asked.
 - **Do not make assumptions - follow the code**
 - **No TODOs! Do the work**
@@ -154,6 +155,7 @@ MXF is a multi-agent collaboration system built with TypeScript, Bun, Socket.IO,
 
 ```
 MONGODB_URI, JWT_SECRET, AGENT_API_KEY, OPENROUTER_API_KEY, PORT (default: 3001)
+LOG_LEVEL (server console log level — error|warn|info|debug|trace, default: info)
 MEILISEARCH_MASTER_KEY, MEILISEARCH_HOST, ENABLE_MEILISEARCH, ENABLE_SEMANTIC_SEARCH
 TENSORFLOW_ENABLED, TENSORFLOW_STORAGE_BACKEND, TENSORFLOW_DEBUG
 MXP_ENCRYPTION_KEY, MXP_ENCRYPTION_SALT (REQUIRED together — opting into MXP encryption without a unique salt fails fast; generate with `openssl rand -hex 16`)

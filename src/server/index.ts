@@ -36,7 +36,7 @@ import { ChannelContextService } from './services/ChannelContextService';
 import { ServerReflectionService } from './socket/services/ServerReflectionService';
 import { MemoryService } from '@mxf-dev/core/services/MemoryService';
 import { MemoryPersistenceService } from './api/services/MemoryPersistenceService';
-import { Logger } from '@mxf-dev/core/utils/Logger';
+import { Logger, enableServerLogging } from '@mxf-dev/core/utils/Logger';
 import apiRoutes from './api/routes';
 import { DEFAULT_SERVER_CONFIG } from '@mxf-dev/core/config/ServerConfig';
 import { authenticateDual } from './api/middleware/dualAuth';
@@ -63,6 +63,11 @@ import { PredictiveAnalyticsService } from '@mxf-dev/core/services/PredictiveAna
 /**
  * Initialize logger with appropriate context
  */
+// The framework Logger ships with server output disabled (library default).
+// The server app must opt in, and must do so before the fatal handlers and
+// startup validation below — otherwise fail-fast errors exit with no output.
+enableServerLogging(process.env.LOG_LEVEL || 'info');
+
 const logger = new Logger('debug', 'Server', 'server');
 
 // Fail fast on fatal process-level errors — never limp along with corrupted state.
