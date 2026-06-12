@@ -862,28 +862,35 @@ export class MxfMLService {
      * @returns true if model was loaded successfully, false if not found
      */
     public async loadModel(modelId: string): Promise<boolean> {
-        const tfRef = this.getTf();
+        this.getTf();
         const entry = this.getModelEntry(modelId);
 
-        const backend = getStorageBackend();
-        let source: string;
-
         try {
-            if (backend === ModelStorageBackend.MONGODB_GRIDFS) {
-                const handler = new GridFSIOHandler(modelId);
-                entry.model = await tfRef.loadLayersModel(handler);
-                source = `gridfs://${modelId}`;
-            } else {
-                const modelDir = path.join(getModelStoragePath(), modelId);
-                const modelJsonPath = path.join(modelDir, 'model.json');
-                if (!fs.existsSync(modelJsonPath)) {
-                    this.logger.debug(`[MxfMLService] Model file not found: ${modelJsonPath}`);
-                    return false;
-                }
-                entry.model = await tfRef.loadLayersModel(`file://${modelDir}/model.json`);
-                source = `file://${modelDir}`;
+            const { loaded, source } = await this.loadModelFromBackend(modelId);
+
+            // Not found in storage (expected on first run before models are trained).
+            if (!loaded) {
+                return false;
             }
 
+            // Preserve compilation across the reload. tf.loadLayersModel() returns a
+            // model without an optimizer unless the saved artifacts carry a
+            // trainingConfig — and the GridFS backend never stores one, so the loaded
+            // model comes back uncompiled. buildSequentialModel() has already created a
+            // compiled model with this exact architecture, so copy the saved weights
+            // into it and keep its compilation. Replacing it outright would leave the
+            // model un-trainable, and the next scheduled retrain would throw
+            // "The model needs to be compiled before being used."
+            // When no model was pre-built (a standalone load for inference only),
+            // adopt the loaded model as-is.
+            if (entry.model) {
+                const builtModel = entry.model as any;
+                const loadedModel = loaded as any;
+                builtModel.setWeights(loadedModel.getWeights());
+                loadedModel.dispose();
+            } else {
+                entry.model = loaded;
+            }
             entry.status = ModelStatus.TRAINED;
 
             this.logger.info(`[MxfMLService] Model loaded: ${modelId} ← ${source}`);
@@ -921,6 +928,43 @@ export class MxfMLService {
             }
             return false;
         }
+    }
+
+    /**
+     * Load a model's topology and weights from the configured storage backend.
+     *
+     * Returns the reconstructed tf.LayersModel and a human-readable source string,
+     * or { loaded: null } when the filesystem backend has no saved model yet.
+     *
+     * Note: tf.loadLayersModel() returns a model WITHOUT an optimizer unless the
+     * saved artifacts carry a trainingConfig. The GridFS handler does not persist
+     * one, so loaded models come back uncompiled — loadModel() compensates by
+     * keeping the already-built compiled model and copying these weights into it.
+     *
+     * @param modelId - ID of the model to load
+     * @returns The loaded model (or null if not found) and its source descriptor
+     */
+    private async loadModelFromBackend(
+        modelId: string
+    ): Promise<{ loaded: unknown | null; source: string }> {
+        const tfRef = this.getTf();
+        const backend = getStorageBackend();
+
+        if (backend === ModelStorageBackend.MONGODB_GRIDFS) {
+            const handler = new GridFSIOHandler(modelId);
+            return { loaded: await tfRef.loadLayersModel(handler), source: `gridfs://${modelId}` };
+        }
+
+        const modelDir = path.join(getModelStoragePath(), modelId);
+        const modelJsonPath = path.join(modelDir, 'model.json');
+        if (!fs.existsSync(modelJsonPath)) {
+            this.logger.debug(`[MxfMLService] Model file not found: ${modelJsonPath}`);
+            return { loaded: null, source: `file://${modelDir}` };
+        }
+        return {
+            loaded: await tfRef.loadLayersModel(`file://${modelDir}/model.json`),
+            source: `file://${modelDir}`,
+        };
     }
 
     // ─── Memory Management ──────────────────────────────────────────────────────
