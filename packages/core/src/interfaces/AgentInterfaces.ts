@@ -28,9 +28,16 @@
 /**
  * LLM Reasoning configuration interface
  * Supports both OpenAI/ChatGPT style (effort) and Anthropic/Claude style (max_tokens)
+ *
+ * enabled has three states:
+ * - true: request reasoning (with effort or maxTokens)
+ * - false: explicitly disable reasoning — required for models that reason by
+ *   default (GLM 5.x, Qwen, DeepSeek), where omitting the parameter leaves
+ *   thinking on and it consumes the completion token budget
+ * - undefined: send nothing and use the provider's default for the model
  */
 export interface LlmReasoningConfig {
-    enabled?: boolean;                    // Enable reasoning with default "medium" effort
+    enabled?: boolean;                    // true: enable reasoning, false: explicit off-switch, undefined: provider default
     effort?: 'low' | 'medium' | 'high';  // OpenAI/ChatGPT style: effort level (20%, 50%, 80% of max_tokens)
     maxTokens?: number;                   // Anthropic/Claude style: direct token allocation for reasoning
     exclude?: boolean;                    // If true, reasoning used internally but not returned in response

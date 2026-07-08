@@ -136,7 +136,7 @@ export interface AgentCreationConfig {
     temperature?: number;
     maxTokens?: number;
     maxHistory?: number;  // Max conversation history entries (default: 50) - keep low for long-running agents
-    reasoning?: LlmReasoningConfig;  // Claude extended thinking: { enabled: true, effort: 'medium', maxTokens: 10000 }
+    reasoning?: LlmReasoningConfig;  // Reasoning tokens: { enabled: true, effort: 'medium' } to request, { enabled: false } to disable models that reason by default (GLM, Qwen, DeepSeek)
     allowedTools?: string[];
     circuitBreakerExemptTools?: string[];  // Tools exempt from circuit breaker detection (for game tools, etc.)
     useMessageAggregate?: boolean;

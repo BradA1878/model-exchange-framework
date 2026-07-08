@@ -659,7 +659,11 @@ export class MxfAgent extends MxfClient {
 
             // Send using context-based approach — use streaming when available for live TUI feedback
             const mcpOptions: Record<string, any> = {};
-            if (this.modelConfig.reasoning?.enabled) {
+            if (this.modelConfig.reasoning) {
+                // Forward the whole config and let the MCP client interpret it.
+                // An explicit enabled:false must reach the provider as the off-switch:
+                // models that reason by default (GLM 5.x, Qwen, DeepSeek) keep thinking
+                // when the request merely omits the reasoning parameter.
                 mcpOptions.reasoning = this.modelConfig.reasoning;
             }
 

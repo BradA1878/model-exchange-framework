@@ -66,7 +66,7 @@ export type LlmProviderType =
 
 // Extended thinking configuration
 export interface LlmReasoningConfig {
-    enabled?: boolean;                       // Enable extended thinking
+    enabled?: boolean;                       // true: request reasoning, false: explicit off-switch, undefined: provider default
     effort?: 'low' | 'medium' | 'high';     // OpenAI style: effort level
     maxTokens?: number;                      // Anthropic style: token allocation
     exclude?: boolean;                       // Exclude reasoning from response

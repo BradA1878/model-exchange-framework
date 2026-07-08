@@ -398,7 +398,7 @@ interface AgentCreationConfig {
     apiKey?: string;
     temperature?: number;
     maxTokens?: number;
-    reasoning?: { enabled: boolean };
+    reasoning?: { enabled: boolean };  // false explicitly disables models that reason by default (GLM, Qwen, DeepSeek)
     
     // Optional: Tool Access
     allowedTools?: string[];

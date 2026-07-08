@@ -205,6 +205,34 @@ export class OpenRouterMcpClient extends BaseMcpClient {
         };
     }
 
+    /**
+     * Attach the OpenRouter `reasoning` parameter to a request body.
+     *
+     * OpenRouter's reasoning config accepts { effort?, max_tokens?, exclude?, enabled? }.
+     * Three states matter here:
+     * - enabled: true  → send effort or max_tokens (mutually exclusive per OpenRouter API)
+     * - enabled: false → send { enabled: false }. Some models (GLM 5.x, Qwen, DeepSeek)
+     *   reason by default when the request omits `reasoning`, so omission does NOT
+     *   disable thinking — only the explicit off-switch does. Without it, default
+     *   thinking shares the completion `max_tokens` budget and can starve tool-call
+     *   output (truncated arguments → unparseable JSON).
+     * - absent/no enabled flag → send nothing and let the provider default apply.
+     */
+    private applyReasoningParam(requestBody: Record<string, any>, options?: Record<string, any>): void {
+        if (options?.reasoning?.enabled === true) {
+            requestBody.reasoning = {
+                // effort and maxTokens are mutually exclusive per OpenRouter API
+                ...(options.reasoning.maxTokens
+                    ? { max_tokens: options.reasoning.maxTokens }
+                    : { effort: options.reasoning.effort || 'medium' }
+                ),
+                ...(options.reasoning.exclude !== undefined && { exclude: options.reasoning.exclude })
+            };
+        } else if (options?.reasoning?.enabled === false) {
+            requestBody.reasoning = { enabled: false };
+        }
+    }
+
     // Request queue to prevent concurrent requests that might cause JSON parsing issues
     private static requestQueue: Array<() => Promise<any>> = [];
     private static isProcessingQueue = false;
@@ -591,17 +619,8 @@ export class OpenRouterMcpClient extends BaseMcpClient {
             stream: true,
         };
 
-        // Enable reasoning tokens if requested
-        if (options?.reasoning?.enabled === true) {
-            requestBody.reasoning = {
-                // effort and maxTokens are mutually exclusive per OpenRouter API
-                ...(options.reasoning.maxTokens
-                    ? { max_tokens: options.reasoning.maxTokens }
-                    : { effort: options.reasoning.effort || 'medium' }
-                ),
-                ...(options.reasoning.exclude !== undefined && { exclude: options.reasoning.exclude })
-            };
-        }
+        // Attach reasoning configuration if requested
+        this.applyReasoningParam(requestBody, options);
 
         // Add tools if provided
         const openRouterTools = tools ? this.convertToOpenRouterTools(tools) : undefined;
@@ -1005,18 +1024,8 @@ export class OpenRouterMcpClient extends BaseMcpClient {
                 max_tokens: maxTokens
             };
             
-            // Enable reasoning tokens for models that support extended thinking
-            // OpenRouter expects { effort, max_tokens?, exclude? } — no 'enabled' field
-            if (options?.reasoning?.enabled === true) {
-                requestBody.reasoning = {
-                    // effort and maxTokens are mutually exclusive per OpenRouter API
-                    ...(options.reasoning.maxTokens
-                        ? { max_tokens: options.reasoning.maxTokens }
-                        : { effort: options.reasoning.effort || 'medium' }
-                    ),
-                    ...(options.reasoning.exclude !== undefined && { exclude: options.reasoning.exclude })
-                };
-            }
+            // Attach reasoning configuration if requested
+            this.applyReasoningParam(requestBody, options);
             
             // Add JSON response format if requested
             if (options?.responseFormat === 'json') {
