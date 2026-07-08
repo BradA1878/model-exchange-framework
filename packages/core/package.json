@@ -1,6 +1,6 @@
 {
   "name": "@mxf-dev/core",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Model Exchange Framework core: events, schemas, types, services, and protocol contracts",
   "type": "module",
   "license": "Apache-2.0",
