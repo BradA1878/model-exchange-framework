@@ -35,4 +35,4 @@
  * It was previously `"DEV-BUILD-" + new Date().toISOString()`, which shipped a build
  * timestamp to npm and told consumers nothing about what they had installed.
  */
-export const SDK_VERSION = '1.0.1';
+export const SDK_VERSION = '2.0.0';
