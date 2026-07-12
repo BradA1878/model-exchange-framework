@@ -84,6 +84,7 @@
     "@tensorflow/tfjs": "^4.22.0",
     "@types/bcrypt": "^5.0.2",
     "@types/dockerode": "^3.3.24",
+    "@types/html-to-text": "^9.0.4",
     "@types/jsdom": "^21.1.7",
     "@types/node": "^20.10.5",
     "@types/turndown": "^5.0.5",
