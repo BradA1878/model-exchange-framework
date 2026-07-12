@@ -163,6 +163,8 @@ export class TaskDagService {
         this.cleanupInterval = setInterval(() => {
             this.cleanupExpiredCaches();
         }, cleanupIntervalMs);
+        // Cache expiry sweep — must not keep the event loop alive on its own.
+        this.cleanupInterval.unref();
     }
 
     /**

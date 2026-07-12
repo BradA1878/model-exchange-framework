@@ -203,11 +203,18 @@ export class McpSecurityGuard {
     private projectRoot: string;
     private allowedPaths: string[] = [];
     
-    constructor(projectRoot: string, additionalAllowedPaths?: string[]) {
-        this.platform = platform();
+    /**
+     * @param projectRoot - Root the guard confines filesystem access to
+     * @param additionalAllowedPaths - Extra paths outside the project root to permit
+     * @param platformOverride - Force the OS rule set. Command rules are OS-specific
+     *   (`apt-get` is blocked outright on Linux but unknown on macOS, for example), so
+     *   without this a test asserting one platform's rules passes on a developer's machine
+     *   and fails on a runner with a different OS. Production code should omit it.
+     */
+    constructor(projectRoot: string, additionalAllowedPaths?: string[], platformOverride?: NodeJS.Platform) {
+        this.platform = platformOverride ?? platform();
         this.projectRoot = path.resolve(projectRoot);
         this.allowedPaths = [this.projectRoot, ...(additionalAllowedPaths || [])];
-        
     }
     
     /**

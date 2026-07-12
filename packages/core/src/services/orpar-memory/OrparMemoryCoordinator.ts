@@ -211,6 +211,8 @@ export class OrparMemoryCoordinator {
         this.cleanupIntervalId = setInterval(() => {
             this.cleanupStaleCycles();
         }, OrparMemoryCoordinator.CLEANUP_INTERVAL_MS);
+        // Background sweep — must not keep the event loop alive on its own.
+        this.cleanupIntervalId.unref();
 
         this.logger.debug('[OrparMemoryCoordinator] Started stale cycle cleanup interval');
     }

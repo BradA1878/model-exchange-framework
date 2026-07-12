@@ -95,6 +95,11 @@ export class BrowserManager {
         this.cleanupInterval = setInterval(() => {
             this.cleanupIdleBrowsers();
         }, 60000); // Check every minute
+        // An idle-browser sweep must not be the reason a process stays alive. Without
+        // unref() this timer holds Node's event loop open, so anything that merely
+        // constructed this manager — including WebSearchService, which builds one — could
+        // never exit. A long-running server is kept alive by its listener, not by this.
+        this.cleanupInterval.unref();
     }
 
     async getBrowser(poolName: string = 'default'): Promise<BrowserInstance> {

@@ -23,7 +23,7 @@
  * Uses SystemLlmService for intelligent agent assignment
  */
 
-import { Observable, BehaviorSubject, combineLatest, timer, from, throwError } from 'rxjs';
+import { Observable, BehaviorSubject, combineLatest, from, throwError, Subscription } from 'rxjs';
 import { map, filter, switchMap, debounceTime, catchError } from 'rxjs/operators';
 import { Logger } from '@mxf-dev/core/utils/Logger';
 import { createStrictValidator } from '@mxf-dev/core/utils/validation';
@@ -70,6 +70,13 @@ export class TaskService {
     private readonly taskAssignments = new Map<string, AgentId>();
     private readonly channelWorkloads = new Map<ChannelId, ChannelWorkloadAnalysis>();
     private orchestrationInitialized = false;
+
+    /** Drives the 30s agent-coordination cadence from an interval we can unref(). */
+    private readonly coordinationTick = new BehaviorSubject<number>(0);
+    private coordinationTimer?: ReturnType<typeof setInterval>;
+    private analysisTimer?: ReturnType<typeof setInterval>;
+    private initialAnalysisTimer?: ReturnType<typeof setTimeout>;
+    private orchestrationSubscriptions: Subscription[] = [];
     private agentService: AgentService | null = null;
     
     // Configuration for task orchestration
@@ -174,28 +181,75 @@ export class TaskService {
      * Set up agent coordination
      */
     private setupAgentCoordination(): void {
-        // Combine channel activities with agent performance patterns
-        combineLatest([
-            this.activeChannels.asObservable(),
-            timer(0, 30000) // Every 30 seconds
-        ]).pipe(
-            switchMap(() => this.coordinateAgentAssignments())
-        ).subscribe({
-            //next: () => // null,
-            error: (error) => this.logger.error(`❌ Agent coordination error: ${error}`)
-        });
+        // The 30s cadence is driven by a plain interval rather than RxJS timer().
+        //
+        // RxJS schedules timer()/interval() on setInterval internally and gives no access
+        // to unref(), so the timer keeps Node's event loop open and any process that
+        // merely constructed this service could never exit. The subscriptions were also
+        // never stored, so they could not be torn down. A long-running server is kept
+        // alive by its listener; a periodic sweep must not be what holds a process open.
+        this.coordinationTimer = setInterval(
+            () => this.coordinationTick.next(this.coordinationTick.value + 1),
+            30000
+        );
+        this.coordinationTimer.unref();
+
+        this.orchestrationSubscriptions.push(
+            combineLatest([
+                this.activeChannels.asObservable(),
+                this.coordinationTick.asObservable()
+            ]).pipe(
+                switchMap(() => this.coordinateAgentAssignments())
+            ).subscribe({
+                error: (error) => this.logger.error(`Agent coordination error: ${error}`)
+            })
+        );
     }
 
     /**
      * Start periodic analysis and optimization
      */
     private startPeriodicAnalysis(): void {
-        // Run analysis every 5 minutes
-        timer(0, 5 * 60 * 1000).subscribe(() => {
+        const runAnalysis = () => {
             this.optimizeTaskAssignments().catch(error => {
-                this.logger.error(`❌ Periodic optimization failed: ${error}`);
+                this.logger.error(`Periodic optimization failed: ${error}`);
             });
-        });
+        };
+
+        // timer(0, ...) used to fire an immediate pass on the next tick; preserve that.
+        this.initialAnalysisTimer = setTimeout(runAnalysis, 0);
+        this.initialAnalysisTimer.unref();
+
+        // Run analysis every 5 minutes.
+        this.analysisTimer = setInterval(runAnalysis, 5 * 60 * 1000);
+        this.analysisTimer.unref();
+    }
+
+    /**
+     * Stop orchestration: clear the periodic timers and unsubscribe.
+     *
+     * Nothing tore these down before, so a TaskService instance leaked its subscriptions
+     * for the lifetime of the process.
+     */
+    public shutdown(): void {
+        if (this.coordinationTimer) {
+            clearInterval(this.coordinationTimer);
+            this.coordinationTimer = undefined;
+        }
+        if (this.analysisTimer) {
+            clearInterval(this.analysisTimer);
+            this.analysisTimer = undefined;
+        }
+        if (this.initialAnalysisTimer) {
+            clearTimeout(this.initialAnalysisTimer);
+            this.initialAnalysisTimer = undefined;
+        }
+
+        for (const subscription of this.orchestrationSubscriptions) {
+            subscription.unsubscribe();
+        }
+        this.orchestrationSubscriptions = [];
+        this.orchestrationInitialized = false;
     }
 
     /**

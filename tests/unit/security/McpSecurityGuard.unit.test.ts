@@ -68,12 +68,36 @@ describe('McpSecurityGuard', () => {
 
     describe('dangerous commands requiring confirmation', () => {
         it.each([
-            'sudo apt-get install foo',
             'rm -rf /',
             'rm -fr /home',
             'kill -9 1',
         ])('requires confirmation for "%s"', (cmd) => {
             const result = guard.validateCommand(cmd, ctx);
+            expect(result.allowed).toBe(true);
+            expect(result.requiresConfirmation).toBe(true);
+            expect(result.riskLevel).toBe('medium');
+        });
+    });
+
+    // Command rules are OS-specific, so a guard built from the host's platform gives a
+    // different verdict on a developer's Mac than on a Linux runner. Package managers are
+    // the clearest case: apt-get is blocked outright on Linux, and is simply an unknown
+    // command on macOS. Pin the platform rather than asserting whatever the host happens
+    // to be — this test used to assert the macOS verdict and failed in CI on Linux.
+    describe('OS-specific package-manager rules', () => {
+        it('blocks apt-get outright on Linux', () => {
+            const linuxGuard = new McpSecurityGuard('/tmp/test-project', undefined, 'linux');
+            const result = linuxGuard.validateCommand('sudo apt-get install foo', ctx);
+
+            expect(result.allowed).toBe(false);
+            expect(result.riskLevel).toBe('critical');
+            expect(result.reason).toMatch(/apt-get/);
+        });
+
+        it('treats apt-get as an unknown command needing confirmation on macOS', () => {
+            const macGuard = new McpSecurityGuard('/tmp/test-project', undefined, 'darwin');
+            const result = macGuard.validateCommand('sudo apt-get install foo', ctx);
+
             expect(result.allowed).toBe(true);
             expect(result.requiresConfirmation).toBe(true);
             expect(result.riskLevel).toBe('medium');

@@ -143,6 +143,10 @@ export class BackgroundTaskManager {
     private constructor() {
         // Start periodic cleanup of completed tasks older than cleanupIntervalMs
         this.cleanupTimer = setInterval(() => this.cleanupCompletedTasks(), this.cleanupIntervalMs);
+        // A periodic cleanup sweep must never be the reason a process stays alive. Without
+        // unref() this timer holds Node's event loop open, so any process that merely
+        // touched this singleton — a test worker, a one-shot CLI run — could not exit.
+        this.cleanupTimer.unref();
     }
 
     /** Get the singleton instance of BackgroundTaskManager */

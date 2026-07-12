@@ -1283,6 +1283,11 @@ export class MxfClient {
         this.heartbeatInterval = setInterval(() => {
             this.sendHeartbeat();
         }, this.HEARTBEAT_INTERVAL_MS);
+
+        // The heartbeat must not be the reason a process stays alive. A connected agent is
+        // held open by its socket; without unref() this timer pins Node's event loop on its
+        // own, so a consumer that merely constructed a client could never exit.
+        this.heartbeatInterval.unref();
     }
 
     /**

@@ -67,6 +67,8 @@ export class SharedStateService {
         this.cleanupInterval = setInterval(() => {
             this.cleanupOldStates();
         }, SharedStateService.CLEANUP_INTERVAL_MS);
+        // Background sweep — must not keep the event loop alive on its own.
+        this.cleanupInterval.unref();
 
         // Do not hold the event loop open on account of a garbage-collection timer.
         this.cleanupInterval.unref?.();
