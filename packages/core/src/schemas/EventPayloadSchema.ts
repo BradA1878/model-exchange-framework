@@ -42,6 +42,11 @@ import {
     CycleCompletedEventData
 } from '../events/event-definitions/OrparMemoryEvents.js';
 import {
+    LlmBudgetEventData,
+    LLM_BUDGET_ACTOR_ID,
+    LLM_BUDGET_CHANNEL_ID
+} from '../events/event-definitions/LlmBudgetEvents.js';
+import {
     DagEvents,
     TaskDependenciesResolvedEventData,
     TaskBlockedEventData,
@@ -2417,6 +2422,15 @@ export type ExternalMcpServerHealthStatusEventPayload = BaseEventPayload<Externa
  * Data for external MCP server tools discovered events
  */
 export interface ExternalMcpServerToolsDiscoveredEventData {
+    /**
+     * Which server these tools came from.
+     *
+     * Registration flows correlate on this. Without it, a caller awaiting its own server's
+     * tools had to assume any TOOLS_DISCOVERED event was its own — so two concurrent
+     * registrations could each resolve with the other's tools, and a channel-scoped
+     * registration could be completed by an unrelated external server's discovery.
+     */
+    serverId: string;
     name: string;
     version: string;
     tools: Array<{
@@ -4444,5 +4458,28 @@ export function createCompactionSummaryGeneratedPayload(
             ...data,
         },
         options
+    );
+}
+
+/**
+ * Build an LLM budget event payload.
+ *
+ * Budget events describe the server's own SystemLLM spend rather than an agent's activity,
+ * so they carry a fixed actor and the global channel.
+ *
+ * @param eventType - One of Events.LlmBudget
+ * @param data - Spend figures for the current budget day
+ * @returns A BaseEventPayload carrying the spend figures
+ */
+export function createLlmBudgetEventPayload(
+    eventType: string,
+    data: LlmBudgetEventData
+): BaseEventPayload<LlmBudgetEventData> {
+    return createBaseEventPayload<LlmBudgetEventData>(
+        eventType,
+        LLM_BUDGET_ACTOR_ID,
+        LLM_BUDGET_CHANNEL_ID,
+        data,
+        { source: 'SystemLlmBudgetService' }
     );
 }

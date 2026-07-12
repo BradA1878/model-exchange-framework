@@ -26,8 +26,8 @@
  */
 
 import * as path from 'path';
-import * as os from 'os';
 import { ExternalServerConfig } from './ExternalMcpServerManager.js';
+import { getWorkspaceRoot } from '../security/McpToolPolicy.js';
 
 /**
  * Configuration for the Calculator MCP Server
@@ -72,28 +72,34 @@ export const SEQUENTIAL_THINKING_SERVER_CONFIG: ExternalServerConfig = {
 };
 
 /**
- * Configuration for the Filesystem MCP Server
- * Provides secure file operations with access controls
- * 
- * NOTE: Configured to allow access to project root directory.
- * The server receives the current working directory as an allowed path.
+ * Configuration for the Filesystem MCP Server.
+ *
+ * The allowed roots are the configured workspace directory plus a scratch
+ * directory. This used to pass `os.homedir()`, which handed every agent read
+ * access to the entire home directory — including ~/.ssh, ~/.aws, and
+ * ~/.mxf/config.json, which is where the MXF CLI stores its own credentials.
+ *
+ * The server only auto-starts when MXF_WORKSPACE_ROOT is set. There is no default:
+ * a filesystem server needs an operator to say which directory agents may touch,
+ * and the previous default answered that question with "all of them".
  */
 export const FILESYSTEM_SERVER_CONFIG: ExternalServerConfig = {
     id: 'filesystem',
     name: 'Filesystem Server',
     version: '0.6.0',
-    description: 'Secure file operations with configurable access controls',
+    description: 'File operations scoped to the configured workspace directory',
     command: 'npx',
-    // MCP filesystem server accepts multiple allowed directory paths as args.
-    // Include the user's home directory so agents can access any folder the
-    // user selects as their working directory (e.g., via the desktop folder picker).
+    // The MCP filesystem server takes its allowed directories as positional args.
     args: [
         '-y',
         '@modelcontextprotocol/server-filesystem',
-        os.homedir(),   // Allow access to user's home directory (covers any selected folder)
-        '/tmp'          // Also allow /tmp for temporary files
-    ],
-    autoStart: true, // Enable auto-start for file operations
+        // Empty when unset. getFilesystemServerConfig() below is what callers
+        // should use — it fails fast rather than spawning a server with no root.
+        getWorkspaceRoot() ?? '',
+        '/tmp/mcp-workspace'
+    ].filter(arg => arg.length > 0),
+    // Only auto-start when a workspace is configured.
+    autoStart: getWorkspaceRoot() !== undefined,
     restartOnCrash: true,
     healthCheckInterval: 30000,
     maxRestartAttempts: 3,
@@ -169,24 +175,45 @@ export const MEMORY_SERVER_CONFIG: ExternalServerConfig = {
 };
 
 /**
- * Configuration for the MongoDB Lens MCP Server
- * Provides database schema analysis, query optimization, and MongoDB intelligence
+ * Configuration for the MongoDB Lens MCP Server.
+ *
+ * OFF by default, and it must stay that way unless you have pointed it somewhere
+ * safe.
+ *
+ * This server hands agents a query interface to whatever MONGODB_URI names. In a
+ * default MXF deployment that is the framework's own database — the one holding
+ * the users collection, personal access tokens, and agent API keys. It used to
+ * auto-start against exactly that.
+ *
+ * To enable it:
+ *   1. Create a MongoDB user with read-only access to a SEPARATE database — not
+ *      the one MXF stores its credentials in.
+ *   2. Set MONGODB_LENS_URI to that user's connection string.
+ *   3. Set autoStart, or start the server explicitly through the hybrid MCP API.
+ *
+ * MONGODB_LENS_URI is deliberately a different variable from MONGODB_URI, so that
+ * enabling this server cannot silently reuse the framework's own credentials.
  */
 export const MONGODB_LENS_SERVER_CONFIG: ExternalServerConfig = {
     id: 'mongodb-lens',
     name: 'MongoDB Lens Server',
     version: '1.0.0',
-    description: 'Database schema analysis, query optimization, aggregation pipeline building, and MongoDB intelligence',
+    description: 'Schema analysis, query optimization and aggregation building against a configured MongoDB database',
     command: 'npx',
     args: ['-y', 'mongodb-lens'],
-    autoStart: true, // ENABLED: Real package exists (furey/mongodb-lens)
+    // Opt-in only. Never point this at the database that holds MXF's users, PATs
+    // and API keys.
+    autoStart: false,
     restartOnCrash: true,
     healthCheckInterval: 30000,
     maxRestartAttempts: 3,
     startupTimeout: 15000, // MongoDB connection may take longer
     environmentVariables: {
         NODE_ENV: 'production',
-        MONGODB_URI: process.env.MONGODB_URI ?? '' // validated non-empty at spawn time by ExternalMcpServerManager
+        // Validated non-empty at spawn time by ExternalMcpServerManager, so starting
+        // this server without MONGODB_LENS_URI set fails with a clear error instead
+        // of falling back to the framework's own database.
+        MONGODB_URI: process.env.MONGODB_LENS_URI ?? ''
     }
 };
 
@@ -284,6 +311,42 @@ export const EXTERNAL_SERVER_CONFIGS: ExternalServerConfig[] = [
     // GIT_SERVER_CONFIG,      // DISABLED: MCP protocol integration issues
     // FETCH_SERVER_CONFIG,    // DISABLED: MCP protocol integration issues (replaced by internal web tools)
 ];
+
+/**
+ * The filesystem server's configuration, or a thrown error explaining why it
+ * cannot be started.
+ *
+ * Use this instead of FILESYSTEM_SERVER_CONFIG when starting the server on
+ * purpose: it refuses to hand out a filesystem server with no configured root,
+ * rather than spawning one whose allowed directories are whatever happens to be
+ * left in the args array.
+ *
+ * @throws Error when MXF_WORKSPACE_ROOT is not set
+ */
+export const getFilesystemServerConfig = (): ExternalServerConfig => {
+    const workspaceRoot = getWorkspaceRoot();
+
+    if (!workspaceRoot) {
+        throw new Error(
+            'The filesystem MCP server needs a workspace directory, but MXF_WORKSPACE_ROOT is not set. ' +
+            'Set it to the directory agents may read and write ' +
+            '(for example: MXF_WORKSPACE_ROOT=/Users/you/projects/my-app). ' +
+            'It has no default — the previous default was your home directory, which exposed ' +
+            '~/.ssh, ~/.aws and ~/.mxf/config.json to every agent.'
+        );
+    }
+
+    return {
+        ...FILESYSTEM_SERVER_CONFIG,
+        args: [
+            '-y',
+            '@modelcontextprotocol/server-filesystem',
+            workspaceRoot,
+            '/tmp/mcp-workspace'
+        ],
+        autoStart: true
+    };
+};
 
 /**
  * Get configurations for auto-start servers only

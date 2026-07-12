@@ -1,10 +1,31 @@
 # LSP-MCP Bridge Integration
 
-The LSP-MCP Bridge integrates Language Server Protocol (LSP) capabilities into MXF as MCP tools, enabling agents to perform intelligent code analysis, navigation, and manipulation across multiple programming languages.
+> **Status: the MCP tools described below do not exist.** This document is a
+> design spec, not a description of working code.
+>
+> `packages/core/src/protocols/mcp/tools/LspTools.ts` held tool *schemas* with no
+> handlers — nine tool definitions that could not execute. Nothing imported the
+> file, no index referenced it, and `McpToolRegistry.registerLspTools()` (used in
+> the examples below) was never a method. The file has been deleted rather than
+> registered, because registering handler-less tools would advertise nine
+> capabilities to a model that would fail the moment it used one.
+>
+> The **LSP service layer is real and remains**:
+> `packages/core/src/services/lsp/` (`LspServerManager`, `LspDocumentManager`,
+> `LspProtocolAdapter`) and `packages/core/src/types/LspTypes.ts`. Finishing this
+> feature means writing handlers on top of that layer and registering the tools in
+> `src/server/mcp/tools/index.ts`. The tool shapes below are a reasonable starting
+> point for that work.
+>
+> `examples/lsp-code-intelligence-demo` does not use these tools. It uses
+> `analyze_codebase` and the `typescript_*` tools, and only name-drops the LSP
+> tools in a console banner.
+
+The LSP-MCP Bridge integrates Language Server Protocol (LSP) capabilities into MXF as MCP tools, enabling agents to perform code analysis, navigation, and manipulation across multiple programming languages.
 
 ## Overview
 
-The LSP-MCP Bridge provides agents with advanced code intelligence through 8 MCP tools that interface with language servers. This enables agents to understand codebases, navigate code structures, diagnose errors, and perform safe refactoring operations.
+The design provides agents with code intelligence through 8 MCP tools that interface with language servers: understanding codebases, navigating code structures, diagnosing errors, and performing refactoring operations.
 
 ### Key Capabilities
 

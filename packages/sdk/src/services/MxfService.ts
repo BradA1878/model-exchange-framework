@@ -31,7 +31,9 @@ import { Events, CoreSocketEvents, AgentEvents, ChannelEvents, ChannelActionType
 import { TaskEvents } from '@mxf-dev/core/events/event-definitions/TaskEvents';
 import { ControlLoopEvents } from '@mxf-dev/core/events/event-definitions/ControlLoopEvents';
 import { OrparEvents } from '@mxf-dev/core/events/event-definitions/OrparEvents';
-import { PublicEventName, isPublicEvent } from '@mxf-dev/core/events/PublicEvents';
+import { PublicEventName, isPublicEvent, getEventCategory } from '@mxf-dev/core/events/PublicEvents';
+import { PayloadOf } from '@mxf-dev/core/events/EventBusBase';
+import { Subscription } from 'rxjs';
 import { v4 as uuidv4 } from 'uuid';
 import { createChannelMessage, ChannelMessage } from '@mxf-dev/core/schemas/MessageSchemas';
 import { 
@@ -113,7 +115,21 @@ export class MxfService implements IInternalChannelService {
     private reconnectAttempts: number = 5;
     private pendingEvents: Array<{event: string, data: any}> = [];
     private validator = createStrictValidator('Channel');
-    private eventListenersSetup: boolean = false; // Track if event listeners are already set up
+
+    // Guards + teardown bookkeeping for the three listener families this service owns.
+    // Every one of these used to leak on reconnect: the CONNECT handler re-ran the whole
+    // setup on every fire, none of the EventBus subscriptions were tracked, and
+    // disconnect() never reset the guards — so a manual disconnect()/connect() produced a
+    // socket with no ORPAR or control-loop forwarding at all.
+    private eventListenersSetup: boolean = false;
+    private socketHandlersSetup: boolean = false;
+    private controlLoopListenersSetup: boolean = false;
+
+    /** EventBus subscriptions from setupEventListeners()/setupTaskEventListeners(). */
+    private busSubscriptions: Subscription[] = [];
+
+    /** Socket.IO handlers registered on the current socket, so they can be removed. */
+    private socketHandlers: Array<{ event: string; handler: (...args: any[]) => void }> = [];
 
     // API Service for context and memory operations
     private apiService: ApiService | null = null;
@@ -261,66 +277,42 @@ export class MxfService implements IInternalChannelService {
                         transports: ['websocket', 'polling'] // Try websocket first, fallback to polling
                     });
                     
-                    // Set up connection event handler
-                    this.socket.on(CoreSocketEvents.CONNECT, () => {
-                        
-                        // Don't clear timeout yet - we still need to wait for CONNECTED event
-                        // The timeout protects against both socket connection AND server response delays
-                        
-                        // Register this agent's socket in the registry (does not overwrite the primary admin socket)
-                        EventBus.client.registerSocket(this.agentId!, this.socket);
-
-                        // Set up control loop socket listeners now that socket is available
-                        this.setupControlLoopSocketListeners();
-
-                        // Listen for authentication events for logging
-                        this.socket.on(AuthEvents.SUCCESS, (authData: any) => {
-
-                            // Store channel config and active agents if provided
-                            if (authData.channelConfig) {
-                                this.channelConfigData = authData.channelConfig;
-                            }
-
-                            if (authData.activeAgents && Array.isArray(authData.activeAgents)) {
-                                this.activeAgentsList = authData.activeAgents;
-                            }
-                        });
-                        
-                        // Listen for authentication errors
-                        this.socket.on(AuthEvents.ERROR, (errorData: any) => {
-                            this.logger.error(`[Channel:${this.channelId}] Authentication failed:`, errorData);
-                        });
-                        
-                        // Set up socket event handlers
-                        this.setupSocketEventHandlers();
-                        
-                        // Emit agent connection request to server
-                        const agentId = this.validateAgentId();
-                        const payload: AgentEventPayload = createAgentEventPayload(
-                            AgentEvents.CONNECT,
-                            agentId,
-                            this.channelId,
-                            {
-                                status: 'connected',
-                                metadata: {
-                                    socketId: this.socket.id,
-                                    channelId: this.channelId,
-                                    connectionTime: Date.now()
-                                }
-                            }
-                        );
-                        
-                        EventBus.client.emitOn(this.agentId!, AgentEvents.CONNECT, payload);
+                    // Auth listeners: registered once, here, rather than re-registered from
+                    // inside the CONNECT handler on every single reconnect.
+                    this.addSocketHandler(AuthEvents.SUCCESS, (authData: any) => {
+                        if (authData.channelConfig) {
+                            this.channelConfigData = authData.channelConfig;
+                        }
+                        if (authData.activeAgents && Array.isArray(authData.activeAgents)) {
+                            this.activeAgentsList = authData.activeAgents;
+                        }
                     });
-                    
+
+                    this.addSocketHandler(AuthEvents.ERROR, (errorData: any) => {
+                        this.logger.error(`[Channel:${this.channelId}] Authentication failed:`, errorData);
+                    });
+
+                    // The rest of the socket handlers (connect/disconnect/reconnect,
+                    // control loop and ORPAR forwarding). Idempotent.
+                    this.setupSocketEventHandlers();
+                    this.setupControlLoopSocketListeners();
+
+                    // Register this agent's socket in the registry (does not overwrite the
+                    // primary admin socket).
+                    this.addSocketHandler(CoreSocketEvents.CONNECT, () => {
+                        // Don't clear timeout yet — we still need to wait for the CONNECTED
+                        // event. The timeout covers both socket connect AND server response.
+                        EventBus.client.registerSocket(this.agentId!, this.socket);
+                    });
+
                     // Handle socket connection errors
-                    this.socket.on(CoreSocketEvents.CONNECT_ERROR, (error: any) => {
+                    this.addSocketHandler(CoreSocketEvents.CONNECT_ERROR, (error: any) => {
                         this.logger.error(`[Channel:${this.channelId}] Socket connection error:`, error);
-                        
+
                         // Clean up event listeners
                         connectedSubscription.unsubscribe();
                         clearTimeout(timeoutId);
-                        
+
                         // Reject the promise
                         reject(new Error(`Socket connection error: ${error.message || 'Unknown error'}`));
                     });
@@ -362,30 +354,48 @@ export class MxfService implements IInternalChannelService {
     }
     
     /**
-     * Set up socket.io event handlers
+     * Register a socket.io handler and remember it so disconnect() can remove it.
+     *
+     * @private
      */
-    private setupSocketEventHandlers(): void {
+    private addSocketHandler(event: string, handler: (...args: any[]) => void): void {
         if (!this.socket) {
             return;
         }
-        
+        this.socket.on(event, handler);
+        this.socketHandlers.push({ event, handler });
+    }
+
+    /**
+     * Set up socket.io connect/disconnect/reconnect handlers.
+     *
+     * Guarded: this used to be called from inside the CONNECT handler, so every
+     * reconnect registered another full set. After N reconnects there were N+1
+     * connect handlers and the agent emitted N duplicate agent-connect events.
+     *
+     * @private
+     */
+    private setupSocketEventHandlers(): void {
+        if (!this.socket || this.socketHandlersSetup) {
+            return;
+        }
+        this.socketHandlersSetup = true;
+
         // Handle connection
-        this.socket.on(CoreSocketEvents.CONNECT, () => {
+        this.addSocketHandler(CoreSocketEvents.CONNECT, () => {
             this.connected = true;
-            
+
             // Process any pending events
             this.processPendingEvents();
-            
+
             try {
-                // Validate agent ID before emitting
                 const agentId = this.validateAgentId();
-                
-                // Emit the connection event with proper payload structure using the schema function
+
                 const connectData: AgentEventData = {
                     status: 'connected',
                     socketId: this.socket.id
                 };
-                
+
                 EventBus.client.emitOn(
                     this.agentId!,
                     AgentEvents.CONNECT,
@@ -400,22 +410,20 @@ export class MxfService implements IInternalChannelService {
                 this.logger.error(`[Channel:${this.channelId}] Failed to emit connect event: ${error instanceof Error ? error.message : String(error)}`);
             }
         });
-        
+
         // Handle disconnect
-        this.socket.on(CoreSocketEvents.DISCONNECT, (reason: string) => {
+        this.addSocketHandler(CoreSocketEvents.DISCONNECT, (reason: string) => {
             this.connected = false;
-            
+
             try {
-                // Emit disconnect event with validated agent ID
                 const agentId = this.validateAgentId();
-                
-                // Notify that we're disconnected using proper payload structure using the schema function
+
                 const disconnectData: AgentEventData = {
                     status: 'disconnected',
                     socketId: this.socket?.id,
                     reason: reason
                 };
-                
+
                 EventBus.client.emitOn(
                     this.agentId!,
                     AgentEvents.DISCONNECT,
@@ -431,14 +439,14 @@ export class MxfService implements IInternalChannelService {
                 this.logger.error(`[Channel:${this.channelId}] Failed to emit disconnect event: ${error instanceof Error ? error.message : String(error)}`);
             }
         });
-        
+
         // Handle reconnect
-        this.socket.on(CoreSocketEvents.RECONNECT, () => {
+        this.addSocketHandler(CoreSocketEvents.RECONNECT, () => {
             this.connected = true;
             this.processPendingEvents();
         });
-        
-        // Set up event listeners for this channel
+
+        // Set up EventBus listeners for this channel (idempotent)
         this.setupEventListeners();
     }
 
@@ -571,7 +579,13 @@ export class MxfService implements IInternalChannelService {
     }
 
     /**
-     * Set up listener for messages on this channel
+     * Set up the EventBus listeners for this channel.
+     *
+     * Idempotent, and every subscription is tracked in `busSubscriptions` so
+     * disconnect() can drop it. The seven subscriptions created here were previously
+     * never stored and never unsubscribed.
+     *
+     * @private
      */
     private setupEventListeners(): void {
         if (this.eventListenersSetup) {
@@ -580,74 +594,66 @@ export class MxfService implements IInternalChannelService {
         this.eventListenersSetup = true;
 
         // Listen for messages on this channel
-        EventBus.client.on(Events.Message.CHANNEL_MESSAGE, (payload: ChannelMessageEventPayload) => {
-            // 'payload' is ChannelMessageEventPayload.
-            // The actual ChannelMessage is in payload.data
-            // The channelId for a ChannelMessage is within its 'context' property.
-            if (payload && payload.data && payload.data.context && payload.data.context.channelId === this.channelId) {
-                // Optional: Check consistency between BaseEventPayload.agentId and ChannelMessage.senderId
-                if (payload.agentId !== payload.data.senderId) {
-                    this.logger.warn(
-                        `[Channel:${this.channelId}] Mismatch in senderId for CHANNEL_MESSAGE. ` +
-                        `Event sender (BaseEventPayload.agentId): ${payload.agentId}, ` +
-                        `Message sender (ChannelMessage.senderId): ${payload.data.senderId}`
-                    );
-                    // Depending on policy, you might choose to ignore, or trust one over the other.
-                    // For now, we'll proceed using the senderId from the ChannelMessage data.
+        this.busSubscriptions.push(
+            EventBus.client.on(Events.Message.CHANNEL_MESSAGE, (payload: ChannelMessageEventPayload) => {
+                // The ChannelMessage is in payload.data; its channelId lives in 'context'.
+                if (payload && payload.data && payload.data.context && payload.data.context.channelId === this.channelId) {
+                    if (payload.agentId !== payload.data.senderId) {
+                        this.logger.warn(
+                            `[Channel:${this.channelId}] Mismatch in senderId for CHANNEL_MESSAGE. ` +
+                            `Event sender (BaseEventPayload.agentId): ${payload.agentId}, ` +
+                            `Message sender (ChannelMessage.senderId): ${payload.data.senderId}`
+                        );
+                    }
+                    // Message handling is delegated to subscribers of this event; MxfService
+                    // stays focused on coordination.
                 }
-                // The ChannelMessage (payload.data) is available for any MxfService-specific processing.
-                // By design, message handling is delegated to subscribers of this event, keeping MxfService focused on coordination.
-            }
-        });
+            })
+        );
 
         // Listen for task events relevant to this agent/channel
         this.setupTaskEventListeners();
 
-        // Note: setupControlLoopSocketListeners() is called inside the socket 'connect' handler
-        // where the socket actually exists. Calling it here would always fail because this.socket
-        // is null until connect() runs.
+        // setupControlLoopSocketListeners() needs a live socket, so it is called from
+        // connect() once the socket exists — not here, where this.socket is still null.
     }
 
     /**
-     * Set up listeners for task events
+     * Set up listeners for task events.
+     *
+     * Subscriptions land in `busSubscriptions` for teardown.
+     *
      * @private
      */
     private setupTaskEventListeners(): void {
-        
-        // Task completion events
-        EventBus.client.on(TaskEvents.COMPLETED, (payload: any) => {
-            this.handleTaskEvent('completed', payload);
-        });
+        const taskEventMap: Array<[string, string]> = [
+            [TaskEvents.COMPLETED, 'completed'],
+            [TaskEvents.FAILED, 'failed'],
+            [TaskEvents.CANCELLED, 'cancelled'],
+            [TaskEvents.ASSIGNED, 'assigned'],
+            [TaskEvents.STARTED, 'started'],
+            [TaskEvents.PROGRESS_UPDATED, 'progressUpdated'],
+        ];
 
-        EventBus.client.on(TaskEvents.FAILED, (payload: any) => {
-            this.handleTaskEvent('failed', payload);
-        });
-
-        EventBus.client.on(TaskEvents.CANCELLED, (payload: any) => {
-            this.handleTaskEvent('cancelled', payload);
-        });
-
-        EventBus.client.on(TaskEvents.ASSIGNED, (payload: any) => {
-            this.handleTaskEvent('assigned', payload);
-        });
-
-        EventBus.client.on(TaskEvents.STARTED, (payload: any) => {
-            this.handleTaskEvent('started', payload);
-        });
-
-        EventBus.client.on(TaskEvents.PROGRESS_UPDATED, (payload: any) => {
-            //
-            this.handleTaskEvent('progressUpdated', payload);
-        });
+        for (const [eventName, callbackKey] of taskEventMap) {
+            this.busSubscriptions.push(
+                EventBus.client.on(eventName, (payload: any) => {
+                    this.handleTaskEvent(callbackKey, payload);
+                })
+            );
+        }
     }
 
-    // Flag to prevent duplicate control loop listener setup
-    private controlLoopListenersSetup = false;
-
     /**
-     * Set up socket listeners for control loop events from the server
-     * These events (REASONING, PLAN, ACTION, REFLECTION, etc.) are emitted by the server's
-     * ControlLoop and need to be forwarded to EventBus.client for SDK components to receive them.
+     * Forward the server's control loop and ORPAR events onto EventBus.client.
+     *
+     * These (REASONING, PLAN, ACTION, REFLECTION, …) are emitted by the server's
+     * ControlLoop and have to reach EventBus.client for SDK components to see them.
+     *
+     * Guarded, and its handlers are tracked. The guard used to survive disconnect(),
+     * so a manual disconnect()/connect() returned early here and produced a socket
+     * with no ORPAR forwarding at all.
+     *
      * @private
      */
     private setupControlLoopSocketListeners(): void {
@@ -691,9 +697,10 @@ export class MxfService implements IInternalChannelService {
             OrparEvents.ERROR
         ];
 
-        // Forward all control loop events through agent socket
-        controlLoopEventsToForward.forEach(eventName => {
-            this.socket!.on(eventName, (payload: any) => {
+        // Forward control loop and ORPAR events through the agent socket.
+        // Registered via addSocketHandler so disconnect() removes them.
+        for (const eventName of [...controlLoopEventsToForward, ...orparEventsToForward]) {
+            this.addSocketHandler(eventName, (payload: any) => {
                 // Only forward events for this channel
                 if (payload.channelId && payload.channelId !== this.channelId) {
                     return;
@@ -702,20 +709,7 @@ export class MxfService implements IInternalChannelService {
                 // Forward the event to EventBus.client so SDK components can receive it
                 EventBus.client.emitOn(this.agentId!, eventName, payload);
             });
-        });
-
-        // Forward all ORPAR events (agent-driven cognitive documentation) through agent socket
-        orparEventsToForward.forEach(eventName => {
-            this.socket!.on(eventName, (payload: any) => {
-                // Only forward events for this channel
-                if (payload.channelId && payload.channelId !== this.channelId) {
-                    return;
-                }
-
-                // Forward the event to EventBus.client so SDK components can receive it
-                EventBus.client.emitOn(this.agentId!, eventName, payload);
-            });
-        });
+        }
 
         this.logger.info(`[Channel:${this.channelId}] Control loop and ORPAR socket listeners initialized`);
     }
@@ -844,17 +838,38 @@ export class MxfService implements IInternalChannelService {
     }
 
     /**
-     * Disconnect from the server and clean up resources
+     * Disconnect from the server and clean up resources.
+     *
+     * Removes every socket handler and every EventBus subscription this service
+     * registered, and resets the setup guards so a later connect() rebuilds them.
+     * Without the guard reset, a manual disconnect()/connect() left
+     * setupControlLoopSocketListeners() returning early and the agent silently lost
+     * all ORPAR and control-loop forwarding.
      */
     public async disconnect(): Promise<void> {
         try {
-
-            // Clean up all channel event listener subscriptions to prevent
-            // lingering RxJS handlers from keeping the event loop alive
+            // Drop listeners registered through on()
             for (const [, subscriptions] of this.channelEventListeners.entries()) {
                 subscriptions.forEach(sub => sub.unsubscribe());
             }
             this.channelEventListeners.clear();
+
+            // Drop the EventBus subscriptions from setupEventListeners()/setupTaskEventListeners()
+            this.busSubscriptions.forEach(sub => sub.unsubscribe());
+            this.busSubscriptions = [];
+
+            // Remove socket.io handlers from the socket before we drop it
+            if (this.socket) {
+                for (const { event, handler } of this.socketHandlers) {
+                    this.socket.off(event, handler);
+                }
+            }
+            this.socketHandlers = [];
+
+            // Reset the setup guards so the next connect() re-registers everything
+            this.eventListenersSetup = false;
+            this.socketHandlersSetup = false;
+            this.controlLoopListenersSetup = false;
 
             // Unregister this agent's socket from the EventBus registry
             if (this.agentId) {
@@ -867,6 +882,7 @@ export class MxfService implements IInternalChannelService {
             }
 
             this.connected = false;
+            this.isActive = false;
 
         } catch (error) {
             this.logger.error(`[Channel:${this.channelId}] Error during disconnect:`, error);
@@ -1668,10 +1684,11 @@ export class MxfService implements IInternalChannelService {
      * based on channelId. Only events in the PUBLIC_EVENTS whitelist can be listened to.
      * 
      * @param eventName - Public event name from Events namespace
-     * @param handler - Event handler function
+     * @param handler - Event handler, typed from the event name
      * @returns This service instance for method chaining
-     * @throws Error if event is not in public whitelist
-     * 
+     * @throws Error if the event is not in the public whitelist. It previously only
+     *         logged a warning and silently ignored the listener.
+     *
      * @example
      * ```typescript
      * // Listen for all messages in the channel
@@ -1687,19 +1704,21 @@ export class MxfService implements IInternalChannelService {
      * });
      * ```
      */
-    public on(eventName: PublicEventName, handler: (data: any) => void): this {
-        // Validate event is in public whitelist
+    public on<E extends PublicEventName>(
+        eventName: E,
+        handler: (payload: PayloadOf<E>) => void
+    ): this {
         if (!isPublicEvent(eventName)) {
-            this.logger.warn(
-                `Event '${eventName}' is not in the public whitelist. ` +
-                `Only events from PUBLIC_EVENTS can be monitored. Ignoring listener.`
+            const category = getEventCategory(eventName as any);
+            throw new Error(
+                `Event '${eventName}' is not in the public whitelist and cannot be listened to. ` +
+                `It looks like an internal ${category} event. ` +
+                `Use an event from the Events namespace that appears in PUBLIC_EVENTS.`
             );
-            return this;
         }
 
         // Wrap handler to filter by channelId
         const channelFilteredHandler = (data: any): void => {
-            // Only process events for this channel
             if (data.channelId === this.channelId) {
                 handler(data);
             }

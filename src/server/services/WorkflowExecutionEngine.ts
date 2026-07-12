@@ -84,7 +84,7 @@ export class WorkflowExecutionEngine {
     private templates = new Map<string, WorkflowTemplate>();
 
     private constructor() {
-        this.logger = new Logger('WorkflowExecutionEngine');
+        this.logger = new Logger('info', 'WorkflowExecutionEngine');
 
         this.setupEventHandlers();
     }

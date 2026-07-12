@@ -123,13 +123,8 @@ async function testExternalMcpServerRegistration() {
             }
         });
 
-        if (result.success) {
-            console.log('✅ Custom MCP server registered successfully!\n');
-            console.log(`   Tools discovered: ${result.toolsDiscovered?.join(', ')}\n`);
-        } else {
-            console.log('❌ Custom MCP server registration failed\n');
-            process.exit(1);
-        }
+        console.log('✅ Custom MCP server registered successfully!\n');
+        console.log(`   Tools discovered: ${result.toolsDiscovered.join(', ')}\n`);
     } catch (error) {
         console.error('❌ Registration error:', error);
         process.exit(1);
@@ -207,13 +202,8 @@ async function testExternalMcpServerRegistration() {
     console.log('🗑️  Step 6: Unregistering custom MCP server...\n');
 
     try {
-        const unregistered = await adminAgent.unregisterExternalMcpServer('simple-custom-server');
-
-        if (unregistered) {
-            console.log('✅ Custom MCP server unregistered successfully!\n');
-        } else {
-            console.log('❌ Server unregistration failed\n');
-        }
+        await adminAgent.unregisterExternalMcpServer('simple-custom-server');
+        console.log('✅ Custom MCP server unregistered successfully!\n');
     } catch (error) {
         console.error('❌ Unregistration error:', error);
     }

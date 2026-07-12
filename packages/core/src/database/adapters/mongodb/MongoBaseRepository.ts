@@ -184,7 +184,13 @@ export abstract class MongoBaseRepository<T, D extends Document, CreateDTO = Par
     }
 
     /**
-     * Map comparison operator to MongoDB operator
+     * Map comparison operator to MongoDB operator.
+     *
+     * An unknown operator throws. Defaulting to '$eq' turned, say, a mistyped
+     * 'gte' into an equality match: the query ran, returned the wrong rows, and
+     * nothing anywhere said so.
+     *
+     * @throws If the operator is not one this repository supports
      */
     private mapComparisonOperator(op: ComparisonOperator): string {
         const mapping: Record<string, string> = {
@@ -198,6 +204,14 @@ export abstract class MongoBaseRepository<T, D extends Document, CreateDTO = Par
             'nin': '$nin',
             'regex': '$regex'
         };
-        return mapping[op] || '$eq';
+
+        const mongoOperator = mapping[op];
+        if (!mongoOperator) {
+            throw new Error(
+                `Unsupported comparison operator '${op}'. Supported operators: ${Object.keys(mapping).join(', ')}`
+            );
+        }
+
+        return mongoOperator;
     }
 }

@@ -56,8 +56,19 @@ export interface CompressionResult {
   originalLength: number;
   compressedLength: number;
   compressionRatio: number;
-  method: 'semantic' | 'extractive' | 'abstractive';
+  method: CompressionMethod;
 }
+
+/**
+ * How a memory's content was compressed.
+ *
+ * Only 'extractive' exists: leading sentences are kept and the remainder is discarded.
+ * The union previously also offered 'semantic' and 'abstractive', neither of which was
+ * ever implemented — 'semantic' was reported for what was, in fact, the same extractive
+ * slicing. Listing methods the service cannot perform invites callers to trust compressed
+ * memories more than they should.
+ */
+export type CompressionMethod = 'extractive';
 
 /**
  * Consolidation options
@@ -257,18 +268,14 @@ export class MemoryCompressor {
     const originalLength = content.length;
     const targetRatio = this.compressionRatios[level];
 
-    let compressedContent: string;
-    let method: 'semantic' | 'extractive' | 'abstractive';
-
-    if (this.contextCompressor && level !== CompressionLevel.Light) {
-      // Use semantic compression for moderate/heavy compression
-      compressedContent = await this.semanticCompress(content, targetRatio);
-      method = 'semantic';
-    } else {
-      // Use extractive compression for light compression
-      compressedContent = this.extractiveCompress(content, targetRatio);
-      method = 'extractive';
-    }
+    // Every compression this service performs is extractive: it keeps leading sentences
+    // and discards the rest. The previous 'semantic' branch called a semanticCompress()
+    // that never touched the contextCompressor it checked for, and did exactly the same
+    // sentence-slicing as the extractive path — it differed only in the label it reported.
+    // Callers deciding how much to trust a compressed memory were reading that label, so
+    // it now says what actually happened.
+    const compressedContent = this.extractiveCompress(content, targetRatio);
+    const method: CompressionMethod = 'extractive';
 
     const compressedLength = compressedContent.length;
     const actualRatio = compressedLength / originalLength;
@@ -281,25 +288,6 @@ export class MemoryCompressor {
       compressionRatio: actualRatio,
       method
     };
-  }
-
-  private async semanticCompress(content: string, targetRatio: number): Promise<string> {
-    // Use ContextCompressionEngine for semantic compression
-    const targetLength = Math.ceil(content.length * targetRatio);
-
-    // Simple summarization approach
-    const words = content.split(/\s+/);
-    const targetWords = Math.ceil(words.length * targetRatio);
-
-    if (words.length <= targetWords) {
-      return content;
-    }
-
-    // Extract key sentences (simple extractive approach)
-    const sentences = content.split(/[.!?]+/).filter(s => s.trim());
-    const targetSentences = Math.max(1, Math.ceil(sentences.length * targetRatio));
-
-    return sentences.slice(0, targetSentences).join('. ') + '.';
   }
 
   private extractiveCompress(content: string, targetRatio: number): string {

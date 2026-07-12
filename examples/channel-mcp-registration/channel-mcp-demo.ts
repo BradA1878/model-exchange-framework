@@ -139,13 +139,8 @@ async function channelMcpDemo() {
             }
         });
 
-        if (result.success) {
-            console.log('✅ Channel MCP server registered successfully!\n');
-            console.log(`   Tools discovered: ${result.toolsDiscovered?.join(', ')}\n`);
-        } else {
-            console.log('❌ Channel MCP server registration failed\n');
-            process.exit(1);
-        }
+        console.log('✅ Channel MCP server registered successfully!\n');
+        console.log(`   Tools discovered: ${result.toolsDiscovered.join(', ')}\n`);
     } catch (error) {
         console.error('❌ Registration error:', error);
         process.exit(1);
@@ -239,13 +234,8 @@ async function channelMcpDemo() {
     await agent1.connect();
 
     try {
-        const unregistered = await agent1.unregisterChannelMcpServer('game-tools');
-
-        if (unregistered) {
-            console.log('✅ Channel MCP server unregistered successfully!\n');
-        } else {
-            console.log('❌ Server unregistration failed\n');
-        }
+        await agent1.unregisterChannelMcpServer('game-tools');
+        console.log('✅ Channel MCP server unregistered successfully!\n');
     } catch (error) {
         console.error('❌ Unregistration error:', error);
     }

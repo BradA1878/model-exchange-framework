@@ -12,6 +12,24 @@ bun add @mxf-dev/core   # or: npm install @mxf-dev/core
 
 Requires Node.js >= 20.19 or Bun >= 1.2. ESM-only.
 
+### Optional peer dependencies
+
+Features that need a heavy or platform-specific library declare it as an optional
+peer dependency, so installing `@mxf-dev/core` does not drag it in. Each is loaded
+on first use and throws a clear install message if it is missing — nothing silently
+degrades.
+
+| Package | Install it to use | Why it is optional |
+|---------|-------------------|--------------------|
+| `puppeteer` | `BrowserManager`, `WebSearchService` | Downloads a ~170MB Chromium |
+| `bcrypt` | The `User` model (password hashing) | Native module, compiled at install |
+| `@tensorflow/tfjs` | `MxfMLService` (set `TENSORFLOW_ENABLED`) | Large; only needed for ML features |
+| `socket.io` | Server-side event transport | Not needed by every consumer |
+
+```bash
+bun add puppeteer   # only if you use the browser tools
+```
+
 ## Usage
 
 ```typescript

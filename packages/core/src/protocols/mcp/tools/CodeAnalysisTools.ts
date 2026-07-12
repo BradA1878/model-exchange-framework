@@ -258,6 +258,11 @@ export const analyzeCodebaseTool = {
                 '-o', '-name', '*.js',
                 '-o', '-name', '*.jsx'
             ], {
+                context: {
+                    agentId: context.agentId,
+                    channelId: context.channelId,
+                    requestId: context.requestId
+                },
                 workingDirectory: workingDir,
                 captureOutput: true
             });
@@ -371,6 +376,11 @@ export const findFunctionsTool = {
                 '--no-heading',
                 `(function\\s+${args.functionName}|const\\s+${args.functionName}\\s*=|${args.functionName}\\s*:\\s*function|${args.functionName}\\s*:\\s*\\()`
             ], {
+                context: {
+                    agentId: context.agentId,
+                    channelId: context.channelId,
+                    requestId: context.requestId
+                },
                 workingDirectory: workingDir,
                 captureOutput: true
             });
@@ -494,6 +504,11 @@ export const traceDependenciesTool = {
                 '--no-heading',
                 `from\\s+['"].*${importPattern}['"]`
             ], {
+                context: {
+                    agentId: context.agentId,
+                    channelId: context.channelId,
+                    requestId: context.requestId
+                },
                 workingDirectory: workingDir,
                 captureOutput: true
             });

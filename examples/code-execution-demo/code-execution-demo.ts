@@ -55,7 +55,7 @@ async function demo() {
 
     // Generate keys for agent
     console.log('Generating authentication keys...');
-    const keys = await sdk.generateKey(channelId, undefined, 'Demo Agent Key');
+    const keys = await sdk.generateKey(channelId, 'CodeDemoAgent', 'Demo Agent Key');
 
     // Create agent that can execute code
     console.log('Creating demo agent...');

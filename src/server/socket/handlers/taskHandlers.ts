@@ -20,10 +20,22 @@
 
 /**
  * Task Management Socket Handlers
- * 
+ *
  * This module provides EventBus handlers for task management operations.
  * Task events are forwarded from socket to EventBus by eventForwardingHandlers,
  * then processed here and responses sent back through EventBus.
+ *
+ * Trust boundary: `payload.agentId` and `payload.channelId` are written by
+ * eventForwardingHandlers from socket.data, which the channel key established at
+ * connect time — they are the caller's real identity, not a client claim. The
+ * `taskId` inside `payload.data` is the opposite: it comes straight off the wire.
+ *
+ * So every mutation here goes through TaskService.updateTaskInChannel, which
+ * scopes the write to the caller's channel, and state changes that only the
+ * assignee may make (complete, fail) additionally require the assignment. These
+ * handlers used to call updateTask(taskId, ...) directly, which resolved to
+ * Task.findByIdAndUpdate with no scoping at all: an agent in one channel could
+ * complete, reassign, or cancel a task in any other channel by naming its id.
  */
 
 import { Socket } from 'socket.io';
@@ -135,9 +147,11 @@ const registerGlobalTaskHandlers = (): void => {
             const taskData = payload.data.task?.data || payload.data;
             const { taskId, ...updateRequest } = taskData;
             validator.assertIsNonEmptyString(taskId, 'taskId is required');
-            
-            const updatedTask = await taskService.updateTask(taskId, updateRequest);
-            
+            validator.assertIsNonEmptyString(channelId, 'channelId is required');
+
+            // Scoped to the caller's channel — see the trust note at the top of this file
+            const updatedTask = await taskService.updateTaskInChannel(taskId, channelId, updateRequest);
+
             // Use PROGRESS_UPDATED since UPDATED doesn't exist
             const taskEventData: TaskEventData = {
                 taskId: updatedTask.id,
@@ -175,12 +189,15 @@ const registerGlobalTaskHandlers = (): void => {
             const { taskId, targetAgentId } = taskData;
             validator.assertIsNonEmptyString(taskId, 'taskId is required');
             validator.assertIsNonEmptyString(targetAgentId, 'targetAgentId is required');
-            
-            const updatedTask = await taskService.updateTask(taskId, {
+            validator.assertIsNonEmptyString(channelId, 'channelId is required');
+
+            // Scoped to the caller's channel — reassigning a task in someone else's
+            // channel is not something a client gets to ask for
+            const updatedTask = await taskService.updateTaskInChannel(taskId, channelId, {
                 assignedAgentId: targetAgentId,
                 status: 'assigned'
             });
-            
+
             const taskEventData: TaskEventData = {
                 taskId: updatedTask.id,
                 fromAgentId: agentId,
@@ -216,9 +233,12 @@ const registerGlobalTaskHandlers = (): void => {
             const taskData = payload.data.task?.data || payload.data;
             const { taskId } = taskData;
             validator.assertIsNonEmptyString(taskId, 'taskId is required');
-            
-            const assignmentResult = await taskService.assignTaskIntelligently(taskId);
-            
+            validator.assertIsNonEmptyString(channelId, 'channelId is required');
+
+            // Scoped to the caller's channel. Assignment runs an LLM pass, so an
+            // unscoped taskId here was also a way to make another channel spend budget.
+            const assignmentResult = await taskService.assignTaskIntelligentlyInChannel(taskId, channelId);
+
             const taskEventData: TaskEventData = {
                 taskId: taskId,
                 fromAgentId: agentId,
@@ -255,11 +275,16 @@ const registerGlobalTaskHandlers = (): void => {
             const { taskId, startingAgentId } = taskData;
             validator.assertIsNonEmptyString(taskId, 'taskId is required');
             validator.assertIsNonEmptyString(startingAgentId, 'startingAgentId is required');
-            
-            const updatedTask = await taskService.updateTask(taskId, {
-                status: 'in_progress'
-            });
-            
+            validator.assertIsNonEmptyString(channelId, 'channelId is required');
+
+            // Only the assignee starts a task, and only in their own channel
+            const updatedTask = await taskService.updateTaskInChannel(
+                taskId,
+                channelId,
+                { status: 'in_progress' },
+                { requireAssignedAgentId: agentId }
+            );
+
             const taskEventData: TaskEventData = {
                 taskId: updatedTask.id,
                 fromAgentId: agentId,
@@ -314,13 +339,22 @@ const registerGlobalTaskHandlers = (): void => {
             }
             
             validator.assertIsNonEmptyString(resolvedTaskId, 'resolvedTaskId is required');
-            validator.assertIsNonEmptyString(completingAgentId || agentId, 'completingAgentId is required');
-            
-            const updatedTask = await taskService.updateTask(resolvedTaskId, {
-                status: 'completed',
-                progress: 100
-            });
-            
+            validator.assertIsNonEmptyString(channelId, 'channelId is required');
+
+            // Completion is restricted twice over: the task must be in the caller's
+            // channel, and the caller must be the agent it is assigned to.
+            // `completingAgentId` from the payload is not used for the check —
+            // `agentId` is the identity the socket authenticated as.
+            const updatedTask = await taskService.updateTaskInChannel(
+                resolvedTaskId,
+                channelId,
+                {
+                    status: 'completed',
+                    progress: 100
+                },
+                { requireAssignedAgentId: agentId }
+            );
+
             const taskEventData: TaskEventData = {
                 taskId: updatedTask.id,
                 fromAgentId: agentId,
@@ -359,11 +393,16 @@ const registerGlobalTaskHandlers = (): void => {
             const { taskId, failingAgentId, error: taskError } = taskData;
             validator.assertIsNonEmptyString(taskId, 'taskId is required');
             validator.assertIsNonEmptyString(failingAgentId, 'failingAgentId is required');
-            
-            const updatedTask = await taskService.updateTask(taskId, {
-                status: 'failed'
-            });
-            
+            validator.assertIsNonEmptyString(channelId, 'channelId is required');
+
+            // Only the assignee can fail a task, and only in their own channel
+            const updatedTask = await taskService.updateTaskInChannel(
+                taskId,
+                channelId,
+                { status: 'failed' },
+                { requireAssignedAgentId: agentId }
+            );
+
             const taskEventData: TaskEventData = {
                 taskId: updatedTask.id,
                 fromAgentId: agentId,
@@ -401,11 +440,15 @@ const registerGlobalTaskHandlers = (): void => {
             const taskData = payload.data.task?.data || payload.data;
             const { taskId, reason } = taskData;
             validator.assertIsNonEmptyString(taskId, 'taskId is required');
-            
-            const updatedTask = await taskService.updateTask(taskId, {
+            validator.assertIsNonEmptyString(channelId, 'channelId is required');
+
+            // Scoped to the caller's channel. Cancellation is not restricted to the
+            // assignee — any agent in the channel may call off work in that channel —
+            // but it can no longer reach across into another one.
+            const updatedTask = await taskService.updateTaskInChannel(taskId, channelId, {
                 status: 'cancelled'
             });
-            
+
             const taskEventData: TaskEventData = {
                 taskId: updatedTask.id,
                 fromAgentId: agentId,

@@ -55,8 +55,10 @@ export class TaskEffectivenessService {
     private readonly taskDefinitions = new Map<string, TaskDefinition>();
     private readonly taskEvents = new Map<string, TaskExecutionEvent[]>();
     
-    // Historical data (in production, this would be in MongoDB)
-    private readonly completedTasks = new Map<string, TaskEffectivenessMetrics>();
+    // Completed tasks live in MongoDB (TaskEffectivenessModel), not in memory.
+    // They were previously kept in a `completedTasks` Map, so all effectiveness
+    // history vanished on restart and any ranking built from it only ever saw
+    // the tasks this process happened to run.
     
     // Configuration
     private config: EffectivenessConfig = {
@@ -213,7 +215,9 @@ export class TaskEffectivenessService {
         updates: Partial<TaskEffectivenessMetrics['quality']>,
         agentId?: AgentId
     ): void {
-        const metrics = this.activeTasks.get(taskId) || this.completedTasks.get(taskId);
+        // Quality is recorded while a task is running. A completed task's metrics
+        // are already persisted and are not amended here.
+        const metrics = this.activeTasks.get(taskId);
         if (metrics) {
             metrics.quality = { ...metrics.quality, ...updates };
             
@@ -261,12 +265,10 @@ export class TaskEffectivenessService {
             metrics.collaboration.collaborationScore = this.calculateCollaborationScore(metrics);
         }
         
-        // Move to completed
-        this.activeTasks.delete(taskId);
-        this.completedTasks.set(taskId, metrics);
-        
-        // Persist to MongoDB
+        // Persist to MongoDB, then drop from the active set. Persist first: if
+        // it throws, the task stays active rather than disappearing entirely.
         await this.persistTaskToDB(taskId, metrics);
+        this.activeTasks.delete(taskId);
         
         // Emit completion event
         EventBus.server.emit(Events.Analytics.TASK_COMPLETED, createBaseEventPayload(
@@ -285,12 +287,25 @@ export class TaskEffectivenessService {
     }
 
     /**
-     * Get comparison with baseline
+     * Compare a task against its baseline.
+     *
+     * Reads a running task from memory and a finished one from MongoDB, so this
+     * keeps working across a restart.
+     *
+     * @returns null when the task or its definition is unknown
      */
-    public compareWithBaseline(taskId: string): EffectivenessComparison | null {
-        const metrics = this.completedTasks.get(taskId) || this.activeTasks.get(taskId);
-        const definition = this.taskDefinitions.get(taskId);
-        
+    public async compareWithBaseline(taskId: string): Promise<EffectivenessComparison | null> {
+        let metrics = this.activeTasks.get(taskId);
+        let definition = this.taskDefinitions.get(taskId);
+
+        if (!metrics || !definition) {
+            const taskDoc = await TaskEffectivenessModel.findOne({ taskId }).exec();
+            if (taskDoc) {
+                metrics = metrics ?? (taskDoc.metrics as TaskEffectivenessMetrics);
+                definition = definition ?? (taskDoc.definition as TaskDefinition);
+            }
+        }
+
         if (!metrics || !definition) {
             return null;
         }
@@ -341,99 +356,82 @@ export class TaskEffectivenessService {
     }
 
     /**
-     * Get analytics for a time period
+     * Effectiveness analytics for a time period, computed from persisted tasks.
+     *
+     * Reads from MongoDB, so results cover every task ever completed — not just
+     * the ones this process happened to run.
+     *
+     * @param startTime Start of the window (epoch ms)
+     * @param endTime End of the window (epoch ms)
+     * @param channelId Optional channel filter
+     * @param taskType Optional task-type filter
+     * @throws If the query fails. Effectiveness numbers computed from an empty
+     *         result set would look like real "no activity" data.
      */
-    public getAnalytics(
+    public async getAnalytics(
         startTime: number,
         endTime: number,
-        channelId?: ChannelId
-    ): EffectivenessAnalytics {
-        const relevantTasks = Array.from(this.completedTasks.values()).filter(task => {
-            const inTimeRange = task.metadata.startTime >= startTime && 
-                               task.metadata.startTime <= endTime;
-            const inChannel = !channelId || 
-                             this.taskDefinitions.get(task.taskId)?.channelId === channelId;
-            return inTimeRange && inChannel;
-        });
-        
-        // Initialize analytics
-        const analytics: EffectivenessAnalytics = {
-            period: { start: startTime, end: endTime },
-            byTaskType: {},
-            byChannel: {},
-            trends: {
-                effectivenessOverTime: [],
-                improving: [],
-                declining: []
-            },
-            patterns: {
-                highPerformanceTasks: [],
-                lowPerformanceTasks: [],
-                effectiveTeams: []
-            }
-        };
-        
-        // Aggregate by task type
-        for (const task of relevantTasks) {
-            const type = task.metadata.type;
-            if (!analytics.byTaskType[type]) {
-                analytics.byTaskType[type] = {
-                    count: 0,
-                    avgCompletionTime: 0,
-                    successRate: 0,
-                    avgAutonomyScore: 0,
-                    commonTools: []
-                };
-            }
-            
-            const typeStats = analytics.byTaskType[type];
-            typeStats.count++;
-            typeStats.avgCompletionTime = 
-                (typeStats.avgCompletionTime * (typeStats.count - 1) + 
-                 (task.performance.completionTime || 0)) / typeStats.count;
-            typeStats.avgAutonomyScore = 
-                (typeStats.avgAutonomyScore * (typeStats.count - 1) + 
-                 task.performance.autonomyScore) / typeStats.count;
-            
-            // Track tools
-            for (const tool of task.performance.uniqueTools) {
-                if (!typeStats.commonTools.includes(tool)) {
-                    typeStats.commonTools.push(tool);
-                }
-            }
-        }
-        
-        // Calculate success rates
-        for (const [type, stats] of Object.entries(analytics.byTaskType)) {
-            const typeTasks = relevantTasks.filter(t => t.metadata.type === type);
-            const successful = typeTasks.filter(t => t.quality.goalAchieved).length;
-            stats.successRate = typeTasks.length > 0 ? successful / typeTasks.length : 0;
-        }
-        
-        // Identify patterns
-        analytics.patterns.highPerformanceTasks = Object.entries(analytics.byTaskType)
-            .filter(([_, stats]) => stats.successRate > 0.8 && stats.avgAutonomyScore > 0.7)
-            .map(([type]) => type);
-            
-        analytics.patterns.lowPerformanceTasks = Object.entries(analytics.byTaskType)
-            .filter(([_, stats]) => stats.successRate < 0.5 || stats.avgAutonomyScore < 0.3)
-            .map(([type]) => type);
-        
-        return analytics;
+        channelId?: ChannelId,
+        taskType?: string
+    ): Promise<EffectivenessAnalytics> {
+        const tasks = await this.findCompletedTasks({ startTime, endTime, channelId, taskType });
+
+        return this.computeAnalyticsFromMetrics(tasks, startTime, endTime);
     }
 
     /**
-     * Persist task effectiveness data to MongoDB
+     * Query persisted task effectiveness records.
+     *
+     * @throws If the query fails
+     */
+    private async findCompletedTasks(filter: {
+        startTime: number;
+        endTime: number;
+        channelId?: ChannelId;
+        taskType?: string;
+        agentId?: AgentId;
+    }): Promise<TaskEffectivenessMetrics[]> {
+        const query: Record<string, unknown> = {
+            'metrics.metadata.startTime': { $gte: filter.startTime, $lte: filter.endTime }
+        };
+
+        if (filter.channelId) {
+            query.channelId = filter.channelId;
+        }
+
+        if (filter.taskType) {
+            query['metrics.metadata.type'] = filter.taskType;
+        }
+
+        if (filter.agentId) {
+            query.agentIds = filter.agentId;
+        }
+
+        try {
+            const docs = await TaskEffectivenessModel.find(query).exec();
+            return docs.map(doc => doc.metrics as TaskEffectivenessMetrics);
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            this.logger.error(`Failed to query task effectiveness data: ${message}`);
+            throw new Error(`Failed to query task effectiveness data: ${message}`);
+        }
+    }
+
+    /**
+     * Persist task effectiveness data to MongoDB.
+     *
+     * @throws If the task has no definition, or the write fails. A completed task
+     *         that is not written down is history that is simply gone; the caller
+     *         needs to know.
      */
     private async persistTaskToDB(taskId: string, metrics: TaskEffectivenessMetrics): Promise<void> {
-        try {
-            const definition = this.taskDefinitions.get(taskId);
-            if (!definition) {
-                this.logger.warn(`No definition found for task ${taskId}, skipping DB persistence`);
-                return;
-            }
+        const definition = this.taskDefinitions.get(taskId);
+        if (!definition) {
+            throw new Error(`Cannot persist task ${taskId}: no task definition was registered for it`);
+        }
 
-            const taskDoc = await TaskEffectivenessModel.findOneAndUpdate(
+        try {
+            await TaskEffectivenessModel.findOneAndUpdate(
                 { taskId },
                 {
                     $set: {
@@ -445,67 +443,11 @@ export class TaskEffectivenessService {
                     }
                 },
                 { upsert: true, new: true }
-            );
-
+            ).exec();
         } catch (error) {
-            this.logger.error(`Failed to persist task effectiveness data: ${error}`);
-        }
-    }
-
-    /**
-     * Load task effectiveness data from MongoDB
-     */
-    private async loadTaskFromDB(taskId: string): Promise<TaskEffectivenessMetrics | null> {
-        try {
-            const taskDoc = await TaskEffectivenessModel.findOne({ taskId });
-            if (!taskDoc) {
-                return null;
-            }
-
-            // Store in caches
-            this.completedTasks.set(taskId, taskDoc.metrics);
-            this.taskDefinitions.set(taskId, taskDoc.definition);
-
-            return taskDoc.metrics;
-        } catch (error) {
-            this.logger.error(`Failed to load task effectiveness data: ${error}`);
-            return null;
-        }
-    }
-
-    /**
-     * Enhanced analytics with MongoDB queries
-     */
-    public async getEnhancedAnalytics(
-        startTime: number,
-        endTime: number,
-        channelId?: ChannelId,
-        taskType?: string
-    ): Promise<EffectivenessAnalytics> {
-        try {
-            const query: any = {
-                'metrics.metadata.startTime': { $gte: startTime, $lte: endTime }
-            };
-
-            if (channelId) {
-                query.channelId = channelId;
-            }
-
-            if (taskType) {
-                query['metrics.metadata.type'] = taskType;
-            }
-
-            const tasks = await TaskEffectivenessModel.find(query).exec();
-            
-            // Convert to in-memory format and use existing analytics logic
-            const taskMetrics = tasks.map(task => task.metrics);
-            
-            // Use existing analytics logic but with MongoDB data
-            return this.computeAnalyticsFromMetrics(taskMetrics, startTime, endTime);
-        } catch (error) {
-            this.logger.error(`Failed to get enhanced analytics: ${error}`);
-            // Fallback to in-memory analytics
-            return this.getAnalytics(startTime, endTime, channelId);
+            const message = error instanceof Error ? error.message : String(error);
+            this.logger.error(`Failed to persist task effectiveness data for ${taskId}: ${message}`);
+            throw new Error(`Failed to persist task effectiveness data for ${taskId}: ${message}`);
         }
     }
 
@@ -820,29 +762,20 @@ export class TaskEffectivenessService {
      * Get task metrics by ID
      */
     public async getTaskMetrics(taskId: string): Promise<TaskEffectivenessMetrics | null> {
-        // Check active tasks first
+        // A running task lives in memory; a finished one lives in MongoDB.
         const activeTask = this.activeTasks.get(taskId);
         if (activeTask) {
             return activeTask;
         }
-        
-        // Check completed tasks
-        const completedTask = this.completedTasks.get(taskId);
-        if (completedTask) {
-            return completedTask;
-        }
-        
-        // Try to load from MongoDB
+
         try {
-            const taskDoc = await TaskEffectivenessModel.findOne({ taskId });
-            if (taskDoc) {
-                return taskDoc.metrics as TaskEffectivenessMetrics;
-            }
+            const taskDoc = await TaskEffectivenessModel.findOne({ taskId }).exec();
+            return taskDoc ? (taskDoc.metrics as TaskEffectivenessMetrics) : null;
         } catch (error) {
-            this.logger.error(`Error loading task from DB: ${error}`);
+            const message = error instanceof Error ? error.message : String(error);
+            this.logger.error(`Failed to load task ${taskId}: ${message}`);
+            throw new Error(`Failed to load task ${taskId}: ${message}`);
         }
-        
-        return null;
     }
 
     /**
@@ -856,17 +789,18 @@ export class TaskEffectivenessService {
     ): Promise<any> {
         const dataPoints: any[] = [];
         const intervals = Math.floor((endTime - startTime) / intervalMs);
-        
+
+        // One query for the whole window, then bucket in memory.
+        const tasks = await this.findCompletedTasks({ startTime, endTime, channelId });
+
         for (let i = 0; i < intervals; i++) {
             const intervalStart = startTime + (i * intervalMs);
             const intervalEnd = intervalStart + intervalMs;
-            
-            const intervalTasks = Array.from(this.completedTasks.values()).filter(task => {
-                const taskChannel = this.taskDefinitions.get(task.taskId)?.channelId;
-                return task.metadata.startTime >= intervalStart &&
-                       task.metadata.startTime < intervalEnd &&
-                       (!channelId || taskChannel === channelId);
-            });
+
+            const intervalTasks = tasks.filter(task =>
+                task.metadata.startTime >= intervalStart &&
+                task.metadata.startTime < intervalEnd
+            );
             
             if (intervalTasks.length > 0) {
                 const avgScore = intervalTasks.reduce((sum, task) => 
@@ -904,15 +838,8 @@ export class TaskEffectivenessService {
         endTime: number,
         channelId?: ChannelId
     ): Promise<any> {
-        const agentTasks = Array.from(this.completedTasks.values()).filter(task => {
-            const taskChannel = this.taskDefinitions.get(task.taskId)?.channelId;
-            const hasAgent = task.collaboration.participatingAgents.includes(agentId);
-            
-            return hasAgent &&
-                   task.metadata.startTime >= startTime &&
-                   task.metadata.startTime <= endTime &&
-                   (!channelId || taskChannel === channelId);
-        });
+        // The agentIds index on the document does the channel/time/agent filtering.
+        const agentTasks = await this.findCompletedTasks({ startTime, endTime, channelId, agentId });
         
         const totalTasks = agentTasks.length;
         const successfulTasks = agentTasks.filter(t => t.quality.goalAchieved).length;

@@ -9,12 +9,16 @@
  *
  * @mention routing is dynamic — built from the session's connected agents.
  *
+ * State is read through the caller's `getState` accessor rather than a captured
+ * `AppState` value. The handler lives inside a `useCallback`, so a captured value
+ * would go stale whenever a dependency did not change — which is what made
+ * `/cost`, `/compact`, `/search` and friends report data from mount time.
+ *
  * @author Brad Anderson <BradA1878@pm.me>
  */
 
-import { useCallback, useMemo, useRef, type Dispatch } from 'react';
+import { useCallback, useMemo, type Dispatch } from 'react';
 import type { AppAction, AppState } from '../state';
-import type { ConversationEntry } from '../types';
 import type { InteractiveSessionManager } from '../services/InteractiveSessionManager';
 import type { ToolPermissionService } from '../services/ToolPermissionService';
 import { executeCommand } from '../commands/registry';
@@ -28,12 +32,15 @@ const MODE_PREFIXES: Record<string, string> = {
     action: '',
 };
 
+/** Maximum characters of the previous task result carried into the next prompt */
+const RECENT_RESULT_MAX_CHARS = 500;
+
 /**
  * Hook that returns a handler for processing user input.
  *
  * @param session - InteractiveSessionManager for task submission
  * @param dispatch - React dispatch function for state updates
- * @param state - Current app state (for context string)
+ * @param getState - Accessor returning the current app state (ref-backed, never stale)
  * @param submitTask - Function to submit a task to the orchestrator
  * @param submitTaskToAgent - Function to submit a task to a specific agent
  * @param requestExit - Callback to trigger TUI exit
@@ -42,16 +49,12 @@ const MODE_PREFIXES: Record<string, string> = {
 export function useInputHandler(
     session: InteractiveSessionManager,
     dispatch: Dispatch<AppAction>,
-    state: AppState,
+    getState: () => AppState,
     submitTask: (task: string, contextString?: string | null, recentResult?: string | null) => Promise<void>,
     submitTaskToAgent: (task: string, agentId: string, contextString?: string | null) => Promise<void>,
     requestExit: () => void,
     permissionService?: ToolPermissionService,
 ): (input: string) => Promise<void> {
-    // Ref for entries — avoids recreating the callback on every entry change
-    const entriesRef = useRef<ConversationEntry[]>(state.entries);
-    entriesRef.current = state.entries;
-
     // Build dynamic @mention map from connected agents
     const nameToAgentId = useMemo(() => {
         const map: Record<string, string> = {};
@@ -66,13 +69,14 @@ export function useInputHandler(
         const trimmed = input.trim();
         if (!trimmed) return;
 
-        // Snap conversation to bottom on any user input submission
-        dispatch({ type: 'SCROLL_TO_BOTTOM' });
+        // Read current state at invocation time, not at callback-creation time.
+        const state = getState();
 
         // Route based on prefix
         if (trimmed.startsWith('/')) {
-            // Slash command
-            const context: CommandContext = { dispatch, session, requestExit, getState: () => state, permissionService, submitTask };
+            // Slash command. Handlers get the live accessor so anything they read
+            // after an `await` (e.g. /compact's post-compaction token count) is fresh.
+            const context: CommandContext = { dispatch, session, requestExit, getState, permissionService, submitTask };
             await executeCommand(trimmed, context);
         } else if (trimmed.startsWith('!')) {
             // Shell command
@@ -140,13 +144,13 @@ export function useInputHandler(
             // This lets follow-up prompts like "can you display it?" know
             // what the previous task produced (e.g., which file was created).
             let recentResult: string | null = null;
-            const entries = entriesRef.current;
+            const entries = state.entries;
             for (let i = entries.length - 1; i >= 0; i--) {
                 if (entries[i].type === 'result') {
                     const resultContent = entries[i].content;
                     // Truncate to avoid bloating the prompt
-                    recentResult = resultContent.length > 500
-                        ? resultContent.substring(0, 500) + '...'
+                    recentResult = resultContent.length > RECENT_RESULT_MAX_CHARS
+                        ? resultContent.substring(0, RECENT_RESULT_MAX_CHARS) + '...'
                         : resultContent;
                     break;
                 }
@@ -159,5 +163,5 @@ export function useInputHandler(
                 dispatch({ type: 'SET_CONTEXT', contextString: null });
             }
         }
-    }, [session, dispatch, state.contextString, state.currentMode, submitTask, submitTaskToAgent, requestExit, nameToAgentId]);
+    }, [session, dispatch, getState, submitTask, submitTaskToAgent, requestExit, nameToAgentId, permissionService]);
 }

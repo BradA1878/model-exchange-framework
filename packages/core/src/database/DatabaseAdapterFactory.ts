@@ -74,6 +74,14 @@ export class DatabaseAdapterFactory {
     private static connected: boolean = false;
 
     /**
+     * True only when connect() opened the connection itself, as opposed to
+     * reusing one the host application (e.g. the server) had already opened.
+     * disconnect() closes the connection only in the first case — otherwise the
+     * factory would close the server's connection out from under it.
+     */
+    private static ownsConnection: boolean = false;
+
+    /**
      * Initialize the factory with database configuration.
      * Must be called before create().
      */
@@ -81,6 +89,7 @@ export class DatabaseAdapterFactory {
         this.config = config;
         this.instance = null; // Reset instance on re-initialization
         this.connected = false;
+        this.ownsConnection = false;
     }
 
     /**
@@ -115,7 +124,8 @@ export class DatabaseAdapterFactory {
     private static async connectMongo(): Promise<void> {
         // Check if mongoose is already connected (e.g., server has established connection)
         if (mongoose.connection.readyState === 1) {
-            // Already connected, reuse existing connection
+            // Reuse the existing connection. We did not open it, so we must not close it.
+            this.ownsConnection = false;
             return;
         }
 
@@ -127,6 +137,7 @@ export class DatabaseAdapterFactory {
         };
 
         await mongoose.connect(this.config!.connectionString, options);
+        this.ownsConnection = true;
     }
 
     /**
@@ -180,22 +191,28 @@ export class DatabaseAdapterFactory {
         this.instance = null;
         this.config = null;
         this.connected = false;
+        this.ownsConnection = false;
     }
 
     /**
      * Disconnect from the database.
-     * Note: Only disconnects if the factory established the connection.
-     * If mongoose was already connected (e.g., by server), this is a no-op.
+     *
+     * Closes the connection only when connect() opened it. If mongoose was
+     * already connected when connect() ran — the usual case inside the server —
+     * the connection belongs to the host and is left alone.
+     *
+     * Previously `connected` was set true in both cases, so calling disconnect()
+     * closed the server's own mongoose connection.
      */
     static async disconnect(): Promise<void> {
-        if (this.connected && this.config?.type === 'mongodb') {
-            // Only disconnect if we established the connection
-            // Check if mongoose connection was established by us
+        if (this.connected && this.ownsConnection && this.config?.type === 'mongodb') {
             if (mongoose.connection.readyState === 1) {
                 await mongoose.connection.close();
             }
         }
+
         this.connected = false;
+        this.ownsConnection = false;
     }
 
     /**

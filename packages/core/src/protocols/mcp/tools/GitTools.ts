@@ -18,432 +18,289 @@
  * @documentation https://mxf-dev.github.io/mxf/
  */
 
-import { Logger } from '../../../utils/Logger.js';
-import { executeShellCommand } from './InfrastructureTools.js';
-import { McpToolHandlerContext, McpToolHandlerResult, McpToolResultContent } from '../McpServerTypes.js';
-
-const logger = new Logger('info', 'GitTools', 'server');
-
 /**
- * Git Tools for MXF
- * 
- * Provides git version control operations using shell commands
- * These tools are placeholders that demonstrate the interface
- * Full implementation would integrate with shell_execute tool
+ * GitTools.ts
+ *
+ * Git operations, run by shelling out to the `git` binary through
+ * executeShellCommand — which validates the command against the security guard
+ * and hands the child a stripped environment.
+ *
+ * Each tool is declared with defineTool: a git command that fails throws a
+ * ToolError and comes back as one envelope with `isError: true`, rather than a
+ * `{ success: false, error: '...' }` object that reads like a successful result.
  */
 
-export const gitStatusTool = {
+import { TOOL_CATEGORIES } from '../../../constants/ToolNames.js';
+import { defineTool, ToolRunContext } from '../defineTool.js';
+import { ToolError } from '../ToolError.js';
+import { executeShellCommand, ShellCommandResult } from './InfrastructureTools.js';
+
+/** Working-directory property shared by every git tool's schema. */
+const workingDirectoryProperty = {
+    type: 'string',
+    description: 'Working directory path (defaults to the server working directory)'
+};
+
+/**
+ * Run a git subcommand, throwing a ToolError when git reports failure.
+ *
+ * Non-zero exit is genuine failure for every subcommand used here — none of them
+ * use exit codes to signal a non-error condition the way `git diff --quiet` does.
+ */
+async function runGit(
+    args: string[],
+    workingDirectory: string | undefined,
+    context: ToolRunContext
+): Promise<ShellCommandResult> {
+    const result = await executeShellCommand('git', args, {
+        context: {
+            agentId: context.agentId,
+            channelId: context.channelId,
+            requestId: context.requestId
+        },
+        workingDirectory: workingDirectory || process.cwd(),
+        captureOutput: true
+    });
+
+    if (result.exitCode !== 0) {
+        throw ToolError.executionFailed(
+            `git ${args.join(' ')} failed (exit ${result.exitCode}): ` +
+            `${result.stderr?.trim() || 'no error output'}`,
+            { details: { exitCode: result.exitCode, args } }
+        );
+    }
+
+    return result;
+}
+
+export const gitStatusTool = defineTool<
+    { workingDirectory?: string },
+    {
+        status: string;
+        branch: string;
+        files: { staged: string[]; modified: string[]; untracked: string[]; deleted: string[] };
+    }
+>({
     name: 'git_status',
-    description: 'Get git repository status including staged, modified, and untracked files',
+    category: TOOL_CATEGORIES.VERSION_CONTROL,
+    description: 'Report the current branch plus staged, modified, untracked and deleted files.',
     inputSchema: {
         type: 'object',
         properties: {
-            workingDirectory: {
-                type: 'string',
-                description: 'Working directory path (defaults to current directory)'
-            }
+            workingDirectory: workingDirectoryProperty
         }
     },
-    handler: async (args: {
-        workingDirectory?: string;
-    }, context: McpToolHandlerContext): Promise<McpToolHandlerResult> => {
-        
-        try {
-            // Execute git status --porcelain to get parseable output
-            const result = await executeShellCommand('git', ['status', '--porcelain', '--branch'], {
-                workingDirectory: args.workingDirectory || process.cwd(),
-                captureOutput: true
-            });
+    run: async (input, context) => {
+        const result = await runGit(['status', '--porcelain', '--branch'], input.workingDirectory, context);
 
-            if (result.exitCode !== 0) {
-                const content: McpToolResultContent = {
-                    type: 'application/json',
-                    data: {
-                        success: false,
-                        status: '',
-                        files: { staged: [], modified: [], untracked: [], deleted: [] },
-                        branch: 'unknown',
-                        error: result.stderr || 'Git command failed'
-                    }
-                };
-                return { content };
+        const lines = result.stdout?.split('\n').filter(line => line.trim()) ?? [];
+        const files = {
+            staged: [] as string[],
+            modified: [] as string[],
+            untracked: [] as string[],
+            deleted: [] as string[]
+        };
+
+        let branch = 'unknown';
+
+        for (const line of lines) {
+            if (line.startsWith('## ')) {
+                const branchMatch = line.match(/^## (.+?)(?:\.\.\.|\s|$)/);
+                if (branchMatch) {
+                    branch = branchMatch[1];
+                }
+                continue;
             }
 
-            // Parse the output
-            const lines = result.stdout?.split('\n').filter(line => line.trim()) || [];
-            const files = {
-                staged: [] as string[],
-                modified: [] as string[],
-                untracked: [] as string[],
-                deleted: [] as string[]
-            };
-
-            let branch = 'unknown';
-            
-            for (const line of lines) {
-                if (line.startsWith('## ')) {
-                    // Branch information
-                    const branchMatch = line.match(/^## (.+?)(?:\.\.\.|\s|$)/);
-                    if (branchMatch) {
-                        branch = branchMatch[1];
-                    }
-                } else if (line.length >= 2) {
-                    // File status
-                    const statusCode = line.substring(0, 2);
-                    const fileName = line.substring(3);
-                    
-                    // Index status (first character)
-                    if (statusCode[0] === 'A' || statusCode[0] === 'M' || statusCode[0] === 'D') {
-                        files.staged.push(fileName);
-                    }
-                    
-                    // Working tree status (second character)
-                    if (statusCode[1] === 'M') {
-                        files.modified.push(fileName);
-                    } else if (statusCode[1] === 'D') {
-                        files.deleted.push(fileName);
-                    }
-                    
-                    // Untracked files
-                    if (statusCode === '??') {
-                        files.untracked.push(fileName);
-                    }
-                }
+            if (line.length < 2) {
+                continue;
             }
 
-            const content: McpToolResultContent = {
-                type: 'application/json',
-                data: {
-                    success: true,
-                    status: result.stdout || '',
-                    files,
-                    branch,
-                    error: null
-                }
-            };
-            return { content };
-        } catch (error) {
-            logger.error('Git status failed', { error });
-            const content: McpToolResultContent = {
-                type: 'application/json',
-                data: {
-                    success: false,
-                    status: '',
-                    files: { staged: [], modified: [], untracked: [], deleted: [] },
-                    branch: 'unknown',
-                    error: error instanceof Error ? error.message : String(error)
-                }
-            };
-            return { content };
+            const statusCode = line.substring(0, 2);
+            const fileName = line.substring(3);
+
+            // Porcelain format: first char is the index state, second is the
+            // working-tree state. '??' in both positions means untracked.
+            if (statusCode === '??') {
+                files.untracked.push(fileName);
+                continue;
+            }
+            if (statusCode[0] === 'A' || statusCode[0] === 'M' || statusCode[0] === 'D') {
+                files.staged.push(fileName);
+            }
+            if (statusCode[1] === 'M') {
+                files.modified.push(fileName);
+            } else if (statusCode[1] === 'D') {
+                files.deleted.push(fileName);
+            }
         }
-    }
-};
 
-export const gitAddTool = {
+        return {
+            status: result.stdout ?? '',
+            branch,
+            files
+        };
+    }
+});
+
+export const gitAddTool = defineTool<
+    { files: string[]; workingDirectory?: string },
+    { stagedCount: number; files: string[] }
+>({
     name: 'git_add',
-    description: 'Stage files for commit',
+    category: TOOL_CATEGORIES.VERSION_CONTROL,
+    description: 'Stage files for commit. Pass "." to stage everything.',
     inputSchema: {
         type: 'object',
         properties: {
             files: {
                 type: 'array',
                 items: { type: 'string' },
+                minItems: 1,
                 description: 'Files to stage (use "." for all files)'
             },
-            workingDirectory: {
-                type: 'string',
-                description: 'Working directory path (defaults to current directory)'
-            }
+            workingDirectory: workingDirectoryProperty
         },
         required: ['files']
     },
-    handler: async (args: {
-        files: string[];
-        workingDirectory?: string;
-    }, context: McpToolHandlerContext): Promise<McpToolHandlerResult> => {
-        
-        try {
-            const result = await executeShellCommand('git', ['add', ...args.files], {
-                workingDirectory: args.workingDirectory || process.cwd(),
-                captureOutput: true
-            });
+    run: async (input, context) => {
+        await runGit(['add', ...input.files], input.workingDirectory, context);
 
-            if (result.exitCode !== 0) {
-                const content: McpToolResultContent = {
-                    type: 'application/json',
-                    data: {
-                        success: false,
-                        message: result.stderr || 'Git add failed',
-                        error: result.stderr || 'Git add command failed'
-                    }
-                };
-                return { content };
-            }
-
-            const content: McpToolResultContent = {
-                type: 'application/json',
-                data: {
-                    success: true,
-                    message: `Successfully staged ${args.files.length} file(s)`,
-                    error: null
-                }
-            };
-            return { content };
-        } catch (error) {
-            logger.error('Git add failed', { error });
-            const content: McpToolResultContent = {
-                type: 'application/json',
-                data: {
-                    success: false,
-                    message: '',
-                    error: error instanceof Error ? error.message : String(error)
-                }
-            };
-            return { content };
-        }
+        return {
+            stagedCount: input.files.length,
+            files: input.files
+        };
     }
-};
+});
 
-export const gitCommitTool = {
+export const gitCommitTool = defineTool<
+    { message: string; workingDirectory?: string },
+    { message: string; commitHash: string }
+>({
     name: 'git_commit',
-    description: 'Create a git commit with a message',
+    category: TOOL_CATEGORIES.VERSION_CONTROL,
+    description: 'Create a commit from the staged changes.',
     inputSchema: {
         type: 'object',
         properties: {
             message: {
                 type: 'string',
+                minLength: 1,
                 description: 'Commit message'
             },
-            workingDirectory: {
-                type: 'string',
-                description: 'Working directory path (defaults to current directory)'
-            }
+            workingDirectory: workingDirectoryProperty
         },
         required: ['message']
     },
-    handler: async (args: {
-        message: string;
-        workingDirectory?: string;
-    }, context: McpToolHandlerContext): Promise<McpToolHandlerResult> => {
-        
-        try {
-            const result = await executeShellCommand('git', ['commit', '-m', args.message], {
-                workingDirectory: args.workingDirectory || process.cwd(),
-                captureOutput: true
-            });
+    run: async (input, context) => {
+        const result = await runGit(['commit', '-m', input.message], input.workingDirectory, context);
 
-            if (result.exitCode !== 0) {
-                const content: McpToolResultContent = {
-                    type: 'application/json',
-                    data: {
-                        success: false,
-                        message: args.message,
-                        error: result.stderr || 'Git commit failed'
-                    }
-                };
-                return { content };
-            }
-
-            const content: McpToolResultContent = {
-                type: 'application/json',
-                data: {
-                    success: true,
-                    message: args.message,
-                    commitHash: result.stdout?.match(/\[(.+?)\]/)?.[1] || 'unknown',
-                    error: null
-                }
-            };
-            return { content };
-        } catch (error) {
-            logger.error('Git commit failed', { error });
-            const content: McpToolResultContent = {
-                type: 'application/json',
-                data: {
-                    success: false,
-                    message: args.message,
-                    error: error instanceof Error ? error.message : String(error)
-                }
-            };
-            return { content };
+        // git prints `[branch abc1234] subject` on success.
+        const commitHash = result.stdout?.match(/\[[^\]]*\s([0-9a-f]{7,40})\]/)?.[1];
+        if (!commitHash) {
+            throw ToolError.executionFailed(
+                `git commit succeeded but its output did not contain a commit hash: ${result.stdout?.trim()}`
+            );
         }
-    }
-};
 
-export const gitDiffTool = {
+        return {
+            message: input.message,
+            commitHash
+        };
+    }
+});
+
+export const gitDiffTool = defineTool<
+    { staged?: boolean; workingDirectory?: string },
+    { diff: string; filesChanged: number; insertions: number; deletions: number }
+>({
     name: 'git_diff',
-    description: 'Show differences between commits, commit and working tree, etc',
+    category: TOOL_CATEGORIES.VERSION_CONTROL,
+    description: 'Show the working-tree diff, or the staged diff when staged is true.',
     inputSchema: {
         type: 'object',
         properties: {
             staged: {
                 type: 'boolean',
                 default: false,
-                description: 'Show staged changes (--cached)'
+                description: 'Show staged changes (--cached) instead of working-tree changes'
             },
-            workingDirectory: {
-                type: 'string',
-                description: 'Working directory path (defaults to current directory)'
-            }
+            workingDirectory: workingDirectoryProperty
         }
     },
-    handler: async (args: {
-        staged?: boolean;
-        workingDirectory?: string;
-    }, context: McpToolHandlerContext): Promise<McpToolHandlerResult> => {
-        
-        try {
-            const gitArgs = ['diff'];
-            if (args.staged) {
-                gitArgs.push('--cached');
-            }
-            gitArgs.push('--stat');
-            
-            const result = await executeShellCommand('git', gitArgs, {
-                workingDirectory: args.workingDirectory || process.cwd(),
-                captureOutput: true
-            });
+    run: async (input, context) => {
+        const baseArgs = input.staged ? ['diff', '--cached'] : ['diff'];
 
-            if (result.exitCode !== 0) {
-                const content: McpToolResultContent = {
-                    type: 'application/json',
-                    data: {
-                        success: false,
-                        diff: '',
-                        filesChanged: 0,
-                        insertions: 0,
-                        deletions: 0,
-                        error: result.stderr || 'Git diff failed'
-                    }
-                };
-                return { content };
-            }
+        const statResult = await runGit([...baseArgs, '--stat'], input.workingDirectory, context);
+        const diffResult = await runGit(baseArgs, input.workingDirectory, context);
 
-            // Get the actual diff content
-            const diffResult = await executeShellCommand('git', args.staged ? ['diff', '--cached'] : ['diff'], {
-                workingDirectory: args.workingDirectory || process.cwd(),
-                captureOutput: true
-            });
+        const statsMatch = statResult.stdout?.match(
+            /(\d+) files? changed(?:, (\d+) insertions?\(\+\))?(?:, (\d+) deletions?\(-\))?/
+        );
 
-            // Parse stats from output
-            const statsMatch = result.stdout?.match(/(\d+) files? changed(?:, (\d+) insertions?\(\+\))?(?:, (\d+) deletions?\(\-\))?/);
-            
-            const content: McpToolResultContent = {
-                type: 'application/json',
-                data: {
-                    success: true,
-                    diff: diffResult.stdout || '',
-                    filesChanged: statsMatch ? parseInt(statsMatch[1]) : 0,
-                    insertions: statsMatch ? parseInt(statsMatch[2] || '0') : 0,
-                    deletions: statsMatch ? parseInt(statsMatch[3] || '0') : 0,
-                    error: null
-                }
-            };
-            return { content };
-        } catch (error) {
-            logger.error('Git diff failed', { error });
-            const content: McpToolResultContent = {
-                type: 'application/json',
-                data: {
-                    success: false,
-                    diff: '',
-                    filesChanged: 0,
-                    insertions: 0,
-                    deletions: 0,
-                    error: error instanceof Error ? error.message : String(error)
-                }
-            };
-            return { content };
-        }
+        return {
+            diff: diffResult.stdout ?? '',
+            filesChanged: statsMatch ? parseInt(statsMatch[1], 10) : 0,
+            insertions: statsMatch ? parseInt(statsMatch[2] ?? '0', 10) : 0,
+            deletions: statsMatch ? parseInt(statsMatch[3] ?? '0', 10) : 0
+        };
     }
-};
+});
 
-export const gitLogTool = {
+export const gitLogTool = defineTool<
+    { maxCount?: number; workingDirectory?: string },
+    { commits: Array<{ hash: string; subject: string; author: string; date: string; refs: string }> }
+>({
     name: 'git_log',
-    description: 'Show commit logs',
+    category: TOOL_CATEGORIES.VERSION_CONTROL,
+    description: 'List recent commits with hash, subject, author and date.',
     inputSchema: {
         type: 'object',
         properties: {
             maxCount: {
                 type: 'number',
                 default: 10,
+                minimum: 1,
+                maximum: 500,
                 description: 'Maximum number of commits to show'
             },
-            workingDirectory: {
-                type: 'string',
-                description: 'Working directory path (defaults to current directory)'
-            }
+            workingDirectory: workingDirectoryProperty
         }
     },
-    handler: async (args: {
-        maxCount?: number;
-        workingDirectory?: string;
-    }, context: McpToolHandlerContext): Promise<McpToolHandlerResult> => {
-        
-        try {
-            const result = await executeShellCommand('git', [
-                'log',
-                '--oneline',
-                '--format=%H|%s|%an|%ad|%d',
-                '--date=iso',
-                `-n${args.maxCount || 10}`
-            ], {
-                workingDirectory: args.workingDirectory || process.cwd(),
-                captureOutput: true
+    run: async (input, context) => {
+        const maxCount = input.maxCount ?? 10;
+
+        const result = await runGit(
+            ['log', '--format=%H|%s|%an|%ad|%d', '--date=iso', `-n${maxCount}`],
+            input.workingDirectory,
+            context
+        );
+
+        const commits = (result.stdout ?? '')
+            .split('\n')
+            .filter(line => line.trim())
+            .map(line => {
+                const [hash, subject, author, date, refs] = line.split('|');
+                return {
+                    hash,
+                    subject,
+                    author,
+                    date,
+                    refs: refs ? refs.trim() : ''
+                };
             });
 
-            if (result.exitCode !== 0) {
-                const content: McpToolResultContent = {
-                    type: 'application/json',
-                    data: {
-                        success: false,
-                        commits: [],
-                        error: result.stderr || 'Git log failed'
-                    }
-                };
-                return { content };
-            }
-
-            // Parse commits
-            const commits = result.stdout?.split('\n')
-                .filter(line => line.trim())
-                .map(line => {
-                    const [hash, subject, author, date, refs] = line.split('|');
-                    return {
-                        hash,
-                        subject,
-                        author,
-                        date,
-                        refs: refs ? refs.trim() : ''
-                    };
-                }) || [];
-
-            const content: McpToolResultContent = {
-                type: 'application/json',
-                data: {
-                    success: true,
-                    commits,
-                    error: null
-                }
-            };
-            return { content };
-        } catch (error) {
-            logger.error('Git log failed', { error });
-            const content: McpToolResultContent = {
-                type: 'application/json',
-                data: {
-                    success: false,
-                    commits: [],
-                    error: error instanceof Error ? error.message : String(error)
-                }
-            };
-            return { content };
-        }
+        return { commits };
     }
-};
+});
 
-export const gitBranchTool = {
+export const gitBranchTool = defineTool<
+    { action?: 'list' | 'create' | 'delete' | 'switch'; branchName?: string; workingDirectory?: string },
+    { action: string; currentBranch: string; branches: string[] }
+>({
     name: 'git_branch',
-    description: 'List, create, or delete branches',
+    category: TOOL_CATEGORIES.VERSION_CONTROL,
+    description: 'List branches, or create, delete, or switch to a branch.',
     inputSchema: {
         type: 'object',
         properties: {
@@ -455,122 +312,67 @@ export const gitBranchTool = {
             },
             branchName: {
                 type: 'string',
-                description: 'Branch name (required for create, delete, switch actions)'
+                description: 'Branch name (required for create, delete and switch)'
             },
-            workingDirectory: {
-                type: 'string',
-                description: 'Working directory path (defaults to current directory)'
-            }
+            workingDirectory: workingDirectoryProperty
         }
     },
-    handler: async (args: {
-        action?: 'list' | 'create' | 'delete' | 'switch';
-        branchName?: string;
-        workingDirectory?: string;
-    }, context: McpToolHandlerContext): Promise<McpToolHandlerResult> => {
-        
-        try {
-            let result;
-            
-            switch (args.action) {
-                case 'create':
-                    if (!args.branchName) {
-                        throw new Error('Branch name required for create action');
-                    }
-                    result = await executeShellCommand('git', ['branch', args.branchName], {
-                        workingDirectory: args.workingDirectory || process.cwd(),
-                        captureOutput: true
-                    });
-                    break;
-                    
-                case 'delete':
-                    if (!args.branchName) {
-                        throw new Error('Branch name required for delete action');
-                    }
-                    result = await executeShellCommand('git', ['branch', '-d', args.branchName], {
-                        workingDirectory: args.workingDirectory || process.cwd(),
-                        captureOutput: true
-                    });
-                    break;
-                    
-                case 'switch':
-                    if (!args.branchName) {
-                        throw new Error('Branch name required for switch action');
-                    }
-                    result = await executeShellCommand('git', ['switch', args.branchName], {
-                        workingDirectory: args.workingDirectory || process.cwd(),
-                        captureOutput: true
-                    });
-                    break;
-                    
-                case 'list':
-                default:
-                    result = await executeShellCommand('git', ['branch', '-a'], {
-                        workingDirectory: args.workingDirectory || process.cwd(),
-                        captureOutput: true
-                    });
-                    break;
-            }
+    run: async (input, context) => {
+        const action = input.action ?? 'list';
 
-            if (result.exitCode !== 0) {
-                const content: McpToolResultContent = {
-                    type: 'application/json',
-                    data: {
-                        success: false,
-                        currentBranch: '',
-                        branches: [],
-                        error: result.stderr || 'Git branch command failed'
-                    }
-                };
-                return { content };
-            }
-
-            // Get current branch
-            const currentBranchResult = await executeShellCommand('git', ['branch', '--show-current'], {
-                workingDirectory: args.workingDirectory || process.cwd(),
-                captureOutput: true
-            });
-
-            const currentBranch = currentBranchResult.stdout?.trim() || '';
-            
-            // Parse branches for list action
-            let branches: string[] = [];
-            if (args.action === 'list' || !args.action) {
-                branches = result.stdout?.split('\n')
-                    .filter(line => line.trim())
-                    .map(line => line.replace(/^[\s\*]+/, '').trim())
-                    .filter(branch => branch) || [];
-            }
-
-            const content: McpToolResultContent = {
-                type: 'application/json',
-                data: {
-                    success: true,
-                    currentBranch,
-                    branches,
-                    error: null
-                }
-            };
-            return { content };
-        } catch (error) {
-            logger.error('Git branch failed', { error });
-            const content: McpToolResultContent = {
-                type: 'application/json',
-                data: {
-                    success: false,
-                    currentBranch: '',
-                    branches: [],
-                    error: error instanceof Error ? error.message : String(error)
-                }
-            };
-            return { content };
+        // create/delete/switch are meaningless without a name — reject before
+        // shelling out, so the model gets a precise correction.
+        if (action !== 'list' && !input.branchName) {
+            throw ToolError.invalidInput(`branchName is required for the "${action}" action.`);
         }
-    }
-};
 
-export const gitPushTool = {
+        let listOutput = '';
+
+        switch (action) {
+            case 'create':
+                await runGit(['branch', input.branchName!], input.workingDirectory, context);
+                break;
+            case 'delete':
+                await runGit(['branch', '-d', input.branchName!], input.workingDirectory, context);
+                break;
+            case 'switch':
+                await runGit(['switch', input.branchName!], input.workingDirectory, context);
+                break;
+            case 'list':
+            default: {
+                const result = await runGit(['branch', '-a'], input.workingDirectory, context);
+                listOutput = result.stdout ?? '';
+                break;
+            }
+        }
+
+        const currentBranchResult = await runGit(
+            ['branch', '--show-current'],
+            input.workingDirectory,
+            context
+        );
+
+        const branches = listOutput
+            .split('\n')
+            .filter(line => line.trim())
+            .map(line => line.replace(/^[\s*]+/, '').trim())
+            .filter(branch => branch.length > 0);
+
+        return {
+            action,
+            currentBranch: currentBranchResult.stdout?.trim() ?? '',
+            branches
+        };
+    }
+});
+
+export const gitPushTool = defineTool<
+    { remote?: string; branch?: string; workingDirectory?: string },
+    { remote: string; branch?: string; output: string }
+>({
     name: 'git_push',
-    description: 'Push commits to remote repository',
+    category: TOOL_CATEGORIES.VERSION_CONTROL,
+    description: 'Push commits to a remote repository.',
     inputSchema: {
         type: 'object',
         properties: {
@@ -581,73 +383,36 @@ export const gitPushTool = {
             },
             branch: {
                 type: 'string',
-                description: 'Branch to push (defaults to current branch)'
+                description: 'Branch to push (defaults to the current branch)'
             },
-            workingDirectory: {
-                type: 'string',
-                description: 'Working directory path (defaults to current directory)'
-            }
+            workingDirectory: workingDirectoryProperty
         }
     },
-    handler: async (args: {
-        remote?: string;
-        branch?: string;
-        workingDirectory?: string;
-    }, context: McpToolHandlerContext): Promise<McpToolHandlerResult> => {
-        
-        try {
-            const gitArgs = ['push'];
-            if (args.remote) {
-                gitArgs.push(args.remote);
-            }
-            if (args.branch) {
-                gitArgs.push(args.branch);
-            }
-            
-            const result = await executeShellCommand('git', gitArgs, {
-                workingDirectory: args.workingDirectory || process.cwd(),
-                captureOutput: true
-            });
-
-            if (result.exitCode !== 0) {
-                const content: McpToolResultContent = {
-                    type: 'application/json',
-                    data: {
-                        success: false,
-                        message: result.stderr || 'Git push failed',
-                        error: result.stderr || 'Git push command failed'
-                    }
-                };
-                return { content };
-            }
-
-            const content: McpToolResultContent = {
-                type: 'application/json',
-                data: {
-                    success: true,
-                    message: result.stdout || 'Push completed successfully',
-                    error: null
-                }
-            };
-            return { content };
-        } catch (error) {
-            logger.error('Git push failed', { error });
-            const content: McpToolResultContent = {
-                type: 'application/json',
-                data: {
-                    success: false,
-                    message: '',
-                    error: error instanceof Error ? error.message : String(error)
-                }
-            };
-            return { content };
+    run: async (input, context) => {
+        const remote = input.remote ?? 'origin';
+        const args = ['push', remote];
+        if (input.branch) {
+            args.push(input.branch);
         }
-    }
-};
 
-export const gitPullTool = {
+        const result = await runGit(args, input.workingDirectory, context);
+
+        // git push reports progress on stderr even when it succeeds, so include both.
+        return {
+            remote,
+            branch: input.branch,
+            output: [result.stdout, result.stderr].filter(Boolean).join('\n').trim()
+        };
+    }
+});
+
+export const gitPullTool = defineTool<
+    { remote?: string; workingDirectory?: string },
+    { remote: string; output: string }
+>({
     name: 'git_pull',
-    description: 'Pull changes from remote repository',
+    category: TOOL_CATEGORIES.VERSION_CONTROL,
+    description: 'Pull changes from a remote repository.',
     inputSchema: {
         type: 'object',
         properties: {
@@ -656,65 +421,21 @@ export const gitPullTool = {
                 default: 'origin',
                 description: 'Remote name'
             },
-            workingDirectory: {
-                type: 'string',
-                description: 'Working directory path (defaults to current directory)'
-            }
+            workingDirectory: workingDirectoryProperty
         }
     },
-    handler: async (args: {
-        remote?: string;
-        workingDirectory?: string;
-    }, context: McpToolHandlerContext): Promise<McpToolHandlerResult> => {
-        
-        try {
-            const gitArgs = ['pull'];
-            if (args.remote) {
-                gitArgs.push(args.remote);
-            }
-            
-            const result = await executeShellCommand('git', gitArgs, {
-                workingDirectory: args.workingDirectory || process.cwd(),
-                captureOutput: true
-            });
+    run: async (input, context) => {
+        const remote = input.remote ?? 'origin';
 
-            if (result.exitCode !== 0) {
-                const content: McpToolResultContent = {
-                    type: 'application/json',
-                    data: {
-                        success: false,
-                        message: result.stderr || 'Git pull failed',
-                        error: result.stderr || 'Git pull command failed'
-                    }
-                };
-                return { content };
-            }
+        const result = await runGit(['pull', remote], input.workingDirectory, context);
 
-            const content: McpToolResultContent = {
-                type: 'application/json',
-                data: {
-                    success: true,
-                    message: result.stdout || 'Pull completed successfully',
-                    error: null
-                }
-            };
-            return { content };
-        } catch (error) {
-            logger.error('Git pull failed', { error });
-            const content: McpToolResultContent = {
-                type: 'application/json',
-                data: {
-                    success: false,
-                    message: '',
-                    error: error instanceof Error ? error.message : String(error)
-                }
-            };
-            return { content };
-        }
+        return {
+            remote,
+            output: [result.stdout, result.stderr].filter(Boolean).join('\n').trim()
+        };
     }
-};
+});
 
-// Export all git tools
 export const gitTools = [
     gitStatusTool,
     gitAddTool,

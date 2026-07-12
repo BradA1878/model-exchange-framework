@@ -37,6 +37,7 @@ import { promisify } from 'util';
 import crypto from 'crypto';
 import { getSecurityGuard, SecurityContext } from '../security/McpSecurityGuard.js';
 import { getConfirmationManager } from '../security/McpConfirmationManager.js';
+import { buildShellChildEnv } from '../security/McpToolPolicy.js';
 import { execute as shellExecuteHandler } from './shell/ShellExecuteHandler.js';
 import { processOutput } from './shell/LargeOutputHandler.js';
 import { BackgroundTaskManager } from '../../../services/BackgroundTaskManager.js';
@@ -58,68 +59,173 @@ const logger = new Logger('info', 'InfrastructureTools', 'server');
 const validator = createStrictValidator('InfrastructureTools');
 const execAsync = promisify(exec);
 
-// Initialize security modules
-const securityGuard = getSecurityGuard(process.cwd());
-const confirmationManager = getConfirmationManager();
+// Initialize the security guard singleton. Importing this module is what binds
+// the guard to the project root; ShellExecuteHandler and executeShellCommand
+// below then retrieve it with getSecurityGuard().
+getSecurityGuard(process.cwd());
 
 /**
- * Helper function to execute shell commands - can be used by other tools
+ * Identity of the caller running a shell command.
+ *
+ * Required — the security guard makes its decision in the context of an agent
+ * and a channel, and every shell execution is attributable. There is no default:
+ * a missing identity is a wiring bug, not something to paper over with 'system'.
  */
-export async function executeShellCommand(
-    command: string,
-    args?: string[],
-    options?: {
-        workingDirectory?: string;
-        environment?: Record<string, string>;
-        timeout?: number;
-        captureOutput?: boolean;
-    }
-): Promise<{
+export interface ShellCommandContext {
+    agentId: AgentId;
+    channelId: ChannelId;
+    requestId: string;
+}
+
+/**
+ * Result of running a shell command through {@link executeShellCommand}.
+ */
+export interface ShellCommandResult {
     command: string;
     exitCode: number;
     stdout?: string;
     stderr?: string;
     executionTime: number;
     executedAt: number;
-}> {
-    const startTime = Date.now();
-    
-    try {
-        // Build the full command string with properly escaped arguments
-        // Shell-escape each argument by wrapping in single quotes and escaping any embedded single quotes
-        const quotedArgs = args ? args.map(arg => `'${arg.replace(/'/g, "'\\''")}'`).join(' ') : '';
-        const fullCommand = args ? `${command} ${quotedArgs}` : command;
+    /** Destructive-pattern warnings raised by the security guard, if any */
+    warnings?: string[];
+}
 
-        // Execute the command
+/**
+ * Run a shell command on behalf of an agent.
+ *
+ * Every tool that shells out — git, tsc, eslint, prettier, jest, mocha, vitest,
+ * find, rg, and the rollback/backup tools — goes through here, so this is where
+ * the security controls have to live:
+ *
+ *   1. The command is validated by the McpSecurityGuard, which parses compound
+ *      expressions and checks each effective command. A blocked command throws.
+ *   2. A command the guard flags for confirmation goes to the confirmation
+ *      manager, and a refusal throws.
+ *   3. The child process receives a minimal environment built by the tool policy
+ *      — not the server's, which holds JWT_SECRET, MONGODB_URI and
+ *      OPENROUTER_API_KEY.
+ *   4. Arguments are shell-escaped before they reach the shell.
+ *
+ * @param command - The base command (for example 'git')
+ * @param args - Arguments, shell-escaped before use
+ * @param options - Execution options; `context` identifies the calling agent
+ * @throws Error when the guard blocks the command or confirmation is refused
+ */
+export async function executeShellCommand(
+    command: string,
+    args: string[] | undefined,
+    options: {
+        /** Who is running this command. Required. */
+        context: ShellCommandContext;
+        workingDirectory?: string;
+        environment?: Record<string, string>;
+        timeout?: number;
+        captureOutput?: boolean;
+    }
+): Promise<ShellCommandResult> {
+    const startTime = Date.now();
+
+    validator.assertIsString(command, 'command');
+
+    const context = options?.context;
+    if (!context || typeof context.agentId !== 'string' || context.agentId.length === 0) {
+        throw new Error(
+            'executeShellCommand requires context.agentId — shell execution must be attributable to an agent.'
+        );
+    }
+    if (typeof context.channelId !== 'string' || context.channelId.length === 0) {
+        throw new Error(
+            'executeShellCommand requires context.channelId — shell execution must be attributable to a channel.'
+        );
+    }
+
+    // Build the full command string with properly escaped arguments. Each argument
+    // is wrapped in single quotes with embedded quotes escaped, so an argument can
+    // never break out into a new shell word.
+    const quotedArgs = args ? args.map(arg => `'${arg.replace(/'/g, "'\\''")}'`).join(' ') : '';
+    const fullCommand = args && args.length > 0 ? `${command} ${quotedArgs}` : command;
+
+    // ── Security validation ────────────────────────────────────────────────
+    // The guard parses compound expressions (`a && b`, `a; b`) and validates each
+    // effective command, so `git status; rm -rf /` cannot slip through on the
+    // strength of its first word.
+    const securityGuard = getSecurityGuard();
+    const securityContext: SecurityContext = {
+        agentId: context.agentId,
+        channelId: context.channelId,
+        requestId: context.requestId
+    };
+
+    const validation = securityGuard.validateCommand(fullCommand, securityContext);
+
+    if (!validation.allowed) {
+        throw new Error(
+            `Command blocked by security policy: ${validation.reason ?? 'command is not allowed'} ` +
+            `(command: ${command}, risk: ${validation.riskLevel ?? 'unknown'})`
+        );
+    }
+
+    if (validation.warnings && validation.warnings.length > 0) {
+        logger.warn(
+            `Destructive command warnings for "${fullCommand}": ${validation.warnings.join('; ')}`
+        );
+    }
+
+    if (validation.requiresConfirmation) {
+        const confirmationManager = getConfirmationManager();
+        const confirmed = await confirmationManager.requestConfirmation(
+            'command',
+            'Execute shell command',
+            {
+                command: fullCommand,
+                riskLevel: validation.riskLevel || 'medium',
+                reason: validation.reason || 'Command requires confirmation'
+            },
+            securityContext,
+            options?.timeout || 30000
+        );
+
+        if (!confirmed) {
+            throw new Error(`Command execution denied by confirmation policy: ${command}`);
+        }
+    }
+
+    // ── Execution ──────────────────────────────────────────────────────────
+    // Least privilege: the child gets PATH/HOME/locale plus whatever the caller
+    // declares, never the server's full environment.
+    const childEnv = buildShellChildEnv(options?.environment);
+
+    try {
         const result = await execAsync(fullCommand, {
             cwd: options?.workingDirectory || process.cwd(),
-            env: { ...process.env, ...options?.environment },
+            env: childEnv,
             timeout: options?.timeout || 30000,
             maxBuffer: 1024 * 1024 * 10 // 10MB buffer
         });
-        
-        const executionTime = Date.now() - startTime;
-        
+
         return {
             command: fullCommand,
             exitCode: 0,
             stdout: options?.captureOutput !== false ? result.stdout : undefined,
             stderr: options?.captureOutput !== false ? result.stderr : undefined,
-            executionTime,
-            executedAt: Date.now()
+            executionTime: Date.now() - startTime,
+            executedAt: Date.now(),
+            warnings: validation.warnings
         };
-        
+
     } catch (execError: any) {
-        const executionTime = Date.now() - startTime;
-        
-        // Handle execution errors (non-zero exit codes)
+        // A non-zero exit code is a result, not an exception — `git diff --quiet`
+        // and `grep` use exit codes to mean "no changes" / "no matches". The caller
+        // inspects exitCode. Genuine policy failures throw above, before we get here.
         return {
-            command: command,
-            exitCode: execError.code || 1,
+            command: fullCommand,
+            exitCode: execError.code ?? 1,
             stdout: options?.captureOutput !== false ? execError.stdout || '' : undefined,
             stderr: options?.captureOutput !== false ? execError.stderr || execError.message : undefined,
-            executionTime,
-            executedAt: Date.now()
+            executionTime: Date.now() - startTime,
+            executedAt: Date.now(),
+            warnings: validation.warnings
         };
     }
 }
@@ -351,11 +457,6 @@ export const shellExecTool = {
                 default: true,
                 description: 'Whether to capture command output'
             },
-            allowedCommands: {
-                type: 'array',
-                items: { type: 'string' },
-                description: 'List of allowed commands (for security)'
-            },
             description: {
                 type: 'string',
                 description: 'Human-readable summary of what this command does (for logging, audit trails, and display)'
@@ -379,6 +480,7 @@ export const shellExecTool = {
      * to BackgroundTaskManager for background execution.
      *
      * Foreground mode provides:
+     * - Security guard validation and confirmation
      * - Command semantics (exit code interpretation)
      * - Destructive command warnings
      * - Command classification (read-only, silent, etc.)
@@ -391,6 +493,10 @@ export const shellExecTool = {
      * - Ring-buffer output accumulation
      * - Throttled progress events via EventBus
      * - Query via shell_task_status tool
+     *
+     * The command allowlist is NOT an input. It comes from MXF_SHELL_ALLOWED_COMMANDS
+     * (see McpToolPolicy) — an allowlist passed as a tool argument would be supplied
+     * by the same model it is meant to restrict.
      */
     async handler(input: {
         command: string;
@@ -399,7 +505,6 @@ export const shellExecTool = {
         environment?: Record<string, string>;
         timeout?: number;
         captureOutput?: boolean;
-        allowedCommands?: string[];
         description?: string;
         runInBackground?: boolean;
         backgroundTimeout?: number;
@@ -408,14 +513,55 @@ export const shellExecTool = {
         channelId: ChannelId;
         requestId: string;
     }) {
-        // Background execution: delegate to BackgroundTaskManager
+        // Background execution: delegate to BackgroundTaskManager.
+        //
+        // The guard runs here, at the tool boundary, because BackgroundTaskManager
+        // spawns directly. Without this the background path would be an unguarded
+        // way to run exactly the commands the foreground path blocks.
         if (input.runInBackground) {
+            const securityGuard = getSecurityGuard();
+            const securityContext: SecurityContext = {
+                agentId: context.agentId,
+                channelId: context.channelId,
+                requestId: context.requestId
+            };
+
+            const validation = securityGuard.validateCommand(input.command, securityContext);
+
+            if (!validation.allowed) {
+                throw new Error(
+                    `Command blocked by security policy: ${validation.reason ?? 'command is not allowed'} ` +
+                    `(command: ${input.command}, risk: ${validation.riskLevel ?? 'unknown'})`
+                );
+            }
+
+            if (validation.requiresConfirmation) {
+                const confirmed = await getConfirmationManager().requestConfirmation(
+                    'command',
+                    'Execute background shell command',
+                    {
+                        command: input.command,
+                        riskLevel: validation.riskLevel || 'medium',
+                        reason: validation.reason || 'Command requires confirmation'
+                    },
+                    securityContext,
+                    input.timeout || 30000
+                );
+
+                if (!confirmed) {
+                    throw new Error(`Background command execution denied by confirmation policy: ${input.command}`);
+                }
+            }
+
             const btm = BackgroundTaskManager.getInstance();
             const { taskId } = await btm.startBackground(
                 input.command,
                 {
                     workingDirectory: input.workingDirectory,
-                    environment: input.environment,
+                    // Hand the child a minimal environment. BackgroundTaskManager
+                    // still merges this over process.env internally — see the
+                    // reported fix for BackgroundTaskManager.ts:190.
+                    environment: buildShellChildEnv(input.environment),
                     timeout: input.backgroundTimeout,
                     description: input.description
                 },

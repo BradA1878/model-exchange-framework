@@ -42,11 +42,13 @@ const router = express.Router();
  */
 router.post('/', async (req, res) => {
     try {
-        const { channelId, name, expiresAt } = req.body;
-        
-        // Validate required fields
+        const { channelId, agentId, name, expiresAt } = req.body;
+
+        // Validate required fields. agentId is the identity this key authenticates
+        // as — socket auth reads it off the key rather than trusting the client.
         validator.assertIsNonEmptyString(channelId, 'channelId is required');
-        
+        validator.assertIsNonEmptyString(agentId, 'agentId is required — it is the identity the key authenticates as');
+
         // Extract createdBy from authenticated user context
         const createdBy = (req as any).user?.id?.toString();
         if (!createdBy) {
@@ -55,7 +57,7 @@ router.post('/', async (req, res) => {
                 error: 'Authentication required'
             });
         }
-        
+
         // Parse expiration date if provided
         let expirationDate: Date | undefined;
         if (expiresAt) {
@@ -67,30 +69,33 @@ router.post('/', async (req, res) => {
                 });
             }
         }
-        
+
         // Create the key
-        const keyRecord = await channelKeyService.createChannelKey(
+        const createdKey = await channelKeyService.createChannelKey(
             channelId,
             createdBy,
+            agentId,
             name,
             expirationDate
         );
-        
-        
-        // Return key information (including secret for initial creation)
+
+
+        // Return key information. The secret exists in this response and nowhere
+        // else — the database stores only its bcrypt hash.
         res.status(201).json({
             success: true,
             data: {
-                keyId: keyRecord.keyId,
-                secretKey: keyRecord.secretKey, // Only returned on creation
-                channelId: keyRecord.channelId,
-                name: keyRecord.name,
-                isActive: keyRecord.isActive,
-                expiresAt: keyRecord.expiresAt,
-                createdAt: keyRecord.createdAt
+                keyId: createdKey.keyId,
+                secretKey: createdKey.secretKey, // Only returned on creation
+                channelId: createdKey.channelId,
+                agentId: createdKey.agentId,
+                name: createdKey.name,
+                isActive: createdKey.isActive,
+                expiresAt: createdKey.expiresAt,
+                createdAt: createdKey.createdAt
             }
         });
-        
+
     } catch (error) {
         logger.error(`Error creating channel key: ${error}`);
         res.status(500).json({
@@ -305,28 +310,42 @@ router.post('/:channelId/rotate-all', async (req, res) => {
         }
         
         const rotationResults = [];
-        
-        // Rotate each key
+
+        // Rotate each key, carrying the agent binding across to the replacement.
+        // A rotated key must authenticate the same agent as the one it replaces.
         for (const oldKey of activeKeys) {
             try {
+                const existing = await channelKeyService.describeKey(oldKey.keyId);
+                const boundAgentId = existing?.agentId;
+
+                if (!boundAgentId) {
+                    rotationResults.push({
+                        oldKeyId: oldKey.keyId,
+                        status: 'error',
+                        error: 'Key is not bound to an agent and cannot be rotated. Regenerate it with an agentId.'
+                    });
+                    continue;
+                }
+
                 // Deactivate old key
                 await channelKeyService.deactivateChannelKey(oldKey.keyId);
-                
+
                 // Create new key
                 const newKey = await channelKeyService.createChannelKey(
                     channelId,
                     createdBy,
+                    boundAgentId,
                     `Rotated: ${oldKey.name || 'Unnamed key'}`,
                     expirationDate
                 );
-                
+
                 rotationResults.push({
                     oldKeyId: oldKey.keyId,
                     newKeyId: newKey.keyId,
                     newSecretKey: newKey.secretKey,
                     status: 'success'
                 });
-                
+
             } catch (error) {
                 rotationResults.push({
                     oldKeyId: oldKey.keyId,
@@ -429,11 +448,12 @@ router.delete('/:channelId/all', async (req, res) => {
  */
 router.post('/generate', async (req, res) => {
     try {
-        const { channelName } = req.body;
-        
+        const { channelName, agentId } = req.body;
+
         // Validate required fields
         validator.assertIsNonEmptyString(channelName, 'channelName is required');
-        
+        validator.assertIsNonEmptyString(agentId, 'agentId is required — it is the identity the key authenticates as');
+
         // Get the authenticated user ID
         const userId = (req as any).user?.id;
         if (!userId) {
@@ -442,30 +462,32 @@ router.post('/generate', async (req, res) => {
                 error: 'Authentication required'
             });
         }
-        
+
         // Generate a temporary channelId for key preview (will be replaced when channel is actually created)
         const tempChannelId = `temp_${channelName.toLowerCase().replace(/[^a-z0-9]/g, '_')}_${Date.now()}`;
-        
+
         // Create a channel key for the future channel
-        const keyRecord = await channelKeyService.createChannelKey(
+        const createdKey = await channelKeyService.createChannelKey(
             tempChannelId,
             userId.toString(),
+            agentId,
             `Key for channel: ${channelName}`,
             undefined // No expiration for channel keys
         );
-        
-        
+
+
         res.status(201).json({
             success: true,
             data: {
-                keyId: keyRecord.keyId,
-                secretKey: keyRecord.secretKey,
+                keyId: createdKey.keyId,
+                secretKey: createdKey.secretKey,
+                agentId: createdKey.agentId,
                 channelName,
                 tempChannelId,
-                createdAt: keyRecord.createdAt
+                createdAt: createdKey.createdAt
             }
         });
-        
+
     } catch (error) {
         logger.error(`Error generating channel key: ${error}`);
         res.status(500).json({

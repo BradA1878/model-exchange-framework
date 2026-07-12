@@ -323,6 +323,20 @@ export class OrparMemoryCoordinator {
             this.onOrparToolEvent('reflection', payload);
         });
 
+        // Fill phase memory usage from actual retrievals.
+        //
+        // PhaseStrataRouter already emits every phase retrieval with the memory ids it
+        // returned, but nothing consumed it: the only way to populate phaseUsage was the
+        // public recordMemoryUsage(), which no production code ever called. phaseUsage was
+        // therefore always empty, so PhaseWeightedRewarder returned no rewards and cycle
+        // consolidation iterated zero memories. Subscribing here is what makes
+        // phase-weighted rewards real.
+        EventBus.server.on(OrparMemoryEvents.PHASE_MEMORY_RETRIEVED, (payload: any) => {
+            if (this.enabled) {
+                this.onPhaseMemoryRetrieved(payload);
+            }
+        });
+
         // Listen for task completion to retroactively update rewards when
         // the ORPAR cycle completed before task_complete was called
         EventBus.server.on(Events.Task.COMPLETED, (payload: any) => {
@@ -331,7 +345,7 @@ export class OrparMemoryCoordinator {
             }
         });
 
-        this.logger.debug('[OrparMemoryCoordinator] Event listeners registered for ControlLoop, OrparTools, and TaskEvents');
+        this.logger.debug('[OrparMemoryCoordinator] Event listeners registered for ControlLoop, OrparTools, PhaseMemory, and TaskEvents');
     }
 
     /**
@@ -341,11 +355,23 @@ export class OrparMemoryCoordinator {
     private onPhaseEvent(phase: OrparPhase, payload: any, source: string = 'controlLoop'): void {
         if (!this.enabled) return;
 
-        const { agentId, channelId } = payload.data || payload;
-        if (!agentId) return;
+        // agentId/channelId are top-level fields on BaseEventPayload, and loopId lives in
+        // `data` (ControlLoopSpecificData). This previously read both from the wrong
+        // level — `payload.data || payload` resolved to `data`, which carries no agentId —
+        // so every control-loop phase event hit the guard below and returned, and no
+        // server-side ORPAR cycle ever accumulated a phase.
+        const agentId = payload.agentId;
+        const channelId = payload.channelId;
+        if (!agentId) {
+            this.logger.warn(
+                `[OrparMemoryCoordinator] Ignoring ${phase} event from ${source}: payload has no agentId`
+            );
+            return;
+        }
 
-        // Get or create cycle state
-        const cycleId = payload.loopId || `${agentId}-${Date.now()}`;
+        // Fall back to a stable per-agent key rather than a timestamp: a timestamped key
+        // would start a fresh cycle on every event and no cycle would ever accumulate.
+        const cycleId = payload.data?.loopId || `${agentId}:${channelId ?? 'default'}`;
 
         // Fix #2: Acquire lock before modifying cycle state
         if (!this.acquireCycleLock(cycleId)) {
@@ -510,14 +536,28 @@ export class OrparMemoryCoordinator {
         const cycleState = this.activeCycles.get(cycleKey);
         if (!cycleState || cycleState.isComplete) return;
 
-        // Build outcome from reflection data
+        // Build the outcome from what we actually observed.
+        //
+        // This previously hardcoded qualityScore (0.8/0.4), errorCount (0), toolCallCount
+        // (5) and taskCompleted (true) and fed them into the reward calculation as though
+        // they were measurements. Rewards derived from invented numbers are worse than no
+        // rewards, so every field below is either observed or omitted.
         const reflectionData = reflectionPayload.data || {};
+
+        // Phases actually entered during this cycle — a real count, not an assumption
+        // that every cycle runs all five.
+        const phasesObserved = Object.keys(cycleState.phaseStartTimes).length;
+
         const outcome: CycleOutcome = {
             success: reflectionData.expectationsMet !== false,
-            qualityScore: reflectionData.expectationsMet !== false ? 0.8 : 0.4,
-            errorCount: 0,
-            toolCallCount: 5, // ORPAR tools count as one call per phase
-            taskCompleted: true,
+            // Only report a quality score if reflection actually produced one.
+            ...(typeof reflectionData.qualityScore === 'number'
+                ? { qualityScore: reflectionData.qualityScore }
+                : {}),
+            errorCount: Array.isArray(reflectionData.errors) ? reflectionData.errors.length : 0,
+            toolCallCount: phasesObserved,
+            // Only true when reflection says so — the coordinator cannot see task state.
+            taskCompleted: reflectionData.taskCompleted === true,
             metadata: {
                 source: 'orparTools',
                 learnings: reflectionData.learnings,
@@ -735,6 +775,40 @@ export class OrparMemoryCoordinator {
     /**
      * Record memory usage in a cycle
      */
+    /**
+     * Record a phase retrieval reported by PhaseStrataRouter.
+     *
+     * Resolves the agent's active cycle and records every returned memory against the
+     * phase it was retrieved in, so the cycle carries real usage by the time it completes.
+     */
+    private onPhaseMemoryRetrieved(payload: any): void {
+        const agentId = payload.agentId;
+        const channelId = payload.channelId;
+        const phase: OrparPhase | undefined = payload.data?.phase;
+        const memoryIds: string[] = payload.data?.memoryIds ?? [];
+
+        if (!agentId || !phase || memoryIds.length === 0) {
+            return;
+        }
+
+        // Match the cycle key used by onPhaseEvent so retrievals land on the live cycle.
+        const cycleId = payload.data?.loopId || `${agentId}:${channelId ?? 'default'}`;
+        if (!this.activeCycles.has(cycleId)) {
+            this.logger.debug(
+                `[OrparMemoryCoordinator] Phase retrieval for ${cycleId} has no active cycle; ignoring`
+            );
+            return;
+        }
+
+        for (const memoryId of memoryIds) {
+            this.recordMemoryUsage(cycleId, phase, memoryId, 'context');
+        }
+
+        this.logger.debug(
+            `[OrparMemoryCoordinator] Recorded ${memoryIds.length} memories for cycle ${cycleId} (phase=${phase})`
+        );
+    }
+
     public recordMemoryUsage(
         cycleId: string,
         phase: OrparPhase,

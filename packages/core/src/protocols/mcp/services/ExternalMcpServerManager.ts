@@ -112,6 +112,30 @@ export interface ExternalMcpTool {
 }
 
 /**
+ * A JSON-RPC request that has been written to a server and is awaiting its reply.
+ */
+interface PendingRequest {
+    resolve: (result: any) => void;
+    reject: (error: Error) => void;
+    timer: NodeJS.Timeout;
+    method: string;
+}
+
+/** How long to wait for a reply to a JSON-RPC request, per method. */
+const REQUEST_TIMEOUTS_MS = {
+    initialize: 30000,
+    'tools/list': 15000,
+    'tools/call': 30000,
+    ping: 5000
+} as const;
+
+/** MCP protocol version this client negotiates in the initialize handshake. */
+const MCP_PROTOCOL_VERSION = '2024-11-05';
+
+/** Version this client reports to servers. */
+const MCP_CLIENT_VERSION = '1.0.0';
+
+/**
  * Manages external MCP server processes and their lifecycle
  */
 export class ExternalMcpServerManager extends EventEmitter {
@@ -121,6 +145,19 @@ export class ExternalMcpServerManager extends EventEmitter {
         status: ExternalServerStatus;
         healthCheckTimer?: NodeJS.Timeout;
         startupTimer?: NodeJS.Timeout;
+        /**
+         * In-flight JSON-RPC requests, keyed by request id.
+         *
+         * There is ONE stdout listener per server (installed at spawn) that resolves
+         * entries in this map. Previously each call attached its own 'data' listener
+         * and re-parsed the whole stream: with N concurrent calls every line was
+         * parsed N times, and a listener that timed out was removed only if the
+         * timeout path ran — repeated timeouts leaked listeners until Node warned
+         * about a possible EventEmitter leak.
+         */
+        pending: Map<string, PendingRequest>;
+        /** Partial line left over from the last stdout chunk. */
+        stdoutBuffer: string;
     }> = new Map();
 
     // Scope tracking for channel/agent-scoped servers
@@ -419,7 +456,9 @@ export class ExternalMcpServerManager extends EventEmitter {
         // Store server configuration and status
         this.servers.set(config.id, {
             config,
-            status
+            status,
+            pending: new Map(),
+            stdoutBuffer: ''
         });
 
 
@@ -627,14 +666,18 @@ export class ExternalMcpServerManager extends EventEmitter {
             serverData.startupTimer = undefined;
         }
 
+        // Fail anything still in flight before we kill the process, so callers get
+        // a clear error rather than waiting out their own timeouts.
+        this.rejectPendingRequests(serverId, 'server is stopping');
+
         // Terminate process
         if (serverData.process) {
             serverData.process.kill('SIGTERM');
-            
+
             // Force kill after timeout
             setTimeout(() => {
                 if (serverData.process && !serverData.process.killed) {
-                    logger.warn(`🔪 Force killing server ${config.name}`);
+                    logger.warn(`Force killing server ${config.name}`);
                     serverData.process.kill('SIGKILL');
                 }
             }, 5000);
@@ -644,6 +687,8 @@ export class ExternalMcpServerManager extends EventEmitter {
         status.status = 'stopped';
         status.pid = undefined;
         status.tools = [];
+        status.initialized = false;
+        status.initializing = false;
 
         // Emit stopped event
         this.emitServerEvent(McpEvents.EXTERNAL_SERVER_STOPPED, serverId, agentId, channelId);
@@ -700,9 +745,19 @@ export class ExternalMcpServerManager extends EventEmitter {
 
         // Handle process exit
         process.on('exit', (code, signal) => {
-            
+
             status.status = 'stopped';
             status.pid = undefined;
+            // The handshake does not survive the process. A restarted server has to
+            // perform it again before it can be marked running.
+            status.initialized = false;
+            status.initializing = false;
+
+            // Anything still waiting on this process will never get a reply.
+            this.rejectPendingRequests(
+                serverId,
+                `server exited (code ${code ?? 'null'}, signal ${signal ?? 'none'})`
+            );
 
             // Clear timers
             if (serverData.healthCheckTimer) {
@@ -732,11 +787,11 @@ export class ExternalMcpServerManager extends EventEmitter {
             this.handleServerError(serverId, error.message);
         });
 
-        // Handle stdout for tool discovery and health checks
+        // ONE stdout listener per server. Every JSON-RPC reply arrives here and is
+        // routed to its waiting caller by request id.
         if (process.stdout) {
-            process.stdout.on('data', (data) => {
-                const output = data.toString();
-                this.handleServerOutput(serverId, output);
+            process.stdout.on('data', (data: Buffer) => {
+                this.handleServerOutput(serverId, data.toString());
             });
         }
 
@@ -754,28 +809,165 @@ export class ExternalMcpServerManager extends EventEmitter {
             });
         }
 
-        // Mark as started when process is spawned successfully
+        // The OS started the process. That is NOT the same as the server being ready
+        // to serve MCP: it says nothing about whether the JSON-RPC handshake will
+        // succeed. Status stays 'starting' until initializeMcpConnection() completes,
+        // so a server that spawns and then fails its handshake never reports 'running'.
         process.on('spawn', () => {
-            logger.info(`[SPAWN] Server ${serverId} process spawned successfully`);
-            status.status = 'running';
-            
-            // Clear startup timer
-            if (serverData.startupTimer) {
-                clearTimeout(serverData.startupTimer);
-                serverData.startupTimer = undefined;
+            logger.info(`[SPAWN] Server ${serverId} process spawned; starting MCP handshake`);
+
+            // stdin writes are buffered by the OS, so the handshake can be written
+            // immediately — the child reads it when it is ready. The old code slept
+            // two seconds here and hoped that was long enough.
+            this.initializeMcpConnection(serverId).catch((err) => {
+                logger.error(`[MCP] Failed to initialize connection to ${serverId}: ${err.message}`);
+                this.handleServerError(serverId, `MCP initialization failed: ${err.message}`);
+            });
+        });
+    }
+
+    /**
+     * Route a chunk of a server's stdout to whoever is waiting for it.
+     *
+     * MCP over stdio is line-delimited JSON. Chunks do not respect line boundaries,
+     * so a partial line is carried over to the next chunk.
+     */
+    private handleServerOutput(serverId: string, chunk: string): void {
+        const serverData = this.servers.get(serverId);
+        if (!serverData) {
+            return;
+        }
+
+        serverData.stdoutBuffer += chunk;
+
+        const lines = serverData.stdoutBuffer.split('\n');
+        // The last element is either an incomplete line or '' — keep it for next time.
+        serverData.stdoutBuffer = lines.pop() ?? '';
+
+        for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed) {
+                continue;
             }
 
-            this.emitServerEvent(McpEvents.EXTERNAL_SERVER_STARTED, serverId);
-            
-            // Initialize MCP connection first, then discover tools
-            logger.info(`[SPAWN] Will initialize MCP connection for ${serverId} in 2 seconds...`);
-            setTimeout(() => {
-                this.initializeMcpConnection(serverId).catch((err) => {
-                    logger.error(`[MCP] Failed to initialize connection to ${serverId}: ${err.message}`);
-                    this.handleServerError(serverId, `MCP initialization failed: ${err.message}`);
-                });
-            }, 2000); // Wait 2 seconds for server to fully start
+            let message: any;
+            try {
+                message = JSON.parse(trimmed);
+            } catch {
+                // Servers spawned through npx sometimes print non-JSON banners to
+                // stdout. Not our reply; not an error.
+                logger.debug(`[MCP-STDOUT] ${serverId}: ${trimmed.slice(0, 200)}`);
+                continue;
+            }
+
+            // A message with no id is a notification from the server, not a reply.
+            if (message.id === undefined || message.id === null) {
+                continue;
+            }
+
+            const requestId = String(message.id);
+            const pending = serverData.pending.get(requestId);
+            if (!pending) {
+                continue;
+            }
+
+            clearTimeout(pending.timer);
+            serverData.pending.delete(requestId);
+
+            if (message.error) {
+                pending.reject(new Error(
+                    `MCP error from ${serverId} (${pending.method}): ` +
+                    `${message.error.message ?? JSON.stringify(message.error)}`
+                ));
+            } else {
+                pending.resolve(message.result);
+            }
+        }
+    }
+
+    /**
+     * Send a JSON-RPC request and wait for its reply.
+     *
+     * The reply is matched by id in handleServerOutput(). On timeout the pending
+     * entry is removed, so nothing accumulates.
+     */
+    private sendRequest(
+        serverId: string,
+        method: keyof typeof REQUEST_TIMEOUTS_MS,
+        params: Record<string, any> = {}
+    ): Promise<any> {
+        const serverData = this.servers.get(serverId);
+        if (!serverData?.process?.stdin) {
+            return Promise.reject(new Error(`Server ${serverId} is not running or has no stdin`));
+        }
+
+        const stdin = serverData.process.stdin;
+        const requestId = uuidv4();
+        const timeoutMs = REQUEST_TIMEOUTS_MS[method];
+
+        return new Promise((resolve, reject) => {
+            const timer = setTimeout(() => {
+                serverData.pending.delete(requestId);
+                reject(new Error(
+                    `Timed out after ${timeoutMs}ms waiting for ${method} from ${serverId}`
+                ));
+            }, timeoutMs);
+
+            serverData.pending.set(requestId, { resolve, reject, timer, method });
+
+            const request = {
+                jsonrpc: '2.0',
+                id: requestId,
+                method,
+                params
+            };
+
+            stdin.write(JSON.stringify(request) + '\n', (writeError) => {
+                if (writeError) {
+                    clearTimeout(timer);
+                    serverData.pending.delete(requestId);
+                    reject(new Error(
+                        `Failed to write ${method} to ${serverId}: ${writeError.message}`
+                    ));
+                }
+            });
         });
+    }
+
+    /**
+     * Send a JSON-RPC notification. Notifications have no id and get no reply.
+     */
+    private sendNotification(
+        serverId: string,
+        method: string,
+        params: Record<string, any> = {}
+    ): void {
+        const serverData = this.servers.get(serverId);
+        if (!serverData?.process?.stdin) {
+            throw new Error(`Server ${serverId} is not running or has no stdin`);
+        }
+
+        const notification = { jsonrpc: '2.0', method, params };
+        serverData.process.stdin.write(JSON.stringify(notification) + '\n');
+    }
+
+    /**
+     * Fail every in-flight request for a server. Called when the process dies, so
+     * callers get an error instead of hanging until their individual timeouts.
+     */
+    private rejectPendingRequests(serverId: string, reason: string): void {
+        const serverData = this.servers.get(serverId);
+        if (!serverData) {
+            return;
+        }
+
+        for (const [requestId, pending] of serverData.pending) {
+            clearTimeout(pending.timer);
+            pending.reject(new Error(`${pending.method} on ${serverId} aborted: ${reason}`));
+            serverData.pending.delete(requestId);
+        }
+
+        serverData.stdoutBuffer = '';
     }
 
     /**
@@ -793,42 +985,48 @@ export class ExternalMcpServerManager extends EventEmitter {
     }
 
     /**
-     * Perform health check for a server
+     * Check that a server is actually answering.
+     *
+     * This used to be `process && !process.killed` — which only says the OS has not
+     * reaped the process. A server that had wedged, deadlocked, or stopped reading
+     * stdin stayed "healthy" forever.
+     *
+     * A real probe means a round trip through the JSON-RPC layer. `tools/list` is
+     * the probe: every server we can talk to implements it (we call it at
+     * discovery), it takes no arguments, and a reply proves the server is reading
+     * stdin, parsing JSON-RPC, and writing stdout.
      */
     private async performHealthCheck(serverId: string): Promise<void> {
         const serverData = this.servers.get(serverId);
         if (!serverData) return;
 
-        const { config, status } = serverData;
+        const { status } = serverData;
 
-        // Emit health check event
         this.emitServerEvent(McpEvents.EXTERNAL_SERVER_HEALTH_CHECK, serverId);
 
-        // Simple health check - process is running
-        const isHealthy = serverData.process && !serverData.process.killed;
-        
         status.lastHealthCheck = Date.now();
-        
-        if (status.status === 'running') {
-            status.uptime = Date.now() - (status.lastHealthCheck - config.healthCheckInterval);
+
+        // A process that is gone is unhealthy without needing a round trip.
+        if (!serverData.process || serverData.process.killed) {
+            this.emitServerHealthStatus(serverId, 'unhealthy');
+            return;
         }
 
-        // Emit health status
-        this.emitServerHealthStatus(serverId, isHealthy ? 'healthy' : 'unhealthy');
-    }
+        // Only probe a server that finished its handshake — one still starting has
+        // not agreed to speak MCP yet.
+        if (status.status !== 'running') {
+            this.emitServerHealthStatus(serverId, 'unhealthy');
+            return;
+        }
 
-    /**
-     * Handle server output for tool discovery
-     *
-     * MCP protocol message parsing is handled in:
-     * - initializeMcpConnection(): Handles MCP initialize handshake
-     * - discoverRealToolsFromServer(): Handles tools/list JSON-RPC calls
-     * - executeToolOnServer(): Handles tools/call JSON-RPC calls
-     */
-    private handleServerOutput(serverId: string, output: string): void {
-        // Server stdout is processed by the MCP JSON-RPC handlers in initializeMcpConnection,
-        // discoverRealToolsFromServer, and executeToolOnServer methods.
-        // This handler is used for any additional output logging if needed.
+        try {
+            await this.sendRequest(serverId, 'tools/list');
+            this.emitServerHealthStatus(serverId, 'healthy');
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            logger.warn(`Health check failed for ${serverId}: ${message}`);
+            this.emitServerHealthStatus(serverId, 'unhealthy');
+        }
     }
 
     /**
@@ -907,7 +1105,18 @@ export class ExternalMcpServerManager extends EventEmitter {
     }
 
     /**
-     * Initialize MCP connection with server
+     * Perform the MCP handshake, then discover the server's tools.
+     *
+     * The handshake is two messages, not one:
+     *   1. `initialize` — request/response, negotiates protocol version.
+     *   2. `notifications/initialized` — a notification telling the server the
+     *      client is ready.
+     *
+     * The second was never sent. It is required by the MCP spec, and a strict
+     * server is entitled to reject `tools/list` from a client that never sent it.
+     *
+     * The server is only marked 'running' once this completes. Spawning a process
+     * says nothing about whether it speaks MCP.
      */
     private async initializeMcpConnection(serverId: string): Promise<void> {
         const serverData = this.servers.get(serverId);
@@ -915,9 +1124,8 @@ export class ExternalMcpServerManager extends EventEmitter {
             throw new Error(`Server ${serverId} not found or not running`);
         }
 
-        // Prevent duplicate initialization
         if (serverData.status.initialized) {
-            logger.warn(`⚠️ MCP connection already initialized for server ${serverData.config.name}`);
+            logger.warn(`MCP connection already initialized for server ${serverData.config.name}`);
             return;
         }
 
@@ -927,202 +1135,73 @@ export class ExternalMcpServerManager extends EventEmitter {
             throw new Error('Process streams not available');
         }
 
-        // Mark as initializing to prevent concurrent initialization
         serverData.status.initializing = true;
 
-
-        // Send MCP initialize request with required parameters
-        const initializeRequest = {
-            jsonrpc: "2.0",
-            id: "initialize",
-            method: "initialize",
-            params: {
-                protocolVersion: "2024-11-05",
-                capabilities: {
-                    experimental: {},
-                    sampling: {}
-                },
-                clientInfo: {
-                    name: "MXF Framework",
-                    version: "0.32.0"
-                }
+        // 1. initialize
+        const result = await this.sendRequest(serverId, 'initialize', {
+            protocolVersion: MCP_PROTOCOL_VERSION,
+            capabilities: {
+                experimental: {},
+                sampling: {}
+            },
+            clientInfo: {
+                name: 'MXF Framework',
+                version: MCP_CLIENT_VERSION
             }
-        };
+        });
 
-        const requestJson = JSON.stringify(initializeRequest) + '\n';
-        process.stdin.write(requestJson);
+        logger.info(
+            `[MCP] ${config.name} initialized ` +
+            `(server: ${result?.serverInfo?.name ?? 'unknown'} ${result?.serverInfo?.version ?? ''})`
+        );
 
-        // Wait for MCP initialize response
-        const responseBuffer = await this.waitForMcpResponse(process.stdout, "initialize");
-        const response = JSON.parse(responseBuffer);
+        // 2. notifications/initialized — required by the spec before any other request
+        this.sendNotification(serverId, 'notifications/initialized');
 
-        if (response.error) {
-            logger.error(`❌ MCP initialize error: ${response.error.message}`);
-            throw new Error(`MCP initialize error: ${response.error.message}`);
-        }
-
-
-        // Discover tools after MCP connection is initialized
-        await this.discoverServerTools(serverId);
-        
-        // Mark as successfully initialized
+        // The handshake succeeded, so the server is genuinely serving MCP now.
+        // Discovery below issues tools/list, which requires this status.
+        serverData.status.status = 'running';
         serverData.status.initialized = true;
         serverData.status.initializing = false;
+
+        if (serverData.startupTimer) {
+            clearTimeout(serverData.startupTimer);
+            serverData.startupTimer = undefined;
+        }
+
+        this.emitServerEvent(McpEvents.EXTERNAL_SERVER_STARTED, serverId);
+
+        // Now that the connection is live, find out what the server offers.
+        await this.discoverServerTools(serverId);
     }
 
     /**
-     * Wait for MCP response with specific ID
+     * Ask a server what tools it has.
      */
-    private async waitForMcpResponse(stdout: NodeJS.ReadableStream, requestId: string): Promise<string> {
-        return new Promise((resolve, reject) => {
-            let responseBuffer = '';
-            let timeoutId: NodeJS.Timeout;
-            let resolved = false;
-
-            const responseHandler = (data: Buffer): void => {
-                if (resolved) return; // Prevent duplicate responses
-                
-                responseBuffer += data.toString();
-                
-                // Try to parse JSON response (MCP responses are line-delimited JSON)
-                const lines = responseBuffer.split('\n');
-                for (let i = 0; i < lines.length - 1; i++) {
-                    const line = lines[i].trim();
-                    if (line) {
-                        try {
-                            const response = JSON.parse(line.trim());
-                            
-                            // Check if this is our response
-                            if (response.id === requestId) {
-                                resolved = true;
-                                clearTimeout(timeoutId);
-                                stdout.removeListener('data', responseHandler);
-                                
-                                // Return the clean JSON line instead of the entire buffer
-                                resolve(line.trim());
-                                return;
-                            }
-                        } catch (parseError) {
-                            // Ignore JSON parse errors for incomplete lines
-                            continue;
-                        }
-                    }
-                }
-                
-                // Keep the last incomplete line in buffer
-                responseBuffer = lines[lines.length - 1];
-            };
-
-            // Set up timeout (30 seconds for MCP response - some servers like n8n need more time)
-            timeoutId = setTimeout(() => {
-                if (!resolved) {
-                    resolved = true;
-                    stdout.removeListener('data', responseHandler);
-                    reject(new Error(`Timeout waiting for MCP response after 30 seconds`));
-                }
-            }, 30000);
-
-            // Listen for response
-            stdout.on('data', responseHandler);
-        });
-    }
-
-    /**
-     * Discover tools from external MCP server using JSON-RPC tools/list method
-     */
-    private async discoverRealToolsFromServer(serverId: string): Promise<Array<{ name: string; description: string; inputSchema: Record<string, any> }>> {
+    private async discoverRealToolsFromServer(
+        serverId: string
+    ): Promise<Array<{ name: string; description: string; inputSchema: Record<string, any> }>> {
         const serverData = this.servers.get(serverId);
         if (!serverData || !serverData.process) {
             throw new Error(`Server ${serverId} not found or not running`);
         }
 
-        const { process, config } = serverData;
+        const { config } = serverData;
 
-        return new Promise((resolve, reject) => {
-            if (!process.stdin || !process.stdout) {
-                reject(new Error('Process streams not available'));
-                return;
-            }
+        const result = await this.sendRequest(serverId, 'tools/list');
 
-            const requestId = `tools-list-${uuidv4()}`;
-            
-            // Create MCP tool call request according to the protocol
-            const mcpRequest = {
-                jsonrpc: '2.0',
-                id: requestId,
-                method: 'tools/list',
-                params: {}
-            };
+        if (!result?.tools) {
+            logger.warn(`No tools in the tools/list response from ${config.name}`);
+            return [];
+        }
 
-            let responseData = '';
-            let timeoutId: NodeJS.Timeout;
-            let resolved = false;
-
-            const handleData = (chunk: Buffer): void => {
-                if (resolved) return; // Prevent duplicate responses
-                
-                responseData += chunk.toString();
-                
-                // Look for complete JSON-RPC response
-                const lines = responseData.split('\n');
-                for (let i = 0; i < lines.length - 1; i++) {
-                    const line = lines[i].trim();
-                    if (line) {
-                        try {
-                            const response = JSON.parse(line.trim());
-                            
-                            // Check if this is our response
-                            if (response.id === requestId) {
-                                resolved = true;
-                                clearTimeout(timeoutId);
-                                process.stdout!.off('data', handleData);
-                                
-                                if (response.error) {
-                                    reject(new Error(`MCP Error: ${response.error.message}`));
-                                    return;
-                                }
-
-                                if (response.result && response.result.tools) {
-                                    const tools = response.result.tools.map((tool: any) => ({
-                                        name: tool.name,
-                                        description: tool.description || `Tool from ${config.name}`,
-                                        inputSchema: tool.inputSchema || { type: 'object', properties: {}, required: [] }
-                                    }));
-                                    
-                                    resolve(tools);
-                                } else {
-                                    logger.warn(`⚠️ No tools found in response from ${config.name}`);
-                                    resolve([]);
-                                }
-                                return;
-                            }
-                        } catch (parseError) {
-                            // Continue looking for valid JSON in other lines
-                        }
-                    }
-                }
-                
-                // Keep the last incomplete line in buffer
-                responseData = lines[lines.length - 1];
-            };
-
-            // Set up timeout (15 seconds for tool execution)
-            timeoutId = setTimeout(() => {
-                if (!resolved) {
-                    resolved = true;
-                    process.stdout!.off('data', handleData);
-                    reject(new Error(`Timeout waiting for tools/list response from ${config.name} after 15 seconds`));
-                }
-            }, 15000);
-
-            // Listen for response
-            process.stdout.on('data', handleData);
-
-            // Send tools/list request
-            const requestLine = JSON.stringify(mcpRequest) + '\n';
-            process.stdin.write(requestLine);
-        });
+        return result.tools.map((tool: any) => ({
+            name: tool.name,
+            description: tool.description || `Tool from ${config.name}`,
+            inputSchema: tool.inputSchema || { type: 'object', properties: {}, required: [] }
+        }));
     }
+
 
     /**
      * Handle server errors
@@ -1250,6 +1329,7 @@ export class ExternalMcpServerManager extends EventEmitter {
             'SYSTEM' as AgentId,
             'SYSTEM' as ChannelId,
             {
+                serverId,
                 name: config.name,
                 version: config.version,
                 tools
@@ -1357,12 +1437,29 @@ export class ExternalMcpServerManager extends EventEmitter {
      * Execute a tool on an external MCP server via JSON-RPC with auto-correction support
      */
     public async executeToolOnServer(
-        serverId: string, 
-        toolName: string, 
+        serverId: string,
+        toolName: string,
         input: any,
-        agentId: string = 'system',
-        channelId: string = 'default'
+        agentId: string,
+        channelId: string
     ): Promise<any> {
+        // Identity is required. These parameters used to default to 'system' and
+        // 'default', which quietly defeated the registry's own rule that every tool
+        // execution carry a real agentId and channelId — and made auto-correction
+        // learn against a fake agent.
+        if (typeof agentId !== 'string' || agentId.length === 0) {
+            throw new Error(
+                `executeToolOnServer requires an agentId (tool "${toolName}" on server "${serverId}"). ` +
+                `External tool calls must be attributable to an agent.`
+            );
+        }
+        if (typeof channelId !== 'string' || channelId.length === 0) {
+            throw new Error(
+                `executeToolOnServer requires a channelId (tool "${toolName}" on server "${serverId}"). ` +
+                `External tool calls must be attributable to a channel.`
+            );
+        }
+
         // PROACTIVE CORRECTION: Apply known corrections before attempting execution
         // NOTE: n8n-mcp server has built-in n8n_autofix_workflow and validation tools,
         // so proactive correction is not needed for n8n_* tools. This is kept for
@@ -1425,11 +1522,14 @@ export class ExternalMcpServerManager extends EventEmitter {
     }
 
     /**
-     * Internal method to execute tool once (without retry logic)
+     * Execute a tool once, without the retry/auto-correction wrapper.
+     *
+     * The reply is matched by request id through the server's single stdout
+     * listener — see sendRequest() and handleServerOutput().
      */
     private async executeToolOnServerInternal(
-        serverId: string, 
-        toolName: string, 
+        serverId: string,
+        toolName: string,
         input: any
     ): Promise<any> {
         const serverData = this.servers.get(serverId);
@@ -1441,100 +1541,18 @@ export class ExternalMcpServerManager extends EventEmitter {
             throw new Error(`Server ${serverId} is not running`);
         }
 
-        // Verify tool exists on server
+        // Verify the server actually offers this tool before calling it.
         const tool = serverData.status.tools.find(t => t.name === toolName);
         if (!tool) {
-            throw new Error(`Tool ${toolName} not found on server ${serverId}`);
+            throw new Error(
+                `Tool ${toolName} not found on server ${serverId}. ` +
+                `Available: ${serverData.status.tools.map(t => t.name).join(', ') || 'none'}`
+            );
         }
 
-        return new Promise((resolve, reject) => {
-            try {
-                const requestId = uuidv4();
-                
-                // Create MCP tool call request according to the protocol
-                const mcpRequest = {
-                    jsonrpc: "2.0",
-                    id: requestId,
-                    method: "tools/call",
-                    params: {
-                        name: toolName,
-                        arguments: input
-                    }
-                };
-
-                let responseBuffer = '';
-                let timeoutId: NodeJS.Timeout;
-                let resolved = false;
-
-                const responseHandler = (data: Buffer): void => {
-                    if (resolved) return; // Prevent duplicate responses
-                    
-                    responseBuffer += data.toString();
-                    
-                    // Try to parse JSON response (MCP responses are line-delimited JSON)
-                    const lines = responseBuffer.split('\n');
-                    for (let i = 0; i < lines.length - 1; i++) {
-                        const line = lines[i].trim();
-                        if (line) {
-                            try {
-                                const response = JSON.parse(line.trim());
-                                
-                                // Check if this is our response
-                                if (response.id === requestId) {
-                                    resolved = true;
-                                    clearTimeout(timeoutId);
-                                    serverData.process!.stdout!.removeListener('data', responseHandler);
-                                    
-                                    if (response.error) {
-                                        const errorMessage = `MCP error: ${response.error.message || response.error}`;
-                                        logger.error(`❌ MCP tool call error: ${errorMessage}`);
-                                        reject(new Error(errorMessage));
-                                    } else {
-                                        resolve(response.result);
-                                    }
-                                    return;
-                                }
-                            } catch (parseError) {
-                                // Ignore JSON parse errors for incomplete lines
-                                continue;
-                            }
-                        }
-                    }
-                    
-                    // Keep the last incomplete line in buffer
-                    responseBuffer = lines[lines.length - 1];
-                };
-
-                // Set up timeout (30 seconds for tool execution)
-                timeoutId = setTimeout(() => {
-                    if (!resolved) {
-                        resolved = true;
-                        serverData.process!.stdout!.removeListener('data', responseHandler);
-                        reject(new Error(`Timeout waiting for tool execution response from ${serverId} after 30 seconds`));
-                    }
-                }, 30000);
-
-                // Listen for response
-                if (!serverData.process || !serverData.process.stdout) {
-                    reject(new Error(`Server ${serverId} process stdout not available`));
-                    return;
-                }
-                serverData.process.stdout.on('data', responseHandler);
-
-                // Send the request
-                if (!serverData.process.stdin) {
-                    reject(new Error(`Server ${serverId} process stdin not available`));
-                    return;
-                }
-                const requestJson = JSON.stringify(mcpRequest) + '\n';
-                serverData.process.stdin.write(requestJson);
-                
-
-            } catch (error) {
-                const errorMessage = error instanceof Error ? error.message : String(error);
-                logger.error(`❌ Failed to execute tool ${toolName} on server ${serverId}: ${errorMessage}`);
-                reject(error);
-            }
+        return this.sendRequest(serverId, 'tools/call', {
+            name: toolName,
+            arguments: input
         });
     }
 }

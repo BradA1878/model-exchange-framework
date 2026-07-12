@@ -31,6 +31,10 @@ import { EventBus } from '@mxf-dev/core/events/EventBus';
 import { Events } from '@mxf-dev/core/events/EventNames';
 import type { IToolEventEmitter } from '@mxf-dev/core/protocols/mcp/services/IToolEventEmitter';
 import type { AgentId, ChannelId } from '@mxf-dev/core/types/ChannelContext';
+import {
+    createExternalMcpServerToolsDiscoveredEventPayload,
+    type ExternalMcpServerToolsDiscoveredEventData,
+} from '@mxf-dev/core/schemas/EventPayloadSchema';
 
 const logger = new Logger('info', 'ClientToolEventEmitter', 'client');
 
@@ -90,6 +94,19 @@ export class ClientToolEventEmitter implements IToolEventEmitter {
         });
     }
 
+    /**
+     * Emit tools-discovered for a client-spawned external MCP server.
+     *
+     * Built with the payload helper so the envelope matches what the server emits, and
+     * carries `serverId` inside `data` so a listener can tell WHICH server's tools these
+     * are. Consumers (MxfClient.registerExternalMcpServer) correlate on exactly that
+     * field; without it, whoever happened to be waiting resolved with the first tool
+     * discovery that came along, no matter which server produced it.
+     *
+     * The `& { serverId: string }` intersection is here because
+     * ExternalMcpServerToolsDiscoveredEventData in @mxf-dev/core does not declare
+     * serverId yet. Once it does, drop the intersection — nothing else changes.
+     */
     emitToolsDiscovered(
         serverId: string,
         serverName: string,
@@ -97,12 +114,23 @@ export class ClientToolEventEmitter implements IToolEventEmitter {
         tools: Array<{ name: string; description: string; inputSchema: Record<string, any> }>
     ): void {
         logger.info(`[client] External MCP tools discovered: ${serverName} has ${tools.length} tools`);
-        EventBus.client.emit(Events.Mcp.EXTERNAL_SERVER_TOOLS_DISCOVERED, {
+
+        const data: ExternalMcpServerToolsDiscoveredEventData & { serverId: string } = {
             serverId,
-            serverName,
-            serverVersion,
+            name: serverName,
+            version: serverVersion,
             tools,
-            timestamp: Date.now(),
-        });
+        };
+
+        EventBus.client.emit(
+            Events.Mcp.EXTERNAL_SERVER_TOOLS_DISCOVERED,
+            createExternalMcpServerToolsDiscoveredEventPayload(
+                Events.Mcp.EXTERNAL_SERVER_TOOLS_DISCOVERED,
+                'SYSTEM' as AgentId,
+                'SYSTEM' as ChannelId,
+                data,
+                { source: 'ClientToolEventEmitter' }
+            )
+        );
     }
 }

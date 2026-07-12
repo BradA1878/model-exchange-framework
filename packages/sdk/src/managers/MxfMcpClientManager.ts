@@ -41,7 +41,6 @@ export interface McpClientConfig {
     temperature?: number;
     maxTokens?: number;
     timeout?: number;
-    retryAttempts?: number;
 }
 
 export class MxfMcpClientManager {
@@ -57,18 +56,20 @@ export class MxfMcpClientManager {
         this.agentId = agentId;
         this.logger = new Logger('debug', `McpManager:${agentId}`, 'client');
         
-        // Extract MCP configuration from agent config with determinism improvements
+        // MxfAgent has already applied its own defaults (temperature 0.7, maxTokens 8000)
+        // to agentConfig before constructing this manager, so temperature/maxTokens are
+        // always set by the time we get here. There used to be `?? 0.1` / `?? 4000`
+        // fallbacks on these two lines that could never fire, plus a `retryAttempts: 3`
+        // that was passed to nothing. All three are gone.
         this.config = {
             provider: agentConfig.llmProvider as LlmProviderType,
             apiKey: agentConfig.apiKey,
             defaultModel: agentConfig.defaultModel,
-            // Determinism improvements: Lower temperature for more consistent behavior
-            temperature: agentConfig.temperature ?? 0.1,
-            maxTokens: agentConfig.maxTokens ?? 4000,
+            temperature: agentConfig.temperature,
+            maxTokens: agentConfig.maxTokens,
             timeout: agentConfig.requestTimeoutMs ?? 30000,
-            retryAttempts: 3
         };
-        
+
         this.validateConfig();
     }
 

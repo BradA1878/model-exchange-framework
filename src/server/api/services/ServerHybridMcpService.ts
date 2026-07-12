@@ -39,12 +39,18 @@ import {
 } from '@mxf-dev/core/protocols/mcp/services/ExternalServerConfigs';
 import type { ExternalServerConfig } from '@mxf-dev/core/protocols/mcp/services/ExternalMcpServerManager';
 import { HybridMcpToolRegistry } from '../../mcp/services/HybridMcpToolRegistry';
+import {
+    setHybridMcpToolRegistry,
+    clearHybridMcpToolRegistry
+} from '../../mcp/services/HybridMcpRegistryAccess';
 import { McpToolRegistry } from './McpToolRegistry';
 import { firstValueFrom } from 'rxjs';
 import { EventBus } from '@mxf-dev/core/events/EventBus';
 import { McpEvents } from '@mxf-dev/core/events/event-definitions/McpEvents';
 import fs from 'fs';
 import path from 'path';
+import { createExternalMcpServerToolsDiscoveredEventPayload } from '@mxf-dev/core/schemas/EventPayloadSchema';
+import type { AgentId, ChannelId } from '@mxf-dev/core/types/ChannelContext';
 
 // Create logger and validator
 const logger = new Logger('info', 'ServerHybridMcpService', 'server');
@@ -125,8 +131,10 @@ export class ServerHybridMcpService {
         // importing this class (would be a static import cycle).
         McpToolRegistry.getInstance().registerExternalToolsProvider(() => this.hybridRegistry.getExternalTools());
 
-        // Expose hybrid registry globally for tools_recommend tool
-        (global as any).hybridMcpToolRegistry = this.hybridRegistry;
+        // Publish the registry through the typed accessor. This used to be
+        // `(global as any).hybridMcpToolRegistry`, written by two different classes
+        // and read back untyped in eleven places.
+        setHybridMcpToolRegistry(this.hybridRegistry);
 
         // Register external server configurations WITHOUT auto-starting
         this.config.externalServerConfigs.forEach(serverConfig => {
@@ -238,14 +246,25 @@ export class ServerHybridMcpService {
             // For now, we'll trigger a refresh by emitting the tools discovered event
             const allExternalTools = this.externalServerManager.getAllExternalTools();
             
-            // Emit the tools discovered event to trigger hybrid registry refresh
+            // Emit the tools discovered event to trigger hybrid registry refresh.
+            // This was emitting a raw object rather than a payload envelope, so consumers
+            // reading the standard BaseEventPayload shape saw no data at all.
             if (allExternalTools.length > 0) {
-                EventBus.server.emit(McpEvents.EXTERNAL_SERVER_TOOLS_DISCOVERED, {
-                    serverId: 'manual-refresh',
-                    tools: allExternalTools,
-                    timestamp: new Date().toISOString(),
-                    source: 'ServerHybridMcpService'
-                });
+                EventBus.server.emit(
+                    McpEvents.EXTERNAL_SERVER_TOOLS_DISCOVERED,
+                    createExternalMcpServerToolsDiscoveredEventPayload(
+                        McpEvents.EXTERNAL_SERVER_TOOLS_DISCOVERED,
+                        'SYSTEM' as AgentId,
+                        'SYSTEM' as ChannelId,
+                        {
+                            serverId: 'manual-refresh',
+                            name: 'manual-refresh',
+                            version: '0.0.0',
+                            tools: allExternalTools
+                        },
+                        { source: 'ServerHybridMcpService' }
+                    )
+                );
             }
         } catch (error) {
             const errorMessage = error instanceof Error ? error.message : String(error);
@@ -258,18 +277,15 @@ export class ServerHybridMcpService {
      */
     public getStatus(): HybridServiceStatus {
         const externalStatus = this.externalServerManager.getServerStatuses();
-        
-        // Count internal tools from existing registry
-        let internalToolsCount = 0;
-        try {
-            // Get tools synchronously if possible, otherwise default to 0
-            const toolsMap = (McpToolRegistry.getInstance() as any).tools;
-            internalToolsCount = toolsMap ? toolsMap.size : 0;
-        } catch (error) {
-            logger.warn('Could not get internal tools count');
-        }
 
-        // Count running and failed external servers
+        // Real counts, from the hybrid registry's current snapshot.
+        //
+        // This used to report `runningServers.length * 2` as the external tool
+        // count — a literal guess ("Estimate 2 tools per server"), served through
+        // the REST status endpoint as if it were measured. The registry knows
+        // exactly which tools were discovered, so ask it.
+        const stats = this.hybridRegistry.getToolStats();
+
         const runningServers = Object.keys(externalStatus).filter(
             id => externalStatus[id].status === 'running'
         );
@@ -277,14 +293,11 @@ export class ServerHybridMcpService {
             id => externalStatus[id].status === 'error'
         );
 
-        // External tools count (mock for now - would be discovered from servers)
-        const externalToolsCount = runningServers.length * 2; // Estimate 2 tools per server
-
         return {
             initialized: this.initialized,
-            internalToolsCount,
-            externalToolsCount,
-            totalToolsCount: internalToolsCount + externalToolsCount,
+            internalToolsCount: stats.internal,
+            externalToolsCount: stats.external,
+            totalToolsCount: stats.total,
             runningServers,
             failedServers,
             uptime: Date.now() - this.startTime
@@ -379,9 +392,9 @@ export class ServerHybridMcpService {
     public async shutdown(): Promise<void> {
         
         try {
-            // Clean up global reference
-            delete (global as any).hybridMcpToolRegistry;
-            
+            // Clear the published registry
+            clearHybridMcpToolRegistry();
+
             // Shutdown external servers
             await this.externalServerManager.shutdown();
             

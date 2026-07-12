@@ -48,6 +48,9 @@ import { createStrictValidator } from '../../../utils/validation.js';
 import { AgentId } from '../../../types/Agent.js';
 import { ChannelId } from '../../../types/ChannelContext.js';
 import { Observation, Reflection } from '../../../types/ControlLoopTypes.js';
+import { OrparPhase as MemoryOrparPhase } from '../../../types/MemoryUtilityTypes.js';
+import { OrparGraphIntegration } from '../../../services/kg/OrparGraphIntegration.js';
+import { EntityExtractionService } from '../../../services/kg/EntityExtractionService.js';
 import {
     normalizeOrparParameters,
     stripUnknownParameters,
@@ -67,6 +70,75 @@ let agentDisconnectListenerRegistered = false;
  * ORPAR phases in order
  */
 export type OrparPhase = 'observe' | 'reason' | 'plan' | 'act' | 'reflect';
+
+/**
+ * The ORPAR tools name phases with verbs ('observe'), while the memory-utility system
+ * names them with nouns ('observation' — see MemoryUtilityTypes.OrparPhase). They are
+ * the same five phases in two vocabularies, which is part of why memory retrieval and
+ * phase-weighted learning were never connected. This map is the bridge.
+ */
+const TOOL_PHASE_TO_MEMORY_PHASE: Record<OrparPhase, MemoryOrparPhase> = {
+    observe: 'observation',
+    reason: 'reasoning',
+    plan: 'planning',
+    act: 'action',
+    reflect: 'reflection'
+};
+
+/**
+ * The agent's current ORPAR phase, in the vocabulary the memory-utility system uses.
+ *
+ * Returns null when the agent has no active ORPAR cycle, in which case callers should
+ * fall back to phase-independent scoring rather than guessing a phase.
+ */
+export function getCurrentMemoryPhase(agentId: string, channelId: string): MemoryOrparPhase | null {
+    const state = agentOrparStates.get(`${agentId}:${channelId}`);
+    if (!state?.currentPhase) {
+        return null;
+    }
+    return TOOL_PHASE_TO_MEMORY_PHASE[state.currentPhase];
+}
+
+/**
+ * Turn a reflection into knowledge-graph learning.
+ *
+ * Extracts the entities the agent named in its reflection, records them, and propagates
+ * the cycle's outcome as a reward across them — so entities that keep appearing in
+ * successful cycles gain utility and entities tied to failures lose it.
+ *
+ * Returns a summary of what changed. When the knowledge graph is disabled this reports
+ * zeroes rather than pretending work happened.
+ */
+async function applyReflectionToGraph(
+    agentId: AgentId,
+    channelId: ChannelId,
+    reflection: string,
+    taskSuccess: boolean
+): Promise<{ entitiesCreated: number; relationshipsCreated: number; qValuesUpdated: number }> {
+    const graph = OrparGraphIntegration.getInstance();
+    if (!graph.isEnabled()) {
+        return { entitiesCreated: 0, relationshipsCreated: 0, qValuesUpdated: 0 };
+    }
+
+    const extraction = await EntityExtractionService.getInstance().extractFromText(
+        channelId,
+        reflection
+    );
+
+    const involvedEntityIds = extraction.entities
+        .map(entity => entity.id)
+        .filter((id): id is string => Boolean(id));
+
+    return graph.applyReflectionUpdate(channelId, agentId, {
+        // Extraction already persisted the entities and relationships it found, so this
+        // update only has to attribute the outcome to them.
+        newEntities: [],
+        newRelationships: [],
+        qValueUpdates: [],
+        involvedEntityIds,
+        taskSuccess
+    });
+}
 
 /**
  * Valid phase transitions
@@ -898,6 +970,20 @@ IMPORTANT - Parameter format:
             { learnings: input.learnings, phaseData: { reflection: input.reflection, learnings: input.learnings, expectationsMet: input.expectationsMet, adjustments: input.adjustments } }
         );
 
+        // Feed the reflection back into the knowledge graph.
+        //
+        // OrparGraphIntegration.applyReflectionUpdate — which creates entities from what the
+        // agent learned and propagates the task outcome as a reward across the entities
+        // involved — had no caller anywhere, so kg_get_high_utility_entities ranked entities
+        // on Q-values that were never once updated. Reflection is the only phase that knows
+        // whether expectations were met, so entity learning belongs here.
+        const knowledgeGraph = await applyReflectionToGraph(
+            agentId,
+            channelId,
+            input.reflection,
+            input.expectationsMet !== false
+        );
+
         return {
             success: true,
             phase: 'reflect',
@@ -909,6 +995,7 @@ IMPORTANT - Parameter format:
                 expectationsMet: input.expectationsMet,
                 adjustments: input.adjustments
             },
+            knowledgeGraph,
             cycleComplete: true,
             nextPhase: 'observe',
             guidance: getPhaseGuidance('reflect', context?.allowedTools || context?._allowedTools),

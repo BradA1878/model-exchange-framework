@@ -106,8 +106,20 @@ export const TaskHelper = {
     },
 
     /**
-     * Complete a task
-     * 
+     * Complete a task.
+     *
+     * The complete/fail/cancel lifecycle events all put their fields at the `data` level,
+     * which is exactly where the server's handlers read them from, and pass `task` as a
+     * short human-readable summary string.
+     *
+     * They previously passed `task` as an object with no `title` / `description` /
+     * `assignmentStrategy`. createTaskEventPayload() validates that shape and fails fast,
+     * so `mxfService.completeTask()` and `mxfService.cancelTask()` threw
+     * "Task title is required" on every single call and no task could ever be completed
+     * or cancelled through the SDK. The validator accepts a plain string for `task`, and
+     * the server's `payload.data.task?.data || payload.data` fallback lands on `data`
+     * either way.
+     *
      * @param taskId - Task ID to complete
      * @param agentId - Agent ID completing the task
      * @param channelId - Channel ID where task exists
@@ -119,28 +131,60 @@ export const TaskHelper = {
         channelId: string,
         result: Record<string, any>
     ): Promise<void> => {
-        // Create completion payload with proper structure
         const payload = createTaskEventPayload(
             TaskEvents.COMPLETE_REQUEST,
             agentId,
             channelId,
             {
                 taskId,
-                task: {
-                    result,
-                    completedBy: agentId,
-                    completedAt: Date.now()
-                }
+                completingAgentId: agentId,
+                result,
+                completedAt: Date.now(),
+                task: `Task ${taskId} completed by ${agentId}`
             }
         );
-        
-        // Emit completion event through agent socket (hidden from developer)
+
         EventBus.client.emitOn(agentId, TaskEvents.COMPLETE_REQUEST, payload);
     },
 
     /**
-     * Cancel a task
-     * 
+     * Fail a task.
+     *
+     * Emits TaskEvents.FAIL_REQUEST, which the server turns into a real `failed` task
+     * status and a TaskEvents.FAILED broadcast. Call this whenever local task execution
+     * throws — otherwise the server keeps the task in `in_progress` forever and
+     * agent.onTaskFailed() never fires.
+     *
+     * @param taskId - Task ID that failed
+     * @param agentId - Agent ID that failed the task
+     * @param channelId - Channel ID where task exists
+     * @param error - Why the task failed
+     */
+    failTask: async (
+        taskId: string,
+        agentId: string,
+        channelId: string,
+        error: string
+    ): Promise<void> => {
+        const payload = createTaskEventPayload(
+            TaskEvents.FAIL_REQUEST,
+            agentId,
+            channelId,
+            {
+                taskId,
+                failingAgentId: agentId,
+                error,
+                failedAt: Date.now(),
+                task: `Task ${taskId} failed: ${error}`
+            }
+        );
+
+        EventBus.client.emitOn(agentId, TaskEvents.FAIL_REQUEST, payload);
+    },
+
+    /**
+     * Cancel a task.
+     *
      * @param taskId - Task ID to cancel
      * @param agentId - Agent ID cancelling the task
      * @param channelId - Channel ID where task exists
@@ -152,22 +196,19 @@ export const TaskHelper = {
         channelId: string,
         reason?: string
     ): Promise<void> => {
-        // Create cancellation payload with proper structure
         const payload = createTaskEventPayload(
             TaskEvents.CANCEL_REQUEST,
             agentId,
             channelId,
             {
                 taskId,
-                task: {
-                    reason,
-                    cancelledBy: agentId,
-                    cancelledAt: Date.now()
-                }
+                cancellingAgentId: agentId,
+                reason,
+                cancelledAt: Date.now(),
+                task: `Task ${taskId} cancelled by ${agentId}${reason ? `: ${reason}` : ''}`
             }
         );
-        
-        // Emit cancellation event through agent socket (hidden from developer)
+
         EventBus.client.emitOn(agentId, TaskEvents.CANCEL_REQUEST, payload);
     }
 };

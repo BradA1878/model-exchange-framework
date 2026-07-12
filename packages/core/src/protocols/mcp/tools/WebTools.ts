@@ -20,27 +20,41 @@
 
 /**
  * WebTools.ts
- * 
- * Web search, navigation, and content extraction tools for MXF
- * Ported from external MCP-WWW server for better integration
+ *
+ * Web search, navigation, content extraction, screenshots, and HTTP fetches.
+ *
+ * Every tool here is declared with defineTool, so a failure arrives as one
+ * envelope with `isError: true` rather than as a string starting with "Error:"
+ * that a caller has to parse.
+ *
+ * api_fetch runs from inside the server's trust boundary, so its target URL is
+ * checked by HttpTargetGuard before the request goes out — see that module for
+ * why an unrestricted fetch is a server-side request forgery hole.
  */
 
-import { WEB_TOOLS } from '../../../constants/ToolNames.js';
+import { WEB_TOOLS, TOOL_CATEGORIES } from '../../../constants/ToolNames.js';
 import { WebSearchService } from '../../../services/WebSearchService.js';
-import { BrowserManager } from '../../../services/BrowserManager.js';
-import { ContentProcessor } from '../../../services/ContentProcessor.js';
+import { defineTool } from '../defineTool.js';
+import { ToolError } from '../ToolError.js';
+import { checkHttpTarget } from '../security/HttpTargetGuard.js';
 
-// Initialize singleton services
+// WebSearchService owns the browser and content-processing plumbing these tools
+// need; they do not touch BrowserManager or ContentProcessor directly.
 const webSearchService = new WebSearchService();
-const browserManager = new BrowserManager();
-const contentProcessor = new ContentProcessor();
 
 /**
- * Web Search Tool - Performs web searches with content extraction
+ * Search the web and optionally pull the content of each result.
  */
-export const webSearchTool = {
+export const webSearchTool = defineTool<{
+    query: string;
+    maxResults?: number;
+    searchEngine?: string;
+    extractContent?: boolean;
+    format?: string;
+}, unknown>({
     name: WEB_TOOLS.WEB_SEARCH,
-    description: 'Perform web searches with optional content extraction and structured output',
+    category: TOOL_CATEGORIES.WEB,
+    description: 'Search the web and return results, optionally with the full text of each page.',
     inputSchema: {
         type: 'object',
         properties: {
@@ -75,61 +89,31 @@ export const webSearchTool = {
         },
         required: ['query']
     },
-    handler: async (input: {
-        query: string;
-        maxResults?: number;
-        searchEngine?: string;
-        extractContent?: boolean;
-        format?: string;
-    }, context: {
-        requestId: string;
-        agentId?: string;
-        channelId?: string;
-    }) => {
-        try {
-            const result = await webSearchService.search({
-                query: input.query,
-                maxResults: input.maxResults || 10,
-                searchEngine: input.searchEngine || 'google',
-                extractContent: input.extractContent ?? true,
-                format: input.format || 'structured'
-            });
-
-            return {
-                content: {
-                    type: 'text',
-                    text: JSON.stringify(result, null, 2)
-                },
-                metadata: {
-                    toolName: WEB_TOOLS.WEB_SEARCH,
-                    requestId: context.requestId,
-                    timestamp: new Date().toISOString()
-                }
-            };
-        } catch (error) {
-            return {
-                content: {
-                    type: 'text',
-                    text: `Error: ${error instanceof Error ? error.message : 'Web search failed'}`
-                },
-                metadata: {
-                    toolName: WEB_TOOLS.WEB_SEARCH,
-                    requestId: context.requestId,
-                    timestamp: new Date().toISOString(),
-                    error: true
-                }
-            };
-        }
-    },
-    enabled: true
-};
+    run: async (input) => {
+        return webSearchService.search({
+            query: input.query,
+            maxResults: input.maxResults ?? 10,
+            searchEngine: input.searchEngine ?? 'google',
+            extractContent: input.extractContent ?? true,
+            format: input.format ?? 'structured'
+        });
+    }
+});
 
 /**
- * Web Navigation Tool - Navigate to URLs and extract content
+ * Load a URL in a browser and extract its content.
  */
-export const webNavigationTool = {
+export const webNavigationTool = defineTool<{
+    url: string;
+    waitStrategy?: string;
+    includeScreenshot?: boolean;
+    screenshotFormat?: string;
+    extractContent?: boolean;
+    format?: string;
+}, unknown>({
     name: WEB_TOOLS.WEB_NAVIGATE,
-    description: 'Navigate to a URL and extract content with optional screenshot capture',
+    category: TOOL_CATEGORIES.WEB,
+    description: 'Load a URL in a headless browser and extract its content, optionally with a screenshot.',
     inputSchema: {
         type: 'object',
         properties: {
@@ -169,63 +153,29 @@ export const webNavigationTool = {
         },
         required: ['url']
     },
-    handler: async (input: {
-        url: string;
-        waitStrategy?: string;
-        includeScreenshot?: boolean;
-        screenshotFormat?: string;
-        extractContent?: boolean;
-        format?: string;
-    }, context: {
-        requestId: string;
-        agentId?: string;
-        channelId?: string;
-    }) => {
-        try {
-            const result = await webSearchService.navigate({
-                url: input.url,
-                waitStrategy: input.waitStrategy || 'networkidle2',
-                includeScreenshot: input.includeScreenshot || false,
-                screenshotFormat: input.screenshotFormat || 'png',
-                extractContent: input.extractContent ?? true,
-                format: input.format || 'structured'
-            });
-
-            return {
-                content: {
-                    type: 'text',
-                    text: JSON.stringify(result, null, 2)
-                },
-                metadata: {
-                    toolName: WEB_TOOLS.WEB_NAVIGATE,
-                    requestId: context.requestId,
-                    timestamp: new Date().toISOString()
-                }
-            };
-        } catch (error) {
-            return {
-                content: {
-                    type: 'text',
-                    text: `Error: ${error instanceof Error ? error.message : 'Web navigation failed'}`
-                },
-                metadata: {
-                    toolName: WEB_TOOLS.WEB_NAVIGATE,
-                    requestId: context.requestId,
-                    timestamp: new Date().toISOString(),
-                    error: true
-                }
-            };
-        }
-    },
-    enabled: true
-};
+    run: async (input) => {
+        return webSearchService.navigate({
+            url: input.url,
+            waitStrategy: input.waitStrategy ?? 'networkidle2',
+            includeScreenshot: input.includeScreenshot ?? false,
+            screenshotFormat: input.screenshotFormat ?? 'png',
+            extractContent: input.extractContent ?? true,
+            format: input.format ?? 'structured'
+        });
+    }
+});
 
 /**
- * Web Content Extraction Tool - Extract content from multiple URLs
+ * Extract content from several URLs at once.
  */
-export const webContentExtractionTool = {
+export const webContentExtractionTool = defineTool<{
+    urls: string[];
+    concurrency?: number;
+    format?: string;
+}, unknown>({
     name: WEB_TOOLS.WEB_BULK_EXTRACT,
-    description: 'Extract content from multiple URLs simultaneously',
+    category: TOOL_CATEGORIES.WEB,
+    description: 'Extract the content of several URLs in one call.',
     inputSchema: {
         type: 'object',
         properties: {
@@ -255,57 +205,28 @@ export const webContentExtractionTool = {
         },
         required: ['urls']
     },
-    handler: async (input: {
-        urls: string[];
-        concurrency?: number;
-        format?: string;
-    }, context: {
-        requestId: string;
-        agentId?: string;
-        channelId?: string;
-    }) => {
-        try {
-            const result = await webSearchService.bulkExtract({
-                urls: input.urls,
-                concurrency: input.concurrency || 3,
-                format: input.format || 'structured'
-            });
-
-            return {
-                content: {
-                    type: 'text',
-                    text: JSON.stringify(result, null, 2)
-                },
-                metadata: {
-                    toolName: WEB_TOOLS.WEB_BULK_EXTRACT,
-                    requestId: context.requestId,
-                    timestamp: new Date().toISOString()
-                }
-            };
-        } catch (error) {
-            return {
-                content: {
-                    type: 'text',
-                    text: `Error: ${error instanceof Error ? error.message : 'Bulk content extraction failed'}`
-                },
-                metadata: {
-                    toolName: WEB_TOOLS.WEB_BULK_EXTRACT,
-                    requestId: context.requestId,
-                    timestamp: new Date().toISOString(),
-                    error: true
-                }
-            };
-        }
-    },
-    enabled: true
-};
+    run: async (input) => {
+        return webSearchService.bulkExtract({
+            urls: input.urls,
+            concurrency: input.concurrency ?? 3,
+            format: input.format ?? 'structured'
+        });
+    }
+});
 
 /**
- * Web Screenshot Tool - Capture screenshots of web pages
+ * Capture a screenshot of a page.
  */
-export const webScreenshotTool = {
+export const webScreenshotTool = defineTool<{
+    url: string;
+    format?: string;
+    fullPage?: boolean;
+    width?: number;
+    height?: number;
+}, { url: string; format: string; byteLength: number }>({
     name: WEB_TOOLS.WEB_SCREENSHOT,
-    description: 'Capture screenshots of web pages',
+    category: TOOL_CATEGORIES.WEB,
+    description: 'Capture a screenshot of a web page.',
     inputSchema: {
         type: 'object',
         properties: {
@@ -342,71 +263,56 @@ export const webScreenshotTool = {
         },
         required: ['url']
     },
-    handler: async (input: {
-        url: string;
-        format?: string;
-        fullPage?: boolean;
-        width?: number;
-        height?: number;
-    }, context: {
-        requestId: string;
-        agentId?: string;
-        channelId?: string;
-    }) => {
-        try {
-            const result = await webSearchService.screenshot({
-                url: input.url,
-                format: input.format || 'png',
-                fullPage: input.fullPage || false,
-                width: input.width || 1280,
-                height: input.height || 720
-            });
+    run: async (input) => {
+        const format = input.format ?? 'png';
+        const screenshot = await webSearchService.screenshot({
+            url: input.url,
+            format,
+            fullPage: input.fullPage ?? false,
+            width: input.width ?? 1280,
+            height: input.height ?? 720
+        });
 
-            return {
-                content: {
-                    type: 'text',
-                    text: `Screenshot captured for ${input.url} (${result.length} bytes)`
-                },
-                metadata: {
-                    toolName: WEB_TOOLS.WEB_SCREENSHOT,
-                    requestId: context.requestId,
-                    timestamp: new Date().toISOString(),
-                    screenshotSize: result.length
-                }
-            };
-        } catch (error) {
-            return {
-                content: {
-                    type: 'text',
-                    text: `Error: ${error instanceof Error ? error.message : 'Screenshot capture failed'}`
-                },
-                metadata: {
-                    toolName: WEB_TOOLS.WEB_SCREENSHOT,
-                    requestId: context.requestId,
-                    timestamp: new Date().toISOString(),
-                    error: true
-                }
-            };
-        }
-    },
-    enabled: true
-};
+        return {
+            url: input.url,
+            format,
+            byteLength: screenshot.length
+        };
+    }
+});
 
 /**
- * Export all web tools
+ * Fetch a URL and return the response body.
+ *
+ * The target is checked before the request goes out: the server can reach the
+ * MXF API on localhost, Meilisearch, MongoDB, and a cloud metadata endpoint, and
+ * an unrestricted fetch would let an agent reach all of them through us.
  */
-/**
- * API Fetch Tool - Fetch JSON from API endpoints
- */
-export const apiFetchTool = {
-    name: 'api_fetch',
-    description: 'Fetch JSON data from API endpoints. Use this for APIs, not web_navigate (which is for HTML pages).',
+export const apiFetchTool = defineTool<{
+    url: string;
+    method?: 'GET' | 'POST' | 'PUT' | 'DELETE';
+    headers?: Record<string, string>;
+    body?: unknown;
+    timeout?: number;
+}, {
+    status: number;
+    contentType: string;
+    dataType: 'json' | 'text';
+    url: string;
+    data: unknown;
+}>({
+    name: WEB_TOOLS.API_FETCH,
+    category: TOOL_CATEGORIES.WEB_REQUEST,
+    description:
+        'Fetch a public HTTP(S) endpoint and return the response body, parsed as JSON when the ' +
+        'response says it is JSON. Use this for APIs; use web_navigate for HTML pages. ' +
+        'Private and loopback addresses are refused.',
     inputSchema: {
         type: 'object',
         properties: {
             url: {
                 type: 'string',
-                description: 'API endpoint URL',
+                description: 'API endpoint URL (http or https, public host)',
                 format: 'uri'
             },
             method: {
@@ -427,127 +333,123 @@ export const apiFetchTool = {
             timeout: {
                 type: 'number',
                 description: 'Request timeout in milliseconds',
-                default: 30000
+                default: 30000,
+                minimum: 1,
+                maximum: 120000
             }
         },
         required: ['url']
     },
-    handler: async (input: {
-        url: string;
-        method?: string;
-        headers?: Record<string, string>;
-        body?: any;
-        timeout?: number;
-    }, context: {
-        requestId: string;
-        agentId?: string;
-        channelId?: string;
-    }) => {
-        try {
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), input.timeout || 30000);
+    run: async (input) => {
+        // Refuse targets inside the trust boundary before opening a socket.
+        const targetCheck = await checkHttpTarget(input.url);
+        if (!targetCheck.allowed) {
+            throw ToolError.permissionDenied(
+                targetCheck.reason ?? `Refusing to fetch ${input.url}`,
+                { url: input.url }
+            );
+        }
 
-            const fetchOptions: RequestInit = {
-                method: input.method || 'GET',
-                headers: {
-                    'Accept': 'application/json',
-                    ...input.headers
-                },
-                signal: controller.signal
+        const method = input.method ?? 'GET';
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), input.timeout ?? 30000);
+
+        try {
+            const headers: Record<string, string> = {
+                Accept: 'application/json',
+                ...input.headers
             };
 
-            if (input.body && (input.method === 'POST' || input.method === 'PUT')) {
+            const fetchOptions: RequestInit = {
+                method,
+                headers,
+                signal: controller.signal,
+                // A redirect can point back at a blocked host after the check above,
+                // so follow none of them — the agent can fetch the new location
+                // explicitly and have it checked in turn.
+                redirect: 'manual'
+            };
+
+            if (input.body !== undefined && (method === 'POST' || method === 'PUT')) {
                 fetchOptions.body = JSON.stringify(input.body);
-                fetchOptions.headers = {
-                    ...fetchOptions.headers,
-                    'Content-Type': 'application/json'
-                };
+                headers['Content-Type'] = 'application/json';
             }
 
             const response = await fetch(input.url, fetchOptions);
-            clearTimeout(timeoutId);
+
+            if (response.status >= 300 && response.status < 400) {
+                const location = response.headers.get('location');
+                throw ToolError.upstream(
+                    `${input.url} redirected to ${location ?? 'an unspecified location'}. ` +
+                    `Redirects are not followed — call api_fetch again with that URL if you want it.`,
+                    { details: { status: response.status, location, url: input.url } }
+                );
+            }
+
+            const responseText = await response.text();
+            const contentType = response.headers.get('content-type') ?? '';
 
             if (!response.ok) {
-                const errorText = await response.text();
-                return {
-                    content: {
-                        type: 'text',
-                        text: JSON.stringify({
-                            error: true,
+                throw ToolError.upstream(
+                    `${method} ${input.url} returned ${response.status} ${response.statusText}`,
+                    {
+                        details: {
                             status: response.status,
                             statusText: response.statusText,
                             url: input.url,
-                            body: errorText.substring(0, 500) // Truncate error responses
-                        }, null, 2)
-                    },
-                    metadata: {
-                        toolName: 'api_fetch',
-                        requestId: context.requestId,
-                        timestamp: new Date().toISOString(),
-                        error: true
+                            body: responseText.slice(0, 500)
+                        }
                     }
-                };
+                );
             }
 
-            // Get raw response text (don't assume JSON)
-            const responseText = await response.text();
-            const contentType = response.headers.get('content-type') || '';
-
-            // Try to parse as JSON if content-type suggests it
-            let data: any = responseText;
-            let dataType = 'text';
+            // Parse as JSON only when the response claims to be JSON. A body that
+            // says it is JSON but does not parse is an upstream error, not a
+            // string to hand back as if nothing happened.
+            let data: unknown = responseText;
+            let dataType: 'json' | 'text' = 'text';
 
             if (contentType.includes('application/json') || contentType.includes('text/json')) {
                 try {
                     data = JSON.parse(responseText);
                     dataType = 'json';
-                } catch (e) {
-                    // JSON parse failed - return as text
-                    data = responseText;
-                    dataType = 'text (JSON parse failed)';
+                } catch (parseError) {
+                    throw ToolError.upstream(
+                        `${input.url} declared Content-Type "${contentType}" but the body is not valid JSON: ` +
+                        `${parseError instanceof Error ? parseError.message : String(parseError)}`,
+                        { details: { url: input.url, contentType, bodyPreview: responseText.slice(0, 200) } }
+                    );
                 }
             }
 
             return {
-                content: {
-                    type: 'text',
-                    text: JSON.stringify({
-                        success: true,
-                        status: response.status,
-                        contentType: contentType,
-                        dataType: dataType,
-                        url: input.url,
-                        data: data
-                    }, null, 2)
-                },
-                metadata: {
-                    toolName: 'api_fetch',
-                    requestId: context.requestId,
-                    timestamp: new Date().toISOString()
-                }
+                status: response.status,
+                contentType,
+                dataType,
+                url: input.url,
+                data
             };
 
         } catch (error) {
-            return {
-                content: {
-                    type: 'text',
-                    text: JSON.stringify({
-                        error: true,
-                        message: error instanceof Error ? error.message : 'API fetch failed',
-                        url: input.url
-                    }, null, 2)
-                },
-                metadata: {
-                    toolName: 'api_fetch',
-                    requestId: context.requestId,
-                    timestamp: new Date().toISOString(),
-                    error: true
-                }
-            };
+            // A ToolError from the branches above is already the right shape.
+            if (error instanceof ToolError) {
+                throw error;
+            }
+            if (error instanceof Error && error.name === 'AbortError') {
+                throw ToolError.upstream(
+                    `${method} ${input.url} timed out after ${input.timeout ?? 30000}ms`,
+                    { details: { url: input.url } }
+                );
+            }
+            throw ToolError.upstream(
+                `${method} ${input.url} failed: ${error instanceof Error ? error.message : String(error)}`,
+                { cause: error, details: { url: input.url } }
+            );
+        } finally {
+            clearTimeout(timeoutId);
         }
-    },
-    enabled: true
-};
+    }
+});
 
 export const webTools = [
     webSearchTool,

@@ -170,6 +170,16 @@ export class QValueManager {
     }
 
     /**
+     * Whether a Q-value for this memory is already in the cache.
+     *
+     * Used by MemoryService.hydrateQValues so a retrieval only reads persistence for
+     * memories this process has not scored yet.
+     */
+    public isCached(memoryId: string): boolean {
+        return this.qValueCache.has(memoryId);
+    }
+
+    /**
      * Set Q-value in cache (typically called when loading from persistence)
      */
     public setQValueInCache(memoryId: string, qValue: number): void {

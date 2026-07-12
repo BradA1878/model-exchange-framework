@@ -357,7 +357,7 @@ async function demo() {
       description: 'Demonstrating multi-timescale memory'
     });
 
-    const keys = await sdk.generateKey(channelId, undefined, 'Memory Demo Agent Key');
+    const keys = await sdk.generateKey(channelId, 'MemoryDemoAgent', 'Memory Demo Agent Key');
 
     agent = await sdk.createAgent({
       agentId: 'MemoryDemoAgent',

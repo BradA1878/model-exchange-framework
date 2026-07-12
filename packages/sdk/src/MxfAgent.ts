@@ -46,8 +46,8 @@ import { MxfSystemPromptManager, PromptManagerCallbacks } from './managers/MxfSy
 import { MxfMemoryManager, MemoryManagerConfig } from './managers/MxfMemoryManager.js';
 import { MxfTaskExecutionManager, TaskExecutionCallbacks } from './managers/MxfTaskExecutionManager.js';
 import { MxfMcpClientManager } from './managers/MxfMcpClientManager.js';
-import { MxfActionHistoryService } from './services/MxfActionHistoryService.js';
 import { MxfContextBuilder } from './services/MxfContextBuilder.js';
+import { TaskHelper } from './services/internal/TaskHelper.js';
 import { MxfMessageAggregator } from '@mxf-dev/core/services/MxfMessageAggregator';
 import { ReasoningToolParser } from '@mxf-dev/core/services/ReasoningToolParser';
 
@@ -142,7 +142,15 @@ export class MxfAgent extends MxfClient {
     private activeControlLoopId: string | null = null;
     private taskCompleted: boolean = false; // Prevent further LLM calls after task completion
     private isGenerating: boolean = false; // Concurrency guard — prevents concurrent generateResponse calls
-    private taskAssignedHandler: ((data: any) => void) | null = null; // Store handler for cleanup
+
+    /**
+     * Subscriptions created by performAgentInitialization(). That method runs on every
+     * connect(), so without tracking these they doubled on every reconnect — the
+     * LLM_REASONING listener in particular stored each reasoning entry N times.
+     * Guarded + torn down in disconnect().
+     */
+    private agentSubscriptions: Subscription[] = [];
+    private agentListenersSetup: boolean = false;
 
     // User input pause gate — blocks the work loop when another agent has a pending user_input request.
     // The requesting agent's own loop is already blocked inside tool execution.
@@ -190,16 +198,6 @@ export class MxfAgent extends MxfClient {
     }> = [];
     private readonly MAX_REASONING_ENTRIES = 5; // Keep last 5 reasoning entries
     
-    // Fallback completion detection
-    private completionDetectionState = {
-        noToolCallIterations: 0,
-        lastSignificantActivity: Date.now(),
-        repeatingResponsePatterns: new Map<string, number>(),
-        inactivityThreshold: 30000, // 30 seconds of inactivity
-        maxNoToolIterations: 2, // Max iterations without tool calls before considering complete
-        confidenceScores: [] as number[]
-    };
-
     /**
      * Create a new MxfAgent instance with service-based architecture
      */
@@ -336,49 +334,57 @@ export class MxfAgent extends MxfClient {
         // Initialize event handlers
         this.eventHandlerService.initializeEventHandlers();
 
-        // Set up user input pause gate so this agent pauses when another agent requests user input
-        this.setupUserInputPauseGate();
+        // Agent-level EventBus listeners. Guarded because performAgentInitialization()
+        // runs on every connect(): without the guard these doubled on each reconnect.
+        if (!this.agentListenersSetup) {
+            this.agentListenersSetup = true;
 
-        // Listen for LLM_REASONING events to store reasoning in memory
-        EventBus.client.on(AgentEvents.LLM_REASONING, (payload) => {
-            if (payload.agentId === this.agentId) {
-                this.storeReasoningInMemory(payload.data);
-            }
-        });
-        
-        // Listen for task assignments to update currentTask immediately
-        this.taskAssignedHandler = async (payload: any) => {
-            // Extract data from the event payload
-            const data = payload.data || payload;
-            if (data.agentId === this.agentId) {
-                // Update currentTask immediately so hasActiveTask() returns true
-                this.currentTask = data.taskRequest;
+            // Pause this agent's work loop when another agent requests user input
+            this.setupUserInputPauseGate();
 
-                // CRITICAL FIX: Add task message to conversation history ONCE
-                // so subsequent iterations find it in history and don't re-inject.
-                // Without this, the task is transient - created fresh each iteration,
-                // causing the LLM to repeat the same tool calls.
-                const taskDescription = data.taskRequest?.description ||
-                                       data.taskRequest?.content ||
-                                       data.task?.description || '';
-                if (taskDescription && this.memoryManager) {
-                    this.memoryManager.addConversationMessage({
-                        role: 'user',
-                        content: `## Current Task\n${taskDescription}`,
-                        metadata: { contextLayer: 'task' }
-                    });
-                }
+            // Store LLM reasoning for use in later prompts
+            this.agentSubscriptions.push(
+                EventBus.client.on(AgentEvents.LLM_REASONING, (payload) => {
+                    if (payload.agentId === this.agentId) {
+                        this.storeReasoningInMemory(payload.data);
+                    }
+                })
+            );
 
-                // Update system prompt with task context
-                try {
-                    await this.systemPromptManager.updatePromptForTask(data.task);
-                } catch (error) {
-                    this.modelLogger.warn(`Failed to update system prompt for task: ${error}`);
-                }
-            }
-        };
-        EventBus.client.on(AgentEvents.TASK_ASSIGNED, this.taskAssignedHandler);
-        
+            // Pick up task assignments so currentTask is set before the work loop starts
+            this.agentSubscriptions.push(
+                EventBus.client.on(AgentEvents.TASK_ASSIGNED, async (payload: any) => {
+                    const data = payload.data || payload;
+                    if (data.agentId !== this.agentId) {
+                        return;
+                    }
+
+                    // Set currentTask immediately so hasActiveTask() returns true
+                    this.currentTask = data.taskRequest;
+
+                    // Add the task to conversation history ONCE, so later iterations find it
+                    // there instead of re-injecting it and driving the LLM to repeat itself.
+                    const taskDescription = data.taskRequest?.description ||
+                                           data.taskRequest?.content ||
+                                           data.task?.description || '';
+                    if (taskDescription && this.memoryManager) {
+                        this.memoryManager.addConversationMessage({
+                            role: 'user',
+                            content: `## Current Task\n${taskDescription}`,
+                            metadata: { contextLayer: 'task' }
+                        });
+                    }
+
+                    // Update system prompt with task context
+                    try {
+                        await this.systemPromptManager.updatePromptForTask(data.task);
+                    } catch (error) {
+                        this.modelLogger.warn(`Failed to update system prompt for task: ${error}`);
+                    }
+                })
+            );
+        }
+
         // Set up task request handler with ORPAR integration
         this.setTaskRequestHandler(async (taskRequest: any) => {
             // Check if channel has systemLlmEnabled for ORPAR orchestration
@@ -684,66 +690,72 @@ export class MxfAgent extends MxfClient {
                 EventBus.client.emitOn(this.agentId, AgentEvents.LLM_STREAM_CHUNK, chunkPayload);
             };
 
-            // Use streaming when the client manager supports it (sends stream:true to OpenRouter)
+            // Streaming request. There is no silent fall back to non-streaming: that used
+            // to be triggered by SUBSTRING-MATCHING the error message ('Streaming completed
+            // without', 'No response body'), which meant any provider that reworded its
+            // error stopped falling back, and any unrelated error whose text happened to
+            // contain those words silently re-ran the whole request. A streaming failure is
+            // a failure — it propagates.
+            //
+            // Context overflow (413) is the one case that is genuinely recoverable, and it
+            // is detected from the HTTP status, not from prose.
             let response: McpApiResponse;
             try {
-                this.modelLogger.debug('📡 Attempting streaming request...');
                 response = await this.mcpClientManager.sendWithContextStreaming(agentContext, mcpOptions, onStreamChunk);
-                this.modelLogger.debug('📡 Streaming request completed successfully');
             } catch (streamError: any) {
-                // If streaming fails (unsupported model/provider), fall back to non-streaming
-                this.modelLogger.debug(`📡 Streaming failed: ${streamError?.message}`);
-                if (streamError?.message?.includes('Streaming completed without') ||
-                    streamError?.message?.includes('No response body')) {
-                    this.modelLogger.debug('📡 Falling back to non-streaming');
-                    response = await this.mcpClientManager.sendWithContext(agentContext, mcpOptions);
-                } else {
-                    // Check for context overflow (413) — apply reactive compaction if enabled
-                    const reactiveService = ReactiveCompactionService.getInstance();
-                    const compactionConfig = loadPromptCompactionConfig();
-                    if (compactionConfig.reactiveCompactionEnabled && reactiveService.isContextOverflowError(streamError)) {
-                        this.modelLogger.warn('Context overflow detected — applying reactive compaction');
-                        const compactionResult = await reactiveService.compact(
-                            agentContext.conversationHistory,
-                            this.agentId,
-                            this.config.channelId,
-                            1,
-                            streamError.status || streamError.statusCode || 413,
-                        );
-                        if (compactionResult.success) {
-                            // Update context with compacted history and retry
-                            agentContext.conversationHistory = compactionResult.messages;
-                            this.modelLogger.info(`Reactive compaction recovered ${compactionResult.tokensBefore - compactionResult.tokensAfter} tokens (${compactionResult.strategy}), retrying`);
-                            try {
-                                response = await this.mcpClientManager.sendWithContextStreaming(agentContext, mcpOptions, onStreamChunk);
-                            } catch (retryError: any) {
-                                // Second attempt — escalate strategy
-                                if (reactiveService.isContextOverflowError(retryError)) {
-                                    const secondResult = await reactiveService.compact(
-                                        agentContext.conversationHistory,
-                                        this.agentId,
-                                        this.config.channelId,
-                                        2,
-                                        retryError.status || retryError.statusCode || 413,
-                                    );
-                                    if (secondResult.success) {
-                                        agentContext.conversationHistory = secondResult.messages;
-                                        response = await this.mcpClientManager.sendWithContext(agentContext, mcpOptions);
-                                    } else {
-                                        // Compaction couldn't reduce tokens further — re-throw the original error
-                                        this.modelLogger.error('Reactive compaction exhausted — context still too large after 2 attempts');
-                                        throw streamError;
-                                    }
-                                } else {
-                                    throw retryError;
-                                }
-                            }
-                        } else {
-                            throw streamError;
-                        }
-                    } else {
+                const reactiveService = ReactiveCompactionService.getInstance();
+                const compactionConfig = loadPromptCompactionConfig();
+
+                const isRecoverableOverflow =
+                    compactionConfig.reactiveCompactionEnabled &&
+                    reactiveService.isContextOverflowError(streamError);
+
+                if (!isRecoverableOverflow) {
+                    throw streamError;
+                }
+
+                this.modelLogger.warn('Context overflow detected — applying reactive compaction');
+                const compactionResult = await reactiveService.compact(
+                    agentContext.conversationHistory,
+                    this.agentId,
+                    this.config.channelId,
+                    1,
+                    streamError.status || streamError.statusCode || 413,
+                );
+
+                if (!compactionResult.success) {
+                    throw streamError;
+                }
+
+                agentContext.conversationHistory = compactionResult.messages;
+                this.modelLogger.info(
+                    `Reactive compaction recovered ${compactionResult.tokensBefore - compactionResult.tokensAfter} tokens ` +
+                    `(${compactionResult.strategy}), retrying`
+                );
+
+                try {
+                    response = await this.mcpClientManager.sendWithContextStreaming(agentContext, mcpOptions, onStreamChunk);
+                } catch (retryError: any) {
+                    // Second attempt — escalate the compaction strategy.
+                    if (!reactiveService.isContextOverflowError(retryError)) {
+                        throw retryError;
+                    }
+
+                    const secondResult = await reactiveService.compact(
+                        agentContext.conversationHistory,
+                        this.agentId,
+                        this.config.channelId,
+                        2,
+                        retryError.status || retryError.statusCode || 413,
+                    );
+
+                    if (!secondResult.success) {
+                        this.modelLogger.error('Reactive compaction exhausted — context still too large after 2 attempts');
                         throw streamError;
                     }
+
+                    agentContext.conversationHistory = secondResult.messages;
+                    response = await this.mcpClientManager.sendWithContextStreaming(agentContext, mcpOptions, onStreamChunk);
                 }
             }
             
@@ -946,10 +958,6 @@ export class MxfAgent extends MxfClient {
             this.memoryManager.addConversationMessage(assistantMessage);
 
             if (toolCalls.length > 0) {
-                // Reset no-tool iterations counter
-                this.completionDetectionState.noToolCallIterations = 0;
-                this.completionDetectionState.lastSignificantActivity = Date.now();
-
                 const toolExecutionResult = await this.handleToolExecutionWithHelpers(toolCalls, availableTools, iteration);
 
                 if (toolExecutionResult.taskComplete) {
@@ -1067,43 +1075,50 @@ export class MxfAgent extends MxfClient {
                     continue;
                 }
             } else {
-                // No tool calls - check for fallback completion
-                this.completionDetectionState.noToolCallIterations++;
-                
-                // Analyze response for completion indicators
-                const completionAnalysis = await this.analyzeResponseForCompletion(responseText);
-
-                if (completionAnalysis.shouldComplete) {
-                    // Auto-complete the task if confidence is high enough
-                    if (completionAnalysis.confidence >= 0.8) {
-                        await this.autoCompleteTask(completionAnalysis.reason);
-                        taskComplete = true;
-                    }
-                    break;
-                }
-                
-                // Check if we've exceeded no-tool iterations
-                if (this.completionDetectionState.noToolCallIterations >= this.completionDetectionState.maxNoToolIterations) {
-                    // Check if this is a reactive agent before auto-completing
-                    const isReactiveAgent = this.isReactiveAgent();
-
-                    if (isReactiveAgent) {
-                        // Reset the counter to prevent constant logging
-                        this.completionDetectionState.noToolCallIterations = 0;
-                        // Continue waiting instead of auto-completing
-                        continue;
-                    } else {
-                        await this.autoCompleteTask('Multiple iterations without tool usage');
-                        taskComplete = true;
-                        break;
-                    }
-                }
+                // No tool calls this iteration. The agent has said something without
+                // doing anything. That is not completion — a task is complete when the
+                // agent calls task_complete, and at no other time.
+                //
+                // There used to be a heuristic here that scored phrases like "all done",
+                // "standing by" and "let me know", plus inactivity, and above a 0.8
+                // confidence called task_complete with
+                // `result: "Task automatically completed by fallback detection: ..."`.
+                // A chatty model that merely SAID it had finished got its task marked
+                // complete server-side with a fabricated result. It has been removed.
+                this.modelLogger.debug(
+                    `Iteration ${iteration}: no tool calls. Waiting for the agent to act or call task_complete.`
+                );
             }
         }
 
-        // Handle final response
-        if (iteration >= maxIterations && !taskComplete) {
-            this.modelLogger.error('Maximum iterations reached without task completion');
+        // The loop is over. If the agent never called task_complete, the task did not
+        // complete — say so, and fail it properly, rather than inventing a completion.
+        if (!taskComplete && this.currentTask) {
+            const taskId = this.currentTask.id || this.currentTask.taskId;
+            const reason =
+                `Agent '${this.agentId}' reached the ${maxIterations}-iteration limit without calling task_complete`;
+
+            this.modelLogger.error(reason);
+
+            if (taskId) {
+                // Emit a real task failure so the server moves the task out of
+                // in_progress and onTaskFailed() fires for the consumer. Previously the
+                // task was either fabricated-complete or left hanging in_progress forever.
+                await TaskHelper.failTask(taskId, this.agentId, this.config.channelId, reason);
+            }
+
+            // Surface it on the agent's error channel too, so agent.on(Events.Agent.ERROR)
+            // and channel monitors see it even when the client Logger is off.
+            EventBus.client.emitOn(
+                this.agentId,
+                AgentEvents.ERROR,
+                createBaseEventPayload(
+                    AgentEvents.ERROR,
+                    this.agentId,
+                    this.config.channelId,
+                    { message: reason, phase: 'max_iterations', taskId }
+                )
+            );
         }
 
         // Notify aggregator that agent has finished processing
@@ -1111,11 +1126,11 @@ export class MxfAgent extends MxfClient {
             this.messageAggregator.onAgentResponse();
             this.modelLogger.debug('✅ Agent finished generateResponse - aggregator notified');
         }
-        
+
         // Return final response
         const finalMessages = this.memoryManager.getConversationHistory();
         const lastAssistantMessage = [...finalMessages].reverse().find(msg => msg.role === 'assistant');
-        return lastAssistantMessage?.content || 'Task completed successfully.';
+        return lastAssistantMessage?.content ?? '';
         } catch (error) {
             // Log the error so it's visible when client logging is enabled
             const errorMsg = error instanceof Error ? error.message : String(error);
@@ -1531,37 +1546,32 @@ This iteration has been skipped. Choose a different action or complete the task.
     }
 
     /**
-     * Register a tool with the agent
+     * Register a tool with the agent.
+     *
+     * @throws Error if the server rejects the registration or does not answer.
+     *         This used to catch everything and return `false`, so a rejected tool
+     *         looked identical to a tool that simply wasn't there.
      */
-    public async registerTool(tool: McpTool): Promise<boolean> {
-        try {
-            await this.mcpClientManager.initializeMcpClient();
-            
-            // Convert McpTool to McpToolDefinition format expected by parent class
-            const toolDefinition: McpToolDefinition = {
-                name: tool.name,
-                description: tool.description,
-                inputSchema: tool.input_schema,
-                enabled: true,
-                metadata: {},
-                handler: async () => {
-                    throw new Error('Tool execution must be handled via events');
-                }
-            };
-            
-            // Use parent class proxy method
-            const success = await super.registerTool(toolDefinition);
-            
-            if (success) {
-                // Also register with MCP client manager
-                await this.mcpClientManager.registerTool(tool);
-            }
+    public async registerTool(tool: McpTool): Promise<void> {
+        await this.mcpClientManager.initializeMcpClient();
 
-            return success;
-        } catch (error) {
-            this.modelLogger.error(`Failed to register tool: ${error instanceof Error ? error.message : String(error)}`);
-            return false;
-        }
+        // Convert McpTool to McpToolDefinition format expected by parent class
+        const toolDefinition: McpToolDefinition = {
+            name: tool.name,
+            description: tool.description,
+            inputSchema: tool.input_schema,
+            enabled: true,
+            metadata: {},
+            handler: async () => {
+                throw new Error('Tool execution must be handled via events');
+            }
+        };
+
+        // Register server-side first; throws if the server rejects it.
+        await super.registerTool(toolDefinition);
+
+        // Then mirror it into the local MCP client manager.
+        await this.mcpClientManager.registerTool(tool);
     }
 
     /**
@@ -1669,21 +1679,14 @@ This iteration has been skipped. Choose a different action or complete the task.
     }
 
     /**
-     * Unregister an MCP tool
+     * Unregister an MCP tool.
+     *
+     * @throws Error if the server rejects the request or does not answer.
+     *         This used to catch everything and return `false`.
      */
-    public async unregisterTool(toolName: string, channelId?: string): Promise<boolean> {
-        try {
-            const success = await super.unregisterTool(toolName, channelId);
-            
-            if (success) {
-                await this.mcpClientManager.unregisterTool(toolName);
-            }
-
-            return success;
-        } catch (error) {
-            this.modelLogger.error(`Failed to unregister tool ${toolName}: ${error}`);
-            return false;
-        }
+    public async unregisterTool(toolName: string, channelId?: string): Promise<void> {
+        await super.unregisterTool(toolName, channelId);
+        await this.mcpClientManager.unregisterTool(toolName);
     }
 
     /**
@@ -1812,30 +1815,6 @@ This iteration has been skipped. Choose a different action or complete the task.
     }
 
     /**
-     * Inject action history into conversation context for LLM prompts
-     */
-    private async injectActionHistoryIntoConversation(conversation: ConversationMessage[]): Promise<ConversationMessage[]> {
-        try {
-            // Get recent action history - MxfActionHistoryService needs to be instantiated, not singleton
-            const actionHistoryService = new MxfActionHistoryService();
-            const actionHistory = await actionHistoryService.getFormattedHistory(this.agentId, 5);
-            
-            // If no action history, return original conversation
-            if (!actionHistory || actionHistory === '(No recent actions)') {
-                return conversation;
-            }
-            
-            // Use the new context injection system
-            return this.injectContextIntoConversation(conversation, actionHistory, 'conversation', 'user');
-            
-        } catch (error) {
-            this.modelLogger.error(`Failed to inject action history: ${error}`);
-            // Return original conversation on error
-            return conversation;
-        }
-    }
-
-    /**
      * Generate structured conversation prompt with clear sections matching user specification
      */
     private async generateStructuredConversationPrompt(conversationHistory: ConversationMessage[]): Promise<ConversationMessage[]> {
@@ -1852,13 +1831,11 @@ This iteration has been skipped. Choose a different action or complete the task.
             promptSections.push(reasoningSection);
         }
 
-        // 3. Conversation History Section
-        // COMMENTED OUT: Redundant with individual conversation messages sent via MCP client
-        // The LLM receives full conversation as structured messages, no need for text summary
-        // const conversationSection = this.formatConversationHistorySection(conversationHistory);
-        // promptSections.push(conversationSection);
+        // No conversation-history section: the LLM already receives the full conversation
+        // as structured messages via the MCP client, so a text summary here would just
+        // duplicate it.
 
-        // 4. Current SystemLLM Insight Section (if available)
+        // 3. Current SystemLLM Insight Section (if available)
         const systemInsightSection = this.formatSystemInsightSection(conversationHistory);
         if (systemInsightSection) {
             promptSections.push(systemInsightSection);
@@ -1902,16 +1879,11 @@ This iteration has been skipped. Choose a different action or complete the task.
             promptSections.push(reasoningSection);
         }
 
-        // 3. Conversation History Section (exclude the current message)
-        // COMMENTED OUT: Redundant with individual conversation messages sent via MCP client
-        // The LLM receives full conversation as structured messages, no need for text summary
-        // const historyWithoutCurrent = currentMessage 
-        //     ? conversationHistory.filter(msg => msg !== currentMessage && msg.id !== currentMessage.id)
-        //     : conversationHistory;
-        // const conversationSection = this.formatConversationHistorySection(historyWithoutCurrent);
-        // promptSections.push(conversationSection);
+        // No conversation-history section: the LLM already receives the full conversation
+        // as structured messages via the MCP client, so a text summary here would just
+        // duplicate it.
 
-        // 4. Current SystemLLM Insight Section (if available)
+        // 3. Current SystemLLM Insight Section (if available)
         const systemInsightSection = this.formatSystemInsightSection(conversationHistory);
         if (systemInsightSection) {
             promptSections.push(systemInsightSection);
@@ -1937,14 +1909,19 @@ This iteration has been skipped. Choose a different action or complete the task.
     }
 
     /**
-     * Format recent actions section
+     * Format recent actions section.
+     *
+     * Reads from the same MxfActionHistoryService instance that executeTool() writes to
+     * (`contextBuilder.actionHistoryService`). This used to do
+     * `new MxfActionHistoryService()` and read from a brand-new, per-instance Map that
+     * was necessarily empty — so "Your Recent Actions" was always "None", no matter how
+     * many tools the agent had called. The old comment claiming the service "needs to be
+     * instantiated, not singleton" had it exactly backwards.
      */
     private async formatRecentActionsSection(): Promise<string> {
         try {
-            // Get recent action history from service
-            const actionHistoryService = new MxfActionHistoryService();
-            const actionHistory = await actionHistoryService.getFormattedHistory(this.agentId, 10);
-            
+            const actionHistory = await this.contextBuilder.actionHistoryService.getFormattedHistory(this.agentId, 10);
+
             if (!actionHistory || actionHistory === '(No recent actions)') {
                 return '## Your Recent Actions\nNone';
             }
@@ -1980,55 +1957,6 @@ This iteration has been skipped. Choose a different action or complete the task.
             .join('\n');
             
         return `## Recent LLM Reasoning\n${formattedReasoning}`;
-    }
-
-    /**
-     * Format conversation history section
-     */
-    private formatConversationHistorySection(conversationHistory: ConversationMessage[]): string {
-        // Get actual conversation messages (not system/tool messages)
-        // Filter out system messages, tool messages, and structured prompts
-        const allConversationMessages = conversationHistory
-            .filter(msg => 
-                !msg.content.startsWith('[SYSTEM]') &&
-                !msg.content.includes('TOOL EXECUTION') &&
-                !msg.content.includes('Tool executed:') &&
-                !msg.content.includes('📊') &&
-                !msg.content.includes('🛠️') &&
-                !msg.content.includes('⚡') &&
-                !msg.content.includes('## Your Recent Actions') &&
-                !msg.content.includes('## Conversation History') &&
-                !msg.content.includes('## Current Message') &&
-                msg.role !== 'system'
-            );
-            
-        // For first message or no history, return None
-        if (allConversationMessages.length === 0) {
-            return '## Conversation History\nNone';
-        }
-        
-        // Show up to 15 most recent messages (but not the current incoming message)
-        const conversationMessages = allConversationMessages.slice(-15);
-
-        if (conversationMessages.length === 0) {
-            return '## Conversation History\nNone';
-        }
-
-        // CRITICAL: This section is TEXT embedded in a prompt, NOT individual messages
-        // It does NOT go through MCP client's convertConversationToMcp()
-        // Therefore, we MUST add attribution here for the agent to understand context
-        const formattedMessages = conversationMessages.map(msg => {
-            const agentName = this.getMessageSenderName(msg);
-            
-            // Skip attribution if content already has it (prevents double-prefixing)
-            if (msg.content.match(/^\[[\w-]+\]:/)) {
-                return msg.content;
-            }
-            
-            return `[${agentName}]: ${msg.content}`;
-        });
-
-        return `## Conversation History\n${formattedMessages.join('\n')}`;
     }
 
     /**
@@ -2392,145 +2320,6 @@ This iteration has been skipped. Choose a different action or complete the task.
     }
 
     /**
-     * Analyze response for completion indicators
-     */
-    private async analyzeResponseForCompletion(responseText: string): Promise<{
-        shouldComplete: boolean;
-        confidence: number;
-        reason: string;
-    }> {
-        const lowerResponse = responseText.toLowerCase();
-        let confidence = 0;
-        const reasons: string[] = [];
-        
-        // Check for explicit completion phrases
-        const completionPhrases = [
-            'task is complete',
-            'task has been completed',
-            'completed the task',
-            'finished the task',
-            'done with the task',
-            'successfully completed',
-            'task accomplished',
-            'mission accomplished',
-            'all done',
-            'everything is done',
-            'nothing else to do',
-            'no further action needed',
-            'no more steps required'
-        ];
-        
-        for (const phrase of completionPhrases) {
-            if (lowerResponse.includes(phrase)) {
-                confidence += 0.3;
-                reasons.push(`Contains completion phrase: "${phrase}"`);
-                break;
-            }
-        }
-        
-        // Check for waiting/idle phrases
-        const waitingPhrases = [
-            'waiting for',
-            'awaiting',
-            'let me know',
-            'tell me',
-            'what would you like',
-            'what should i do',
-            'need further instructions',
-            'require more information',
-            'standing by'
-        ];
-        
-        for (const phrase of waitingPhrases) {
-            if (lowerResponse.includes(phrase)) {
-                confidence += 0.2;
-                reasons.push(`Contains waiting phrase: "${phrase}"`);
-            }
-        }
-        
-        // Check for repetition patterns
-        const responseHash = this.hashResponse(responseText);
-        const repetitions = this.completionDetectionState.repeatingResponsePatterns.get(responseHash) || 0;
-        this.completionDetectionState.repeatingResponsePatterns.set(responseHash, repetitions + 1);
-        
-        if (repetitions > 0) {
-            confidence += 0.3;
-            reasons.push(`Response pattern repeated ${repetitions + 1} times`);
-        }
-        
-        // Check inactivity
-        const inactivityTime = Date.now() - this.completionDetectionState.lastSignificantActivity;
-        if (inactivityTime > this.completionDetectionState.inactivityThreshold) {
-            confidence += 0.2;
-            reasons.push(`Inactive for ${Math.round(inactivityTime / 1000)}s`);
-        }
-        
-        // Check if response is very short (might indicate completion)
-        if (responseText.length < 100 && this.completionDetectionState.noToolCallIterations > 0) {
-            confidence += 0.1;
-            reasons.push('Short response with no tool usage');
-        }
-        
-        // Store confidence score for trend analysis
-        this.completionDetectionState.confidenceScores.push(confidence);
-        if (this.completionDetectionState.confidenceScores.length > 5) {
-            this.completionDetectionState.confidenceScores.shift();
-        }
-        
-        // Check if confidence is trending up
-        if (this.completionDetectionState.confidenceScores.length >= 3) {
-            const trend = this.calculateConfidenceTrend();
-            if (trend > 0) {
-                confidence += 0.1;
-                reasons.push('Confidence trending upward');
-            }
-        }
-        
-        // Clean up old patterns (keep only last 10)
-        if (this.completionDetectionState.repeatingResponsePatterns.size > 10) {
-            const entries = Array.from(this.completionDetectionState.repeatingResponsePatterns.entries());
-            entries.sort((a, b) => b[1] - a[1]); // Sort by count
-            this.completionDetectionState.repeatingResponsePatterns = new Map(entries.slice(0, 10));
-        }
-        
-        const shouldComplete = confidence >= 0.7;
-        const reason = reasons.length > 0 ? reasons.join('; ') : 'No specific indicators';
-        
-        this.modelLogger.debug(`🔍 Completion analysis: confidence=${confidence.toFixed(2)}, shouldComplete=${shouldComplete}, reason="${reason}"`);
-        
-        return { shouldComplete, confidence, reason };
-    }
-    
-    /**
-     * Hash response for pattern detection
-     */
-    private hashResponse(text: string): string {
-        // Simple hash that captures the essence of the response
-        const normalized = text.toLowerCase()
-            .replace(/[^a-z0-9\s]/g, '') // Remove punctuation
-            .replace(/\s+/g, ' ') // Normalize whitespace
-            .trim();
-        
-        // Create a simple hash based on length and key phrases
-        const keyPhrases = normalized.split(' ').filter(word => word.length > 4).slice(0, 10);
-        return `${normalized.length}-${keyPhrases.join('-')}`;
-    }
-    
-    /**
-     * Calculate confidence trend
-     */
-    private calculateConfidenceTrend(): number {
-        const scores = this.completionDetectionState.confidenceScores;
-        if (scores.length < 2) return 0;
-        
-        let trend = 0;
-        for (let i = 1; i < scores.length; i++) {
-            trend += scores[i] - scores[i - 1];
-        }
-        return trend / (scores.length - 1);
-    }
-    
-    /**
      * Store LLM reasoning data in memory for conversation prompts
      */
     private storeReasoningInMemory(reasoningData: any): void {
@@ -2553,60 +2342,6 @@ This iteration has been skipped. Choose a different action or complete the task.
             
         } catch (error) {
             this.modelLogger.error(`Failed to store reasoning in memory: ${error}`);
-        }
-    }
-
-    /**
-     * Check if this agent is marked as reactive in the current task
-     */
-    private isReactiveAgent(): boolean {
-        if (!this.currentTask || !this.currentTask.metadata) {
-            return false;
-        }
-        
-        const agentRoles = this.currentTask.metadata.agentRoles || {};
-        const agentRole = agentRoles[this.agentId];
-        
-        return agentRole === 'reactive' || agentRole === 'passive';
-    }
-
-    /**
-     * Auto-complete task when fallback detection triggers
-     */
-    private async autoCompleteTask(reason: string): Promise<void> {
-        // Check if agent has task_completion capability
-        if (!this.config.capabilities?.includes('task_completion')) {
-            // Still mark task as complete locally to prevent further iterations
-            this.taskCompleted = true;
-            
-            // Add notification to conversation that task appears complete
-            this.memoryManager.addConversationMessage({
-                role: 'user',
-                content: `SYSTEM: Task appears to be complete. Reason: ${reason}. The system will handle task completion automatically.`
-            });
-            
-            return;
-        }
-        
-        try {
-            // Execute task_complete tool
-            const result = await this.executeTool('task_complete', {
-                result: `Task automatically completed by fallback detection: ${reason}`,
-                summary: `The agent completed the task objectives but did not explicitly call task_complete. Reason: ${reason}`
-            });
-
-            // Add notification to conversation
-            this.memoryManager.addConversationMessage({
-                role: 'user',
-                content: `SYSTEM: Task was automatically completed. Reason: ${reason}. The task objectives appear to have been met.`
-            });
-            
-        } catch (error) {
-            this.modelLogger.error(`Failed to auto-complete task: ${error}`);
-            
-            // Still mark task as complete locally to prevent further iterations
-            this.taskCompleted = true;
-            this.taskExecutionManager.cancelCurrentTask('Auto-completion failed but preventing further iterations');
         }
     }
 
@@ -2670,19 +2405,21 @@ This iteration has been skipped. Choose a different action or complete the task.
     }
 
     /**
-     * Override disconnect to cleanup all services
+     * Disconnect and clean up every service and subscription this agent owns.
+     *
+     * The agent-level subscriptions and the setup guard are both reset, so a later
+     * connect() rebuilds them exactly once rather than stacking a second set.
      */
     public async disconnect(): Promise<void> {
         // Cleanup message aggregator
         if (this.messageAggregator) {
             this.messageAggregator.cleanup();
         }
-        
-        // Remove task assignment listener
-        if (this.taskAssignedHandler) {
-            EventBus.client.off(AgentEvents.TASK_ASSIGNED, this.taskAssignedHandler);
-            this.taskAssignedHandler = null;
-        }
+
+        // Drop the LLM_REASONING / TASK_ASSIGNED subscriptions and re-arm the guard
+        this.agentSubscriptions.forEach(sub => sub.unsubscribe());
+        this.agentSubscriptions = [];
+        this.agentListenersSetup = false;
 
         // Cleanup user input pause gate subscriptions and resolve any pending pause
         for (const sub of this.userInputPauseSubscriptions) {

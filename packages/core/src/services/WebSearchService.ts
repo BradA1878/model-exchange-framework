@@ -25,7 +25,8 @@
 
 import { BrowserManager, BrowserConfig } from './BrowserManager.js';
 import { ContentProcessor, OptimizationOptions } from './ContentProcessor.js';
-import { Page } from 'puppeteer';
+// Type-only: erased at compile time, so puppeteer stays an optional peer dependency.
+import type { Page } from 'puppeteer';
 
 export interface WebSearchArgs {
     query: string;

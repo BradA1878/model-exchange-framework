@@ -25,22 +25,17 @@
  * Handles client-specific event operations, socket connections, and event forwarding.
  */
 
-import { Subject, Subscription, filter, map } from 'rxjs';
-import { Events } from './EventNames.js';
-import type { EventMap } from './EventNames.js';
+import { Subject, Subscription } from 'rxjs';
 import { ControlLoopEvents } from './event-definitions/ControlLoopEvents.js';
 import { OrparEvents } from './event-definitions/OrparEvents.js';
-import { 
-    AnyEventName, 
-    BaseEventBusImplementation, 
-    EventHandler, 
-    EventMessage, 
-    SocketLike, 
-    validateEventName, invokeHandlerSafely, PayloadOf } from './EventBusBase.js';
-import { 
-    createAgentEventPayload, 
-    createBaseEventPayload, 
-} from '../schemas/EventPayloadSchema.js';
+import {
+    AnyEventName,
+    BaseEventBusImplementation,
+    EventMessage,
+    SocketLike,
+    validateEventName,
+    PayloadOf
+} from './EventBusBase.js';
 import { createStrictValidator } from '../utils/validation.js';
 import { Logger } from '../utils/Logger.js';
 
@@ -87,8 +82,8 @@ export interface IClientEventBus extends BaseEventBusImplementation {
     unregisterSocket(socketId: string): this;
 
     /**
-     * Emit an event through a specific registered socket
-     * Falls back to the primary socket with a warning if socketId not found.
+     * Emit an event through a specific registered socket.
+     * Uses the primary socket when socketId is not in the registry.
      * @param socketId Identifier of the socket to emit through
      * @param event Event name
      * @param payload Event payload
@@ -102,50 +97,39 @@ export interface IClientEventBus extends BaseEventBusImplementation {
     disconnect(): this;
 
     /**
-     * Remove all socket listeners
+     * Remove listeners the sockets registered on this bus
      * @returns this (for chaining)
      */
-    removeAllListeners(event?: AnyEventName): this;
-
-    /**
-     * Emit an event through the primary socket
-     * @param event Event name
-     * @param payload Event payload
-     */
-    emit<K extends AnyEventName>(event: K, payload: PayloadOf<K>): void;
+    removeAllSocketListeners(): this;
 }
 
 /**
- * Client-side event bus implementation
+ * Client-side event bus implementation.
+ *
+ * Subscription handling (on/once/off/onAll/categories/debug) lives in
+ * BaseEventBusImplementation. This class owns only the socket transport.
  */
 export class ClientEventBus extends BaseEventBusImplementation implements IClientEventBus {
     // Primary socket (set by setClientSocket, used by admin/SDK emit())
     private socket: SocketLike | null = null;
     // Listeners tracked for the primary socket's onAny handler
     private socketListeners: Map<string, (...args: any[]) => void> = new Map();
-    private subscriptions: Subscription[] = [];
-    private categorySubscriptions: Map<string, Subscription[]> = new Map();
-
-    // Track subscriptions by event and handler
-    private handlerSubscriptions: Map<string, Map<EventHandler<any>, Subscription>> = new Map();
-    private debugMode: boolean = false;
-    private debugSubscription: Subscription | null = null;
 
     // Socket registry: maps socketId (typically agentId) → socket instance
     // Agent sockets register here so they don't overwrite the primary admin socket
     private socketRegistry: Map<string, SocketLike> = new Map();
     // Listeners tracked for each registered socket's onAny handler
     private socketListenersRegistry: Map<string, Map<string, (...args: any[]) => void>> = new Map();
-    
+
+
     /**
      * Create a new ClientEventBus
      * @param eventSubject Subject to use for events
      */
     constructor(eventSubject: Subject<EventMessage>) {
-        super(eventSubject);
-        //// ;
+        super(eventSubject, logger);
     }
-    
+
     /**
      * Set the socket to use for event forwarding
      * @param socket Socket to use
@@ -154,78 +138,44 @@ export class ClientEventBus extends BaseEventBusImplementation implements IClien
     public setClientSocket(socket: SocketLike): this {
         try {
             validator.assertIsObject(socket);
-            
+
             // Check that this is a socket-like object
             validator.assertHasFunction(socket, 'on');
             validator.assertHasFunction(socket, 'emit');
-            
+
             // Store the socket
             this.socket = socket;
-            
+
             // Set up event forwarding
             this.setupClientSocketForwarding(socket);
-            
+
         } catch (error) {
             logger.error('[ClientEventBus] Error setting socket:', error instanceof Error ? error.message : String(error));
             throw new Error(`Error setting socket: ${error instanceof Error ? error.message : 'Invalid socket'}`);
         }
-        
+
         return this;
     }
-    
+
     /**
-     * Emit an event
-     * This is the core method that handles all event emission
-     * @param event Event name
-     * @param payload Event payload
+     * Forward an emitted event to the primary socket.
+     *
+     * Called by BaseEventBusImplementation.emit() after validation and local
+     * delivery. A disconnected socket is a warning, not an error: local
+     * subscribers still received the event.
      */
-    public emit<K extends AnyEventName>(event: K, payload: PayloadOf<K>): void {
-        try {
-
-            // ;
-
-            // Validate event name and payload
-            validateEventName(event);
-            this.validateEventPayload(String(event), payload);
-            
-            // Emit to local event bus
-            this.eventSubject.next({
-                type: event,
-                payload,
-            });
-            
-            // Forward to socket.io if connected
-            if (this.socket && this.socket.connected) {
-                // Direct log for critical events to ensure visibility
-                if (typeof event === 'string' && (event.includes('register') || event.includes('connect'))) {
-                }
-                
-                // Add detailed logging for message events
-                if (typeof event === 'string' && event.includes('message')) {
-                }
-                
-                // Emit to socket
-                this.socket.emit(event, payload);
-            } else {
-                logger.warn(`[ClientEventBus] WARNING: Socket not connected, could not forward event: ${event}. Socket exists: ${!!this.socket}, Socket connected: ${this.socket?.connected}`);
-            }
-            
-            //// ;
-        } catch (error) {
-            logger.error(`[ClientEventBus] Error emitting event '${event}':`, error instanceof Error ? error.message : String(error));
-            
-            // Emit error event
-            this.eventSubject.next({
-                type: Events.Agent.ERROR,
-                payload: {
-                    error: error instanceof Error ? error.message : String(error),
-                    event,
-                    timestamp: Date.now()
-                }
-            });
+    protected override forwardToTransport<K extends AnyEventName>(event: K, payload: PayloadOf<K>): void {
+        if (this.socket && this.socket.connected) {
+            this.socket.emit(String(event), payload);
+            return;
         }
+
+        logger.warn(
+            `[ClientEventBus] Socket not connected, could not forward event: ${String(event)}. ` +
+            `Socket exists: ${!!this.socket}, Socket connected: ${this.socket?.connected}`
+        );
     }
-    
+
     /**
      * Set up socket event forwarding from socket to event bus
      * @param socket Socket to use
@@ -397,48 +347,36 @@ export class ClientEventBus extends BaseEventBusImplementation implements IClien
      * @param payload Event payload
      */
     public emitOn(socketId: string, event: AnyEventName, payload: any): void {
-        try {
-            // Validate event name and payload (same checks as emit())
-            validateEventName(event);
-            this.validateEventPayload(String(event), payload);
+        // Same validation contract as emit(): a bad event name or payload throws.
+        validateEventName(event);
 
-            // Push to local event bus so on()/once() subscribers receive it
-            this.eventSubject.next({ type: event, payload });
-
-            // Look up the registered socket
-            const registeredSocket = this.socketRegistry.get(socketId);
-            if (registeredSocket && registeredSocket.connected) {
-                registeredSocket.emit(event, payload);
-                return;
-            }
-
-            // Fallback: try the primary socket with a warning
-            if (registeredSocket && !registeredSocket.connected) {
-                logger.warn(`[ClientEventBus] Registered socket '${socketId}' not connected, falling back to primary for event: ${event}`);
-            } else {
-                // Debug level: this is expected during early agent startup before the socket is registered
-                logger.debug(`[ClientEventBus] Socket '${socketId}' not found in registry, falling back to primary for event: ${event}`);
-            }
-
-            if (this.socket && this.socket.connected) {
-                this.socket.emit(event, payload);
-            } else {
-                logger.warn(`[ClientEventBus] No socket available to emit event: ${event}`);
-            }
-
-        } catch (error) {
-            logger.error(`[ClientEventBus] Error in emitOn('${socketId}', '${event}'):`, error instanceof Error ? error.message : String(error));
-
-            // Emit error event
-            this.eventSubject.next({
-                type: Events.Agent.ERROR,
-                payload: {
-                    error: error instanceof Error ? error.message : String(error),
-                    event,
-                    timestamp: Date.now()
-                }
-            });
+        if (payload === undefined || payload === null) {
+            throw new Error(
+                `Event '${String(event)}' was emitted with a ${payload === null ? 'null' : 'undefined'} payload. ` +
+                `Build the payload with a helper from EventPayloadSchema.`
+            );
         }
+
+        this.validateEventPayload(String(event), payload);
+
+        // Push to local event bus so on()/once() subscribers receive it
+        this.eventSubject.next({ type: event, payload });
+
+        // Look up the registered socket
+        const registeredSocket = this.socketRegistry.get(socketId);
+        if (registeredSocket && registeredSocket.connected) {
+            registeredSocket.emit(String(event), payload);
+            return;
+        }
+
+        if (registeredSocket && !registeredSocket.connected) {
+            logger.warn(`[ClientEventBus] Registered socket '${socketId}' not connected, using primary socket for event: ${String(event)}`);
+        } else {
+            // Debug level: this is expected during early agent startup before the socket is registered
+            logger.debug(`[ClientEventBus] Socket '${socketId}' not found in registry, using primary socket for event: ${String(event)}`);
+        }
+
+        this.forwardToTransport(event, payload as PayloadOf<AnyEventName>);
     }
 
     /**
@@ -469,65 +407,6 @@ export class ClientEventBus extends BaseEventBusImplementation implements IClien
         }
 
         return this;
-    }
-    
-    /**
-     * Unsubscribe from an event
-     * @param event Event name
-     * @param handler Event handler function (optional)
-     */
-    public override off<K extends AnyEventName>(event: K, handler?: EventHandler<any>): void {
-        validateEventName(event);
-        
-        const eventHandlers = this.handlerSubscriptions.get(event);
-        if (!eventHandlers) {
-            // No handlers for this event found
-            // ;
-            return;
-        }
-        
-        if (handler) {
-            // If specific handler provided, just unsubscribe that one
-            const subscription = eventHandlers.get(handler);
-            if (subscription) {
-                // Unsubscribe from the RxJS subscription
-                subscription.unsubscribe();
-                
-                // Remove from our handler registry
-                eventHandlers.delete(handler);
-                
-                // Remove from the array if present
-                const index = this.subscriptions.indexOf(subscription);
-                if (index !== -1) {
-                    this.subscriptions.splice(index, 1);
-                }
-                
-                // ;
-            } else {
-                // ;
-            }
-        } else {
-            // If no specific handler, unsubscribe all handlers for this event
-            let unsubscribedCount = 0;
-            
-            eventHandlers.forEach((subscription) => {
-                // Unsubscribe from the RxJS subscription
-                subscription.unsubscribe();
-                
-                // Remove from the array if present
-                const index = this.subscriptions.indexOf(subscription);
-                if (index !== -1) {
-                    this.subscriptions.splice(index, 1);
-                }
-                
-                unsubscribedCount++;
-            });
-            
-            // Clear all handlers for this event
-            eventHandlers.clear();
-            
-            // ;
-        }
     }
     
     /**
@@ -604,218 +483,4 @@ export class ClientEventBus extends BaseEventBusImplementation implements IClien
         return !!this.socket && !!this.socket.connected;
     }
     
-    /**
-     * Subscribe to an event in the client event bus
-     * 
-     * @param event Event name to subscribe to
-     * @param listener Listener function to call when the event is emitted
-     * @returns Subscription that can be unsubscribed to stop listening
-     */
-    public on<T extends AnyEventName>(event: T, listener: (payload: PayloadOf<T>) => void): Subscription {
-        // Create a filtered observable for this specific event
-        const observable = this.eventSubject.pipe(
-            filter((e: EventMessage) => e.type === event),
-            map((e: EventMessage) => e.payload)
-        );
-        
-        // Log subscription to important events
-        if (event && typeof event === 'string' && 
-            (event.includes('register') || event.includes('connect'))) {
-        }
-        
-        // Subscribe with throw/rejection isolation so one bad listener cannot
-        // kill the subscription or fail silently.
-        const subscription = observable.subscribe((payload) =>
-            invokeHandlerSafely(logger, event, listener, payload)
-        );
-        
-        // Store the subscription for cleanup
-        this.subscriptions.push(subscription);
-        
-        // Also store in our handler-based registry for off() support
-        if (!this.handlerSubscriptions.has(event)) {
-            this.handlerSubscriptions.set(event, new Map());
-        }
-        
-        const eventHandlers = this.handlerSubscriptions.get(event);
-        if (eventHandlers) {
-            eventHandlers.set(listener, subscription);
-        }
-        
-        return subscription;
-    }
-    
-    /**
-     * Subscribe to an event once in the client event bus
-     * Once the event is fired, the subscription is automatically removed
-     * 
-     * @param event Event name to subscribe to
-     * @param listener Listener function to call when the event is emitted
-     * @returns Subscription that can be unsubscribed to stop listening
-     */
-    public override once<T extends AnyEventName>(event: T, listener: (payload: PayloadOf<T>) => void): Subscription {
-        // Create a filtered observable for this specific event
-        const observable = this.eventSubject.pipe(
-            filter((e: EventMessage) => e.type === event),
-            map((e: EventMessage) => e.payload)
-        );
-        
-        // Log subscription to important events
-        if (event && typeof event === 'string' && 
-            (event.includes('register') || event.includes('connect'))) {
-        }
-        
-        // Create a wrapper listener that will unsubscribe after first execution
-        const onceListener = (payload: any) => {
-            try {
-                invokeHandlerSafely(logger, event, listener, payload);
-            } finally {
-                // Always unsubscribe — once means once, even when the listener throws.
-                this.off(event, onceListener);
-            }
-        };
-        
-        // Subscribe to the observable with the one-time listener
-        const subscription = observable.subscribe(onceListener);
-        
-        // Store the subscription for cleanup
-        this.subscriptions.push(subscription);
-        
-        // Also store in our handler-based registry for off() support
-        if (!this.handlerSubscriptions.has(event)) {
-            this.handlerSubscriptions.set(event, new Map());
-        }
-        
-        const eventHandlers = this.handlerSubscriptions.get(event);
-        if (eventHandlers) {
-            eventHandlers.set(listener, subscription);
-        }
-        
-        return subscription;
-    }
-
-    /**
-     * Subscribe to all events in the client event bus
-     * 
-     * @param listener Listener function that receives both event type and payload
-     * @returns Subscription that can be unsubscribed to stop listening
-     */
-    public onAll(listener: (eventType: string, payload: any) => void): Subscription {
-        // Create an observable that passes both event type and payload
-        const observable = this.eventSubject.pipe(
-            map((e: EventMessage) => ({ type: e.type, payload: e.payload }))
-        );
-        
-        
-        // Subscribe to the observable with the listener
-        const subscription = observable.subscribe(event => {
-            listener(event.type, event.payload);
-        });
-        
-        // Store the subscription for cleanup
-        this.subscriptions.push(subscription);
-        
-        return subscription;
-    }
-    
-    /**
-     * Subscribe to an event in the client event bus with category
-     * for grouped subscription management
-     * 
-     * @param category Category name for grouping subscriptions
-     * @param event Event name to subscribe to
-     * @param listener Listener function to call when the event is emitted
-     * @returns Subscription that can be unsubscribed to stop listening
-     */
-    public onWithCategory<T extends AnyEventName>(
-        category: string,
-        event: T, 
-        listener: (payload: any) => void
-    ): Subscription {
-        // Get the subscription using the standard on method
-        const subscription = this.on(event, listener);
-        
-        // Store in the category map
-        if (!this.categorySubscriptions.has(category)) {
-            this.categorySubscriptions.set(category, []);
-        }
-        
-        const categorySubs = this.categorySubscriptions.get(category);
-        if (categorySubs) {
-            categorySubs.push(subscription);
-        }
-        
-        return subscription;
-    }
-    
-    /**
-     * Unsubscribe from all events in a specific category
-     * 
-     * @param category Category name to unsubscribe from
-     * @returns this (for chaining)
-     */
-    public unsubscribeCategory(category: string): this {
-        const subscriptions = this.categorySubscriptions.get(category) || [];
-        
-        // Unsubscribe from each subscription in the category
-        subscriptions.forEach(subscription => {
-            subscription.unsubscribe();
-            
-            // Also remove from the main subscriptions array
-            const index = this.subscriptions.indexOf(subscription);
-            if (index !== -1) {
-                this.subscriptions.splice(index, 1);
-            }
-        });
-        
-        // Clear the category
-        this.categorySubscriptions.delete(category);
-        
-        return this;
-    }
-    
-    /**
-     * Enable or disable debug mode to log all events
-     * 
-     * @param enabled Whether debug mode should be enabled
-     * @returns this (for chaining)
-     */
-    public enableDebugMode(enabled: boolean = true): this {
-        // If already in the requested mode, do nothing
-        if (this.debugMode === enabled) {
-            return this;
-        }
-        
-        this.debugMode = enabled;
-        
-        // If enabling debug mode
-        if (enabled) {
-            
-            // Create a subscription to all events
-            this.debugSubscription = this.onAll((eventType, payload) => {
-                // ;
-            });
-            
-            // Make sure it's tracked for cleanup
-            if (this.debugSubscription) {
-                this.subscriptions.push(this.debugSubscription);
-            }
-        } 
-        // If disabling debug mode
-        else if (this.debugSubscription) {
-            
-            // Unsubscribe from the debug subscription
-            this.debugSubscription.unsubscribe();
-            
-            // Remove from subscriptions array
-            const index = this.subscriptions.indexOf(this.debugSubscription);
-            if (index !== -1) {
-                this.subscriptions.splice(index, 1);
-            }
-            
-            this.debugSubscription = null;
-        }
-        
-        return this;
-    }
 }

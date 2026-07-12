@@ -28,6 +28,7 @@ import { TaskEvents } from '@mxf-dev/core/events/event-definitions/TaskEvents';
 import { AgentEvents } from '@mxf-dev/core/events/event-definitions/AgentEvents';
 import { EventBus } from '@mxf-dev/core/events/EventBus';
 import { Handler } from './Handler.js';
+import { TaskHelper } from '../services/internal/TaskHelper.js';
 import { SimpleTaskRequest, SimpleTaskResponse, TaskRequestHandler } from '@mxf-dev/core/interfaces/TaskInterfaces';
 import { Subscription } from 'rxjs';
 import { TaskRequestEvent, TaskResponseEvent } from '@mxf-dev/core/events/EventNames'; // These types might become obsolete or change
@@ -37,11 +38,24 @@ import {
     BaseEventPayload 
 } from '@mxf-dev/core/schemas/EventPayloadSchema'; // Updated import
 
+/**
+ * How many processed task IDs to remember. Bounded so a long-running agent cannot grow
+ * this set without limit — it used to be an unbounded Set that only ever gained entries.
+ * Well above any realistic number of concurrently-live tasks for one agent.
+ */
+const MAX_PROCESSED_TASK_ASSIGNMENTS = 1000;
+
 export class TaskHandlers extends Handler {
     private agentId: string;
     private channelId: string; // Added to store channelId from constructor
-    private readonly processedTaskAssignments = new Set<string>(); // Track processed assignments
-    
+
+    /**
+     * Task IDs this agent has already started, used to drop duplicate ASSIGNED events.
+     * Insertion-ordered, and evicted oldest-first once it reaches
+     * MAX_PROCESSED_TASK_ASSIGNMENTS.
+     */
+    private readonly processedTaskAssignments = new Set<string>();
+
     // Task-related handlers and callbacks
     private taskRequestHandler: TaskRequestHandler | null = null;
     private responseHandlers: Map<string, (response: SimpleTaskResponse) => void> = new Map();
@@ -317,13 +331,11 @@ export class TaskHandlers extends Handler {
                 
                 // Check if task has already been processed
                 if (this.processedTaskAssignments.has(assignedTask.id)) {
-                    //this.logger.info(`[TaskHandlers:${this.agentId}] Task ${assignedTask.id} already processed, skipping`);
                     return;
                 }
-                
-                //this.logger.info(`[TaskHandlers:${this.agentId}] Processing task ${assignedTask.id} for the first time`);
-                this.processedTaskAssignments.add(assignedTask.id);
-                
+
+                this.rememberProcessedTask(assignedTask.id);
+
                 
                 // Convert to SimpleTaskRequest format for compatibility with existing handler
                 // Include title and description for proper task context in buildTaskDesc
@@ -351,28 +363,72 @@ export class TaskHandlers extends Handler {
                 );
                 EventBus.client.emitOn(this.agentId,AgentEvents.TASK_ASSIGNED, taskAssignmentPayload);
                 
-                // Always trigger task execution - agent roles affect behavior, not task processing
-                // Reactive agents will still process tasks and messages, but won't take proactive actions
+                // Always trigger task execution — agent roles affect behaviour, not whether
+                // the task is processed.
                 if (this.taskRequestHandler) {
-                    this.taskRequestHandler(taskRequest).catch(error => {
-                        this.logger.error(`Error executing assigned task ${assignedTask.id}:`, error);
+                    this.taskRequestHandler(taskRequest).catch((error: unknown) => {
+                        // A local execution failure has to become a real task failure.
+                        // This used to only call logger.error() — and the client Logger is
+                        // disabled by default — so the server kept the task in `in_progress`
+                        // forever and agent.onTaskFailed() never fired for anyone.
+                        this.failAssignedTask(
+                            assignedTask.id,
+                            assignedTask.channelId || this.channelId,
+                            error
+                        );
                     });
                 } else {
-                    this.logger.warn('No task request handler set - cannot execute assigned task');
+                    const reason = 'No task request handler set — cannot execute assigned task';
+                    this.logger.error(reason);
+                    this.failAssignedTask(
+                        assignedTask.id,
+                        assignedTask.channelId || this.channelId,
+                        new Error(reason)
+                    );
                 }
-                
-                // Log agent role for debugging but don't prevent task execution
-                const agentRoles = assignedTask.metadata?.agentRoles || {};
-                const agentRole = agentRoles[this.agentId];
-                if (agentRole === 'reactive' || agentRole === 'passive') {
-                } else if (agentRole === 'proactive') {
-                }
-                
+
             } catch (error) {
                 this.logger.error('Error handling task assignment:', error);
             }
         });
-        
+
         this.subscriptions.push(subscription);
+    }
+
+    /**
+     * Record a task as processed, evicting the oldest entry once the set is full.
+     *
+     * @private
+     */
+    private rememberProcessedTask(taskId: string): void {
+        if (this.processedTaskAssignments.size >= MAX_PROCESSED_TASK_ASSIGNMENTS) {
+            // Sets iterate in insertion order, so the first key is the oldest.
+            const oldest = this.processedTaskAssignments.values().next().value;
+            if (oldest !== undefined) {
+                this.processedTaskAssignments.delete(oldest);
+            }
+        }
+        this.processedTaskAssignments.add(taskId);
+    }
+
+    /**
+     * Report that this agent failed to execute an assigned task.
+     *
+     * Emits TaskEvents.FAIL_REQUEST, which the server turns into a `failed` task status
+     * and a TaskEvents.FAILED broadcast — so `agent.onTaskFailed()` fires and the task
+     * stops sitting in `in_progress`.
+     *
+     * @private
+     */
+    private failAssignedTask(taskId: string, channelId: string, error: unknown): void {
+        const message = error instanceof Error ? error.message : String(error);
+        this.logger.error(`Error executing assigned task ${taskId}: ${message}`);
+
+        TaskHelper.failTask(taskId, this.agentId, channelId, message).catch((emitError: unknown) => {
+            this.logger.error(
+                `Failed to report task failure for ${taskId}: ` +
+                `${emitError instanceof Error ? emitError.message : String(emitError)}`
+            );
+        });
     }
 }

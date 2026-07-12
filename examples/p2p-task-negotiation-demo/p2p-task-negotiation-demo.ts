@@ -766,7 +766,7 @@ async function demo() {
 
         // Generate keys
         console.log('Generating agent keys...');
-        const keys = await sdk.generateKey(config.channelId, undefined, 'Task Auction Analyst Key');
+        const keys = await sdk.generateKey(config.channelId, 'TaskAuctionAnalyst', 'Task Auction Analyst Key');
         cleanupState.credentials = { keyId: keys.keyId, secretKey: keys.secretKey };
         console.log('Keys generated\n');
 

@@ -26,20 +26,54 @@
  * across the hybrid MCP architecture.
  */
 
-import { v4 as uuidv4 } from 'uuid';
 import { Observable, BehaviorSubject, combineLatest, map } from 'rxjs';
 import { McpToolRegistry, ExtendedMcpToolDefinition } from '../../api/services/McpToolRegistry';
 import { ExternalMcpServerManager, ExternalMcpTool } from '@mxf-dev/core/protocols/mcp/services/ExternalMcpServerManager';
-import { createStrictValidator } from '@mxf-dev/core/utils/validation';
 import { Logger } from '@mxf-dev/core/utils/Logger';
 import { getExternalServerCategory } from '@mxf-dev/core/protocols/mcp/services/ExternalServerConfigs';
 import { EventBus } from '@mxf-dev/core/events/EventBus';
 import { McpEvents } from '@mxf-dev/core/events/event-definitions/McpEvents';
-import { enhanceToolSchema } from '@mxf-dev/core/protocols/mcp/services/ToolSchemaEnhancements';
 
-// Create logger and validator instances
+// Create logger instance
 const logger = new Logger('info', 'HybridMcpToolRegistry', 'server');
-const validator = createStrictValidator('HybridMcpToolRegistry');
+
+/**
+ * Separator between a server id and a tool name in a namespaced external tool.
+ *
+ * External tools are exposed as `<serverId>__<toolName>`. Without this an external
+ * server that happens to expose `task_create` would land in the same flat list as
+ * the internal `task_create`, and findTool() — which returns the first match in a
+ * list sorted by name — would pick one of them by coin flip.
+ *
+ * Two underscores, because MCP tool names are `[a-z0-9_-]` and a single underscore
+ * is common inside both server ids and tool names.
+ */
+export const EXTERNAL_TOOL_SEPARATOR = '__';
+
+/**
+ * Build the name an external tool is exposed under.
+ */
+export function namespaceExternalTool(serverId: string, toolName: string): string {
+    return `${serverId}${EXTERNAL_TOOL_SEPARATOR}${toolName}`;
+}
+
+/**
+ * Split a namespaced external tool name back into its server id and tool name.
+ *
+ * Returns null for a name that is not namespaced — that is an internal tool.
+ */
+export function parseExternalToolName(
+    name: string
+): { serverId: string; toolName: string } | null {
+    const index = name.indexOf(EXTERNAL_TOOL_SEPARATOR);
+    if (index <= 0) {
+        return null;
+    }
+    return {
+        serverId: name.slice(0, index),
+        toolName: name.slice(index + EXTERNAL_TOOL_SEPARATOR.length)
+    };
+}
 
 /**
  * Enhanced tool definition that includes server source information
@@ -57,18 +91,8 @@ export interface HybridMcpTool extends ExtendedMcpToolDefinition {
     scopeId?: string;
     /** List of channels this tool is available to (for channel-scoped tools) */
     availableToChannels?: string[];
-}
-
-/**
- * Tool execution context for routing
- */
-export interface ToolExecutionContext {
-    toolName: string;
-    source: string;
-    input: Record<string, any>;
-    agentId?: string;
-    channelId?: string;
-    requestId?: string;
+    /** For external tools: the name the origin server knows this tool by */
+    externalToolName?: string;
 }
 
 /**
@@ -177,13 +201,33 @@ export class HybridMcpToolRegistry {
     }
 
     /**
-     * Combine internal and external tools into hybrid tool list
+     * Combine internal and external tools into one list.
+     *
+     * Internal tools keep their names. External tools are namespaced as
+     * `<serverId>__<toolName>`, so an external server can never take a name an
+     * internal tool already uses. Previously the two lists were concatenated with
+     * no duplicate check and the combined list sorted by name — an external
+     * `task_create` would sit next to the internal one and findTool() would return
+     * whichever sorted first.
      */
     private combineTools(internalTools: ExtendedMcpToolDefinition[], externalTools: ExternalMcpTool[]): HybridMcpTool[] {
         const hybridTools: HybridMcpTool[] = [];
+        const internalNames = new Set<string>();
 
         // Add internal tools with 'internal' source (global scope)
         for (const tool of internalTools) {
+            // The internal set is validated for uniqueness at the tool index and
+            // again at registry reconciliation. If a duplicate still reaches here,
+            // say so rather than letting the later copy win by array position.
+            if (internalNames.has(tool.name)) {
+                logger.error(
+                    `Duplicate internal tool name "${tool.name}" reached the hybrid registry. ` +
+                    `The first definition is kept; the duplicate is dropped.`
+                );
+                continue;
+            }
+            internalNames.add(tool.name);
+
             hybridTools.push({
                 ...tool,
                 source: 'internal',
@@ -195,20 +239,20 @@ export class HybridMcpToolRegistry {
             });
         }
 
-        // Add external tools with server ID as source and scope metadata
+        // Add external tools under a namespaced name
         for (const tool of externalTools) {
-            // Enhance the tool schema with examples and additional details
-            const enhancedSchema = enhanceToolSchema(tool.name, tool.serverId, tool.inputSchema);
-
             // Determine scope from server ID format (channelId:serverId for channel scope)
             const isChannelScoped = tool.serverId.includes(':');
             const scope: 'global' | 'channel' | 'agent' = isChannelScoped ? 'channel' : 'global';
             const scopeId = isChannelScoped ? tool.serverId.split(':')[0] : undefined;
 
+            const namespacedName = namespaceExternalTool(tool.serverId, tool.name);
+
             hybridTools.push({
-                name: tool.name,
+                name: namespacedName,
+                externalToolName: tool.name,
                 description: tool.description,
-                inputSchema: enhancedSchema,
+                inputSchema: tool.inputSchema,
                 source: tool.serverId,
                 category: getExternalServerCategory(tool.serverId),
                 isExternal: true,
@@ -217,10 +261,11 @@ export class HybridMcpToolRegistry {
                 scopeId,
                 availableToChannels: scopeId ? [scopeId] : undefined,
                 handler: async (input: any, context: any) => {
-                    // Execute tool on external MCP server using the sendMcpToolCall method
+                    // Execute tool on external MCP server using the sendMcpToolCall method.
+                    // The origin server knows the tool by its unqualified name.
                     try {
                         const result = await this.sendMcpToolCall(tool.serverId, tool.name, input, context);
-                        
+
                         // Transform MCP protocol result format to MXF format
                         // MCP returns: { content: [{ type: "text", text: "..." }] }
                         // MXF expects: { content: { type: "text", data: "..." } }
@@ -286,7 +331,10 @@ export class HybridMcpToolRegistry {
     private getInternalToolCategory(toolName: string): string {
         // Use the same logic as the existing MetaTools.ts getToolCategory function
         if (toolName.startsWith('agent_')) return 'communication';
-        if (toolName.startsWith('control_loop_')) return 'control-loop';
+        // orpar_*, not control_loop_*: the old control-loop tools were named
+        // controlLoop_* in camelCase, so this test never matched one of them and
+        // they all fell through to 'unknown'. That family has since been removed.
+        if (toolName.startsWith('orpar_')) return 'control-loop';
         if (toolName.startsWith('fs_') || toolName.startsWith('memory_') || toolName.startsWith('shell_')) return 'infrastructure';
         if (toolName.startsWith('channel_') || toolName.startsWith('agent_context') || toolName.startsWith('agent_memory')) return 'context-memory';
         if (toolName.startsWith('tools_')) return 'meta';
@@ -398,181 +446,57 @@ export class HybridMcpToolRegistry {
     }
 
     /**
-     * Get tool execution context for routing
+     * REMOVED: executeTool / executeInternalTool / executeExternalTool /
+     * getToolExecutionContext.
+     *
+     * That was a second execution path, and it was both dead and broken.
+     * executeInternalTool called `(this.internalRegistry as any).executeTool(...)`
+     * — a method McpToolRegistry has never had — so the `as any` was hiding a
+     * guaranteed TypeError. It never fired only because the sole caller,
+     * HybridMcpService, was never instantiated anywhere in the codebase.
+     *
+     * Tools execute through exactly one path now:
+     *   internal → McpToolRegistry's handler, invoked by McpService
+     *   external → the handler closure attached in combineTools(), which calls
+     *              sendMcpToolCall() below
+     *
+     * Callers that used to reach for hybridRegistry.executeTool() should invoke
+     * the tool's own `handler`, reached via findTool().
      */
-    public getToolExecutionContext(toolName: string, input: Record<string, any>, options: {
-        agentId?: string;
-        channelId?: string;
-        requestId?: string;
-    } = {}): ToolExecutionContext | null {
-        const tool = this.findTool(toolName);
-        if (!tool) {
-            logger.warn(`⚠️ Tool not found: ${toolName}`);
-            return null;
-        }
-
-        return {
-            toolName,
-            source: tool.source,
-            input,
-            agentId: options.agentId,
-            channelId: options.channelId,
-            requestId: options.requestId || this.generateRequestId()
-        };
-    }
-
-    /**
-     * Execute a tool (internal or external)
-     * Emits events for tool execution tracking and persistence
-     */
-    public async executeTool(
-        toolName: string,
-        input: Record<string, any>,
-        agentId?: string,
-        channelId?: string
-    ): Promise<any> {
-        const context = this.getToolExecutionContext(toolName, input, { agentId, channelId });
-
-        if (!context) {
-            throw new Error(`Tool ${toolName} not found`);
-        }
-
-        const requestId = context.requestId || this.generateRequestId();
-
-        // Emit tool call event for persistence tracking
-        EventBus.server.emit(McpEvents.TOOL_CALL, {
-            requestId,
-            name: toolName,
-            input,
-            agentId,
-            channelId,
-            source: context.source,
-            serverId: context.source !== 'internal' ? context.source : undefined
-        });
-
-        try {
-            let result: any;
-
-            if (context.source === 'internal') {
-                // Route to internal MXF tool registry
-                result = await this.executeInternalTool(context);
-            } else {
-                // Route to external server
-                result = await this.executeExternalTool(context);
-            }
-
-            // Emit tool result event for persistence tracking
-            EventBus.server.emit(McpEvents.TOOL_RESULT, {
-                requestId,
-                result,
-                metadata: {
-                    toolName,
-                    source: context.source,
-                    agentId,
-                    channelId
-                }
-            });
-
-            return result;
-        } catch (error) {
-            const errorMessage = error instanceof Error ? error.message : String(error);
-
-            // Emit tool error event for persistence tracking
-            EventBus.server.emit(McpEvents.TOOL_ERROR, {
-                requestId,
-                error: errorMessage,
-                code: 'EXECUTION_ERROR',
-                details: {
-                    toolName,
-                    source: context.source,
-                    agentId,
-                    channelId
-                }
-            });
-
-            throw error;
-        }
-    }
-
-    /**
-     * Execute an internal MXF tool
-     */
-    private async executeInternalTool(context: ToolExecutionContext): Promise<any> {
-        try {
-            // Use the existing internal tool execution method
-            // This assumes the McpToolRegistry has an executeTool method
-            const result = await (this.internalRegistry as any).executeTool(
-                context.toolName, 
-                context.input, 
-                context.agentId,
-                context.channelId
-            );
-
-            return result;
-
-        } catch (error) {
-            const errorMessage = error instanceof Error ? error.message : String(error);
-            logger.error(`❌ Internal tool ${context.toolName} execution failed: ${errorMessage}`);
-            throw error;
-        }
-    }
-
-    /**
-     * Execute an external server tool
-     */
-    private async executeExternalTool(context: ToolExecutionContext): Promise<any> {
-        try {
-            
-            // Get the server status
-            const serverStatus = this.externalServerManager.getServerStatusById(context.source);
-            if (!serverStatus || serverStatus.status !== 'running') {
-                throw new Error(`External server ${context.source} is not running`);
-            }
-
-            // Find the tool definition
-            const tool = serverStatus.tools.find((t: any) => t.name === context.toolName);
-            if (!tool) {
-                throw new Error(`Tool ${context.toolName} not found on server ${context.source}`);
-            }
-
-            // Send MCP tool call via the server manager
-            const result = await this.sendMcpToolCall(context.source, context.toolName, context.input);
-            
-            return result;
-
-        } catch (error) {
-            const errorMessage = error instanceof Error ? error.message : String(error);
-            logger.error(`❌ External tool ${context.toolName} execution failed: ${errorMessage}`);
-            throw error;
-        }
-    }
 
     /**
      * Send MCP tool call to external server via JSON-RPC protocol
      */
     private async sendMcpToolCall(serverId: string, toolName: string, input: any, context?: any): Promise<any> {
-        try {
-            // Use the ExternalMcpServerManager's new executeToolOnServer method
-            const result = await this.externalServerManager.executeToolOnServer(
-                serverId, 
-                toolName, 
-                input,
-                context?.agentId || 'system',
-                context?.channelId || 'default'
+        // Identity is not optional. Defaulting to 'system'/'default' here made the
+        // call unattributable and quietly undid the registry's own requirement that
+        // every tool execution carry an agentId and a channelId.
+        if (!context?.agentId || typeof context.agentId !== 'string') {
+            throw new Error(
+                `Cannot execute external tool "${toolName}" on server "${serverId}": ` +
+                `the execution context has no agentId. External tool calls must be attributable.`
             );
-            return result;
+        }
+        if (!context?.channelId || typeof context.channelId !== 'string') {
+            throw new Error(
+                `Cannot execute external tool "${toolName}" on server "${serverId}": ` +
+                `the execution context has no channelId. External tool calls must be attributable.`
+            );
+        }
+
+        try {
+            return await this.externalServerManager.executeToolOnServer(
+                serverId,
+                toolName,
+                input,
+                context.agentId,
+                context.channelId
+            );
         } catch (error) {
             const errorMessage = error instanceof Error ? error.message : String(error);
-            logger.error(`❌ External tool execution failed: ${errorMessage}`);
+            logger.error(`External tool ${toolName} on ${serverId} failed: ${errorMessage}`);
             throw error;
         }
-    }
-
-    /**
-     * Generate a unique request ID
-     */
-    private generateRequestId(): string {
-        return `hybrid-${uuidv4()}`;
     }
 
     /**

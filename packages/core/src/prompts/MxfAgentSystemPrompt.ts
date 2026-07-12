@@ -35,7 +35,6 @@ import { Logger } from '../utils/Logger.js';
 import { createStrictValidator } from '../utils/validation.js';
 import {
     COMMUNICATION_TOOLS,
-    CONTROL_LOOP_TOOLS,
     CONTEXT_MEMORY_TOOLS,
     META_TOOLS
 } from '../constants/ToolNames.js';
@@ -145,7 +144,7 @@ Execute immediately when you have sufficient information. Take decisive action b
     private static buildMxfIdentity(agentConfig: AgentConfig, availableTools?: string[]): string {
         // Determine available capabilities based on tools
         const toolSet = availableTools || [];
-        const hasControlLoop = toolSet.some(tool => tool.startsWith('controlLoop_'));
+        const hasOrpar = toolSet.some(tool => tool.startsWith('orpar_'));
         const hasCommunication = toolSet.some(tool => tool.startsWith('messaging_') || tool.startsWith('agent_'));
         const hasMemoryContext = toolSet.some(tool => tool.includes('context_') || tool.includes('memory_'));
         
@@ -165,7 +164,7 @@ Execute immediately when you have sufficient information. Take decisive action b
 MXF enables you to collaborate with other AI agents`;
         
         // Only mention ORPAR if control loop tools are available
-        if (hasControlLoop) {
+        if (hasOrpar) {
             content += `, execute complex workflows through ORPAR cognitive cycles,`;
         }
         
@@ -261,15 +260,18 @@ Use tools to take actions - the system will automatically execute your tool requ
         }
         
         // Control Loop - only if control loop tools are available
-        const hasControlLoop = toolSet.some(tool => tool.startsWith('controlLoop_'));
-        if (hasControlLoop) {
-            const controlCapabilities: string[] = [];
-            if (toolSet.includes('controlLoop_start')) controlCapabilities.push(`- **${CONTROL_LOOP_TOOLS.START}**: Start new ORPAR cognitive cycles`);
-            if (toolSet.includes('controlLoop_observe')) controlCapabilities.push(`- **${CONTROL_LOOP_TOOLS.OBSERVE}**: Submit observations to active control loops`);
-            if (toolSet.includes('controlLoop_execute')) controlCapabilities.push(`- **${CONTROL_LOOP_TOOLS.EXECUTE}**: Execute planned actions within control loops`);
-            
-            if (controlCapabilities.length > 0) {
-                sections.push(`**Control Loop (ORPAR Integration):**\n${controlCapabilities.join('\n')}`);
+        const hasOrpar = toolSet.some(tool => tool.startsWith('orpar_'));
+        if (hasOrpar) {
+            const orparCapabilities: string[] = [];
+            if (toolSet.includes('orpar_observe')) orparCapabilities.push('- **orpar_observe**: Record what you observed, starting a cognitive cycle');
+            if (toolSet.includes('orpar_reason')) orparCapabilities.push('- **orpar_reason**: Record your reasoning about the observation');
+            if (toolSet.includes('orpar_plan')) orparCapabilities.push('- **orpar_plan**: Record the plan you intend to carry out');
+            if (toolSet.includes('orpar_act')) orparCapabilities.push('- **orpar_act**: Record the action you took');
+            if (toolSet.includes('orpar_reflect')) orparCapabilities.push('- **orpar_reflect**: Record what you learned, completing the cycle');
+            if (toolSet.includes('orpar_status')) orparCapabilities.push('- **orpar_status**: Check which phase of the cycle you are in');
+
+            if (orparCapabilities.length > 0) {
+                sections.push(`**ORPAR cognitive cycle:**\n${orparCapabilities.join('\n')}`);
             }
         }
         
@@ -304,43 +306,26 @@ Use tools to take actions - the system will automatically execute your tool requ
 
     /**
      * Detailed Tool Schemas with JSON Examples
-     * Now respects allowedTools to only show documentation for tools the agent can actually use
+     * Only documents tools the registry actually provided and the agent is allowed to use.
      */
     private static async buildToolSchemas(config: MxfSystemPromptConfig, availableTools?: any[], toolNames?: string[], agentConfig?: AgentConfig): Promise<string> {
         if (!config.includeToolSchemas) return '';
 
-        // Use provided tools from the actual tool registry
-        let tools: any[] = availableTools || [];
+        // Tools come from the registry. Nothing else is a valid source.
+        //
+        // An earlier version, when handed no tools, invented them: it took the
+        // list of tool NAMES and built "mock tool objects" with made-up
+        // descriptions and guessed input schemas, then presented them to the
+        // agent as documentation. The agent then called those tools with the
+        // guessed arguments, producing malformed calls. If the registry has no
+        // tools, the honest output is no tool-schema section at all.
+        const tools: any[] = availableTools || [];
         if (tools.length === 0) {
-            // Core tools fallback - create mock tool objects for allowed tools (or all core tools if no allowedTools)
-            const toolsToMock = (toolNames && toolNames.length > 0) ? toolNames : CORE_MXF_TOOLS;
-            tools = toolsToMock.map(toolName => ({
-                name: toolName,
-                description: `${toolName} - Core MXF ${toolName.includes('memory') ? 'Memory Management' : toolName.includes('messaging') ? 'Communication' : toolName.includes('controlLoop') ? 'ORPAR Control Loop' : toolName.includes('task') ? 'Task Management' : 'Meta'} tool`,
-                inputSchema: {
-                    type: 'object',
-                    properties: {
-                        ...(toolName.includes('messaging') && {
-                            targetAgentId: { type: 'string' },
-                            message: { type: 'string' }
-                        }),
-                        ...(toolName.includes('memory') && {
-                            key: { type: 'string' },
-                            value: { type: 'string' }
-                        }),
-                        ...(toolName.includes('controlLoop') && {
-                            observation: { type: 'string' },
-                            confidence: { type: 'number' }
-                        }),
-                        ...(toolName === 'task_complete' && {
-                            summary: { type: 'string', required: true },
-                            success: { type: 'boolean', default: true },
-                            details: { type: 'object', optional: true },
-                            nextSteps: { type: 'string', optional: true }
-                        })
-                    }
-                }
-            }));
+            logger.error(
+                'SYSTEM PROMPT: the tool registry returned no tools, so no tool schemas can be documented. ' +
+                'Check that the agent has tools registered and that allowedTools is not empty.'
+            );
+            return '';
         }
 
         // Deduplicate tools by name (keep first occurrence)
@@ -370,8 +355,13 @@ Use tools to take actions - the system will automatically execute your tool requ
         const finalToolsForDocumentation = mxfCoreTools;
         
         if (finalToolsForDocumentation.length === 0) {
-            logger.error('❌ SYSTEM PROMPT: No allowed tools found for this agent - this indicates a configuration issue');
-            return '## Tool Usage Reference\n\n❌ **ERROR: No allowed tools found**\n\nThis agent has no tools configured in its allowedTools list.';
+            // Emit no section rather than writing an error notice into the
+            // agent's system prompt, which the model would read as instructions.
+            logger.error(
+                'SYSTEM PROMPT: none of the registry tools match this agent\'s allowedTools, ' +
+                'so no tool schemas can be documented. This is a configuration issue.'
+            );
+            return '';
         }
 
         // Apply deferred tool schema disclosure if enabled — tier-2 tools get
@@ -400,7 +390,7 @@ Use tools to take actions - the system will automatically execute your tool requ
 
         // Group allowed tools by category (only show documentation for tools this agent can actually use)
         const communicationTools = toolsForFullDocs.filter(t => t.name.startsWith('messaging_'));
-        const controlLoopTools = toolsForFullDocs.filter(t => t.name.startsWith('controlLoop_'));
+        const orparTools = toolsForFullDocs.filter(t => t.name.startsWith('orpar_'));
         const infrastructureTools = toolsForFullDocs.filter(t =>
             t.name === 'filesystem_read' || t.name === 'filesystem_write' ||
             t.name === 'filesystem_list' || t.name === 'shell_execute' ||
@@ -424,9 +414,9 @@ Use tools to take actions - the system will automatically execute your tool requ
         }
 
         // Control Loop Tools Section
-        if (controlLoopTools.length > 0) {
+        if (orparTools.length > 0) {
             toolSections.push('### Control Loop Tools\n');
-            for (const tool of controlLoopTools) {
+            for (const tool of orparTools) {
                 toolSections.push(this.buildToolExample(tool, agentConfig?.mxpEnabled, compactionConfig.toolBehavioralGuidanceEnabled));
             }
         }
@@ -534,12 +524,12 @@ ${toolSections.join('\n')}${deferredSummary}`;
         }
         
         // Pattern 2: ORPAR Integration - only if control loop tools are available
-        const hasControlLoop = toolSet.some(tool => tool.startsWith('controlLoop_'));
-        if (hasControlLoop) {
-            const observeTool = toolSet.find(tool => tool === 'controlLoop_observe');
+        const hasOrpar = toolSet.some(tool => tool.startsWith('orpar_'));
+        if (hasOrpar) {
+            const observeTool = toolSet.find(tool => tool === 'orpar_observe');
             if (observeTool) {
                 sections.push(`**Pattern 2: ORPAR Integration**
-- Submit observations using 'controlLoop_observe'
+- Submit observations using 'orpar_observe'
 - Include confidence scores and data sources
 - Provide rich metadata for better reasoning`);
             }
@@ -638,9 +628,9 @@ When you need capabilities beyond your core tools:
         
         // Only include ORPAR if control loop tools are available
         const toolSet = availableTools || [];
-        const hasControlLoop = toolSet.some(tool => tool.startsWith('controlLoop_'));
+        const hasOrpar = toolSet.some(tool => tool.startsWith('orpar_'));
         
-        if (!hasControlLoop) return '';
+        if (!hasOrpar) return '';
 
         return `## MXF Operational Guidelines
 

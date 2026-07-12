@@ -20,10 +20,10 @@
 
 /**
  * MXF MCP Meta-Tools
- * 
- * Advanced meta-tools that provide intelligent tool management and recommendation
- * capabilities. These tools use AI/LLM services to analyze agent intents and
- * provide contextual tool recommendations from the unified MCP tool registry.
+ *
+ * Tools about tools: recommend a tool for a stated intent, look up what a tool
+ * does, and signal task completion. tools_recommend asks the SystemLLM to choose
+ * from the registry; the rest read the registry directly.
  */
 
 import { firstValueFrom, Observable } from 'rxjs';
@@ -32,6 +32,7 @@ import { Logger } from '@mxf-dev/core/utils/Logger';
 import { SystemLlmServiceManager } from '../../socket/services/SystemLlmServiceManager';
 import { TOOL_RECOMMENDATION_SCHEMA } from '@mxf-dev/core/schemas/JsonResponseSchemas';
 import { McpToolRegistry } from '../../api/services/McpToolRegistry';
+import { getHybridMcpToolRegistry } from '../services/HybridMcpRegistryAccess';
 import { META_TOOLS } from '@mxf-dev/core/constants/ToolNames';
 import { TaskService } from '../../socket/services/TaskService';
 import { TaskEvents } from '@mxf-dev/core/events/event-definitions/TaskEvents';
@@ -67,7 +68,11 @@ const TOOL_CATEGORIES = {
  */
 const getToolCategory = (toolName: string): string => {
     if (toolName.startsWith('agent_')) return TOOL_CATEGORIES.COMMUNICATION;
-    if (toolName.startsWith('control_loop_')) return TOOL_CATEGORIES.CONTROL_LOOP;
+    // The ORPAR tools are the cognitive-cycle family. This branch used to test for
+    // 'control_loop_', which never matched anything: the control-loop tools were
+    // named controlLoop_* in camelCase, so every one of them fell through to
+    // 'unknown'. That family has since been removed in favour of orpar_*.
+    if (toolName.startsWith('orpar_')) return TOOL_CATEGORIES.CONTROL_LOOP;
     if (toolName.startsWith('fs_') || toolName.startsWith('memory_') || toolName.startsWith('shell_')) return TOOL_CATEGORIES.INFRASTRUCTURE;
     if (toolName.startsWith('channel_') || toolName.startsWith('agent_context') || toolName.startsWith('agent_memory')) return TOOL_CATEGORIES.CONTEXT_MEMORY;
     if (toolName.startsWith('tools_')) return TOOL_CATEGORIES.META;
@@ -136,53 +141,22 @@ export interface ToolRecommendationResponse {
 }
 
 /**
- * Generate fallback recommendations using keyword matching
+ * REMOVED: generateFallbackRecommendations.
+ *
+ * It scored tools by checking whether the intent string appeared verbatim in a
+ * tool's name or description, gave everything else a floor score of 0.1, and its
+ * output was returned with a hard-coded `confidence: 0.5`. It ran whenever the
+ * SystemLLM call failed, and the caller could not tell the two apart.
+ *
+ * tools_recommend now fails when the SystemLLM is unavailable.
  */
-const generateFallbackRecommendations = async (
-    intent: string,
-    maxRecommendations: number,
-    excludeTools: string[]
-): Promise<ToolRecommendation[]> => {
-    try {
-        // Get tools from the actual registry
-        const allTools = await firstValueFrom(McpToolRegistry.getInstance().listTools());
-        
-        // Filter out excluded tools
-        const filteredTools = allTools.filter(tool => !excludeTools.includes(tool.name));
-        
-        // Simple keyword-based scoring
-        const intentLower = intent.toLowerCase();
-        const recommendations = filteredTools
-            .map(tool => {
-                const nameScore = tool.name.toLowerCase().includes(intentLower) ? 0.8 : 0;
-                const descScore = tool.description.toLowerCase().includes(intentLower) ? 0.6 : 0;
-                const relevanceScore = Math.max(nameScore, descScore, 0.1); // Minimum score
-                
-                return {
-                    name: tool.name,
-                    description: tool.description,
-                    category: getToolCategory(tool.name),
-                    relevanceScore,
-                    reasoning: `Keyword match in ${nameScore > 0 ? 'name' : 'description'}`,
-                    usageHint: `Use ${tool.name} to ${tool.description.toLowerCase()}`
-                };
-            })
-            .sort((a, b) => b.relevanceScore - a.relevanceScore)
-            .slice(0, maxRecommendations);
-
-        return recommendations;
-    } catch (error) {
-        logger.error(`Failed to generate fallback recommendations: ${error}`);
-        return [];
-    }
-};
 
 /**
- * MCP Meta-Tools for intelligent tool management - Enhanced for Phase 3 Validation-Aware Recommendations
+ * Recommend tools for a stated intent, ranked by the SystemLLM.
  */
 export const tools_recommend = {
     name: META_TOOLS.TOOLS_RECOMMEND,
-    description: 'Get AI-powered recommendations for the most relevant MCP tools based on your intent and context. Uses advanced LLM analysis enhanced with validation performance data and successful parameter patterns to suggest optimal tool combinations.',
+    description: 'Recommend MCP tools for a stated intent. The SystemLLM ranks the available tools against your intent and returns the most relevant ones with a usage hint for each, informed by past validation results and successful parameter patterns.',
     inputSchema: {
         type: 'object',
         properties: {
@@ -310,7 +284,7 @@ export const tools_recommend = {
             
             try {
                 // Check if we have a hybrid registry available (will be injected later)
-                const hybridRegistry = (global as any).hybridMcpToolRegistry;
+                const hybridRegistry = getHybridMcpToolRegistry();
                 if (hybridRegistry) {
                     allToolsFromRegistry = hybridRegistry.getAllToolsSnapshot();
                     isHybridRegistry = true;
@@ -638,37 +612,25 @@ export const tools_recommend = {
             };
 
         } catch (error) {
-            logger.warn(`LLM-based tool recommendation failed, using fallback method: ${error instanceof Error ? error.message : String(error)}`);
-            
-            // Fallback to simple keyword-based recommendations from registry
-            const fallbackRecommendations = await generateFallbackRecommendations(
-                input.intent,
-                input.maxRecommendations || 5,
-                input.excludeTools || []
+            // No silent fallback.
+            //
+            // This used to swallow the failure and return keyword matches labelled
+            // `llmProvider: 'fallback'` with a `confidence: 0.5` that nothing
+            // computed, over a `totalAvailableTools` that fell back to the literal
+            // 26 when the registry could not be read. The caller received a
+            // confident-looking recommendation built from three made-up numbers and
+            // had no way to tell it apart from a real one.
+            //
+            // If the SystemLLM cannot rank the tools, say so. The agent can still
+            // list the tools itself.
+            const message = error instanceof Error ? error.message : String(error);
+            logger.error(`tools_recommend failed: ${message}`);
+
+            throw new Error(
+                `Could not produce tool recommendations: ${message}. ` +
+                `The SystemLLM ranks the tools for this tool, and it is unavailable. ` +
+                `Use tools_help or tool_docs to inspect the tool set directly.`
             );
-            
-            const processingTime = Date.now() - startTime;
-            
-            // Get total tool count from registry for accurate reporting
-            let totalAvailableTools = 0;
-            try {
-                const allTools = await firstValueFrom(McpToolRegistry.getInstance().listTools());
-                totalAvailableTools = allTools.length;
-            } catch (registryError) {
-                logger.error(`Failed to get tool count from registry: ${registryError}`);
-                totalAvailableTools = 26; // Fallback estimate
-            }
-            
-            
-            return {
-                agentId: context.agentId,
-                intent: input.intent,
-                recommendedTools: fallbackRecommendations,
-                totalAvailableTools,
-                processingTime,
-                llmProvider: 'fallback',
-                confidence: 0.5
-            };
         }
     }
 };
@@ -793,7 +755,7 @@ export const tools_validate = {
             // Get all available tools
             let allTools: any[] = [];
             try {
-                const hybridRegistry = (global as any).hybridMcpToolRegistry;
+                const hybridRegistry = getHybridMcpToolRegistry();
                 if (hybridRegistry) {
                     allTools = hybridRegistry.getAllToolsSnapshot();
                 } else {
@@ -898,7 +860,7 @@ export const tools_discover = {
             // Get all available tools
             let allTools: any[] = [];
             try {
-                const hybridRegistry = (global as any).hybridMcpToolRegistry;
+                const hybridRegistry = getHybridMcpToolRegistry();
                 if (hybridRegistry) {
                     allTools = hybridRegistry.getAllToolsSnapshot();
                 } else {
@@ -1051,7 +1013,7 @@ export const tools_compare = {
             // Get all available tools
             let allTools: any[] = [];
             try {
-                const hybridRegistry = (global as any).hybridMcpToolRegistry;
+                const hybridRegistry = getHybridMcpToolRegistry();
                 if (hybridRegistry) {
                     allTools = hybridRegistry.getAllToolsSnapshot();
                 } else {
@@ -1271,7 +1233,7 @@ export const agent_introspect = {
                 // Get available tools
                 let allTools: any[] = [];
                 try {
-                    const hybridRegistry = (global as any).hybridMcpToolRegistry;
+                    const hybridRegistry = getHybridMcpToolRegistry();
                     if (hybridRegistry) {
                         allTools = hybridRegistry.getAllToolsSnapshot();
                     } else {
@@ -1369,7 +1331,7 @@ export const workflow_plan = {
             // Get available tools
             let allTools: any[] = [];
             try {
-                const hybridRegistry = (global as any).hybridMcpToolRegistry;
+                const hybridRegistry = getHybridMcpToolRegistry();
                 if (hybridRegistry) {
                     allTools = hybridRegistry.getAllToolsSnapshot();
                 } else {
@@ -1456,7 +1418,7 @@ export const workflow_plan = {
  */
 export const tools_recommend_on_error = {
     name: META_TOOLS.TOOLS_RECOMMEND_ON_ERROR,
-    description: 'Get intelligent tool recommendations specifically triggered by validation failures or execution errors. Provides alternative tools, parameter corrections, and prevention strategies.',
+    description: 'Suggest alternative tools and parameter corrections after a tool call failed validation or errored. Returns alternatives, corrected parameters, and what to avoid next time.',
     inputSchema: {
         type: 'object',
         properties: {
@@ -1552,7 +1514,7 @@ export const tools_recommend_on_error = {
             // Get all available tools
             let allTools: any[] = [];
             try {
-                const hybridRegistry = (global as any).hybridMcpToolRegistry;
+                const hybridRegistry = getHybridMcpToolRegistry();
                 if (hybridRegistry) {
                     allTools = hybridRegistry.getAllToolsSnapshot();
                 } else {
@@ -1767,7 +1729,7 @@ export const error_diagnose = {
             // Get tool information
             let allTools: any[] = [];
             try {
-                const hybridRegistry = (global as any).hybridMcpToolRegistry;
+                const hybridRegistry = getHybridMcpToolRegistry();
                 if (hybridRegistry) {
                     allTools = hybridRegistry.getAllToolsSnapshot();
                 } else {

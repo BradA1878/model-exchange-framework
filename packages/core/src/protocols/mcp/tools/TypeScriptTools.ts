@@ -18,469 +18,409 @@
  * @documentation https://mxf-dev.github.io/mxf/
  */
 
-import { Logger } from '../../../utils/Logger.js';
-import { executeShellCommand } from './InfrastructureTools.js';
-import { McpToolHandlerContext, McpToolHandlerResult, McpToolResultContent } from '../McpServerTypes.js';
-
-const logger = new Logger('info', 'TypeScriptTools', 'server');
-
 /**
- * TypeScript Language Server Tools for MXF
- * 
- * Provides TypeScript analysis, diagnostics, and code intelligence
- * These tools are placeholders that demonstrate the interface
- * Full implementation would integrate with shell_execute tool
+ * TypeScriptTools.ts
+ *
+ * TypeScript checking, building, formatting, linting and test running. Each tool
+ * shells out to the real binary (tsc, prettier, eslint, jest) through
+ * executeShellCommand, which validates the command and strips the child's
+ * environment.
+ *
+ * On exit codes: tsc, eslint and jest all exit non-zero to mean "I found
+ * problems". That is a successful tool call with a negative finding, not a tool
+ * failure — so those tools return `passed: false` with the diagnostics, and
+ * `isError` stays false. `isError` is reserved for the tool genuinely not
+ * working: the binary is missing, the working directory does not exist, output
+ * cannot be parsed.
  */
 
-export const typescriptCheckTool = {
+import { TOOL_CATEGORIES } from '../../../constants/ToolNames.js';
+import { defineTool, ToolRunContext } from '../defineTool.js';
+import { ToolError } from '../ToolError.js';
+import { executeShellCommand, ShellCommandResult } from './InfrastructureTools.js';
+
+/** Exit code the shell reports when a command could not be found or spawned. */
+const COMMAND_NOT_FOUND = 127;
+
+const workingDirectoryProperty = {
+    type: 'string',
+    description: 'Working directory path (defaults to the server working directory)'
+};
+
+/**
+ * Run one of the node toolchain binaries via npx.
+ *
+ * Throws only when the binary could not be run at all. A non-zero exit that the
+ * binary uses to report findings is handed back to the caller to interpret.
+ */
+async function runNpx(
+    args: string[],
+    workingDirectory: string | undefined,
+    context: ToolRunContext
+): Promise<ShellCommandResult> {
+    const result = await executeShellCommand('npx', args, {
+        context: {
+            agentId: context.agentId,
+            channelId: context.channelId,
+            requestId: context.requestId
+        },
+        workingDirectory: workingDirectory || process.cwd(),
+        captureOutput: true
+    });
+
+    if (result.exitCode === COMMAND_NOT_FOUND) {
+        throw ToolError.preconditionFailed(
+            `Could not run "npx ${args[0]}" — the command was not found. ` +
+            `${result.stderr?.trim() ?? ''}`.trim(),
+            { command: args[0] }
+        );
+    }
+
+    return result;
+}
+
+/** Pull `file(line,col): error TSxxxx: message` diagnostics out of tsc output. */
+function parseTscDiagnostics(output: string): Array<{
+    type: 'error' | 'warning';
+    file: string;
+    line: number;
+    column: number;
+    code: string;
+    message: string;
+}> {
+    const diagnostics: Array<{
+        type: 'error' | 'warning';
+        file: string;
+        line: number;
+        column: number;
+        code: string;
+        message: string;
+    }> = [];
+
+    // tsc --pretty false emits: path/file.ts(12,5): error TS2304: Cannot find name 'x'.
+    const pattern = /^(.+?)\((\d+),(\d+)\):\s+(error|warning)\s+(TS\d+):\s+(.*)$/;
+
+    for (const line of output.split('\n')) {
+        const match = line.match(pattern);
+        if (!match) {
+            continue;
+        }
+        diagnostics.push({
+            type: match[4] as 'error' | 'warning',
+            file: match[1],
+            line: parseInt(match[2], 10),
+            column: parseInt(match[3], 10),
+            code: match[5],
+            message: match[6].trim()
+        });
+    }
+
+    return diagnostics;
+}
+
+export const typescriptCheckTool = defineTool<
+    { workingDirectory?: string; files?: string[] },
+    {
+        passed: boolean;
+        totalErrors: number;
+        totalWarnings: number;
+        diagnostics: ReturnType<typeof parseTscDiagnostics>;
+    }
+>({
     name: 'typescript_check',
-    description: 'Type-check TypeScript files and report diagnostics',
+    category: TOOL_CATEGORIES.INFRASTRUCTURE,
+    description:
+        'Type-check TypeScript with `tsc --noEmit` and return the diagnostics. ' +
+        'passed is false when there are type errors.',
     inputSchema: {
         type: 'object',
         properties: {
-            workingDirectory: {
-                type: 'string',
-                description: 'Working directory path (defaults to current directory)'
-            },
+            workingDirectory: workingDirectoryProperty,
             files: {
                 type: 'array',
                 items: { type: 'string' },
-                description: 'Specific files to check (optional, checks all if not provided)'
+                description: 'Specific files to check. Checks the whole project when omitted.'
             }
         }
     },
-    handler: async (args: {
-        workingDirectory?: string;
-        files?: string[];
-    }, context: McpToolHandlerContext): Promise<McpToolHandlerResult> => {
-        
-        try {
-            const tscArgs = ['--noEmit', '--pretty', 'false'];
-            if (args.files && args.files.length > 0) {
-                tscArgs.push(...args.files);
-            }
-            
-            const result = await executeShellCommand('npx', ['tsc', ...tscArgs], {
-                workingDirectory: args.workingDirectory || process.cwd(),
-                captureOutput: true
-            });
-
-            // TypeScript compiler exits with code 1 if there are errors, but this is expected
-            const diagnostics = [];
-            let totalErrors = 0;
-            let totalWarnings = 0;
-            let filesChecked = 0;
-
-            if (result.stdout) {
-                // Parse TypeScript compiler output
-                const lines = result.stdout.split('\n');
-                for (const line of lines) {
-                    if (line.includes('error TS')) {
-                        totalErrors++;
-                        diagnostics.push({
-                            type: 'error',
-                            message: line.trim(),
-                            file: line.split('(')[0] || '',
-                            line: 0,
-                            column: 0
-                        });
-                    } else if (line.includes('warning TS')) {
-                        totalWarnings++;
-                        diagnostics.push({
-                            type: 'warning',
-                            message: line.trim(),
-                            file: line.split('(')[0] || '',
-                            line: 0,
-                            column: 0
-                        });
-                    }
-                }
-            }
-
-            const content: McpToolResultContent = {
-                type: 'application/json',
-                data: {
-                    success: result.exitCode === 0,
-                    diagnostics,
-                    totalErrors,
-                    totalWarnings,
-                    filesChecked: args.files ? args.files.length : 0,
-                    error: result.exitCode !== 0 ? result.stderr : null
-                }
-            };
-            return { content };
-        } catch (error) {
-            logger.error('TypeScript check failed', { error });
-            const content: McpToolResultContent = {
-                type: 'application/json',
-                data: {
-                    success: false,
-                    diagnostics: [],
-                    totalErrors: 0,
-                    totalWarnings: 0,
-                    filesChecked: 0,
-                    error: error instanceof Error ? error.message : String(error)
-                }
-            };
-            return { content };
+    run: async (input, context) => {
+        const tscArgs = ['tsc', '--noEmit', '--pretty', 'false'];
+        if (input.files && input.files.length > 0) {
+            tscArgs.push(...input.files);
         }
-    }
-};
 
-export const typescriptBuildTool = {
+        const result = await runNpx(tscArgs, input.workingDirectory, context);
+
+        // tsc writes diagnostics to stdout and exits 1 when it finds any. That is
+        // the tool working, not the tool failing.
+        const diagnostics = parseTscDiagnostics(result.stdout ?? '');
+        const totalErrors = diagnostics.filter(d => d.type === 'error').length;
+        const totalWarnings = diagnostics.filter(d => d.type === 'warning').length;
+
+        // A non-zero exit with nothing parseable means tsc fell over for some other
+        // reason (bad tsconfig, unreadable directory). That is a real failure.
+        if (result.exitCode !== 0 && diagnostics.length === 0) {
+            throw ToolError.executionFailed(
+                `tsc exited ${result.exitCode} without producing diagnostics: ` +
+                `${(result.stderr || result.stdout)?.trim() || 'no output'}`
+            );
+        }
+
+        return {
+            passed: totalErrors === 0,
+            totalErrors,
+            totalWarnings,
+            diagnostics
+        };
+    }
+});
+
+export const typescriptBuildTool = defineTool<
+    { workingDirectory?: string; clean?: boolean },
+    { passed: boolean; buildTimeMs: number; errors: string[]; output: string }
+>({
     name: 'typescript_build',
-    description: 'Build TypeScript project and emit JavaScript files',
+    category: TOOL_CATEGORIES.INFRASTRUCTURE,
+    description: 'Build the TypeScript project with `tsc --build` and emit JavaScript.',
     inputSchema: {
         type: 'object',
         properties: {
-            workingDirectory: {
-                type: 'string',
-                description: 'Working directory path (defaults to current directory)'
-            },
+            workingDirectory: workingDirectoryProperty,
             clean: {
                 type: 'boolean',
                 default: false,
-                description: 'Clean output directory before build'
+                description: 'Run `tsc --build --clean` first'
             }
         }
     },
-    handler: async (args: {
-        workingDirectory?: string;
-        clean?: boolean;
-    }, context: McpToolHandlerContext): Promise<McpToolHandlerResult> => {
-        
-        try {
-            const startTime = Date.now();
-            
-            // Clean output directory if requested
-            if (args.clean) {
-                const cleanResult = await executeShellCommand('npx', ['tsc', '--build', '--clean'], {
-                    workingDirectory: args.workingDirectory || process.cwd(),
-                    captureOutput: true
-                });
-                if (cleanResult.exitCode !== 0) {
-                    logger.warn('Clean command failed', { error: cleanResult.stderr });
-                }
-            }
-            
-            const result = await executeShellCommand('npx', ['tsc', '--build'], {
-                workingDirectory: args.workingDirectory || process.cwd(),
-                captureOutput: true
-            });
+    run: async (input, context) => {
+        const startedAt = Date.now();
 
-            const buildTime = Date.now() - startTime;
-            
-            const errors = [];
-            const warnings = [];
-            
-            if (result.stdout) {
-                const lines = result.stdout.split('\n');
-                for (const line of lines) {
-                    if (line.includes('error TS')) {
-                        errors.push(line.trim());
-                    } else if (line.includes('warning TS')) {
-                        warnings.push(line.trim());
-                    }
-                }
+        if (input.clean) {
+            const cleanResult = await runNpx(
+                ['tsc', '--build', '--clean'],
+                input.workingDirectory,
+                context
+            );
+            // A failed clean leaves stale output behind, which makes the build's
+            // result meaningless. Say so rather than building on top of it.
+            if (cleanResult.exitCode !== 0) {
+                throw ToolError.executionFailed(
+                    `tsc --build --clean failed (exit ${cleanResult.exitCode}): ` +
+                    `${(cleanResult.stderr || cleanResult.stdout)?.trim() || 'no output'}`
+                );
             }
-
-            const content: McpToolResultContent = {
-                type: 'application/json',
-                data: {
-                    success: result.exitCode === 0,
-                    output: result.stdout || '',
-                    errors,
-                    warnings,
-                    buildTime,
-                    error: result.exitCode !== 0 ? result.stderr : null
-                }
-            };
-            return { content };
-        } catch (error) {
-            logger.error('TypeScript build failed', { error });
-            const content: McpToolResultContent = {
-                type: 'application/json',
-                data: {
-                    success: false,
-                    output: '',
-                    errors: [],
-                    warnings: [],
-                    buildTime: 0,
-                    error: error instanceof Error ? error.message : String(error)
-                }
-            };
-            return { content };
         }
-    }
-};
 
-export const typescriptFormatTool = {
+        const result = await runNpx(['tsc', '--build'], input.workingDirectory, context);
+
+        const errors = (result.stdout ?? '')
+            .split('\n')
+            .filter(line => line.includes('error TS'))
+            .map(line => line.trim());
+
+        return {
+            passed: result.exitCode === 0,
+            buildTimeMs: Date.now() - startedAt,
+            errors,
+            output: result.stdout ?? ''
+        };
+    }
+});
+
+export const typescriptFormatTool = defineTool<
+    { files?: string[]; check?: boolean; workingDirectory?: string },
+    { mode: 'check' | 'write'; formatted: boolean; files: string[]; output: string }
+>({
     name: 'typescript_format',
-    description: 'Format TypeScript files using prettier or similar formatter',
+    category: TOOL_CATEGORIES.INFRASTRUCTURE,
+    description:
+        'Format TypeScript/JavaScript files with prettier. ' +
+        'With check: true it reports whether files are formatted without changing them.',
     inputSchema: {
         type: 'object',
         properties: {
             files: {
                 type: 'array',
                 items: { type: 'string' },
-                description: 'Files to format (supports glob patterns)'
+                description: 'Files to format (glob patterns allowed). Defaults to all TS/JS sources.'
             },
             check: {
                 type: 'boolean',
                 default: false,
-                description: 'Check if files are formatted without modifying them'
+                description: 'Report formatting problems instead of rewriting files'
             },
-            workingDirectory: {
-                type: 'string',
-                description: 'Working directory path (defaults to current directory)'
-            }
+            workingDirectory: workingDirectoryProperty
         }
     },
-    handler: async (args: {
-        files?: string[];
-        check?: boolean;
-        workingDirectory?: string;
-    }, context: McpToolHandlerContext): Promise<McpToolHandlerResult> => {
-        
-        try {
-            const prettierArgs = args.check ? ['--check'] : ['--write'];
-            if (args.files && args.files.length > 0) {
-                prettierArgs.push(...args.files);
-            } else {
-                prettierArgs.push('**/*.{ts,tsx,js,jsx}');
-            }
-            
-            const result = await executeShellCommand('npx', ['prettier', ...prettierArgs], {
-                workingDirectory: args.workingDirectory || process.cwd(),
-                captureOutput: true
-            });
+    run: async (input, context) => {
+        const mode: 'check' | 'write' = input.check ? 'check' : 'write';
+        const prettierArgs = ['prettier', input.check ? '--check' : '--write'];
 
-            const formattedFiles = [];
-            const unchanged = [];
-            
-            if (result.stdout) {
-                const lines = result.stdout.split('\n');
-                for (const line of lines) {
-                    if (line.includes('unchanged')) {
-                        unchanged.push(line.trim());
-                    } else if (line.trim() && !line.startsWith('Checking')) {
-                        formattedFiles.push(line.trim());
-                    }
-                }
-            }
-
-            const content: McpToolResultContent = {
-                type: 'application/json',
-                data: {
-                    success: result.exitCode === 0,
-                    formattedFiles,
-                    unchanged,
-                    error: result.exitCode !== 0 ? result.stderr : null
-                }
-            };
-            return { content };
-        } catch (error) {
-            logger.error('TypeScript format failed', { error });
-            const content: McpToolResultContent = {
-                type: 'application/json',
-                data: {
-                    success: false,
-                    formattedFiles: [],
-                    unchanged: [],
-                    error: error instanceof Error ? error.message : String(error)
-                }
-            };
-            return { content };
+        if (input.files && input.files.length > 0) {
+            prettierArgs.push(...input.files);
+        } else {
+            prettierArgs.push('**/*.{ts,tsx,js,jsx}');
         }
-    }
-};
 
-export const typescriptLintTool = {
+        const result = await runNpx(prettierArgs, input.workingDirectory, context);
+
+        // In check mode prettier exits 1 when files need formatting — a finding,
+        // not a failure. In write mode a non-zero exit means it could not write.
+        if (mode === 'write' && result.exitCode !== 0) {
+            throw ToolError.executionFailed(
+                `prettier --write failed (exit ${result.exitCode}): ` +
+                `${(result.stderr || result.stdout)?.trim() || 'no output'}`
+            );
+        }
+
+        const files = (result.stdout ?? '')
+            .split('\n')
+            .map(line => line.trim())
+            .filter(line => line.length > 0 && !line.startsWith('Checking'));
+
+        return {
+            mode,
+            formatted: result.exitCode === 0,
+            files,
+            output: result.stdout ?? ''
+        };
+    }
+});
+
+export const typescriptLintTool = defineTool<
+    { files?: string[]; fix?: boolean; workingDirectory?: string },
+    { passed: boolean; errorCount: number; warningCount: number; results: unknown[] }
+>({
     name: 'typescript_lint',
-    description: 'Lint TypeScript files using ESLint',
+    category: TOOL_CATEGORIES.INFRASTRUCTURE,
+    description:
+        'Lint TypeScript/JavaScript with ESLint and return the findings. ' +
+        'passed is false when there are lint errors.',
     inputSchema: {
         type: 'object',
         properties: {
             files: {
                 type: 'array',
                 items: { type: 'string' },
-                description: 'Files to lint (supports glob patterns)'
+                description: 'Files to lint (glob patterns allowed). Defaults to all TS/JS sources.'
             },
             fix: {
                 type: 'boolean',
                 default: false,
-                description: 'Automatically fix problems'
+                description: 'Automatically fix the problems ESLint can fix'
             },
-            workingDirectory: {
-                type: 'string',
-                description: 'Working directory path (defaults to current directory)'
-            }
+            workingDirectory: workingDirectoryProperty
         }
     },
-    handler: async (args: {
-        files?: string[];
-        fix?: boolean;
-        workingDirectory?: string;
-    }, context: McpToolHandlerContext): Promise<McpToolHandlerResult> => {
-        
-        try {
-            const eslintArgs = ['--format', 'json'];
-            if (args.fix) {
-                eslintArgs.push('--fix');
-            }
-            
-            if (args.files && args.files.length > 0) {
-                eslintArgs.push(...args.files);
-            } else {
-                eslintArgs.push('**/*.{ts,tsx,js,jsx}');
-            }
-            
-            const result = await executeShellCommand('npx', ['eslint', ...eslintArgs], {
-                workingDirectory: args.workingDirectory || process.cwd(),
-                captureOutput: true
-            });
-
-            let results = [];
-            try {
-                if (result.stdout) {
-                    results = JSON.parse(result.stdout);
-                }
-            } catch (parseError) {
-                logger.warn('Could not parse ESLint output as JSON', { output: result.stdout });
-                results = [{
-                    filePath: 'unknown',
-                    messages: [{
-                        message: result.stdout,
-                        severity: 1,
-                        line: 0,
-                        column: 0
-                    }]
-                }];
-            }
-
-            const content: McpToolResultContent = {
-                type: 'application/json',
-                data: {
-                    success: result.exitCode === 0,
-                    results,
-                    error: result.exitCode !== 0 ? result.stderr : null
-                }
-            };
-            return { content };
-        } catch (error) {
-            logger.error('TypeScript lint failed', { error });
-            const content: McpToolResultContent = {
-                type: 'application/json',
-                data: {
-                    success: false,
-                    results: [],
-                    error: error instanceof Error ? error.message : String(error)
-                }
-            };
-            return { content };
+    run: async (input, context) => {
+        const eslintArgs = ['eslint', '--format', 'json'];
+        if (input.fix) {
+            eslintArgs.push('--fix');
         }
-    }
-};
 
-export const typescriptTestTool = {
+        if (input.files && input.files.length > 0) {
+            eslintArgs.push(...input.files);
+        } else {
+            eslintArgs.push('**/*.{ts,tsx,js,jsx}');
+        }
+
+        const result = await runNpx(eslintArgs, input.workingDirectory, context);
+
+        // ESLint exits 1 when it finds errors, but always prints its JSON report.
+        // No parseable report means ESLint itself fell over — that is a failure,
+        // and it must not be reported as "no lint problems".
+        const raw = (result.stdout ?? '').trim();
+        if (raw.length === 0) {
+            throw ToolError.executionFailed(
+                `eslint produced no report (exit ${result.exitCode}): ` +
+                `${result.stderr?.trim() || 'no error output'}`
+            );
+        }
+
+        let results: Array<{ errorCount?: number; warningCount?: number }>;
+        try {
+            results = JSON.parse(raw);
+        } catch (parseError) {
+            throw ToolError.executionFailed(
+                `Could not parse the ESLint JSON report: ` +
+                `${parseError instanceof Error ? parseError.message : String(parseError)}`,
+                { details: { outputPreview: raw.slice(0, 200) } }
+            );
+        }
+
+        const errorCount = results.reduce((sum, file) => sum + (file.errorCount ?? 0), 0);
+        const warningCount = results.reduce((sum, file) => sum + (file.warningCount ?? 0), 0);
+
+        return {
+            passed: errorCount === 0,
+            errorCount,
+            warningCount,
+            results
+        };
+    }
+});
+
+export const typescriptTestTool = defineTool<
+    { testFiles?: string[]; coverage?: boolean; workingDirectory?: string },
+    { passed: boolean; testsRun: number; testsPassed: number; testsFailed: number; output: string }
+>({
     name: 'typescript_test',
-    description: 'Run TypeScript tests using Jest or other test runners',
+    category: TOOL_CATEGORIES.INFRASTRUCTURE,
+    description:
+        'Run Jest tests and return the counts. passed is false when any test fails.',
     inputSchema: {
         type: 'object',
         properties: {
             testFiles: {
                 type: 'array',
                 items: { type: 'string' },
-                description: 'Specific test files to run'
+                description: 'Specific test files to run. Runs the whole suite when omitted.'
             },
             coverage: {
                 type: 'boolean',
                 default: false,
-                description: 'Generate test coverage report'
+                description: 'Generate a coverage report'
             },
-            workingDirectory: {
-                type: 'string',
-                description: 'Working directory path (defaults to current directory)'
-            }
+            workingDirectory: workingDirectoryProperty
         }
     },
-    handler: async (args: {
-        testFiles?: string[];
-        coverage?: boolean;
-        workingDirectory?: string;
-    }, context: McpToolHandlerContext): Promise<McpToolHandlerResult> => {
-        
-        try {
-            const jestArgs = ['--no-watchman', '--passWithNoTests'];
-            
-            if (args.coverage) {
-                jestArgs.push('--coverage');
-            }
-            
-            if (args.testFiles && args.testFiles.length > 0) {
-                jestArgs.push(...args.testFiles);
-            }
-            
-            const result = await executeShellCommand('npx', ['jest', ...jestArgs], {
-                workingDirectory: args.workingDirectory || process.cwd(),
-                captureOutput: true
-            });
+    run: async (input, context) => {
+        const jestArgs = ['jest', '--no-watchman', '--passWithNoTests'];
 
-            // Parse Jest output for test results
-            let testsRun = 0;
-            let testsPassed = 0;
-            let testsFailed = 0;
-            
-            if (result.stdout) {
-                const runMatch = result.stdout.match(/Tests:\s+(\d+)\s+total/);
-                const passMatch = result.stdout.match(/Tests:\s+\d+\s+failed,\s+(\d+)\s+passed/);
-                const failMatch = result.stdout.match(/Tests:\s+(\d+)\s+failed/);
-                
-                if (runMatch) testsRun = parseInt(runMatch[1]);
-                if (passMatch) testsPassed = parseInt(passMatch[1]);
-                if (failMatch) testsFailed = parseInt(failMatch[1]);
-                
-                // Alternative parsing for different Jest output formats
-                if (testsRun === 0) {
-                    const totalMatch = result.stdout.match(/(\d+)\s+tests?\s+passed/);
-                    if (totalMatch) {
-                        testsRun = parseInt(totalMatch[1]);
-                        testsPassed = testsRun;
-                    }
-                }
-            }
-
-            const content: McpToolResultContent = {
-                type: 'application/json',
-                data: {
-                    success: result.exitCode === 0,
-                    output: result.stdout || '',
-                    testsRun,
-                    testsPassed,
-                    testsFailed,
-                    error: result.exitCode !== 0 ? result.stderr : null
-                }
-            };
-            return { content };
-        } catch (error) {
-            logger.error('TypeScript test failed', { error });
-            const content: McpToolResultContent = {
-                type: 'application/json',
-                data: {
-                    success: false,
-                    output: '',
-                    testsRun: 0,
-                    testsPassed: 0,
-                    testsFailed: 0,
-                    error: error instanceof Error ? error.message : String(error)
-                }
-            };
-            return { content };
+        if (input.coverage) {
+            jestArgs.push('--coverage');
         }
-    }
-};
+        if (input.testFiles && input.testFiles.length > 0) {
+            jestArgs.push(...input.testFiles);
+        }
 
-// Export all TypeScript tools
+        const result = await runNpx(jestArgs, input.workingDirectory, context);
+
+        // Jest writes its summary to stderr, not stdout.
+        const output = [result.stdout, result.stderr].filter(Boolean).join('\n');
+
+        // Summary line: "Tests: 1 failed, 2 skipped, 17 passed, 20 total"
+        const summary = output.match(/^Tests:\s+(.+)$/m)?.[1] ?? '';
+        const readCount = (label: string): number => {
+            const match = summary.match(new RegExp(`(\\d+)\\s+${label}`));
+            return match ? parseInt(match[1], 10) : 0;
+        };
+
+        const testsRun = readCount('total');
+        const testsPassed = readCount('passed');
+        const testsFailed = readCount('failed');
+
+        return {
+            passed: result.exitCode === 0,
+            testsRun,
+            testsPassed,
+            testsFailed,
+            output
+        };
+    }
+});
+
 export const typescriptTools = [
     typescriptCheckTool,
     typescriptBuildTool,

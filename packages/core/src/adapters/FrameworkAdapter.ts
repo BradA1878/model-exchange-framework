@@ -123,7 +123,7 @@ export abstract class FrameworkAdapter {
 
     constructor(config: FrameworkAdapterConfig) {
         this.config = config;
-        this.logger = new Logger('FrameworkAdapter');
+        this.logger = new Logger('info', 'FrameworkAdapter');
 
         this.logger.info('Initialized framework adapter', {
             frameworkName: config.frameworkName,

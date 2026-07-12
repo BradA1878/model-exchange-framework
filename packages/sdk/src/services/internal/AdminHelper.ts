@@ -20,16 +20,24 @@
 
 /**
  * Admin Helper
- * 
- * Internal helper for admin operations (channel/key management).
- * Provides event-driven alternatives to HTTP API calls.
- * Hides EventBus complexity from SDK users.
+ *
+ * INTERNAL USE ONLY - NOT EXPORTED FROM SDK
+ *
+ * Event-driven admin operations (channel/key management). Every flow goes through
+ * the shared awaitEventResponse helper, so each one clears its own timer,
+ * unsubscribes on every exit path, and rejects on failure. These were four
+ * hand-rolled copies of the same request/response dance.
  */
 
-import { EventBus } from '@mxf-dev/core/events/EventBus';
 import { Events } from '@mxf-dev/core/events/EventNames';
 import { createBaseEventPayload } from '@mxf-dev/core/schemas/EventPayloadSchema';
-import { v4 as uuidv4 } from 'uuid';
+import { Logger } from '@mxf-dev/core/utils/Logger';
+import { awaitEventResponse } from './EventRequest.js';
+
+const logger = new Logger('info', 'AdminHelper', 'client');
+
+/** How long to wait for an admin operation to come back. */
+const ADMIN_TIMEOUT_MS = 30_000;
 
 /**
  * Channel creation configuration
@@ -82,16 +90,18 @@ export interface KeyInfo {
 }
 
 /**
- * Admin Helper - provides clean SDK interface for admin operations
+ * Admin Helper - event-driven admin operations for the SDK
  */
 export class AdminHelper {
     /**
-     * Create a channel via event-driven architecture
-     * 
+     * Create a channel.
+     *
      * @param config - Channel creation configuration
      * @param createdBy - Agent ID creating the channel
      * @returns Promise resolving to channel creation result
-     * 
+     * @throws EventRequestError if the server rejects the request
+     * @throws EventRequestTimeoutError if the server does not answer
+     *
      * @example
      * ```typescript
      * const result = await AdminHelper.createChannel({
@@ -105,39 +115,9 @@ export class AdminHelper {
         config: ChannelCreateConfig,
         createdBy: string
     ): Promise<ChannelCreateResult> {
-        return new Promise((resolve, reject) => {
-            const timeout = setTimeout(() => {
-                EventBus.client.off(Events.Channel.CREATED, successHandler);
-                EventBus.client.off(Events.Channel.CREATION_FAILED, failureHandler);
-                reject(new Error('Channel creation timeout'));
-            }, 30000); // 30 second timeout
-
-            const successHandler = (payload: any): void => {
-                if (payload.channelId === config.channelId) {
-                    clearTimeout(timeout);
-                    EventBus.client.off(Events.Channel.CREATED, successHandler);
-                    EventBus.client.off(Events.Channel.CREATION_FAILED, failureHandler);
-                    resolve({
-                        channelId: payload.data.channelId,
-                        name: payload.data.name
-                    });
-                }
-            };
-
-            const failureHandler = (payload: any): void => {
-                if (payload.channelId === config.channelId) {
-                    clearTimeout(timeout);
-                    EventBus.client.off(Events.Channel.CREATED, successHandler);
-                    EventBus.client.off(Events.Channel.CREATION_FAILED, failureHandler);
-                    reject(new Error(payload.data.error || 'Channel creation failed'));
-                }
-            };
-
-            EventBus.client.on(Events.Channel.CREATED, successHandler);
-            EventBus.client.on(Events.Channel.CREATION_FAILED, failureHandler);
-
-            // Emit create channel event
-            const createPayload = createBaseEventPayload(
+        return awaitEventResponse<ChannelCreateResult>({
+            emitEvent: Events.Channel.CREATE,
+            payload: createBaseEventPayload(
                 Events.Channel.CREATE,
                 createdBy,
                 config.channelId,
@@ -145,19 +125,30 @@ export class AdminHelper {
                     name: config.name,
                     metadata: config.metadata
                 }
-            );
-
-            EventBus.client.emitOn(createdBy, Events.Channel.CREATE, createPayload);
+            ),
+            route: { via: 'agent', agentId: createdBy },
+            successEvent: Events.Channel.CREATED,
+            failureEvent: Events.Channel.CREATION_FAILED,
+            correlate: (payload: any) => payload?.channelId === config.channelId,
+            mapResult: (payload: any) => ({
+                channelId: payload.data.channelId,
+                name: payload.data.name
+            }),
+            timeoutMs: ADMIN_TIMEOUT_MS,
+            description: `Channel creation for '${config.channelId}'`,
+            logger,
         });
     }
 
     /**
-     * Generate a channel key via event-driven architecture
-     * 
+     * Generate a channel key.
+     *
      * @param config - Key generation configuration
      * @param requestedBy - Agent ID requesting the key
      * @returns Promise resolving to key generation result
-     * 
+     * @throws EventRequestError if the server rejects the request
+     * @throws EventRequestTimeoutError if the server does not answer
+     *
      * @example
      * ```typescript
      * const key = await AdminHelper.generateKey({
@@ -172,42 +163,9 @@ export class AdminHelper {
         config: KeyGenerateConfig,
         requestedBy: string
     ): Promise<KeyGenerateResult> {
-        return new Promise((resolve, reject) => {
-            const timeout = setTimeout(() => {
-                EventBus.client.off(Events.Key.GENERATED, successHandler);
-                EventBus.client.off(Events.Key.GENERATION_FAILED, failureHandler);
-                reject(new Error('Key generation timeout'));
-            }, 30000); // 30 second timeout
-
-            const successHandler = (payload: any): void => {
-                if (payload.channelId === config.channelId) {
-                    clearTimeout(timeout);
-                    EventBus.client.off(Events.Key.GENERATED, successHandler);
-                    EventBus.client.off(Events.Key.GENERATION_FAILED, failureHandler);
-                    resolve({
-                        keyId: payload.data.keyId,
-                        secretKey: payload.data.secretKey,
-                        channelId: payload.data.channelId,
-                        agentId: payload.data.agentId,
-                        expiresAt: payload.data.expiresAt
-                    });
-                }
-            };
-
-            const failureHandler = (payload: any): void => {
-                if (payload.data?.channelId === config.channelId) {
-                    clearTimeout(timeout);
-                    EventBus.client.off(Events.Key.GENERATED, successHandler);
-                    EventBus.client.off(Events.Key.GENERATION_FAILED, failureHandler);
-                    reject(new Error(payload.data.error || 'Key generation failed'));
-                }
-            };
-
-            EventBus.client.on(Events.Key.GENERATED, successHandler);
-            EventBus.client.on(Events.Key.GENERATION_FAILED, failureHandler);
-
-            // Emit generate key event
-            const generatePayload = createBaseEventPayload(
+        return awaitEventResponse<KeyGenerateResult>({
+            emitEvent: Events.Key.GENERATE,
+            payload: createBaseEventPayload(
                 Events.Key.GENERATE,
                 requestedBy,
                 config.channelId,
@@ -217,20 +175,34 @@ export class AdminHelper {
                     name: config.name,
                     expiresAt: config.expiresAt?.toISOString()
                 }
-            );
-
-            EventBus.client.emitOn(requestedBy, Events.Key.GENERATE, generatePayload);
+            ),
+            route: { via: 'agent', agentId: requestedBy },
+            successEvent: Events.Key.GENERATED,
+            failureEvent: Events.Key.GENERATION_FAILED,
+            correlate: (payload: any) => payload?.data?.channelId === config.channelId,
+            mapResult: (payload: any) => ({
+                keyId: payload.data.keyId,
+                secretKey: payload.data.secretKey,
+                channelId: payload.data.channelId,
+                agentId: payload.data.agentId,
+                expiresAt: payload.data.expiresAt
+            }),
+            timeoutMs: ADMIN_TIMEOUT_MS,
+            description: `Key generation for channel '${config.channelId}'`,
+            logger,
         });
     }
 
     /**
-     * Deactivate a channel key via event-driven architecture
-     * 
+     * Deactivate a channel key.
+     *
      * @param keyId - Key ID to deactivate
      * @param channelId - Channel ID the key belongs to
      * @param requestedBy - Agent ID requesting deactivation
-     * @returns Promise resolving when key is deactivated
-     * 
+     * @returns Promise that resolves when the key is deactivated
+     * @throws EventRequestError if the server rejects the request
+     * @throws EventRequestTimeoutError if the server does not answer
+     *
      * @example
      * ```typescript
      * await AdminHelper.deactivateKey('key_123', 'my-channel', 'admin-agent');
@@ -241,56 +213,35 @@ export class AdminHelper {
         channelId: string,
         requestedBy: string
     ): Promise<void> {
-        return new Promise((resolve, reject) => {
-            const timeout = setTimeout(() => {
-                EventBus.client.off(Events.Key.DEACTIVATED, successHandler);
-                EventBus.client.off(Events.Key.DEACTIVATION_FAILED, failureHandler);
-                reject(new Error('Key deactivation timeout'));
-            }, 30000); // 30 second timeout
-
-            const successHandler = (payload: any): void => {
-                if (payload.data.keyId === keyId) {
-                    clearTimeout(timeout);
-                    EventBus.client.off(Events.Key.DEACTIVATED, successHandler);
-                    EventBus.client.off(Events.Key.DEACTIVATION_FAILED, failureHandler);
-                    resolve();
-                }
-            };
-
-            const failureHandler = (payload: any): void => {
-                if (payload.data?.keyId === keyId) {
-                    clearTimeout(timeout);
-                    EventBus.client.off(Events.Key.DEACTIVATED, successHandler);
-                    EventBus.client.off(Events.Key.DEACTIVATION_FAILED, failureHandler);
-                    reject(new Error(payload.data.error || 'Key deactivation failed'));
-                }
-            };
-
-            EventBus.client.on(Events.Key.DEACTIVATED, successHandler);
-            EventBus.client.on(Events.Key.DEACTIVATION_FAILED, failureHandler);
-
-            // Emit deactivate key event
-            const deactivatePayload = createBaseEventPayload(
+        await awaitEventResponse<void>({
+            emitEvent: Events.Key.DEACTIVATE,
+            payload: createBaseEventPayload(
                 Events.Key.DEACTIVATE,
                 requestedBy,
                 channelId,
-                {
-                    keyId
-                }
-            );
-
-            EventBus.client.emitOn(requestedBy, Events.Key.DEACTIVATE, deactivatePayload);
+                { keyId }
+            ),
+            route: { via: 'agent', agentId: requestedBy },
+            successEvent: Events.Key.DEACTIVATED,
+            failureEvent: Events.Key.DEACTIVATION_FAILED,
+            correlate: (payload: any) => payload?.data?.keyId === keyId,
+            mapResult: () => undefined,
+            timeoutMs: ADMIN_TIMEOUT_MS,
+            description: `Key deactivation for '${keyId}'`,
+            logger,
         });
     }
 
     /**
-     * List channel keys via event-driven architecture
-     * 
+     * List channel keys.
+     *
      * @param channelId - Channel ID to list keys for
      * @param requestedBy - Agent ID requesting the list
      * @param activeOnly - Whether to list only active keys (default: true)
      * @returns Promise resolving to array of key information
-     * 
+     * @throws EventRequestError if the server rejects the request
+     * @throws EventRequestTimeoutError if the server does not answer
+     *
      * @example
      * ```typescript
      * const keys = await AdminHelper.listKeys('my-channel', 'admin-agent', true);
@@ -302,46 +253,22 @@ export class AdminHelper {
         requestedBy: string,
         activeOnly: boolean = true
     ): Promise<KeyInfo[]> {
-        return new Promise((resolve, reject) => {
-            const timeout = setTimeout(() => {
-                EventBus.client.off(Events.Key.LISTED, successHandler);
-                EventBus.client.off(Events.Key.LIST_FAILED, failureHandler);
-                reject(new Error('Key listing timeout'));
-            }, 30000); // 30 second timeout
-
-            const successHandler = (payload: any): void => {
-                if (payload.data.channelId === channelId) {
-                    clearTimeout(timeout);
-                    EventBus.client.off(Events.Key.LISTED, successHandler);
-                    EventBus.client.off(Events.Key.LIST_FAILED, failureHandler);
-                    resolve(payload.data.keys);
-                }
-            };
-
-            const failureHandler = (payload: any): void => {
-                if (payload.data?.channelId === channelId) {
-                    clearTimeout(timeout);
-                    EventBus.client.off(Events.Key.LISTED, successHandler);
-                    EventBus.client.off(Events.Key.LIST_FAILED, failureHandler);
-                    reject(new Error(payload.data.error || 'Key listing failed'));
-                }
-            };
-
-            EventBus.client.on(Events.Key.LISTED, successHandler);
-            EventBus.client.on(Events.Key.LIST_FAILED, failureHandler);
-
-            // Emit list keys event
-            const listPayload = createBaseEventPayload(
+        return awaitEventResponse<KeyInfo[]>({
+            emitEvent: Events.Key.LIST,
+            payload: createBaseEventPayload(
                 Events.Key.LIST,
                 requestedBy,
                 channelId,
-                {
-                    channelId,
-                    activeOnly
-                }
-            );
-
-            EventBus.client.emitOn(requestedBy, Events.Key.LIST, listPayload);
+                { channelId, activeOnly }
+            ),
+            route: { via: 'agent', agentId: requestedBy },
+            successEvent: Events.Key.LISTED,
+            failureEvent: Events.Key.LIST_FAILED,
+            correlate: (payload: any) => payload?.data?.channelId === channelId,
+            mapResult: (payload: any) => payload.data.keys,
+            timeoutMs: ADMIN_TIMEOUT_MS,
+            description: `Key listing for channel '${channelId}'`,
+            logger,
         });
     }
 }

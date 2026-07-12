@@ -81,33 +81,35 @@ router.post('/:agentId/keys', async (req, res) => {
             });
         }
         
-        // Create a channel key for this agent
-        const keyRecord = await channelKeyService.createChannelKey(
+        // Create a channel key bound to this agent. Socket auth reads the identity
+        // off the key, so the binding is what stops one agent speaking as another.
+        const createdKey = await channelKeyService.createChannelKey(
             channelId,
             userId.toString(), // Created by authenticated user
+            agentId,
             name || `Key for agent ${agentId}`,
             expirationDate
         );
-        
+
         // Update agent with the keyId
-        agent.keyId = keyRecord.keyId;
+        agent.keyId = createdKey.keyId;
         await agent.save();
-        
-        
+
+
         res.status(201).json({
             success: true,
             data: {
                 agentId,
-                keyId: keyRecord.keyId,
-                secretKey: keyRecord.secretKey, // Only returned on creation
-                channelId: keyRecord.channelId,
-                name: keyRecord.name,
-                isActive: keyRecord.isActive,
-                expiresAt: keyRecord.expiresAt,
-                createdAt: keyRecord.createdAt
+                keyId: createdKey.keyId,
+                secretKey: createdKey.secretKey, // Only returned on creation
+                channelId: createdKey.channelId,
+                name: createdKey.name,
+                isActive: createdKey.isActive,
+                expiresAt: createdKey.expiresAt,
+                createdAt: createdKey.createdAt
             }
         });
-        
+
     } catch (error) {
         logger.error(`Error generating key for agent: ${error}`);
         res.status(500).json({
@@ -143,21 +145,25 @@ router.get('/:agentId/keys', async (req, res) => {
                 message: 'Agent has no assigned key'
             });
         }
-        
-        // Validate the key and get channel info
-        const validation = await channelKeyService.validateKey(agent.keyId, 'dummy');
-        
+
+        // Look the key up without its secret. This used to call
+        // validateKey(keyId, 'dummy') and read channelId off a result that
+        // validateKey only fills in when the secret matches — so it always
+        // reported no channel. describeKey answers the question actually being
+        // asked: does this key exist, and where does it point.
+        const keyInfo = await channelKeyService.describeKey(agent.keyId);
+
         res.json({
             success: true,
             data: {
                 agentId,
                 keyId: agent.keyId,
-                channelId: validation.channelId,
-                hasValidKey: false, // We used dummy secret, so this indicates key exists
-                keyExists: true
+                channelId: keyInfo?.channelId,
+                boundAgentId: keyInfo?.agentId,
+                keyExists: keyInfo !== null
             }
         });
-        
+
     } catch (error) {
         logger.error(`Error getting agent key info: ${error}`);
         res.status(500).json({
@@ -214,32 +220,33 @@ router.post('/:agentId/keys/rotate', async (req, res) => {
             });
         }
         
-        // Create new key
-        const keyRecord = await channelKeyService.createChannelKey(
+        // Create new key, bound to the same agent
+        const createdKey = await channelKeyService.createChannelKey(
             channelId,
             userId.toString(), // Created by authenticated user
+            agentId,
             name || `Rotated key for agent ${agentId}`,
             expirationDate
         );
-        
+
         // Update agent with new keyId
-        agent.keyId = keyRecord.keyId;
+        agent.keyId = createdKey.keyId;
         await agent.save();
-        
-        
+
+
         res.json({
             success: true,
             data: {
                 agentId,
                 oldKeyDeactivated: true,
                 newKey: {
-                    keyId: keyRecord.keyId,
-                    secretKey: keyRecord.secretKey, // Only returned on creation
-                    channelId: keyRecord.channelId,
-                    name: keyRecord.name,
-                    isActive: keyRecord.isActive,
-                    expiresAt: keyRecord.expiresAt,
-                    createdAt: keyRecord.createdAt
+                    keyId: createdKey.keyId,
+                    secretKey: createdKey.secretKey, // Only returned on creation
+                    channelId: createdKey.channelId,
+                    name: createdKey.name,
+                    isActive: createdKey.isActive,
+                    expiresAt: createdKey.expiresAt,
+                    createdAt: createdKey.createdAt
                 }
             }
         });
@@ -319,12 +326,14 @@ router.delete('/:agentId/keys', async (req, res) => {
  */
 router.post('/keys/generate', async (req, res) => {
     try {
-        const { channelId, agentName } = req.body;
-        
-        // Validate required fields
+        const { channelId, agentId, agentName } = req.body;
+
+        // Validate required fields. agentId is the identity the key authenticates
+        // as; agentName is only a label.
         validator.assertIsNonEmptyString(channelId, 'channelId is required');
+        validator.assertIsNonEmptyString(agentId, 'agentId is required — it is the identity the key authenticates as');
         validator.assertIsNonEmptyString(agentName, 'agentName is required');
-        
+
         // Get the authenticated user ID
         const userId = (req as any).user?.id;
         if (!userId) {
@@ -333,27 +342,29 @@ router.post('/keys/generate', async (req, res) => {
                 error: 'Authentication required'
             });
         }
-        
+
         // Create a channel key for the future agent
-        const keyRecord = await channelKeyService.createChannelKey(
+        const createdKey = await channelKeyService.createChannelKey(
             channelId,
             userId.toString(),
+            agentId,
             `Key for agent: ${agentName}`,
             undefined // No expiration for agent keys
         );
-        
-        
+
+
         res.status(201).json({
             success: true,
             data: {
-                keyId: keyRecord.keyId,
-                secretKey: keyRecord.secretKey,
-                channelId: keyRecord.channelId,
+                keyId: createdKey.keyId,
+                secretKey: createdKey.secretKey,
+                channelId: createdKey.channelId,
+                agentId: createdKey.agentId,
                 agentName,
-                createdAt: keyRecord.createdAt
+                createdAt: createdKey.createdAt
             }
         });
-        
+
     } catch (error) {
         logger.error(`Error generating agent keys: ${error}`);
         res.status(500).json({
@@ -414,26 +425,29 @@ router.get('/keys/status', async (req, res) => {
         // Get all agents
         const agents = await Agent.find(filter).select('agentId name keyId status lastActive');
         
-        // Enhance with key status information
+        // Enhance with key status information. describeKey looks the key up without
+        // its secret — the previous validateKey(keyId, 'dummy') probe could never
+        // report 'active', because validateKey only returns a channelId when the
+        // secret matches.
         const agentsWithKeyStatus = await Promise.all(agents.map(async (agent: any): Promise<object> => {
             let keyStatus = 'no_key';
             let channelId: string | undefined;
-            
+
             if (agent.keyId) {
                 try {
-                    // Check if key is valid (without actually validating secret)
-                    const validation = await channelKeyService.validateKey(agent.keyId, 'dummy');
-                    keyStatus = 'invalid'; // Default assumption
-                    
-                    if (validation.channelId) {
+                    const keyInfo = await channelKeyService.describeKey(agent.keyId);
+
+                    if (keyInfo) {
                         keyStatus = 'active';
-                        channelId = validation.channelId;
+                        channelId = keyInfo.channelId;
+                    } else {
+                        keyStatus = 'inactive';
                     }
                 } catch (error) {
                     keyStatus = 'error';
                 }
             }
-            
+
             return {
                 agentId: agent.agentId,
                 name: agent.name,

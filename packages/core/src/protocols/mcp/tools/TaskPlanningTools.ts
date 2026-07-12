@@ -444,7 +444,18 @@ The task will be monitored and automatically completed when criteria are met.`
  */
 export const task_link_to_plan: McpToolDefinition = {
     name: 'task_link_to_plan',
-    description: 'Link an existing task to a plan for automatic completion monitoring',
+    // What this does: write the plan-based completion config onto the task's
+    // metadata. It does NOT itself start the completion monitor — the monitor is
+    // started by TaskService when a task is created with this metadata. The old
+    // description promised "the task will now automatically complete when plan
+    // criteria are met", which was untrue twice over: the event it emitted
+    // ('task:update_metadata') had no listeners anywhere, so not even the metadata
+    // was written.
+    description:
+        'Record a plan-based completion config on an existing task: which plan it is ' +
+        'linked to and what counts as done (all steps, critical steps, or a percentage). ' +
+        'Writing the config does not by itself start the completion monitor — check ' +
+        'task_monitoring_status to see whether the task is actually being monitored.',
     inputSchema: {
         type: 'object',
         properties: {
@@ -488,50 +499,81 @@ export const task_link_to_plan: McpToolDefinition = {
             planUpdateLocks.set(input.planId, true);
             
             try {
-                // Update task metadata to enable monitoring
-            const updatePayload = {
-                taskId: input.taskId,
-                updates: {
-                    metadata: {
-                        completionConfig: {
-                            primary: {
-                                type: 'plan-based',
-                                planId: input.planId,
-                                completionType: input.completionType || 'all_steps',
-                                percentage: input.percentage
-                            },
-                            allowManualCompletion: true
-                        },
-                        enableMonitoring: true
-                    }
-                }
-            };
-            
-            EventBus.server.emit('task:update_metadata', updatePayload);
-            
-            
-            const content: McpToolResultContent = {
-                type: 'text',
-                data: `Task successfully linked to plan for automatic completion monitoring.
-                    
-Task ID: ${input.taskId}
-Plan ID: ${input.planId}
-Completion Type: ${input.completionType || 'all_steps'}
+                const completionType = input.completionType || 'all_steps';
 
-The task will now automatically complete when plan criteria are met.`
-            };
-            
-            return {
-                content,
-                metadata: {
-                    processingTime: Date.now() - startTime
+                // 'percentage' completion needs a percentage. Without one the config
+                // is meaningless and the monitor could never decide the task is done.
+                if (completionType === 'percentage' && typeof input.percentage !== 'number') {
+                    throw new Error(
+                        'percentage is required when completionType is "percentage".'
+                    );
                 }
-            } as McpToolHandlerResult;
+
+                const completionConfig: TaskCompletionConfig = {
+                    primary: {
+                        type: 'plan-based',
+                        planId: input.planId,
+                        completionType,
+                        percentage: input.percentage
+                    },
+                    allowManualCompletion: true
+                } as TaskCompletionConfig;
+
+                // Emit the real task-update event.
+                //
+                // This used to emit the string literal 'task:update_metadata' with a
+                // raw object payload. No such event exists in EventNames.ts and
+                // nothing listens for it, so the emit was a no-op — the task metadata
+                // was never written — while the tool told the model the link had
+                // succeeded and monitoring was active.
+                //
+                // TaskEvents.UPDATE_REQUEST is a real event with a real listener
+                // (taskHandlers.handleTaskUpdate), which calls TaskService.updateTask
+                // and persists the metadata.
+                EventBus.server.emit(
+                    Events.Task.UPDATE_REQUEST,
+                    createTaskEventPayload(
+                        Events.Task.UPDATE_REQUEST,
+                        context.agentId!,
+                        context.channelId!,
+                        {
+                            taskId: input.taskId,
+                            metadata: {
+                                completionConfig,
+                                enableMonitoring: true
+                            }
+                        } as any
+                    )
+                );
+
+                const content: McpToolResultContent = {
+                    type: 'application/json',
+                    data: {
+                        taskId: input.taskId,
+                        planId: input.planId,
+                        completionType,
+                        percentage: input.percentage,
+                        completionConfigWritten: true,
+                        // Say only what is true. The write is asynchronous (it goes
+                        // through the task update handler), and starting the monitor
+                        // is a separate step owned by the task service.
+                        note:
+                            'The plan-based completion config has been submitted for this task. ' +
+                            'Call task_monitoring_status to confirm the task is being monitored.'
+                    }
+                };
+
+                return {
+                    content,
+                    metadata: {
+                        processingTime: Date.now() - startTime
+                    }
+                } as McpToolHandlerResult;
             } finally {
                 // Always release lock
                 planUpdateLocks.delete(input.planId);
             }
-            
+
         } catch (error) {
             logger.error(`Failed to link task to plan: ${error}`);
             throw error;

@@ -46,9 +46,10 @@ import {
     MemoryUpdateEventPayload,
     MemoryDeleteEventPayload
 } from '@mxf-dev/core/schemas/EventPayloadSchema';
-import { IInternalChannelService } from '../services/MxfService.js'; 
-import { createStrictValidator } from '@mxf-dev/core/utils/validation'; 
-import { Logger } from '@mxf-dev/core/utils/Logger'; 
+import { IInternalChannelService } from '../services/MxfService.js';
+import { createStrictValidator } from '@mxf-dev/core/utils/validation';
+import { Logger } from '@mxf-dev/core/utils/Logger';
+import { awaitEventResponse } from '../services/internal/EventRequest.js';
 
 export class MemoryHandlers extends Handler {
     private agentId: string;
@@ -77,60 +78,49 @@ export class MemoryHandlers extends Handler {
     }
 
     public cleanup(): void {
-        this.agentMemory = null; 
-        // Any EventBus.client.once subscriptions are self-cleaning or managed by EventBus itself upon emit.
+        this.agentMemory = null;
+        // Memory requests are self-contained: awaitEventResponse unsubscribes and
+        // clears its timer on every exit path, so nothing is left to clean up here.
     }
 
-    // Core private sender method using EventBus and MxfService.socketEmit
+    /**
+     * Send a memory request and wait for its result.
+     *
+     * Correlated by operationId, with one failure contract: a server-side error or a
+     * timeout rejects. This used to reject inside the promise and then swallow that
+     * rejection in an outer catch that returned `null`, so a failed memory write was
+     * indistinguishable from a memory that simply had nothing in it.
+     *
+     * @throws Error if the agent is not connected
+     * @throws EventRequestError if the server reports the operation failed
+     * @throws EventRequestTimeoutError if the server does not answer
+     */
     private async sendMemoryRequestCore<TResponse>(
         eventType: string,
         payload: BaseEventPayload<BaseMemoryOperationData>,
         resultEventName: string,
         errorEventName: string
-    ): Promise<TResponse | null> {
+    ): Promise<TResponse> {
         if (!this.mxfService.isConnected()) {
-            this.logger.warn(`[${this.agentId}] Cannot send memory request for event ${eventType}: MxfService is not connected.`);
-            return null;
+            throw new Error(
+                `[${this.agentId}] Cannot send memory request '${eventType}': agent is not connected`
+            );
         }
 
-        try {
-            const operationId = payload.data.operationId;
+        const operationId = payload.data.operationId;
 
-            return await new Promise<TResponse | null>((resolve, reject) => {
-                const timeoutId = setTimeout(() => {
-                    EventBus.client.off(resultEventName, resultHandler);
-                    EventBus.client.off(errorEventName, errorHandler);
-                    this.logger.warn(`[${this.agentId}] Memory operation ${eventType} for ${operationId} timed out after ${this.requestTimeoutMs}ms`);
-                    reject(new Error(`Memory operation (${eventType}) timed out`));
-                }, this.requestTimeoutMs);
-
-                const resultHandler = (responsePayload: any) => {
-                    if (responsePayload && responsePayload.data && responsePayload.data.operationId === operationId) {
-                        clearTimeout(timeoutId);
-                        EventBus.client.off(errorEventName, errorHandler);
-                        resolve(responsePayload.data as TResponse); 
-                    }
-                };
-                
-                const errorHandler = (errorPayload: any) => {
-                    if (errorPayload && errorPayload.data && errorPayload.data.operationId === operationId) {
-                        clearTimeout(timeoutId);
-                        EventBus.client.off(resultEventName, resultHandler);
-                        this.logger.error(`[${this.agentId}] Received error for ${eventType} operation ${operationId}`, errorPayload.data?.error || 'Unknown error');
-                        reject(new Error(errorPayload.data?.error || `Unknown memory operation error for ${eventType}`));
-                    }
-                };
-                
-                EventBus.client.once(resultEventName, resultHandler);
-                EventBus.client.once(errorEventName, errorHandler);
-                
-                this.mxfService.socketEmit(eventType, payload); 
-            });
-
-        } catch (error: any) {
-            this.logger.error(`[${this.agentId}] Error in sendMemoryRequestCore for ${eventType}: ${error.message}`, error);
-            return null;
-        }
+        return awaitEventResponse<TResponse>({
+            emitEvent: eventType,
+            payload,
+            route: { via: 'agent', agentId: this.agentId },
+            successEvent: resultEventName,
+            failureEvent: errorEventName,
+            correlate: (responsePayload: any) => responsePayload?.data?.operationId === operationId,
+            mapResult: (responsePayload: any) => responsePayload.data as TResponse,
+            timeoutMs: this.requestTimeoutMs,
+            description: `Memory operation '${eventType}' (${operationId})`,
+            logger: this.logger,
+        });
     }
 
     /**

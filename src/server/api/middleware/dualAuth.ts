@@ -215,9 +215,17 @@ const tryKeyAuthentication = async (req: Request): Promise<{ success: boolean; a
 };
 
 /**
- * Require admin role (works with both JWT users and key-based agents)
+ * Require admin role
  * Must be used after authenticateDual middleware
- * 
+ *
+ * Roles are a property of users, not of channel keys. A channel key proves which
+ * channel the holder may act on — it carries no role and cannot be promoted to
+ * one. Key-authenticated agents are therefore refused here, and so is any
+ * request that reached this point without an auth type.
+ *
+ * This used to call next() for key auth, which meant every agent holding any
+ * valid channel key had administrator access to every admin-gated route.
+ *
  * @param req - Express request object
  * @param res - Express response object
  * @param next - Express next function
@@ -225,28 +233,32 @@ const tryKeyAuthentication = async (req: Request): Promise<{ success: boolean; a
 export const requireAdmin = (req: Request, res: Response, next: NextFunction): void => {
     try {
         const authType = (req as any).authType;
-        
-        if (authType === 'jwt') {
-            // Check JWT user role
-            const user = (req as any).user;
-            if (!user || user.role !== UserRole.ADMIN) {
-                res.status(403).json({
-                    success: false,
-                    message: 'Admin access required'
-                });
-                return;
+
+        if (authType !== 'jwt') {
+            if (authType === 'key') {
+                const agent = (req as any).agent;
+                logger.warn(
+                    `Denied admin route ${req.method} ${req.path} to key-authenticated agent ${agent?.agentId ?? 'unknown'} — ` +
+                    'channel keys do not carry roles'
+                );
             }
-        } else if (authType === 'key') {
-            // For key-based auth, we could implement admin agent verification here
-            // For now, agents with valid keys are considered to have admin access to their own resources
-        } else {
+
             res.status(403).json({
                 success: false,
-                message: 'Authentication required'
+                message: 'Admin access required'
             });
             return;
         }
-        
+
+        const user = (req as any).user;
+        if (!user || user.role !== UserRole.ADMIN) {
+            res.status(403).json({
+                success: false,
+                message: 'Admin access required'
+            });
+            return;
+        }
+
         next();
     } catch (error) {
         logger.error('Authorization error:', error);
@@ -258,9 +270,12 @@ export const requireAdmin = (req: Request, res: Response, next: NextFunction): v
 };
 
 /**
- * Require provider role or admin (works with both authentication types)
+ * Require provider role or admin
  * Must be used after authenticateDual middleware
- * 
+ *
+ * Same rule as requireAdmin: a channel key is not a role. Key-authenticated
+ * agents are refused rather than waved through.
+ *
  * @param req - Express request object
  * @param res - Express response object
  * @param next - Express next function
@@ -268,27 +283,32 @@ export const requireAdmin = (req: Request, res: Response, next: NextFunction): v
 export const requireProvider = (req: Request, res: Response, next: NextFunction): void => {
     try {
         const authType = (req as any).authType;
-        
-        if (authType === 'jwt') {
-            // Check JWT user role
-            const user = (req as any).user;
-            if (!user || (user.role !== UserRole.ADMIN && user.role !== UserRole.PROVIDER)) {
-                res.status(403).json({
-                    success: false,
-                    message: 'Provider access required'
-                });
-                return;
+
+        if (authType !== 'jwt') {
+            if (authType === 'key') {
+                const agent = (req as any).agent;
+                logger.warn(
+                    `Denied provider route ${req.method} ${req.path} to key-authenticated agent ${agent?.agentId ?? 'unknown'} — ` +
+                    'channel keys do not carry roles'
+                );
             }
-        } else if (authType === 'key') {
-            // For key-based auth, agents with valid keys are considered to have provider access
-        } else {
+
             res.status(403).json({
                 success: false,
-                message: 'Authentication required'
+                message: 'Provider access required'
             });
             return;
         }
-        
+
+        const user = (req as any).user;
+        if (!user || (user.role !== UserRole.ADMIN && user.role !== UserRole.PROVIDER)) {
+            res.status(403).json({
+                success: false,
+                message: 'Provider access required'
+            });
+            return;
+        }
+
         next();
     } catch (error) {
         logger.error('Authorization error:', error);

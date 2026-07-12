@@ -63,7 +63,6 @@ import { AgentId, ChannelId } from '@mxf-dev/core/types/ChannelContext';
 import { ChannelActionType } from '@mxf-dev/core/events/event-definitions/ChannelEvents';
 import { MxpMiddleware } from '@mxf-dev/core/middleware/MxpMiddleware';
 import { isMxpMessage } from '@mxf-dev/core/schemas/MxpProtocolSchemas';
-import { MxpEventForwardingEnhancer } from '@mxf-dev/core/mxp/MxpEventForwardingEnhancer';
 
 // Create a module-specific logger
 const moduleLogger = new Logger('debug', 'EventForwardingHandlers', 'server');
@@ -181,46 +180,10 @@ class EventForwardingQueue {
         }
 
         queue.push(queuedEvent);
-        // ;
-
-        // MXP 2.0 Enhancement: Also enqueue in MXP-enhanced system if enabled
-        this.enqueueMxpEnhanced(queuedEvent);
 
         // Start processing if not already running
         if (this.config.enabled && !this.processing && this.socketService) {
             this.startProcessing();
-        }
-    }
-
-    // MXP 2.0 Enhancement: Enqueue event with compression support
-    private enqueueMxpEnhanced(event: QueuedEvent): void {
-        try {
-            // Determine channel ID for MXP configuration lookup
-            let channelId: string | undefined;
-            
-            // Try to extract channel ID from the event payload or context
-            if (event.payload && typeof event.payload === 'object') {
-                channelId = event.payload.channelId || 
-                           event.payload.context?.channelId ||
-                           (event.type === 'channel' ? event.targetId : undefined);
-            }
-
-            if (channelId) {
-                // Enqueue in MXP-enhanced system with compression support
-                MxpEventForwardingEnhancer.getInstance().enqueueEvent(
-                    event.eventName,
-                    event.payload,
-                    event.priority,
-                    event.targetId,
-                    event.type,
-                    channelId,
-                    event.excludedAgentId
-                ).catch((error) => {
-                    // Graceful degradation - original queue still works
-                });
-            }
-        } catch (error) {
-            // Graceful degradation - if MXP fails, original queue still works
         }
     }
 
@@ -968,6 +931,56 @@ export const setupEventBusToSocketForwarding = (socketService: ISocketService): 
 };
 
 /**
+ * Check a client envelope against the identity the socket actually authenticated as.
+ *
+ * `socketAgentId` and `socketChannelId` come from socket.data, which is written by
+ * the channel-key validation at connect time. A payload that claims a different
+ * agent or channel is either a client bug or an impersonation attempt; either way
+ * it is dropped and the sender is told, rather than being quietly rewritten.
+ *
+ * @param eventName - Event the client emitted
+ * @param payload - Client-supplied event envelope
+ * @param socketAgentId - Agent this socket authenticated as
+ * @param socketChannelId - Channel this socket's key is bound to
+ * @returns True when the envelope matches; false when it was rejected
+ */
+const assertMatchesSocketIdentity = (
+    eventName: string,
+    payload: { agentId?: unknown; channelId?: unknown },
+    socketAgentId: string,
+    socketChannelId: string
+): boolean => {
+    const claimedAgentId = payload.agentId;
+    const claimedChannelId = payload.channelId;
+
+    if (claimedAgentId === socketAgentId && claimedChannelId === socketChannelId) {
+        return true;
+    }
+
+    moduleLogger.warn(
+        `Rejected ${eventName} from agent ${socketAgentId} on channel ${socketChannelId}: ` +
+        `payload claims agentId=${String(claimedAgentId)} channelId=${String(claimedChannelId)}`
+    );
+
+    // Tell the sender. MESSAGE_ERROR is forwarded back to payload.agentId by the
+    // EventBus-to-socket path, so it is addressed with the authenticated identity.
+    EventBus.server.emit(
+        Events.Message.MESSAGE_ERROR,
+        createBaseEventPayload(
+            Events.Message.MESSAGE_ERROR,
+            socketAgentId as AgentId,
+            socketChannelId as ChannelId,
+            {
+                error: `Rejected ${eventName}: payload agentId/channelId must match the authenticated socket`,
+                rejectedEvent: eventName
+            }
+        )
+    );
+
+    return false;
+};
+
+/**
  * Setup event forwarding from socket to EventBus
  * @param socket Socket instance
  * @param agentId Agent ID
@@ -975,7 +988,7 @@ export const setupEventBusToSocketForwarding = (socketService: ISocketService): 
  */
 export const setupSocketToEventBusForwarding = (
     socket: Socket,
-    agentId: string, 
+    agentId: string,
     channelId: string
 ): void => {
     try {
@@ -1013,43 +1026,60 @@ export const setupSocketToEventBusForwarding = (
             });
         });
 
-        // Forward Message events
+        // Forward Message events.
+        //
+        // The client's envelope is checked against the authenticated socket
+        // context and then thrown away: the payload that reaches EventBus is
+        // rebuilt from `agentId`/`channelId`, which come from socket.data at
+        // connection time and cannot be chosen by the client. `senderId` inside
+        // the message body is overwritten for the same reason — it is an identity
+        // claim, and the only identity we trust is the one the channel key
+        // authenticated.
+        //
+        // This used to forward the client's object verbatim after checking only
+        // that the fields were present, so any connected agent could post into
+        // any channel as any agent.
         Object.values(Events.Message).forEach(eventName => {
             socket.on(eventName, (payload) => {
                 try {
-                    // Ensure the event is only processed if it's a Message event type
-                    if (Object.values(Events.Message).includes(eventName as any)) {
-                        const validator = createStrictValidator('setupSocketToEventBusForwarding');
-                        validator.assertIsNonEmptyString(agentId, 'agentId');
-                        validator.assertIsNonEmptyString(channelId, 'channelId');
-                        
-                        if (eventName === Events.Message.CHANNEL_MESSAGE) {
-                        }
-                        
-                        // Payload should already be a proper BaseEventPayload structure
-                        // Validate it has the required EventPayload structure
-                        if (!payload || typeof payload !== 'object' || 
-                            !payload.eventId || !payload.eventType || !payload.agentId || !payload.channelId) {
-                            throw new Error(`Invalid EventPayload structure received for ${eventName}`);
-                        }
-                        
-                        if (eventName === Events.Message.CHANNEL_MESSAGE) {
-                        }
-                        
-                        // Forward the already-structured payload directly to EventBus
-                        EventBus.server.emit(eventName, payload);
-                        
-                        // Confirm forwarding for CHANNEL_MESSAGE events
-                        if (eventName === Events.Message.CHANNEL_MESSAGE) {
-                        }
+                    const validator = createStrictValidator('setupSocketToEventBusForwarding');
+                    validator.assertIsNonEmptyString(agentId, 'agentId');
+                    validator.assertIsNonEmptyString(channelId, 'channelId');
+
+                    // Payload should already be a proper BaseEventPayload structure
+                    if (!payload || typeof payload !== 'object' ||
+                        !payload.eventId || !payload.eventType || !payload.agentId || !payload.channelId) {
+                        throw new Error(`Invalid EventPayload structure received for ${eventName}`);
                     }
+
+                    if (!assertMatchesSocketIdentity(eventName, payload, agentId, channelId)) {
+                        return;
+                    }
+
+                    const messageData = (payload.data && typeof payload.data === 'object')
+                        ? { ...payload.data, senderId: agentId }
+                        : payload.data;
+
+                    const structuredPayload = createBaseEventPayload(
+                        eventName,
+                        agentId as AgentId,
+                        channelId as ChannelId,
+                        messageData
+                    );
+
+                    EventBus.server.emit(eventName, structuredPayload);
                 } catch (error) {
                     moduleLogger.error(`Error processing ${eventName}: ${error}`);
                 }
             });
         });
 
-        // Forward Memory events
+        // Forward Memory events.
+        //
+        // Same rule as messages: the envelope is rebuilt from the authenticated
+        // socket context. Memory results are routed back by `payload.agentId`, so
+        // a forged envelope both hid the requester and delivered another agent's
+        // memory to a socket of the attacker's choosing.
         Object.values(Events.Memory).forEach(eventName => {
             socket.on(eventName, (payload) => {
                 try {
@@ -1058,14 +1088,23 @@ export const setupSocketToEventBusForwarding = (
                     validator.assertIsNonEmptyString(channelId, 'channelId');
 
                     // Payload should already be a proper BaseEventPayload structure
-                    // Validate it has the required EventPayload structure
                     if (!payload || typeof payload !== 'object' ||
                         !payload.eventId || !payload.eventType || !payload.agentId || !payload.channelId) {
                         throw new Error(`Invalid EventPayload structure received for ${eventName}`);
                     }
 
-                    // Forward the already-structured payload directly to EventBus
-                    EventBus.server.emit(eventName, payload);
+                    if (!assertMatchesSocketIdentity(eventName, payload, agentId, channelId)) {
+                        return;
+                    }
+
+                    const structuredPayload = createBaseEventPayload(
+                        eventName,
+                        agentId as AgentId,
+                        channelId as ChannelId,
+                        payload.data
+                    );
+
+                    EventBus.server.emit(eventName, structuredPayload);
                 } catch (error) {
                     moduleLogger.error(`Error processing ${eventName}: ${error}`);
                 }
@@ -1160,26 +1199,15 @@ export const setupSocketToEventBusForwarding = (
 
         // NOTE: MCP events are handled by setupMcpSocketToEventBusForwarding() - do not duplicate here
 
-        // Forward generic events (less common from client, but possible)
-        // Consider if a more specific list is needed instead of 'event'
-        socket.on('event', (eventName: string, payload: any) => {
-            try {
-                const validator = createStrictValidator('setupSocketToEventBusForwarding');
-                validator.assertIsNonEmptyString(agentId, 'agentId');
-                validator.assertIsNonEmptyString(channelId, 'channelId');
-                validator.assertIsNonEmptyString(eventName, 'eventName');
-                
-                const structuredPayload = createBaseEventPayload(
-                    eventName,
-                    agentId,
-                    channelId,
-                    payload
-                );
-                EventBus.server.emit(eventName, structuredPayload);
-            } catch (error) {
-                moduleLogger.error(`Error processing generic event ${eventName}: ${error}`);
-            }
-        });
+        // There is deliberately no generic `event` passthrough here.
+        //
+        // A `socket.on('event', (eventName, payload) => EventBus.server.emit(eventName, ...))`
+        // handler used to sit at this spot. It let any connected client put any
+        // event name onto the server bus — including the internal names the server
+        // acts on, such as task lifecycle and MCP tool calls — which routed around
+        // every per-family check above. Clients emit the specific events they need;
+        // each family is forwarded explicitly, with its identity rebuilt from the
+        // authenticated socket.
 
     } catch (error) {
         moduleLogger.error(`Error setting up socket to EventBus forwarding: ${error}`);

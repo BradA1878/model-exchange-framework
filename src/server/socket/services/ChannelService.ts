@@ -237,23 +237,12 @@ export class ChannelService extends EventEmitter {
             }
         });
 
-        // Listen for bulk message persistence requests
-        this.eventBus.on('PERSIST_BULK_CHANNEL_MESSAGES_REQUEST', async (payload: any) => {
-            try {
-                this.validator.assert(!!payload, 'Bulk persistence payload cannot be null');
-                this.validator.assert(!!payload.data, 'payload.data is required');
-                this.validator.assert(Array.isArray(payload.data.messages), 'payload.data.messages must be an array');
-                this.validator.assertIsNonEmptyString(payload.data.channelId, 'payload.data.channelId is required');
-
-                const { channelId, messages } = payload.data;
-
-                await this.persistChannelMessagesBulk(channelId, messages);
-                
-                
-            } catch (error) {
-                this.logger.error(`Error processing bulk message persistence: ${error instanceof Error ? error.message : String(error)}`);
-            }
-        });
+        // The bulk-persistence listener that lived here keyed off the string literal
+        // 'PERSIST_BULK_CHANNEL_MESSAGES_REQUEST' — an event name that was never defined in
+        // EventNames.ts, matched by a literal on the SDK side. The SDK now sends messages
+        // through the normal Events.Message.CHANNEL_MESSAGE flow, which this service already
+        // persists, so nothing emits the literal any more and the listener is removed.
+        // Restoring a bulk path means defining a real Channel event and payload helper first.
 
         // Listen for agent join/leave events to manage channel MCP servers
         this.eventBus.on(Events.Channel.AGENT_JOINED, async (payload: any) => {

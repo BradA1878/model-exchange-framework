@@ -22,6 +22,10 @@ import express from 'express';
 import * as agentController from '../controllers/agentController';
 import * as channelController from '../controllers/channelController';
 import { userController } from '../controllers/userController';
+import { requireChannelAccess } from '../middleware/channelAuth';
+import { createAuthRateLimiter } from '../middleware/rateLimit';
+import { isWebhookEnabled } from '../middleware/webhookAuth';
+import { Logger } from '@mxf-dev/core/utils/Logger';
 import mcpRoutes from './mcp';
 import hybridMcpRoutes from './hybridMcp';
 import channelContextRoutes from './channelContextRoutes';
@@ -36,7 +40,6 @@ import analyticsRoutes from './analytics';
 import configRoutes from './config';
 import taskEffectivenessRoutes from './taskEffectiveness';
 import demoRoutes from './demoRoutes';
-import n8nWebhookRoutes from './n8nWebhooks';
 import knowledgeGraphRoutes from './knowledgeGraph';
 import dagRoutes from './dag';
 import memoryBrowserRoutes from './memory';
@@ -44,15 +47,20 @@ import orparRoutes from './orpar';
 import tokenRoutes from './tokenRoutes';
 
 const router = express.Router();
+const logger = new Logger('info', 'ApiRoutes', 'server');
 
 // Protected routes (require authentication)
 // Middleware will be added by the server when routes are registered
 
+// Throttle the credential endpoints. They are the only routes an
+// unauthenticated caller can reach, which makes them the brute-force surface.
+const authRateLimiter = createAuthRateLimiter();
+
 // User routes (authentication)
-router.post('/users/register', userController.register);
-router.post('/users/login', userController.login);
-router.post('/users/magic-link', userController.requestMagicLink);
-router.post('/users/magic-link/verify', userController.verifyMagicLink);
+router.post('/users/register', authRateLimiter, userController.register);
+router.post('/users/login', authRateLimiter, userController.login);
+router.post('/users/magic-link', authRateLimiter, userController.requestMagicLink);
+router.post('/users/magic-link/verify', authRateLimiter, userController.verifyMagicLink);
 router.get('/users/profile', userController.getProfile);
 router.patch('/users/profile', userController.updateProfile);
 router.delete('/users/profile', userController.deleteProfile);
@@ -74,12 +82,18 @@ router.patch('/agents/memory/:keyId', agentController.updateAgentMemory);
 router.patch('/agents/context/:keyId', agentController.updateAgentContext);
 
 // Channel routes - Core CRUD operations
+//
+// Every route below that names a channel runs through requireChannelAccess: a
+// user must own the channel, an agent's key must be bound to it. Without that
+// gate, knowing a channelId was enough to rename, delete, or read any channel
+// in the system — getChannelById and getAllChannels already filtered by
+// createdBy, so the write paths were the ones that never checked.
 router.get('/channels', channelController.getAllChannels);
 router.post('/channels', channelController.registerChannel);
 router.get('/channels/:channelId', channelController.getChannelById);
-router.put('/channels/:channelId', channelController.updateChannel);
-router.delete('/channels/:channelId', channelController.deleteChannel);
-router.get('/channels/:channelId/documents', require('../controllers/documentController').getDocumentsByChannel);
+router.put('/channels/:channelId', requireChannelAccess, channelController.updateChannel);
+router.delete('/channels/:channelId', requireChannelAccess, channelController.deleteChannel);
+router.get('/channels/:channelId/documents', requireChannelAccess, require('../controllers/documentController').getDocumentsByChannel);
 
 // Channel additional operations
 router.post('/channels/workspace', channelController.createChannelWorkspace);
@@ -92,13 +106,13 @@ router.get('/channels/domain/:domain', channelController.listChannelsByDomain);
 
 // Channel memory routes (using channelId as lookup)
 // Context routes have been moved to channelContextRoutes
-router.get('/channels/memory/:channelId', channelController.getOrCreateChannelMemory);
-router.patch('/channels/memory/:channelId', channelController.updateChannelMemory);
+router.get('/channels/memory/:channelId', requireChannelAccess, channelController.getOrCreateChannelMemory);
+router.patch('/channels/memory/:channelId', requireChannelAccess, channelController.updateChannelMemory);
 
 // Channel MCP server management routes
-router.post('/channels/:channelId/mcp-servers', channelController.registerChannelMcpServer);
-router.get('/channels/:channelId/mcp-servers', channelController.listChannelMcpServers);
-router.delete('/channels/:channelId/mcp-servers/:serverId', channelController.unregisterChannelMcpServer);
+router.post('/channels/:channelId/mcp-servers', requireChannelAccess, channelController.registerChannelMcpServer);
+router.get('/channels/:channelId/mcp-servers', requireChannelAccess, channelController.listChannelMcpServers);
+router.delete('/channels/:channelId/mcp-servers/:serverId', requireChannelAccess, channelController.unregisterChannelMcpServer);
 
 // Task management routes
 router.use('/tasks', taskRoutes);
@@ -142,8 +156,19 @@ router.use('/effectiveness', taskEffectivenessRoutes);
 // Demo routes (public access for presentation)
 router.use('/demo', demoRoutes);
 
-// n8n Webhook routes (minimal auth for external integration)
-router.use('/webhooks/n8n', n8nWebhookRoutes);
+// n8n Webhook routes.
+//
+// Off unless MXF_WEBHOOK_ENABLED=true. These routes create tasks and drive
+// agents, which spends LLM budget, so the surface does not exist unless someone
+// asked for it. When enabled, the router requires an HMAC signature on every
+// request and refuses to load without MXF_WEBHOOK_SECRET — hence the deferred
+// require(), which keeps that boot check off the path of servers that never
+// turn webhooks on.
+if (isWebhookEnabled()) {
+    const n8nWebhookRoutes = require('./n8nWebhooks').default;
+    router.use('/webhooks/n8n', n8nWebhookRoutes);
+    logger.info('n8n webhook routes mounted at /api/webhooks/n8n (HMAC signature required)');
+}
 
 // Knowledge Graph routes
 router.use('/kg', knowledgeGraphRoutes);

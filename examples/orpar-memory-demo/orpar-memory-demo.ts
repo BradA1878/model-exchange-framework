@@ -388,7 +388,7 @@ async function demo() {
 
         // Generate keys
         console.log('Generating agent keys...');
-        const keys = await sdk.generateKey(config.channelId, undefined, 'ORPAR-Memory Demo Key');
+        const keys = await sdk.generateKey(config.channelId, 'OrparMemoryDemoAgent', 'ORPAR-Memory Demo Key');
         cleanupState.credentials = { keyId: keys.keyId, secretKey: keys.secretKey };
         console.log('Keys generated\n');
 

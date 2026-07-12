@@ -9,7 +9,6 @@
  * - Task templates: {{CURRENT_TASK_ID}}, {{CURRENT_TASK_STATUS}}, etc.
  * - MemoryPromptInjector memory context injection
  * - Discovery vs verbose prompt modes
- * - MxfLayeredPromptAssembler integration
  *
  * The prompt template system is critical for providing dynamic, contextual
  * information to agents in their system prompts.
@@ -33,7 +32,6 @@ import {
     DEFAULT_PROMPT_CONFIG,
     getPromptConfig
 } from '@mxf-dev/core/config/PromptConfig';
-import { MxfLayeredPromptAssembler } from '@mxf-dev/sdk/services/MxfLayeredPromptAssembler';
 
 describe('MCP Prompts Integration (P5)', () => {
     let testSdk: TestSDK;
@@ -1338,87 +1336,6 @@ Progress: {{CURRENT_TASK_PROGRESS}}`;
 
             expect(discoveryConfig.includeOrparGuidance).toBe(true);
             expect(verboseConfig.includeOrparGuidance).toBe(true);
-        });
-    });
-
-    // =========================================================================
-    // Section 15: MxfLayeredPromptAssembler Integration
-    // =========================================================================
-
-    describe('MxfLayeredPromptAssembler Integration', () => {
-        it('should create assembler with agent config', () => {
-            const agentConfig = {
-                agentId: 'test-agent',
-                name: 'Test Agent',
-                channelId: channelId,
-                llmProvider: 'openrouter' as any,
-                apiKey: 'test-key',
-                defaultModel: 'anthropic/claude-3.5-haiku'
-            };
-
-            const assembler = new MxfLayeredPromptAssembler('test-agent', agentConfig as any);
-
-            expect(assembler).toBeDefined();
-            expect(assembler.actionHistoryService).toBeDefined();
-            expect(assembler.reasoningHistoryService).toBeDefined();
-        });
-
-        it('should create system prompt message', () => {
-            const agentConfig = {
-                agentId: 'test-agent',
-                name: 'Test Agent',
-                channelId: channelId,
-                llmProvider: 'openrouter' as any,
-                apiKey: 'test-key',
-                defaultModel: 'anthropic/claude-3.5-haiku'
-            };
-
-            const assembler = new MxfLayeredPromptAssembler('test-agent', agentConfig as any);
-            const message = assembler.createSystemPromptMessage('You are a helpful assistant.');
-
-            expect(message.role).toBe('system');
-            expect(message.content).toBe('You are a helpful assistant.');
-            expect(message.metadata?.layer).toBe('system');
-            expect(message.metadata?.persistent).toBe(true);
-        });
-
-        it('should create task prompt message', () => {
-            const agentConfig = {
-                agentId: 'test-agent',
-                name: 'Test Agent',
-                channelId: channelId,
-                llmProvider: 'openrouter' as any,
-                apiKey: 'test-key',
-                defaultModel: 'anthropic/claude-3.5-haiku'
-            };
-
-            const assembler = new MxfLayeredPromptAssembler('test-agent', agentConfig as any);
-            const message = assembler.createTaskPromptMessage('Complete the integration tests.');
-
-            expect(message.role).toBe('user');
-            expect(message.content).toBe('Complete the integration tests.');
-            expect(message.metadata?.layer).toBe('task');
-            expect(message.metadata?.persistent).toBe(false);
-        });
-
-        it('should create SystemLLM message with ephemeral flag', () => {
-            const agentConfig = {
-                agentId: 'test-agent',
-                name: 'Test Agent',
-                channelId: channelId,
-                llmProvider: 'openrouter' as any,
-                apiKey: 'test-key',
-                defaultModel: 'anthropic/claude-3.5-haiku'
-            };
-
-            const assembler = new MxfLayeredPromptAssembler('test-agent', agentConfig as any);
-            const message = assembler.createSystemLLMMessage('Consider using the search tool.');
-
-            expect(message.role).toBe('user');
-            expect(message.content).toContain('[SystemLLM]');
-            expect(message.content).toContain('Consider using the search tool');
-            expect(message.metadata?.ephemeral).toBe(true);
-            expect(message.metadata?.isSystemLLM).toBe(true);
         });
     });
 

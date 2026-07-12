@@ -427,7 +427,16 @@ export const completeSocketConnection = async (
         });
 
         // 7. Set up allowed tools update handler for dynamic tool changes
-        socket.on(Events.Agent.ALLOWED_TOOLS_UPDATE, (payload: { agentId: string; allowedTools: string[] }) => {
+        socket.on(Events.Agent.ALLOWED_TOOLS_UPDATE, (envelope: { agentId: string; data?: { allowedTools?: string[] } }) => {
+            // The SDK now emits this through EventBus.client rather than a raw socket emit,
+            // so it arrives as a BaseEventPayload: agentId on the envelope, the tool list
+            // inside `data`. Phase-gated tool access breaks silently if this reads the old
+            // flat shape. Derived outside the try so the catch can still report the agent.
+            const payload = {
+                agentId: envelope.agentId,
+                allowedTools: envelope.data?.allowedTools ?? []
+            };
+
             try {
                 const updated = getAgentService().updateAgentAllowedTools(payload.agentId, payload.allowedTools);
 

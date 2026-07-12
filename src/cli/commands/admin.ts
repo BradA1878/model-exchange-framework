@@ -28,6 +28,7 @@ import axios from 'axios';
 import * as fs from 'fs';
 import * as path from 'path';
 import prompts from 'prompts';
+import { logSuccess, logError, logInfo, logWarning, logSection } from '../utils/output';
 
 const DEFAULT_PORT = process.env.MXF_PORT || '3001';
 const DEFAULT_API_URL = process.env.MXF_API_URL || `http://localhost:${DEFAULT_PORT}/api`;
@@ -38,32 +39,6 @@ interface ApiResponse {
     data?: any;
     token?: string;
 }
-
-// Operator-facing CLI output — console is the UI here (sanctioned exception).
-const colors = {
-    reset: '\x1b[0m',
-    bright: '\x1b[1m',
-    green: '\x1b[32m',
-    red: '\x1b[31m',
-    yellow: '\x1b[33m',
-    cyan: '\x1b[36m'
-};
-
-const logSuccess = (message: string): void => {
-    console.log(`${colors.green}✓${colors.reset} ${message}`);
-};
-
-const logError = (message: string): void => {
-    console.error(`${colors.red}✗${colors.reset} ${message}`);
-};
-
-const logInfo = (message: string): void => {
-    console.log(`${colors.cyan}ℹ${colors.reset} ${message}`);
-};
-
-const logWarning = (message: string): void => {
-    console.log(`${colors.yellow}⚠${colors.reset} ${message}`);
-};
 
 /**
  * Generate .env formatted content from credentials
@@ -85,34 +60,64 @@ const generateEnvContent = (credentials: Record<string, { keyId: string; secretK
 };
 
 /**
+ * Write the MXF_USERNAME / MXF_PASSWORD block to the credentials file.
+ *
+ * The file holds a plaintext password, so it is kept owner-only (0600) whether
+ * it is being created or appended to.
+ */
+const writeUserCredentials = (outputPath: string, userEnvContent: string): void => {
+    if (fs.existsSync(outputPath)) {
+        const existingContent = fs.readFileSync(outputPath, 'utf-8');
+        if (existingContent.includes('MXF_USERNAME') || existingContent.includes('MXF_PASSWORD')) {
+            logWarning('User credentials (MXF_USERNAME/MXF_PASSWORD) already exist in .env file');
+        } else {
+            fs.appendFileSync(outputPath, '\n' + userEnvContent);
+            logSuccess('User credentials added to .env file');
+        }
+    } else {
+        fs.writeFileSync(outputPath, userEnvContent, { mode: 0o600 });
+        logSuccess('User credentials saved to .env file');
+    }
+
+    fs.chmodSync(outputPath, 0o600);
+};
+
+/**
+ * Read a required environment variable referenced from a config file.
+ *
+ * Throws rather than substituting an empty string: these values are passwords
+ * and emails, and an unset one previously produced an empty credential that
+ * setup then happily used.
+ */
+const requireEnvVar = (name: string): string => {
+    const value = process.env[name];
+    if (!value) {
+        throw new Error(
+            `Environment variable ${name} is referenced by the config file but is not set. ` +
+            'Set it and re-run, or replace the reference with a literal value.',
+        );
+    }
+    return value;
+};
+
+/**
  * Resolve environment variables in config values
  * Supports: ${VAR_NAME} or $VAR_NAME syntax
+ *
+ * Any referenced variable that is not set aborts setup.
  */
 const resolveEnvVars = (value: any): any => {
     if (typeof value === 'string') {
         const envVarMatch = value.match(/^\$\{([A-Z_][A-Z0-9_]*)\}$/);
         if (envVarMatch) {
-            const envValue = process.env[envVarMatch[1]];
-            if (!envValue) {
-                logWarning(`Environment variable ${envVarMatch[1]} is not set, using empty string`);
-                return '';
-            }
-            return envValue;
+            return requireEnvVar(envVarMatch[1]);
         }
 
         if (value.startsWith('$') && !value.includes('{')) {
-            const varName = value.substring(1);
-            const envValue = process.env[varName];
-            if (!envValue) {
-                logWarning(`Environment variable ${varName} is not set, using empty string`);
-                return '';
-            }
-            return envValue;
+            return requireEnvVar(value.substring(1));
         }
 
-        return value.replace(/\$\{([A-Z_][A-Z0-9_]*)\}/g, (_, varName) => {
-            return process.env[varName] || '';
-        });
+        return value.replace(/\$\{([A-Z_][A-Z0-9_]*)\}/g, (_, varName) => requireEnvVar(varName));
     }
 
     if (typeof value === 'object' && value !== null) {
@@ -150,13 +155,17 @@ const createUser = async (options: {
             password: options.password
         });
 
-        if (response.data.success) {
-            logSuccess(`User created successfully: ${options.email}`);
-            console.log(`   Username: ${username}`);
-            console.log(`   Email: ${options.email}`);
-        } else {
+        if (!response.data.success) {
+            // Abort: the channel and key steps that follow all authenticate as
+            // this user, and would otherwise run against an account that does
+            // not exist.
             logError(`Failed to create user: ${response.data.message || 'Unknown error'}`);
+            process.exit(1);
         }
+
+        logSuccess(`User created: ${options.email}`);
+        console.log(`   Username: ${username}`);
+        console.log(`   Email: ${options.email}`);
     } catch (error: any) {
         const errorMessage = error.response?.data?.message || error.message;
 
@@ -217,14 +226,16 @@ const createChannel = async (options: {
             authConfig
         );
 
-        if (channelResponse.data.success) {
-            logSuccess(`Channel created successfully: ${options.id}`);
-            console.log(`   Channel ID: ${options.id}`);
-            console.log(`   Name: ${options.name}`);
-            console.log(`   Private: ${options.isPrivate !== false}`);
-        } else {
-            logError('Failed to create channel');
+        if (!channelResponse.data.success) {
+            // Abort: key generation targets this channel.
+            logError(`Failed to create channel: ${options.id}`);
+            process.exit(1);
         }
+
+        logSuccess(`Channel created: ${options.id}`);
+        console.log(`   Channel ID: ${options.id}`);
+        console.log(`   Name: ${options.name}`);
+        console.log(`   Private: ${options.isPrivate !== false}`);
     } catch (error: any) {
         logError(`Failed to create channel: ${error.response?.data?.message || error.message}`);
         process.exit(1);
@@ -281,16 +292,21 @@ const generateKeys = async (options: {
                 authConfig
             );
 
-            if (keyResponse.data.success && keyResponse.data.data) {
-                credentials[agentId] = {
-                    keyId: keyResponse.data.data.keyId,
-                    secretKey: keyResponse.data.data.secretKey
-                };
-                logSuccess(`Generated key for agent: ${agentId}`);
-                console.log(`   Key ID: ${keyResponse.data.data.keyId}`);
-            } else {
+            if (!keyResponse.data.success || !keyResponse.data.data) {
+                // Abort: writing a credentials file that is missing agents is
+                // worse than writing none — the caller cannot tell which agents
+                // are usable, and a later run would append duplicates.
                 logError(`Failed to generate key for agent: ${agentId}`);
+                logError('Aborting — no credentials written.');
+                process.exit(1);
             }
+
+            credentials[agentId] = {
+                keyId: keyResponse.data.data.keyId,
+                secretKey: keyResponse.data.data.secretKey
+            };
+            logSuccess(`Generated key for agent: ${agentId}`);
+            console.log(`   Key ID: ${keyResponse.data.data.keyId}`);
         }
 
         if (options.output) {
@@ -308,14 +324,18 @@ const generateKeys = async (options: {
                     logSuccess(`Credentials appended to: ${outputPath}`);
                 }
             } else {
-                fs.writeFileSync(outputPath, envContent);
+                fs.writeFileSync(outputPath, envContent, { mode: 0o600 });
                 logSuccess(`Credentials saved to: ${outputPath}`);
             }
 
-            console.log('\n' + colors.bright + 'Environment Variables Added:' + colors.reset);
+            // These are agent secret keys — keep the file owner-only even if it
+            // already existed with looser permissions.
+            fs.chmodSync(outputPath, 0o600);
+
+            logSection('Environment Variables Added');
             console.log(envContent);
         } else {
-            console.log('\n' + colors.bright + 'Generated Credentials (.env format):' + colors.reset);
+            logSection('Generated Credentials (.env format)');
             console.log(generateEnvContent(credentials, options.channel));
         }
     } catch (error: any) {
@@ -333,8 +353,7 @@ const interactiveSetup = async (options: {
 }): Promise<void> => {
     const apiUrl = options.apiUrl || DEFAULT_API_URL;
 
-    console.log('');
-    console.log(colors.bright + '🚀 MXF Interactive Setup' + colors.reset);
+    logSection('MXF Interactive Setup');
     console.log('This will create a user account, channel, and agent keys.');
     console.log('');
 
@@ -448,22 +467,11 @@ const interactiveSetup = async (options: {
                 `MXF_PASSWORD="${userResponses.password}"`
             ].join('\n');
 
-            if (fs.existsSync(outputPath)) {
-                const existingContent = fs.readFileSync(outputPath, 'utf-8');
-                if (existingContent.includes('MXF_USERNAME') || existingContent.includes('MXF_PASSWORD')) {
-                    logWarning('User credentials (MXF_USERNAME/MXF_PASSWORD) already exist in .env file');
-                } else {
-                    fs.appendFileSync(outputPath, '\n' + userEnvContent);
-                    logSuccess('User credentials added to .env file');
-                }
-            } else {
-                fs.writeFileSync(outputPath, userEnvContent);
-                logSuccess('User credentials saved to .env file');
-            }
+            writeUserCredentials(outputPath, userEnvContent);
         }
 
         console.log('');
-        logSuccess('✨ Setup completed successfully!');
+        logSuccess('Setup complete.');
         console.log('');
         logInfo(`Channel ID: ${projectResponses.channelId}`);
         logInfo(`Agents: ${agentResponses.agents.join(', ')}`);
@@ -486,20 +494,18 @@ const setupFromConfig = async (options: {
     const apiUrl = options.apiUrl || DEFAULT_API_URL;
 
     try {
-        let configPath = path.resolve(options.config);
+        const configPath = path.resolve(options.config);
 
+        // No silent fall back to the .example file: it holds placeholder
+        // credentials, and setup would create a real user from them.
         if (!fs.existsSync(configPath)) {
+            logError(`Config file not found: ${configPath}`);
             const examplePath = configPath + '.example';
             if (fs.existsSync(examplePath)) {
-                logWarning(`Config file not found: ${configPath}`);
-                logInfo(`Using example config file: ${examplePath}`);
-                logWarning('⚠️  Please update the credentials in the example file before running setup!');
-                configPath = examplePath;
-            } else {
-                logError(`Config file not found: ${configPath}`);
-                logError(`Example file also not found: ${examplePath}`);
-                process.exit(1);
+                logInfo(`An example config exists at ${examplePath}.`);
+                logInfo(`Copy it, fill in real credentials, and re-run: cp ${examplePath} ${configPath}`);
             }
+            process.exit(1);
         }
 
         const rawConfig = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
@@ -552,22 +558,11 @@ const setupFromConfig = async (options: {
                 `MXF_PASSWORD="${config.user.password}"`
             ].join('\n');
 
-            if (fs.existsSync(outputPath)) {
-                const existingContent = fs.readFileSync(outputPath, 'utf-8');
-                if (existingContent.includes('MXF_USERNAME') || existingContent.includes('MXF_PASSWORD')) {
-                    logWarning('User credentials (MXF_USERNAME/MXF_PASSWORD) already exist in .env file');
-                } else {
-                    fs.appendFileSync(outputPath, '\n' + userEnvContent);
-                    logSuccess('User credentials added to .env file');
-                }
-            } else {
-                fs.writeFileSync(outputPath, userEnvContent);
-                logSuccess('User credentials saved to .env file');
-            }
+            writeUserCredentials(outputPath, userEnvContent);
         }
 
         console.log('');
-        logSuccess('Setup completed successfully!');
+        logSuccess('Setup complete.');
     } catch (error: any) {
         logError(`Setup failed: ${error.message}`);
         process.exit(1);

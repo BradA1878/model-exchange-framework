@@ -427,19 +427,46 @@ MXF provides a unified Logger utility for both server and client (SDK) component
 
 The Logger is located at `packages/core/src/utils/Logger.ts` and supports separate server/client logging pathways.
 
-**Default Configuration (logging disabled):**
+**Default Configuration (non-error logging disabled):**
 ```typescript
 const LOGGING_CONFIG = {
     server: {
-        enabled: false,  // Server logging disabled by default
+        enabled: false,  // Server non-error logging off by default
         level: 'debug'
     },
     client: {
-        enabled: false,  // Client logging disabled by default
+        enabled: false,  // Client non-error logging off by default
         level: 'debug'
     }
 };
 ```
+
+**Errors are always written.** `logger.error()` ignores the `enabled` flag, so a
+consumer who never calls `enableServerLogging()` still sees failures. Only
+`warn`/`info`/`debug`/`trace` are gated. (Errors used to be suppressed along with
+everything else, which meant a server whose startup validation threw before it had
+enabled logging exited with no output at all.)
+
+### Log level resolution
+
+Two levels apply and both are honoured — **the more restrictive one wins**:
+
+| Level | Set by | Purpose |
+|-------|--------|---------|
+| Target level | `enableServerLogging('info')`, `configureLogging(...)` | Application-wide ceiling |
+| Instance level | `new Logger('warn', 'MyService')`, `logger.setLevel('warn')` | Turns one noisy component down |
+
+```typescript
+enableServerLogging('debug');                      // ceiling: debug
+const quiet = new Logger('warn', 'NoisyService');  // this component: warn
+
+quiet.info('suppressed');   // instance level is more restrictive
+quiet.warn('printed');
+```
+
+An unknown level string throws rather than being ignored, so
+`new Logger('MyService')` — passing a context where the level belongs — fails
+immediately instead of silently logging at an undefined level.
 
 ### Enabling Logging
 

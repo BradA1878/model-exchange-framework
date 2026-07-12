@@ -40,6 +40,7 @@ import { Logger, enableServerLogging } from '@mxf-dev/core/utils/Logger';
 import apiRoutes from './api/routes';
 import { DEFAULT_SERVER_CONFIG } from '@mxf-dev/core/config/ServerConfig';
 import { authenticateDual } from './api/middleware/dualAuth';
+import { captureRawBody } from './api/middleware/webhookAuth';
 import { McpSocketExecutor } from './socket/services/McpSocketExecutor'; // Import McpSocketExecutor
 import { ServerHybridMcpService } from './api/services/ServerHybridMcpService';
 import { EphemeralEventPatternService } from './socket/services/EphemeralEventPatternService';
@@ -57,6 +58,11 @@ import { QValueManager } from '@mxf-dev/core/services/QValueManager';
 import { RewardSignalProcessor } from '@mxf-dev/core/services/RewardSignalProcessor';
 import { UtilityScorerService } from '@mxf-dev/core/services/UtilityScorerService';
 import { OrparMemoryCoordinator } from '@mxf-dev/core/services/orpar-memory/OrparMemoryCoordinator';
+import { StratumManager } from '@mxf-dev/core/services/StratumManager';
+import { SurpriseCalculator } from '@mxf-dev/core/services/SurpriseCalculator';
+import { MemoryCompressor } from '@mxf-dev/core/services/MemoryCompressor';
+import { RetentionGateService } from '@mxf-dev/core/services/RetentionGateService';
+import { getMemoryStrataConfig, isMemoryStrataEnabled } from '@mxf-dev/core/config/memory-strata.config';
 import { MxfMLService } from '@mxf-dev/core/services/MxfMLService';
 import { PredictiveAnalyticsService } from '@mxf-dev/core/services/PredictiveAnalyticsService';
 
@@ -105,7 +111,12 @@ const PUBLIC_ENDPOINTS = [
     '/health',
     '/demo/interview/start',
     '/demo/status',
-    '/webhooks/n8n'  // n8n webhook endpoints (external integration)
+    // Webhook routes are not "public" — they carry their own HMAC signature auth
+    // (api/middleware/webhookAuth.ts) and are only mounted when MXF_WEBHOOK_ENABLED=true.
+    // They skip dualAuth because they authenticate with a signature rather than a JWT or
+    // agent key; removing this entry would make dualAuth reject every signed n8n request
+    // with a 401 before the signature was ever checked.
+    '/webhooks/n8n'
 ];
 
 /**
@@ -125,7 +136,9 @@ app.use(cors({
     origin: ['http://localhost:8080', 'http://127.0.0.1:8080', 'http://localhost:8088', 'http://localhost:3002'],
     credentials: true
 }));
-app.use(express.json());
+// The verify hook keeps the raw request bytes so webhook HMAC signatures can be checked
+// against the body exactly as it was sent. Without it, signature verification fails closed.
+app.use(express.json({ verify: captureRawBody }));
 app.use(express.urlencoded({ extended: true }));
 
 // Initialize Socket.IO server first
@@ -167,9 +180,25 @@ let channelService: ChannelService;
 const initializeServer = async () => {
     try {
         // Step 0: Initialize MemoryService with persistence FIRST (before anything else uses it)
-        MemoryService.getInstance({
+        memoryService = MemoryService.getInstance({
             persistenceService: MemoryPersistenceService.getInstance()
         });
+
+        // Step 0.1: Give MULS a persistence sink.
+        //
+        // QValueManager already calls its persistence callback on every Q-value change and
+        // on dirty-cache eviction — but no callback was ever registered, so every learned
+        // Q-value lived only in the process cache and was lost on restart. This is the
+        // registration that makes memory-utility learning durable.
+        const qValueManager = QValueManager.getInstance();
+        if (qValueManager.isEnabled()) {
+            qValueManager.setPersistenceCallback(
+                (memoryId, utility) => memoryService.updateMemoryUtility(memoryId, utility)
+            );
+            logger.info('[Boot] MULS enabled — Q-value persistence callback registered');
+        } else {
+            logger.info('[Boot] MULS disabled (MEMORY_UTILITY_LEARNING_ENABLED not set)');
+        }
 
         // Step 1: Connect to database
         await connectToDatabase();
@@ -343,15 +372,37 @@ const initializeServer = async () => {
             }
         }
 
-        // Step 2.6: Initialize ORPAR-Memory integration if enabled
+        // Step 2.55: Initialize the memory strata (Nested Learning) services.
+        //
+        // These must come up before the ORPAR-Memory coordinator, because
+        // PhaseMemoryOperations and PhaseStrataRouter store and retrieve through
+        // StratumManager. Nothing initialized StratumManager outside of test files, so it
+        // stayed disabled no matter what MEMORY_STRATA_ENABLED was set to — which meant
+        // phase retrievals returned nothing and the whole strata layer was inert.
+        if (isMemoryStrataEnabled()) {
+            const strataConfig = getMemoryStrataConfig();
+            StratumManager.getInstance().initialize(strataConfig);
+            SurpriseCalculator.getInstance().initialize({
+                enabled: strataConfig.surprise.enabled,
+                threshold: strataConfig.surprise.threshold,
+                momentumDecayRate: 0.7,
+                momentumBoostFactor: 1.2
+            });
+            MemoryCompressor.getInstance().initialize({ enabled: true });
+            RetentionGateService.getInstance().initialize({ enabled: true });
+            logger.info('Memory strata (Nested Learning) initialized');
+        } else {
+            logger.info('Memory strata disabled (MEMORY_STRATA_ENABLED not set)');
+        }
+
+        // Step 2.6: Initialize ORPAR-Memory integration if enabled.
+        //
+        // Failing to initialize this must be fatal rather than logged-and-ignored: the
+        // operator asked for the integration, and continuing without it means the server
+        // silently runs with learning switched off while reporting that it started.
         if (process.env.ORPAR_MEMORY_INTEGRATION_ENABLED === 'true') {
-            try {
-                OrparMemoryCoordinator.getInstance().initialize();
-                logger.info('ORPAR-Memory integration initialized');
-            } catch (error) {
-                logger.error(`Failed to initialize ORPAR-Memory integration: ${error instanceof Error ? error.message : String(error)}`);
-                logger.warn('Continuing without ORPAR-Memory integration');
-            }
+            OrparMemoryCoordinator.getInstance().initialize();
+            logger.info('ORPAR-Memory integration initialized');
         }
 
         // Step 2.8: Initialize TensorFlow.js integration if enabled
@@ -393,34 +444,16 @@ const initializeServer = async () => {
         // NOTE: This must happen BEFORE McpService initializes so it can load the newly registered tools
         try {
 
-            // Force load tools from database before attempting registration
-            // This ensures we don't try to re-register tools that already exist
-            const existingTools = await firstValueFrom(mcpToolRegistry.listTools());
-
-            // Now register any new tools that aren't in the database yet
-            const existingToolNames = new Set(existingTools.map(t => t.name));
-            const newTools = allMxfMcpTools.filter(tool => !existingToolNames.has(tool.name));
-
-            if (newTools.length === 0) {
-            } else {
-                let successCount = 0;
-
-                for (const tool of newTools) {
-                    try {
-                        const success = await firstValueFrom(mcpToolRegistry.registerTool(
-                            tool as any,
-                            'mxf-server',
-                            'system'
-                        ));
-                        if (success) {
-                            successCount++;
-                        }
-                    } catch (error) {
-                        logger.warn(`Failed to register tool ${tool.name}: ${error}`);
-                    }
-                }
-
-            }
+            // Reconcile every tool against the code, which is the source of truth.
+            //
+            // Registration used to skip any tool whose *name* already existed in the
+            // database, while serving the description from the database and the schema from
+            // the code. So editing a tool's description changed nothing until the database
+            // was wiped, and description and schema could drift apart within a single tool.
+            // Tool descriptions are the prompt text an agent reads to decide how to call a
+            // tool, so that drift was silent prompt rot. This upserts description, schema
+            // and metadata for every tool, and prunes rows whose handler no longer exists.
+            await mcpToolRegistry.reconcileTools(allMxfMcpTools as any, 'mxf-server', 'system');
 
             // Final count
             const finalTools = await firstValueFrom(mcpToolRegistry.listTools());

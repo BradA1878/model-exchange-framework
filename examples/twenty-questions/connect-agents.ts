@@ -604,10 +604,9 @@ async function connectAgents() {
             reconnectDelay: RECONNECT_DELAY_MS
         });
 
-        const connected = await agent.connect();
-        if (!connected) {
-            console.error(`   ⚠️ Warning: ${player.name} may not be fully connected`);
-        }
+        // connect() throws on failure — a bad key or a registration timeout is fatal,
+        // not a warning to shrug at.
+        await agent.connect();
         agents[role] = agent;
 
         // Small delay between agent connections to avoid socket race conditions

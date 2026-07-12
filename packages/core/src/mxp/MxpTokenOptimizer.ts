@@ -167,8 +167,13 @@ export class MxpTokenOptimizer {
     }
 
     /**
-     * Apply context compression to a conversation history
-     * Integrates with ContextCompressionEngine for intelligent compression
+     * Replace older conversation history with a structured summary.
+     *
+     * Delegates to ContextCompressionEngine. The result is LOSSY: older messages
+     * are represented by a summary, not reproduced. The reported ratio is measured.
+     *
+     * @returns null when context compression is disabled for this channel/agent.
+     * @throws If compression fails.
      */
     public async compressConversationContext(
         messages: (ChannelMessage | AgentMessage)[],
@@ -176,7 +181,6 @@ export class MxpTokenOptimizer {
             channelId: string;
             agentId?: string;
             windowSize?: number;
-            compressionRatio?: number;
             preserveKeywords?: string[];
         }
     ): Promise<CompressedContext | null> {
@@ -194,14 +198,11 @@ export class MxpTokenOptimizer {
             return null; // Return null when disabled to avoid processing
         }
 
-
         try {
-            // Use ContextCompressionEngine for intelligent compression
             const compressed = await ContextCompressionEngine.getInstance().compressConversation(messages, {
                 channelId: options.channelId,
                 agentId: options.agentId,
                 windowSize: options.windowSize || 5,
-                compressionRatio: options.compressionRatio || 0.3,
                 preserveKeywords: options.preserveKeywords || [],
                 useContextReferences: true
             });
@@ -210,12 +211,11 @@ export class MxpTokenOptimizer {
                 // Update our internal statistics
                 this.optimizationStats.totalOptimizations++;
                 this.optimizationStats.totalTokensSaved += (compressed.originalTokens - compressed.compressedTokens);
-                
+
                 // Recalculate average compression ratio
                 const totalProcessed = this.optimizationStats.totalOptimizations;
-                this.optimizationStats.averageCompressionRatio = 
+                this.optimizationStats.averageCompressionRatio =
                     ((this.optimizationStats.averageCompressionRatio * (totalProcessed - 1)) + compressed.ratio) / totalProcessed;
-
             }
 
             return compressed;
@@ -226,7 +226,7 @@ export class MxpTokenOptimizer {
                 channelId: options.channelId,
                 messageCount: messages.length
             });
-            return null; // Fail gracefully
+            throw error;
         }
     }
     

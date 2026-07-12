@@ -46,6 +46,7 @@ import { registerHistoryCommand } from './commands/history';
 import { registerResumeCommand } from './commands/resume';
 import { registerUpdateCommand } from './commands/update';
 import { registerAdminCommands } from './commands/admin';
+import { logError } from './utils/output';
 
 import { existsSync } from 'fs';
 import { spawn } from 'child_process';
@@ -153,4 +154,12 @@ program
         await (tuiModule as any).launchTUI(options.session, agentIds, options.cwd);
     });
 
-program.parse(process.argv);
+// parseAsync (not parse) so rejections from async action handlers surface here.
+// With parse(), commander ignores the returned promise and any failure — e.g.
+// `mxf start` when Docker is down — escapes as an unhandled rejection and dumps
+// a raw stack trace over the actionable message the command already produced.
+program.parseAsync(process.argv).catch((error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error);
+    logError(message);
+    process.exit(1);
+});

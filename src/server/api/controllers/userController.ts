@@ -24,11 +24,15 @@ import jwt from 'jsonwebtoken';
 import { User, UserRole } from '@mxf-dev/core/models/user';
 import { Logger } from '@mxf-dev/core/utils/Logger';
 import { requireEnv } from '@mxf-dev/core/utils/env';
+import { getMagicLinkSender, buildMagicLinkUrl } from '../services/MagicLinkSender';
 
 /**
  * User controller for handling user-related operations
  */
 const logger = new Logger('info', 'UserController', 'server');
+
+/** Magic-link token lifetime, in minutes. */
+const MAGIC_LINK_EXPIRY_MINUTES = 15;
 
 /**
  * Generate JWT token for authentication
@@ -46,19 +50,64 @@ const generateToken = (userId: string, type: string, role: string): string => {
     );
 };
 
+/**
+ * Narrow a value from the request body to a plain string.
+ *
+ * Mongo query values are interpolated straight into filters such as
+ * `{ $or: [{ username }, { email: username }] }`. JSON bodies can carry objects,
+ * so a body of `{"username": {"$gt": ""}}` would otherwise become a query
+ * operator and match the first user in the collection. Anything that is not a
+ * string is rejected before it reaches the query.
+ *
+ * @param value - Raw value from req.body
+ * @returns The trimmed string, or null when the value is not a non-empty string
+ */
+const asIdentifier = (value: unknown): string | null => {
+    if (typeof value !== 'string') {
+        return null;
+    }
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : null;
+};
+
 export const userController = {
     /**
      * Register a new user
+     *
+     * Self-registration always creates a CONSUMER. `role` is never read from the
+     * request body — UserRole.ADMIN is a valid enum value, so honouring a
+     * client-supplied role would let anyone register as an administrator.
+     * Roles are changed only through updateUserRole, which is admin-gated.
      */
     register: async (req: Request, res: Response): Promise<void> => {
         try {
-            const { username, email, password, firstName, lastName, company, role } = req.body;
-            
+            const { password, firstName, lastName, company } = req.body;
+
+            // Reject non-string identifiers before they reach the Mongo query
+            const username = asIdentifier(req.body?.username);
+            const email = asIdentifier(req.body?.email);
+
+            if (!username || !email) {
+                res.status(400).json({
+                    success: false,
+                    message: 'Username and email are required and must be strings'
+                });
+                return;
+            }
+
+            if (typeof password !== 'string' || password.length === 0) {
+                res.status(400).json({
+                    success: false,
+                    message: 'Password is required and must be a string'
+                });
+                return;
+            }
+
             // Check if user already exists
-            const existingUser = await User.findOne({ 
-                $or: [{ username }, { email }] 
+            const existingUser = await User.findOne({
+                $or: [{ username }, { email }]
             });
-            
+
             if (existingUser) {
                 res.status(400).json({
                     success: false,
@@ -66,8 +115,8 @@ export const userController = {
                 });
                 return;
             }
-            
-            // Create new user
+
+            // Create new user — role is fixed, never taken from the request
             const user = new User({
                 username,
                 email,
@@ -75,9 +124,9 @@ export const userController = {
                 firstName,
                 lastName,
                 company,
-                role: role || UserRole.CONSUMER
+                role: UserRole.CONSUMER
             });
-            
+
             await user.save();
             
             // Generate auth token
@@ -114,13 +163,26 @@ export const userController = {
      */
     login: async (req: Request, res: Response): Promise<void> => {
         try {
-            const { username, password } = req.body;
-            
+            const { password } = req.body;
+
+            // Reject non-string identifiers before they reach the Mongo query.
+            // A body of {"username": {"$gt": ""}} would otherwise be interpolated
+            // as a query operator and match the first user in the collection.
+            const username = asIdentifier(req.body?.username);
+
+            if (!username || typeof password !== 'string' || password.length === 0) {
+                res.status(401).json({
+                    success: false,
+                    message: 'Invalid credentials'
+                });
+                return;
+            }
+
             // Find user by username or email
             const user = await User.findOne({
                 $or: [{ username }, { email: username }]
             });
-            
+
             if (!user) {
                 res.status(401).json({
                     success: false,
@@ -128,10 +190,10 @@ export const userController = {
                 });
                 return;
             }
-            
+
             // Check password
             const isMatch = await user.comparePassword(password);
-            
+
             if (!isMatch) {
                 res.status(401).json({
                     success: false,
@@ -406,30 +468,37 @@ export const userController = {
 
     /**
      * Request magic link for authentication
+     *
+     * The magic-link token is a bearer credential: /magic-link/verify exchanges
+     * it for a 24h session. It is therefore delivered out of band by the
+     * configured MagicLinkSender and never returned in this response — returning
+     * it would let any unauthenticated caller take over any account by asking
+     * for a link to that address.
+     *
+     * Unknown addresses still auto-create an account, but the response is
+     * identical either way so it cannot be used to enumerate registered users.
      */
     requestMagicLink: async (req: Request, res: Response): Promise<void> => {
         try {
-            const { email } = req.body;
-
-            if (!email) {
-                res.status(400).json({
-                    success: false,
-                    message: 'Email is required'
-                });
-                return;
-            }
-
             // Validate email format up front — magic link auto-creates a user,
             // so a malformed address would otherwise fail Mongoose validation
-            // deep in save() and surface as a confusing 500.
+            // deep in save() and surface as a confusing 500. The typeof check
+            // also keeps query operators out of the User.findOne filter.
+            const email = asIdentifier(req.body?.email);
             const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-            if (typeof email !== 'string' || !EMAIL_PATTERN.test(email)) {
+
+            if (!email || !EMAIL_PATTERN.test(email)) {
                 res.status(400).json({
                     success: false,
                     message: 'A valid email address is required'
                 });
                 return;
             }
+
+            // Resolve the transport before creating anything. In production with no
+            // transport configured this throws, so we never mint a token we cannot
+            // deliver and never report success for a link that went nowhere.
+            const sender = getMagicLinkSender();
 
             // Find existing user or auto-create a new one
             let user = await User.findOne({ email });
@@ -465,26 +534,30 @@ export const userController = {
             const magicToken = jwt.sign(
                 { userId: user._id?.toString(), email: user.email, type: 'magic_link' },
                 secret,
-                { expiresIn: '15m' } // 15 minutes expiry
+                { expiresIn: `${MAGIC_LINK_EXPIRY_MINUTES}m` }
             );
 
-            // In production, this would send an email
-            // For development, return the token directly
+            // Deliver out of band. A delivery failure throws and surfaces as a 500 —
+            // it must not be reported as success.
+            await sender.send({
+                email: user.email,
+                magicLink: buildMagicLinkUrl(magicToken),
+                token: magicToken,
+                expiresInMinutes: MAGIC_LINK_EXPIRY_MINUTES,
+                isNewUser
+            });
+
+            // Identical response for known and unknown addresses, and no token.
             res.status(200).json({
                 success: true,
-                message: isNewUser
-                    ? 'Account created and magic link generated successfully'
-                    : 'Magic link generated successfully',
-                isNewUser,
-                // For development only - remove in production
-                magicLink: magicToken,
-                expiresIn: '15 minutes'
+                message: 'If that address can receive mail, a sign-in link is on its way',
+                expiresIn: `${MAGIC_LINK_EXPIRY_MINUTES} minutes`
             });
         } catch (error) {
             logger.error('Magic link request error:', error);
             res.status(500).json({
                 success: false,
-                message: 'Error generating magic link'
+                message: 'Error sending magic link'
             });
         }
     },

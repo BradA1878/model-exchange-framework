@@ -35,13 +35,22 @@ import crypto from 'crypto';
 export interface IChannelKey extends Document {
     // The unique key identifier
     keyId: string;
-    
-    // The actual secret key used for authentication
+
+    // bcrypt hash of the secret. The plaintext is shown once at creation and never stored —
+    // see ChannelKeyService. It used to be kept in the clear, so any read of this
+    // collection exposed every channel credential.
     secretKey: string;
-    
+
     // Reference to the channel this key provides access to
     channelId: string;
-    
+
+    // The agent this key authenticates as.
+    //
+    // Socket authentication reads the agent's identity from here rather than from the
+    // client handshake. Previously the key authenticated the *channel* while the client
+    // chose its own agentId, so one shared key let a client present any agent identity.
+    agentId: string;
+
     // Optional name for the key (for user reference)
     name?: string;
     
@@ -78,6 +87,11 @@ const ChannelKeySchema: Schema = new Schema({
         required: true,
         index: true,
         ref: 'ChannelRegistration',
+    },
+    agentId: {
+        type: String,
+        required: true,
+        index: true,
     },
     name: {
         type: String,

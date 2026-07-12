@@ -1,6 +1,24 @@
 {
   "$schema": "./node_modules/@stryker-mutator/core/schema/stryker-schema.json",
-  "packageManager": "npm",
+  "_comment": [
+    "The mutate list holds only files that unit/property tests genuinely exercise.",
+    "It used to list files no test imported at all (McpToolCallParser, McpToolSchema,",
+    "JsonResponseSchemas, MxpProtocolSchemas, TokenEstimator, MxpEncryption, env,",
+    "PhaseStrataRouter, PhaseWeightedRewarder). 78% of mutants had no coverage, so the",
+    "score measured how much code was untested rather than how good the tests were.",
+    "",
+    "Also dropped after measuring: EventPayloadSchema.ts (753 of 863 mutants unreached) and",
+    "MxfMemoryManager.ts (533 of 696) — imported by a test but barely executed; and",
+    "TaskTypes.ts, which is types-only and yields no mutants. Add them back when they have",
+    "tests that actually drive them.",
+    "",
+    "packageManager is deliberately absent: Stryker only accepts npm|yarn|pnpm and this repo",
+    "has a bun lockfile only. Every plugin is already in devDependencies, so Stryker never",
+    "needs to install anything.",
+    "",
+    "thresholds.break is a real gate, set just under the measured score. Raise it when the",
+    "score improves; do not lower it to make a red run pass."
+  ],
   "reporters": [
     "html",
     "clear-text",
@@ -12,20 +30,15 @@
   },
   "checkers": [],
   "mutate": [
-    "packages/core/src/schemas/**/*.ts",
-    "packages/core/src/protocols/mcp/McpToolCallParser.ts",
-    "packages/core/src/protocols/mcp/McpToolSchema.ts",
+    "packages/core/src/schemas/MessageSchemas.ts",
     "packages/core/src/utils/validation.ts",
-    "packages/core/src/utils/TokenEstimator.ts",
-    "packages/core/src/utils/MxpEncryption.ts",
-    "packages/core/src/utils/env.ts",
-    "packages/core/src/types/TaskTypes.ts",
     "packages/core/src/services/CodeExecutionSandboxService.ts",
     "packages/core/src/services/QValueManager.ts",
     "packages/core/src/services/RewardSignalProcessor.ts",
-    "packages/core/src/services/orpar-memory/PhaseStrataRouter.ts",
-    "packages/core/src/services/orpar-memory/PhaseWeightedRewarder.ts",
-    "packages/sdk/src/managers/MxfMemoryManager.ts",
+    "src/cli/models.ts",
+    "src/cli/services/ConfigService.ts",
+    "src/cli/commands/config.ts",
+    "src/cli/services/SessionRunner.ts",
     "!**/*.test.ts",
     "!**/*.spec.ts",
     "!**/index.ts"
@@ -41,11 +54,11 @@
   "concurrency": 4,
   "coverageAnalysis": "perTest",
   "thresholds": {
-    "high": 70,
-    "low": 45,
-    "break": null
+    "high": 60,
+    "low": 40,
+    "break": 38
   },
   "disableTypeChecks": "**/*.ts",
-  "incremental": true,
+  "incremental": false,
   "incrementalFile": ".stryker-tmp/incremental.json"
 }

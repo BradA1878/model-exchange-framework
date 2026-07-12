@@ -448,6 +448,8 @@ export interface UtilityRetrievalOptions {
     maxResults?: number;
     /** Similarity threshold */
     similarityThreshold?: number;
+    /** Hybrid search balance passed to Meilisearch (0 = keyword, 1 = semantic) */
+    hybridRatio?: number;
     /** Include score breakdown */
     includeBreakdown?: boolean;
 }

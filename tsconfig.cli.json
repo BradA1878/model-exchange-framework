@@ -1,15 +1,33 @@
 {
+  // Typecheck config for the MXF CLI, including the Ink TUI.
+  //
+  // The root tsconfig.json excludes src/cli/tui/**/* because it emits CommonJS
+  // to dist/ and the TUI is never built — Bun runs it from source. This config
+  // typechecks the CLI the way Bun actually resolves it: ESM + bundler
+  // resolution, no emit.
+  //
+  // `paths` is cleared so @mxf-dev/core and @mxf-dev/sdk resolve through their
+  // package `exports` maps to the built .d.ts files, rather than being pulled in
+  // as source (which violates the inherited rootDir and re-checks all of core).
+  // Run `tsc -b` before this so packages/*/dist exists. `rootDir` is neutralized
+  // for the same reason; it has no meaning under noEmit.
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "jsx": "react-jsx",
     "jsxImportSource": "react",
     "module": "esnext",
     "moduleResolution": "bundler",
-    "noEmit": true
+    "noEmit": true,
+    "declaration": false,
+    "rootDir": ".",
+    "paths": {}
   },
+  "references": [],
   "include": [
-    "src/cli/tui/**/*",
-    "src/cli/services/**/*",
-    "src/cli/utils/**/*"
+    "src/cli/**/*"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist"
   ]
 }

@@ -29,6 +29,15 @@
     { "path": "./packages/core" },
     { "path": "./packages/sdk" }
   ],
+  // The TUI and the desktop app are excluded here because this project emits
+  // CommonJS to dist/ and neither is ever compiled — Bun runs the TUI from
+  // source and the desktop builds through Vite.
+  //
+  // Excluded from the BUILD does not mean unchecked: the TUI is typechecked by
+  // tsconfig.cli.json (`bun run typecheck:cli`, also a CI step). Leaving it out
+  // of both is what let a dispatch to a nonexistent reducer action sit in
+  // useInputHandler.ts unnoticed. If you add another CLI directory here, add it
+  // to tsconfig.cli.json too.
   "exclude": [
     "node_modules",
     "dist",

@@ -17,6 +17,8 @@ import { getThemeNames } from '../theme/themes';
 import { SessionHistoryService, formatSessionList } from '../services/SessionHistory';
 import { ToolHookService } from '../services/ToolHookService';
 import { VimModeService } from '../services/VimMode';
+import { stopAgentActivity } from '../services/StopController';
+import { getModelIds, hasModelCatalog } from '../../models';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -318,46 +320,6 @@ registerCommand({
 });
 
 /**
- * Model choices organized by provider, matching the init command's MODEL_CHOICES.
- * Used by /model to present a numbered list for in-session model switching.
- */
-const MODEL_CHOICES: Record<string, Array<{ label: string; value: string }>> = {
-    openrouter: [
-        { label: 'anthropic/claude-sonnet-4.6', value: 'anthropic/claude-sonnet-4.6' },
-        { label: 'anthropic/claude-sonnet-4.5', value: 'anthropic/claude-sonnet-4.5' },
-        { label: 'anthropic/claude-haiku-4.5', value: 'anthropic/claude-haiku-4.5' },
-        { label: 'anthropic/claude-opus-4.6', value: 'anthropic/claude-opus-4.6' },
-        { label: 'openai/gpt-4.1', value: 'openai/gpt-4.1' },
-        { label: 'openai/gpt-4.1-mini', value: 'openai/gpt-4.1-mini' },
-        { label: 'google/gemini-3-pro-preview', value: 'google/gemini-3-pro-preview' },
-        { label: 'google/gemini-3-flash-preview', value: 'google/gemini-3-flash-preview' },
-        { label: 'google/gemini-2.5-pro', value: 'google/gemini-2.5-pro' },
-        { label: 'google/gemini-2.5-flash', value: 'google/gemini-2.5-flash' },
-    ],
-    anthropic: [
-        { label: 'claude-sonnet-4-6', value: 'claude-sonnet-4-6' },
-        { label: 'claude-sonnet-4-5', value: 'claude-sonnet-4-5' },
-        { label: 'claude-haiku-4-5', value: 'claude-haiku-4-5' },
-        { label: 'claude-opus-4-6', value: 'claude-opus-4-6' },
-    ],
-    openai: [
-        { label: 'gpt-4.1', value: 'gpt-4.1' },
-        { label: 'gpt-4.1-mini', value: 'gpt-4.1-mini' },
-        { label: 'gpt-4o', value: 'gpt-4o' },
-    ],
-    gemini: [
-        { label: 'gemini-3-pro-preview', value: 'gemini-3-pro-preview' },
-        { label: 'gemini-3-flash-preview', value: 'gemini-3-flash-preview' },
-        { label: 'gemini-2.5-pro', value: 'gemini-2.5-pro' },
-        { label: 'gemini-2.5-flash', value: 'gemini-2.5-flash' },
-    ],
-    xai: [
-        { label: 'grok-3', value: 'grok-3' },
-        { label: 'grok-3-mini', value: 'grok-3-mini' },
-    ],
-};
-
-/**
  * /model — Change the default model for subsequent tasks.
  *
  * With no args: enters interactive selection mode with numbered list.
@@ -400,7 +362,21 @@ registerCommand({
         const configService = ConfigService.getInstance();
         const config = configService.load();
         const provider = config?.llm?.provider || 'openrouter';
-        const choices = MODEL_CHOICES[provider] || MODEL_CHOICES.openrouter;
+
+        // Providers without a curated list (Ollama) have user-installed models.
+        // Showing another provider's list would offer models that don't exist here.
+        if (!hasModelCatalog(provider)) {
+            context.dispatch({
+                type: 'ADD_ENTRY',
+                entry: {
+                    type: 'system',
+                    content: `No model list for provider "${provider}" — its models are user-installed.\nSet one directly: /model <model-id>`,
+                },
+            });
+            return;
+        }
+
+        const choices = getModelIds(provider).map(id => ({ label: id, value: id }));
 
         context.dispatch({
             type: 'ADD_ENTRY',
@@ -505,20 +481,16 @@ registerCommand({
 
 /**
  * /stop — Cancel current agent activity.
+ *
+ * Disconnects and reconnects the agents, which kills any in-flight LLM call.
+ * Reports success only once that actually completes.
  */
 registerCommand({
     name: 'stop',
     description: 'Stop current agent activity',
     usage: '/stop',
     handler: async (_args: string, context: CommandContext) => {
-        context.dispatch({ type: 'SET_AGENT_WORKING', working: false });
-        context.dispatch({
-            type: 'ADD_ENTRY',
-            entry: {
-                type: 'system',
-                content: 'Agent activity stopped. You can submit a new task.',
-            },
-        });
+        await stopAgentActivity(context.session, context.dispatch);
     },
 });
 
@@ -916,7 +888,10 @@ registerCommand({
 
                 await context.session.compactAgent(targetId);
 
-                const postTokens = state?.costData?.agents[targetId]?.totalTokens || 0;
+                // Re-read state after the await — compaction updates the token counts,
+                // and `state` above is a snapshot taken before they changed.
+                const postState = context.getState?.();
+                const postTokens = postState?.costData?.agents[targetId]?.totalTokens || 0;
                 const recoveryStr = preTokens > 0 ? ` — ${formatTokenRecovery(preTokens, postTokens)}` : '';
 
                 context.dispatch({
@@ -947,9 +922,11 @@ registerCommand({
                 }
             }
 
-            // Build summary with per-agent context usage
+            // Build summary with per-agent context usage, reading state fresh —
+            // the compaction loop above changed the token counts that feed it.
+            const postState = context.getState?.();
             const agentSummaries = definitions.map((def) => {
-                const pct = state ? getContextUsagePercent(def.agentId, state.costData) : null;
+                const pct = postState ? getContextUsagePercent(def.agentId, postState.costData) : null;
                 return pct !== null ? `${def.name} (${pct}%)` : def.name;
             });
 
@@ -1432,9 +1409,7 @@ registerCommand({
             lines.push('');
             lines.push('  Agent activity:');
             for (const agent of agentData) {
-                const msgs = agent.messageCount;
-                const tools = agent.toolCallCount;
-                lines.push(`    ${agent.agentName.padEnd(14)} ${msgs} msgs, ${tools} tool calls`);
+                lines.push(`    ${agent.agentName.padEnd(14)} ${agent.messages} msgs, ${agent.toolCalls} tool calls`);
             }
         }
 

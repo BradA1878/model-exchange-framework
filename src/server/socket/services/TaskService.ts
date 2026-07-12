@@ -329,6 +329,71 @@ export class TaskService {
     }
 
     /**
+     * Claim an unassigned task for an agent, atomically.
+     *
+     * The claim is a single conditional update: it only matches while the task is
+     * still `pending` and still unassigned, so of two agents racing for the same
+     * task exactly one update matches and the other gets null back.
+     *
+     * The previous code read the task, decided on an agent, then called
+     * task.save() — last write wins, and two agents could each believe they owned
+     * the same task.
+     *
+     * @param taskId - Task to claim
+     * @param agentId - Agent claiming it
+     * @returns The claimed task, or null if another agent got there first
+     */
+    private async claimTaskForAgent(taskId: string, agentId: AgentId): Promise<TaskDocument | null> {
+        return Task.findOneAndUpdate(
+            {
+                _id: taskId,
+                status: 'pending',
+                $or: [
+                    { assignedAgentId: { $exists: false } },
+                    { assignedAgentId: null }
+                ]
+            },
+            {
+                $set: {
+                    assignedAgentId: agentId,
+                    status: 'assigned',
+                    updatedAt: new Date()
+                }
+            },
+            { new: true }
+        );
+    }
+
+    /**
+     * Run intelligent assignment for a task, scoped to the caller's channel.
+     *
+     * The socket entry point for assignment. Same reasoning as
+     * updateTaskInChannel: the taskId arrives from the wire, so it is confined to
+     * the channel the caller authenticated on before any assignment work — and
+     * before any LLM spend — happens.
+     *
+     * @param taskId - Task to assign
+     * @param channelId - Channel the caller authenticated on
+     * @returns The assignment result
+     * @throws If the task is not in the caller's channel
+     */
+    public async assignTaskIntelligentlyInChannel(
+        taskId: string,
+        channelId: ChannelId
+    ): Promise<TaskAssignmentResult> {
+        this.validator.assertIsNonEmptyString(taskId, 'taskId is required');
+        this.validator.assertIsNonEmptyString(channelId, 'channelId is required');
+
+        const task = await Task.findOne({ _id: taskId, channelId }).select('_id');
+
+        if (!task) {
+            throw new Error(`Task ${taskId} not found in channel ${channelId}`);
+        }
+
+        return this.assignTaskIntelligently(taskId);
+    }
+
+    /**
      * Assign task to a single agent (original logic)
      */
     private async assignToSingleAgent(task: TaskDocument): Promise<TaskAssignmentResult> {
@@ -338,10 +403,21 @@ export class TaskService {
             (task.assignedAgentIds && task.assignedAgentIds.length > 0 ? task.assignedAgentIds[0] : null);
 
         if (manualAgentId) {
-            // Update the singular field if it was derived from the array
-            if (!task.assignedAgentId && manualAgentId) {
+            // Normalize the singular field when it was derived from the array.
+            // Conditional so a concurrent writer that already set it wins rather
+            // than being clobbered.
+            if (!task.assignedAgentId) {
+                await Task.updateOne(
+                    {
+                        _id: task.id,
+                        $or: [
+                            { assignedAgentId: { $exists: false } },
+                            { assignedAgentId: null }
+                        ]
+                    },
+                    { $set: { assignedAgentId: manualAgentId, updatedAt: new Date() } }
+                );
                 task.assignedAgentId = manualAgentId;
-                await task.save();
             }
 
             this.logger.info(`📋 Task assigned: "${task.title}" → Agent: ${manualAgentId} (manual)`);
@@ -403,19 +479,25 @@ export class TaskService {
                     if (assignmentAnalysis.confidence >= this.config.llmConfidenceThreshold) {
                         const assignedAgentId = assignmentAnalysis.recommendedAgentId;
                         const assignedAgent = availableAgents.find(agent => agent.id === assignedAgentId);
-                        
+
                         if (assignedAgent) {
-                            // Update task with assignment
-                            task.assignedAgentId = assignedAgent.id;
-                            await task.save();
+                            // Claim atomically — another assignment pass may have taken
+                            // this task while the LLM was deciding.
+                            const claimed = await this.claimTaskForAgent(task.id, assignedAgent.id);
+
+                            if (!claimed) {
+                                throw new Error(
+                                    `Task ${task.id} was claimed by another agent while assignment was in progress`
+                                );
+                            }
 
                             this.logger.info(`📋 Task assigned: "${task.title}" → Agent: ${assignedAgent.id} (intelligent)`);
 
                             // Emit assignment event
-                            await this.emitTaskAssignmentEvent(task, assignedAgent.id);
+                            await this.emitTaskAssignmentEvent(claimed, assignedAgent.id);
 
                             return {
-                                taskId: task.id,
+                                taskId: claimed.id,
                                 assignedAgentId: assignedAgent.id,
                                 strategy: 'intelligent' as AssignmentStrategy,
                                 confidence: assignmentAnalysis.confidence,
@@ -433,21 +515,27 @@ export class TaskService {
             const fallbackAnalysis = this.getFallbackAssignment(task, availableAgents);
             const fallbackAgentId = fallbackAnalysis.recommendedAgentId;
             const fallbackAgent = availableAgents.find(agent => agent.id === fallbackAgentId);
-            
+
             if (!fallbackAgent) {
                 throw new Error('No suitable agent found for assignment');
             }
-            
-            task.assignedAgentId = fallbackAgent.id;
-            await task.save();
+
+            // Claim atomically, same as the intelligent path
+            const claimed = await this.claimTaskForAgent(task.id, fallbackAgent.id);
+
+            if (!claimed) {
+                throw new Error(
+                    `Task ${task.id} was claimed by another agent while assignment was in progress`
+                );
+            }
 
             this.logger.info(`📋 Task assigned: "${task.title}" → Agent: ${fallbackAgent.id} (fallback)`);
 
             // Emit assignment event
-            await this.emitTaskAssignmentEvent(task, fallbackAgent.id);
+            await this.emitTaskAssignmentEvent(claimed, fallbackAgent.id);
 
             return {
-                taskId: task.id,
+                taskId: claimed.id,
                 assignedAgentId: fallbackAgent.id,
                 strategy: this.config.fallbackStrategy,
                 confidence: 0.6,
@@ -1107,6 +1195,60 @@ Respond with JSON:
         }
 
         return this.taskDocumentToChannelTask(task);
+    }
+
+    /**
+     * Update a task on behalf of an agent, scoped to the channel it connected on.
+     *
+     * `updateTask` takes a bare taskId and writes straight through to
+     * Task.findByIdAndUpdate — fine for server-internal callers that already know
+     * which task they mean, wrong for anything driven by a client. Every socket
+     * task handler goes through here instead, so a taskId from the wire can only
+     * ever address a task in the caller's own channel: an agent in channel A can
+     * no longer complete, reassign, or cancel a task in channel B by guessing its
+     * id.
+     *
+     * `requireAssignedAgentId` additionally restricts the update to the agent the
+     * task is assigned to, which is what completion and failure need — finishing
+     * someone else's work is not a thing an agent gets to do.
+     *
+     * @param taskId - Task being updated
+     * @param channelId - Channel the caller authenticated on
+     * @param update - Fields to change
+     * @param options.requireAssignedAgentId - Agent that must hold the assignment
+     * @returns The updated task
+     * @throws If the task is not in the caller's channel, or not assigned to them
+     */
+    public async updateTaskInChannel(
+        taskId: string,
+        channelId: ChannelId,
+        update: UpdateTaskRequest,
+        options: { requireAssignedAgentId?: AgentId } = {}
+    ): Promise<ChannelTask> {
+        this.validator.assertIsNonEmptyString(taskId, 'taskId is required');
+        this.validator.assertIsNonEmptyString(channelId, 'channelId is required');
+
+        const task = await Task.findOne({ _id: taskId, channelId });
+
+        // Same error whether the task is in another channel or does not exist —
+        // there is no reason to confirm the existence of tasks the caller cannot see.
+        if (!task) {
+            throw new Error(`Task ${taskId} not found in channel ${channelId}`);
+        }
+
+        const requiredAgentId = options.requireAssignedAgentId;
+        if (requiredAgentId) {
+            const isAssignee = task.assignedAgentId === requiredAgentId
+                || (Array.isArray(task.assignedAgentIds) && task.assignedAgentIds.includes(requiredAgentId));
+
+            if (!isAssignee) {
+                throw new Error(
+                    `Agent ${requiredAgentId} is not assigned to task ${taskId} and cannot change its state`
+                );
+            }
+        }
+
+        return this.updateTask(taskId, update);
     }
 
     /**

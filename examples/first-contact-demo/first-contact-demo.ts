@@ -438,12 +438,12 @@ const createChannelAndKeys = async (sdk: MxfSDK): Promise<{
     StoryLogger.logSystemUpdate('🔑 Generating authentication keys for all personnel...');
     
     const keys = {
-        commander: await sdk.generateKey(config.channelId, undefined, 'Commander Kane Key'),
-        science: await sdk.generateKey(config.channelId, undefined, 'Dr. Chen Key'),
-        tactical: await sdk.generateKey(config.channelId, undefined, 'Lt. Rodriguez Key'),
-        comms: await sdk.generateKey(config.channelId, undefined, 'Ensign Park Key'),
-        xenolinguist: await sdk.generateKey(config.channelId, undefined, 'Dr. Xenara Key'),
-        alienCommander: await sdk.generateKey(config.channelId, undefined, 'Commander Zenth Key')
+        commander: await sdk.generateKey(config.channelId, 'commander-kane', 'Commander Kane Key'),
+        science: await sdk.generateKey(config.channelId, 'dr-chen', 'Dr. Chen Key'),
+        tactical: await sdk.generateKey(config.channelId, 'lt-rodriguez', 'Lt. Rodriguez Key'),
+        comms: await sdk.generateKey(config.channelId, 'ensign-park', 'Ensign Park Key'),
+        xenolinguist: await sdk.generateKey(config.channelId, 'dr-xenara', 'Dr. Xenara Key'),
+        alienCommander: await sdk.generateKey(config.channelId, 'commander-zenth', 'Commander Zenth Key')
     };
     
     // Update configurations with generated keys

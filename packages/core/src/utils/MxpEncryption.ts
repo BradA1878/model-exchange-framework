@@ -20,9 +20,23 @@
 
 /**
  * MXP Encryption Utilities
- * 
- * Simple encryption/decryption using a shared key from environment variables.
+ *
+ * Encryption/decryption using a shared key from environment variables.
  * Uses AES-256-GCM for authenticated encryption.
+ *
+ * ## Failure policy
+ *
+ * Encryption is a security boundary, so there is no degraded mode:
+ *
+ * - `encrypt()` / `decrypt()` return `null` ONLY to mean "encryption is not
+ *   configured" (no MXP_ENCRYPTION_KEY). That is a deliberate, operator-chosen
+ *   state, not a failure.
+ * - Any actual crypto failure — bad key, bad IV, failed authentication tag,
+ *   unsupported algorithm — THROWS.
+ *
+ * Earlier versions returned the plaintext payload when encryption threw
+ * (`return encrypted || payload`), so a crypto fault silently put cleartext on
+ * the wire while the caller believed it was encrypted.
  */
 
 import * as crypto from 'crypto';
@@ -82,30 +96,34 @@ export class MxpEncryption {
     }
     
     /**
-     * Encrypt an MXP payload
+     * Encrypt an MXP payload.
+     *
+     * @returns The encrypted payload, or null if encryption is not configured.
+     * @throws If encryption IS configured but the cipher fails. Never returns
+     *         plaintext.
      */
     public encrypt(payload: MxpPayload): EncryptedPayload | null {
         if (!this.isEncryptionEnabled()) {
             return null;
         }
-        
+
         try {
             // Generate a random IV for each encryption
             const iv = crypto.randomBytes(16);
-            
+
             // Create cipher
             const cipher = crypto.createCipheriv('aes-256-gcm', this.encryptionKey!, iv);
-            
+
             // Encrypt the payload
             const payloadString = JSON.stringify(payload);
             const encrypted = Buffer.concat([
                 cipher.update(payloadString, 'utf8'),
                 cipher.final()
             ]);
-            
+
             // Get the authentication tag
             const authTag = cipher.getAuthTag();
-            
+
             return {
                 algorithm: MxpEncryptionAlgorithm.AES_256_GCM,
                 data: encrypted.toString('base64'),
@@ -113,70 +131,87 @@ export class MxpEncryption {
                 authTag: authTag.toString('base64')
             };
         } catch (error) {
-            logger.error(`Encryption failed: ${error}`);
-            return null;
+            const message = error instanceof Error ? error.message : String(error);
+            logger.error(`Encryption failed: ${message}`);
+            throw new Error(`MXP encryption failed: ${message}`);
         }
     }
-    
+
     /**
-     * Decrypt an encrypted payload
+     * Decrypt an encrypted payload.
+     *
+     * @throws If encryption is not configured, the algorithm is unsupported, or
+     *         the ciphertext fails authentication.
      */
-    public decrypt(encryptedPayload: EncryptedPayload): MxpPayload | null {
+    public decrypt(encryptedPayload: EncryptedPayload): MxpPayload {
         if (!this.isEncryptionEnabled()) {
-            logger.error('Cannot decrypt - encryption not configured');
-            return null;
+            throw new Error(
+                'Cannot decrypt MXP payload: encryption is not configured. Set MXP_ENCRYPTION_KEY and MXP_ENCRYPTION_SALT.'
+            );
         }
-        
+
         if (encryptedPayload.algorithm !== MxpEncryptionAlgorithm.AES_256_GCM) {
-            logger.error(`Unsupported encryption algorithm: ${encryptedPayload.algorithm}`);
-            return null;
+            throw new Error(`Unsupported MXP encryption algorithm: ${encryptedPayload.algorithm}`);
         }
-        
+
         try {
             // Decode from base64
             const encrypted = Buffer.from(encryptedPayload.data, 'base64');
             const iv = Buffer.from(encryptedPayload.iv, 'base64');
             const authTag = Buffer.from(encryptedPayload.authTag, 'base64');
-            
+
             // Create decipher
             const decipher = crypto.createDecipheriv('aes-256-gcm', this.encryptionKey!, iv);
             decipher.setAuthTag(authTag);
-            
-            // Decrypt
+
+            // Decrypt — final() throws if the authentication tag does not match
             const decrypted = Buffer.concat([
                 decipher.update(encrypted),
                 decipher.final()
             ]);
-            
+
             // Parse the JSON payload
             return JSON.parse(decrypted.toString('utf8'));
         } catch (error) {
-            logger.error(`Decryption failed: ${error}`);
-            return null;
+            const message = error instanceof Error ? error.message : String(error);
+            logger.error(`Decryption failed: ${message}`);
+            throw new Error(`MXP decryption failed: ${message}`);
         }
     }
-    
+
     /**
-     * Encrypt a full message payload (for convenience)
+     * Encrypt a full message payload.
+     *
+     * @returns The encrypted payload, or the original payload when encryption
+     *          is not configured.
+     * @throws If encryption is configured but fails.
      */
     public encryptMessage(payload: MxpPayload): MxpPayload | EncryptedPayload {
         if (!this.isEncryptionEnabled()) {
-            return payload; // Return unencrypted if encryption is disabled
+            return payload; // Encryption not configured — caller opted out
         }
-        
+
         const encrypted = this.encrypt(payload);
-        return encrypted || payload; // Fallback to unencrypted on error
+        if (!encrypted) {
+            // isEncryptionEnabled() was true, so encrypt() either returns a
+            // payload or throws. Reaching here means the two disagree.
+            throw new Error('MXP encryption is enabled but produced no payload');
+        }
+
+        return encrypted;
     }
-    
+
     /**
-     * Decrypt a message payload (with type checking)
+     * Decrypt a message payload (with type checking).
+     *
+     * @throws If the payload is encrypted and decryption fails.
      */
-    public decryptMessage(payload: MxpPayload | EncryptedPayload): MxpPayload | null {
+    public decryptMessage(payload: MxpPayload | EncryptedPayload): MxpPayload {
         // Check if it's an encrypted payload
         if ('algorithm' in payload && 'data' in payload && 'iv' in payload) {
             return this.decrypt(payload as EncryptedPayload);
         }
-        
+
         // It's already decrypted
         return payload as MxpPayload;
     }

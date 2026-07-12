@@ -259,7 +259,7 @@ export class EvaluationService {
     private evaluationHistory = new Map<string, EvaluationResult[]>();
 
     private constructor() {
-        this.logger = new Logger('EvaluationService');
+        this.logger = new Logger('info', 'EvaluationService');
 
         this.setupEventHandlers();
     }

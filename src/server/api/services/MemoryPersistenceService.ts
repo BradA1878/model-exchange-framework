@@ -49,6 +49,9 @@ import {
     SurpriseHistoryModel,
     MemoryPatternModel
 } from '@mxf-dev/core/models/memoryStrata';
+import { MemoryUtility } from '@mxf-dev/core/models/memoryUtility';
+import { MemoryUtilitySubdocument } from '@mxf-dev/core/types/MemoryUtilityTypes';
+import { IMemoryPersistence } from '@mxf-dev/core/interfaces/IMemoryPersistence';
 
 /**
  * Memory Persistence Service interface
@@ -111,8 +114,11 @@ export interface IMemoryPersistenceService {
  * Memory Persistence Service Implementation
  * Pure database operations - no caching
  */
-export class MemoryPersistenceService implements IMemoryPersistenceService {
+export class MemoryPersistenceService implements IMemoryPersistenceService, IMemoryPersistence {
     private static instance: MemoryPersistenceService;
+
+    /** Cap on retained Q-value history entries per memory. */
+    private static readonly Q_VALUE_HISTORY_LIMIT = 50;
     
     // Validator
     private validator = createMemoryValidator('MemoryPersistenceService');
@@ -560,6 +566,86 @@ export class MemoryPersistenceService implements IMemoryPersistenceService {
         return of(false);
     }
     
+    /**
+     * Persist the MULS utility subdocument for a single retrieved memory.
+     *
+     * Registered (via MemoryService.updateMemoryUtility) as QValueManager's persistence
+     * callback, so this runs whenever a Q-value changes and when a dirty cache entry is
+     * evicted. Upserts because a memory earns a utility record the first time it is
+     * actually rewarded, not when it is created.
+     *
+     * Throws on failure by design: a silent failure here would mean the framework
+     * reports learning that it never retained.
+     */
+    public async updateAgentMemoryUtility(
+        memoryId: string,
+        utility: Partial<MemoryUtilitySubdocument>
+    ): Promise<void> {
+        this.validator.assertIsNonEmptyString(memoryId, 'Memory ID must be a non-empty string');
+
+        const update: Record<string, unknown> = { updatedAt: new Date() };
+
+        if (utility.qValue !== undefined) {
+            if (!Number.isFinite(utility.qValue)) {
+                throw new Error(
+                    `[MemoryPersistenceService] Refusing to persist a non-finite Q-value for memory ${memoryId}`
+                );
+            }
+            update.qValue = utility.qValue;
+        }
+        if (utility.retrievalCount !== undefined) update.retrievalCount = utility.retrievalCount;
+        if (utility.successCount !== undefined) update.successCount = utility.successCount;
+        if (utility.failureCount !== undefined) update.failureCount = utility.failureCount;
+        if (utility.lastRewardAt !== undefined) update.lastRewardAt = utility.lastRewardAt;
+        if (utility.initializedFrom !== undefined) update.initializedFrom = utility.initializedFrom;
+
+        const operation: Record<string, unknown> = { $set: update };
+
+        // Keep the convergence history bounded so a long-lived memory cannot grow the
+        // document without limit.
+        if (utility.qValueHistory && utility.qValueHistory.length > 0) {
+            operation.$push = {
+                qValueHistory: {
+                    $each: utility.qValueHistory,
+                    $slice: -MemoryPersistenceService.Q_VALUE_HISTORY_LIMIT
+                }
+            };
+        }
+
+        await MemoryUtility.updateOne({ memoryId }, operation, { upsert: true }).exec();
+    }
+
+    /**
+     * Load stored utility records for a batch of memories.
+     *
+     * Memories with no stored utility are absent from the map; the caller keeps the
+     * configured default Q-value for those.
+     */
+    public async getAgentMemoryUtilities(
+        memoryIds: string[]
+    ): Promise<Map<string, MemoryUtilitySubdocument>> {
+        const result = new Map<string, MemoryUtilitySubdocument>();
+        if (memoryIds.length === 0) {
+            return result;
+        }
+
+        const docs = await MemoryUtility.find({ memoryId: { $in: memoryIds } }).lean().exec();
+
+        for (const doc of docs) {
+            result.set(doc.memoryId, {
+                qValue: doc.qValue,
+                qValueHistory: doc.qValueHistory ?? [],
+                retrievalCount: doc.retrievalCount ?? 0,
+                successCount: doc.successCount ?? 0,
+                failureCount: doc.failureCount ?? 0,
+                lastRewardAt: doc.lastRewardAt ?? new Date(0),
+                initializedFrom: doc.initializedFrom
+            } as MemoryUtilitySubdocument);
+        }
+
+        return result;
+    }
+
     /**
      * Get singleton instance
      * @returns The memory persistence service instance

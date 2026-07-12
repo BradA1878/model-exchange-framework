@@ -505,7 +505,7 @@ async function demo() {
 
         // Generate keys
         console.log('Generating agent keys...');
-        const keys = await sdk.generateKey(config.channelId, undefined, 'MULS Agent Key');
+        const keys = await sdk.generateKey(config.channelId, 'MULSAgent', 'MULS Agent Key');
         cleanupState.credentials = { keyId: keys.keyId, secretKey: keys.secretKey };
         console.log('Keys generated\n');
 

@@ -51,15 +51,42 @@ export class SharedStateService {
     private static instance: SharedStateService;
     private stateStore = new Map<string, SharedStateEntry>();
     private channelStates = new Map<string, Set<string>>(); // channelId -> Set of stateIds
-    
+
+    /** How long an untouched state entry is kept before cleanup (24 hours). */
+    private static readonly STATE_TTL_MS = 24 * 60 * 60 * 1000;
+
+    /** How often the cleanup sweep runs (1 hour). */
+    private static readonly CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
+
+    private cleanupInterval: NodeJS.Timeout | null = null;
+
     private constructor() {
+        // This is a process-lifetime singleton holding an unbounded Map, so the
+        // sweep has to be driven by something. cleanupOldStates() existed but had
+        // no callers anywhere, so stateStore/channelStates simply grew forever.
+        this.cleanupInterval = setInterval(() => {
+            this.cleanupOldStates();
+        }, SharedStateService.CLEANUP_INTERVAL_MS);
+
+        // Do not hold the event loop open on account of a garbage-collection timer.
+        this.cleanupInterval.unref?.();
     }
-    
+
     public static getInstance(): SharedStateService {
         if (!SharedStateService.instance) {
             SharedStateService.instance = new SharedStateService();
         }
         return SharedStateService.instance;
+    }
+
+    /**
+     * Stop the cleanup timer. For tests and shutdown.
+     */
+    public stopCleanup(): void {
+        if (this.cleanupInterval) {
+            clearInterval(this.cleanupInterval);
+            this.cleanupInterval = null;
+        }
     }
     
     /**
@@ -178,27 +205,46 @@ export class SharedStateService {
     }
     
     /**
-     * Clean up old states to prevent memory leaks
+     * Drop states that have not been touched within the TTL.
+     *
+     * Runs on a timer from the constructor; also callable directly.
+     *
+     * @param maxAgeMs Age past which a state is dropped (default: 24 hours)
+     * @returns The number of states removed
      */
-    public cleanupOldStates(maxAgeMs: number = 24 * 60 * 60 * 1000): void { // Default 24 hours
+    public cleanupOldStates(maxAgeMs: number = SharedStateService.STATE_TTL_MS): number {
         const now = Date.now();
         const toDelete: string[] = [];
-        
+
         for (const [stateId, state] of this.stateStore.entries()) {
             const age = now - (state.lastUpdatedAt || state.createdAt);
             if (age > maxAgeMs) {
                 toDelete.push(stateId);
             }
         }
-        
+
         for (const stateId of toDelete) {
             const state = this.stateStore.get(stateId);
             if (state) {
                 this.stateStore.delete(stateId);
-                this.channelStates.get(state.channelId)?.delete(stateId);
+
+                const channelStateIds = this.channelStates.get(state.channelId);
+                if (channelStateIds) {
+                    channelStateIds.delete(stateId);
+                    // Drop the channel entry too, or channelStates grows forever
+                    // with empty Sets for channels that are long gone.
+                    if (channelStateIds.size === 0) {
+                        this.channelStates.delete(state.channelId);
+                    }
+                }
             }
         }
-        
+
+        if (toDelete.length > 0) {
+            logger.debug(`Removed ${toDelete.length} shared state entries older than ${maxAgeMs}ms`);
+        }
+
+        return toDelete.length;
     }
     
     /**

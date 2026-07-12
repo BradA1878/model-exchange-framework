@@ -53,19 +53,10 @@ export const COORDINATION_TOOLS = {
     LIST: 'coordination_list'
 } as const;
 
-/**
- * Control Loop Tools - ORPAR cognitive cycle management
- */
-export const CONTROL_LOOP_TOOLS = {
-    START: 'controlLoop_start',
-    STOP: 'controlLoop_stop',
-    STATUS: 'controlLoop_status',
-    OBSERVE: 'controlLoop_observe',
-    REASON: 'controlLoop_reason',
-    PLAN: 'controlLoop_plan',
-    EXECUTE: 'controlLoop_execute',
-    REFLECT: 'controlLoop_reflect'
-} as const;
+// The controlLoop_* tool family was removed. It was a second, parallel implementation of
+// the ORPAR cognitive cycle with its own state machine and result shape, and agents could
+// see both families at once. orpar_* is the maintained one; controlLoop_status also
+// returned fabricated metrics. See protocols/mcp/tools/OrparTools.ts.
 
 /**
  * Infrastructure Tools - System interaction and data management
@@ -325,7 +316,6 @@ export const ALL_INTERNAL_TOOLS = {
     ...WOLFRAM_TOOLS,
     ...COMMUNICATION_TOOLS,
     ...COORDINATION_TOOLS,
-    ...CONTROL_LOOP_TOOLS,
     ...INFRASTRUCTURE_TOOLS,
     ...CONTEXT_MEMORY_TOOLS,
     ...META_TOOLS,
@@ -409,7 +399,6 @@ export const TOOL_CATEGORIES = {
  */
 export type CommunicationToolName = typeof COMMUNICATION_TOOLS[keyof typeof COMMUNICATION_TOOLS];
 export type CoordinationToolName = typeof COORDINATION_TOOLS[keyof typeof COORDINATION_TOOLS];
-export type ControlLoopToolName = typeof CONTROL_LOOP_TOOLS[keyof typeof CONTROL_LOOP_TOOLS];
 export type InfrastructureToolName = typeof INFRASTRUCTURE_TOOLS[keyof typeof INFRASTRUCTURE_TOOLS];
 export type ContextMemoryToolName = typeof CONTEXT_MEMORY_TOOLS[keyof typeof CONTEXT_MEMORY_TOOLS];
 export type MetaToolName = typeof META_TOOLS[keyof typeof META_TOOLS];
@@ -460,9 +449,6 @@ export const getToolCategory = (toolName: string): ToolCategory | null => {
     }
     if (Object.values(COORDINATION_TOOLS).includes(toolName as CoordinationToolName)) {
         return TOOL_CATEGORIES.COORDINATION;
-    }
-    if (Object.values(CONTROL_LOOP_TOOLS).includes(toolName as ControlLoopToolName)) {
-        return TOOL_CATEGORIES.CONTROL_LOOP;
     }
     if (Object.values(INFRASTRUCTURE_TOOLS).includes(toolName as InfrastructureToolName)) {
         return TOOL_CATEGORIES.INFRASTRUCTURE;

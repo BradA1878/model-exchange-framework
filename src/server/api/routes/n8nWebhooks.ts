@@ -20,15 +20,24 @@
 
 /**
  * n8n Webhook Integration Routes
- * 
+ *
  * Webhook endpoints for n8n workflows to trigger MXF actions
  * - Task creation from external events
  * - Generic event notifications
  * - Direct agent messaging
- * 
- * These endpoints have minimal authentication to allow n8n workflows
- * to easily integrate with MXF. For production, consider adding
- * API key authentication or IP whitelisting.
+ *
+ * Every route here spends money: creating a task assigns it to an agent, which
+ * starts an ORPAR loop against a paid model. They are therefore:
+ *
+ * 1. Mounted only when MXF_WEBHOOK_ENABLED=true (see routes/index.ts). Off by
+ *    default, so there is no open surface unless someone asked for one.
+ * 2. Signed with HMAC-SHA256 over the raw body (see middleware/webhookAuth.ts).
+ *    The server refuses to boot if the routes are enabled without a secret.
+ * 3. Rate limited per source address before signature checking.
+ *
+ * n8n must send, on every request except /health:
+ *   X-MXF-Timestamp: <unix seconds>
+ *   X-MXF-Signature: sha256=<hex HMAC-SHA256 of `${timestamp}.${rawBody}` with MXF_WEBHOOK_SECRET>
  */
 
 import { Router, Request, Response } from 'express';
@@ -38,14 +47,43 @@ import { TaskService } from '../../socket/services/TaskService';
 import { EventBus } from '@mxf-dev/core/events/EventBus';
 import { Events } from '@mxf-dev/core/events/EventNames';
 import { createBaseEventPayload, createTaskEventPayload } from '@mxf-dev/core/schemas/EventPayloadSchema';
-import { 
-    CreateTaskRequest, 
-    TaskPriority 
+import { authenticateWebhook, requireWebhookSecret } from '../middleware/webhookAuth';
+import { createWebhookRateLimiter } from '../middleware/rateLimit';
+import {
+    CreateTaskRequest,
+    TaskPriority
 } from '@mxf-dev/core/types/TaskTypes';
 
 const router = Router();
 const logger = new Logger('debug', 'N8nWebhooks', 'server');
 const validator = createStrictValidator('N8nWebhooks');
+
+/**
+ * Actor recorded on every event these routes emit.
+ *
+ * The webhook holds a shared secret, not an agent identity, so it can never
+ * speak as an agent. Requests may still name an agent to *deliver* to; that
+ * goes in receiverId, never in the payload's agentId.
+ */
+const WEBHOOK_ACTOR_ID = 'n8n-webhook';
+
+/**
+ * Event types accepted by POST /event.
+ *
+ * The emitted name is `webhook:<eventType>`, which lands on EventBus.server, so
+ * the suffix is constrained rather than taken verbatim. Without this an unsigned
+ * — or merely careless — caller could shape a name that collides with an
+ * internal namespace.
+ */
+const EVENT_TYPE_PATTERN = /^[a-z0-9][a-z0-9_.-]{0,63}$/i;
+
+// Fail fast at boot: enabling these routes without a secret is a configuration
+// error, not something to discover on the first unsigned request.
+requireWebhookSecret();
+
+// Throttle by source address before any signature is computed, so an unsigned
+// flood cannot make the server do HMAC work at line rate.
+router.use(createWebhookRateLimiter());
 
 // Initialize TaskService
 const taskService = TaskService.getInstance();
@@ -70,16 +108,16 @@ const taskService = TaskService.getInstance();
  *   }
  * }
  */
-router.post('/task', async (req: Request, res: Response) => {
+router.post('/task', authenticateWebhook, async (req: Request, res: Response) => {
     try {
-        const { 
-            channelId, 
-            title, 
-            description, 
-            assignTo, 
+        const {
+            channelId,
+            title,
+            description,
+            assignTo,
             priority = 'medium',
             coordinationMode = 'collaborative',
-            metadata = {} 
+            metadata = {}
         } = req.body;
         
         // Validate required fields
@@ -216,13 +254,13 @@ router.post('/task', async (req: Request, res: Response) => {
  *   ]
  * }
  */
-router.post('/task/batch', async (req: Request, res: Response) => {
+router.post('/task/batch', authenticateWebhook, async (req: Request, res: Response) => {
     try {
-        const { 
-            channelId, 
-            title, 
-            description, 
-            assignTo, 
+        const {
+            channelId,
+            title,
+            description,
+            assignTo,
             priority = 'medium',
             coordinationMode = 'collaborative',
             items = []
@@ -368,19 +406,27 @@ router.post('/task/batch', async (req: Request, res: Response) => {
  *   }
  * }
  */
-router.post('/event', async (req: Request, res: Response) => {
+router.post('/event', authenticateWebhook, async (req: Request, res: Response) => {
     try {
         const { channelId, eventType, data = {} } = req.body;
-        
+
         // Validate required fields
         validator.assertIsNonEmptyString(channelId, 'channelId is required');
         validator.assertIsNonEmptyString(eventType, 'eventType is required');
-        
+
+        // Constrain the emitted name. The event lands on EventBus.server, so the
+        // suffix is checked against a fixed charset rather than concatenated as-is.
+        if (!EVENT_TYPE_PATTERN.test(eventType)) {
+            throw new Error(
+                'eventType must be 1-64 characters of letters, digits, underscore, dot, or hyphen'
+            );
+        }
+
         // Emit custom event
         const customEventName = `webhook:${eventType}`;
         const eventPayload = createBaseEventPayload(
             customEventName,
-            'n8n-webhook',
+            WEBHOOK_ACTOR_ID,
             channelId,
             {
                 ...data,
@@ -390,10 +436,10 @@ router.post('/event', async (req: Request, res: Response) => {
                 webhookUrl: req.originalUrl
             }
         );
-        
+
         EventBus.server.emit(customEventName, eventPayload);
-        
-        
+
+
         res.json({
             success: true,
             event: {
@@ -431,22 +477,30 @@ router.post('/event', async (req: Request, res: Response) => {
  *   }
  * }
  */
-router.post('/message', async (req: Request, res: Response) => {
+router.post('/message', authenticateWebhook, async (req: Request, res: Response) => {
     try {
         const { channelId, agentId, message, metadata = {} } = req.body;
-        
+
         // Validate required fields
         validator.assertIsNonEmptyString(channelId, 'channelId is required');
         validator.assertIsNonEmptyString(message, 'message is required');
-        
+
+        // `agentId` is a delivery target, not an identity. It selects who receives
+        // the message (receiverId); the actor stays WEBHOOK_ACTOR_ID. Passing it
+        // through as the payload's agentId — as this route used to — let a caller
+        // publish messages that appear to come from any agent.
+        const receiverId = typeof agentId === 'string' && agentId.trim().length > 0
+            ? agentId.trim()
+            : 'broadcast';
+
         // Emit message event
         const messageEventPayload = createBaseEventPayload(
             Events.Message.AGENT_MESSAGE,
-            agentId || 'n8n-webhook',
+            WEBHOOK_ACTOR_ID,
             channelId,
             {
-                senderId: 'n8n-webhook',
-                receiverId: agentId || 'broadcast',
+                senderId: WEBHOOK_ACTOR_ID,
+                receiverId,
                 content: message,
                 metadata: {
                     ...metadata,
@@ -456,7 +510,7 @@ router.post('/message', async (req: Request, res: Response) => {
                 }
             }
         );
-        
+
         EventBus.server.emit(Events.Message.AGENT_MESSAGE, messageEventPayload);
         
         
@@ -464,13 +518,13 @@ router.post('/message', async (req: Request, res: Response) => {
             success: true,
             data: {
                 channelId,
-                agentId: agentId || 'broadcast',
+                agentId: receiverId,
                 content: message,
                 sentAt: Date.now()
             },
             message: 'Message sent successfully'
         });
-        
+
     } catch (error) {
         logger.error(`❌ n8n webhook message failed: ${error}`);
         res.status(400).json({

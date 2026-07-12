@@ -154,6 +154,10 @@ import { MeilisearchEvents } from './event-definitions/MeilisearchEvents.js';
 import type { MeilisearchPayloads } from './event-definitions/MeilisearchEvents.js';
 export { MeilisearchEvents };
 export type { MeilisearchPayloads };
+import { LlmBudgetEvents } from './event-definitions/LlmBudgetEvents.js';
+import type { LlmBudgetPayloads } from './event-definitions/LlmBudgetEvents.js';
+export { LlmBudgetEvents };
+export type { LlmBudgetPayloads };
 
 import { CodeExecutionEvents } from './event-definitions/CodeExecutionEvents.js';
 import type { CodeExecutionPayloads } from './event-definitions/CodeExecutionEvents.js';
@@ -252,6 +256,7 @@ export namespace Events {
     export const Auth = AuthEvents;
     export const Mxp = MxpEvents;
     export const Meilisearch = MeilisearchEvents;
+    export const LlmBudget = LlmBudgetEvents;
     export const CodeExecution = CodeExecutionEvents;
     export const Shell = ShellExecutionEvents;
     export const Workflow = WorkflowEvents;
@@ -288,6 +293,7 @@ export type EventMap =
     BulkPayloads &
     MxpPayloads &
     MeilisearchPayloads &
+    LlmBudgetPayloads &
     CodeExecutionPayloads &
     ShellExecutionPayloads &
     WorkflowPayloads &

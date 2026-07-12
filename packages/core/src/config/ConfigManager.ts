@@ -25,6 +25,7 @@
  * Enables dynamic configuration of agent behaviors and capabilities.
  */
 
+import { readFile } from 'node:fs/promises';
 import { Observable, from } from 'rxjs';
 import { map } from 'rxjs/operators';
 import { Logger } from '../utils/Logger.js';
@@ -750,24 +751,55 @@ export class ConfigManager implements IConfigManager {
     }
     
     /**
-     * Load configuration from a file
-     * @param filePath - Path to configuration file
+     * Load configuration from a JSON file and merge it over the defaults.
+     *
+     * Errors are surfaced through the Observable: a missing file, unreadable
+     * file, or malformed JSON is a configuration error the caller must see.
+     * (This method previously logged "not fully implemented" and handed back the
+     * current config, so callers believed they had loaded a file they had not.)
+     *
+     * @param filePath - Path to a JSON configuration file
+     * @returns Observable of the merged configuration
      */
     public loadConfigFromFile(filePath: string): Observable<SdkConfig> {
-        // In a browser environment, we would use fetch
-        // In Node.js, we would use fs.readFile
-        
-        // This is a simplified implementation that assumes we're in a Node.js environment
-        try {
-            // Note: In a real implementation, this would be asynchronous
-            // For now, we'll just return the current config
-            this.logger.warn(`loadConfigFromFile not fully implemented. File path: ${filePath}`);
-            
-            return from(Promise.resolve(this.config));
-        } catch (error) {
-            this.logger.error(`Failed to load configuration from file: ${error}`);
-            return from(Promise.resolve(this.config));
+        if (typeof filePath !== 'string' || filePath.trim() === '') {
+            throw new Error('loadConfigFromFile requires a non-empty file path');
         }
+
+        const load = async (): Promise<SdkConfig> => {
+            let fileContents: string;
+            try {
+                fileContents = await readFile(filePath, 'utf8');
+            } catch (error) {
+                const message = error instanceof Error ? error.message : String(error);
+                this.logger.error(`Failed to read configuration file '${filePath}': ${message}`);
+                throw new Error(`Failed to read configuration file '${filePath}': ${message}`);
+            }
+
+            let parsed: unknown;
+            try {
+                parsed = JSON.parse(fileContents);
+            } catch (error) {
+                const message = error instanceof Error ? error.message : String(error);
+                this.logger.error(`Configuration file '${filePath}' is not valid JSON: ${message}`);
+                throw new Error(`Configuration file '${filePath}' is not valid JSON: ${message}`);
+            }
+
+            if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+                throw new Error(`Configuration file '${filePath}' must contain a JSON object`);
+            }
+
+            // Merge, validate and emit CONFIG_UPDATED through the normal path.
+            this.config = this.mergeConfigs(DEFAULT_CONFIG, parsed as Partial<SdkConfig>);
+            this.validateConfig();
+            this.emitConfigUpdated(['all']);
+
+            this.logger.info(`Loaded configuration from '${filePath}'`);
+
+            return this.config;
+        };
+
+        return from(load());
     }
     
     /**
@@ -1397,10 +1429,11 @@ export class ConfigManager implements IConfigManager {
             data,
             { source: 'ConfigManager' }
         );
-        // Emit to client bus - will propagate to server via shared eventSubject
+        // Emit once. Both buses push into the SAME RxJS Subject (see EventBus.ts),
+        // so emitting on both delivered every local subscriber two copies of the
+        // event. The client bus is the right one here: ConfigManager runs in the
+        // SDK, and the shared Subject already carries the event to server-side
+        // subscribers.
         EventBus.client.emit(ConfigEvents.CHANNEL_SYSTEM_LLM_CHANGED, payload);
-
-        // Also emit to server bus to ensure propagation
-        EventBus.server.emit(ConfigEvents.CHANNEL_SYSTEM_LLM_CHANGED, payload);
     }
 }

@@ -19,7 +19,10 @@
  */
 
 import { Logger } from '../../../utils/Logger.js';
-import { executeShellCommand } from './InfrastructureTools.js';
+import { TOOL_CATEGORIES } from '../../../constants/ToolNames.js';
+import { defineTool, ToolRunContext } from '../defineTool.js';
+import { ToolError } from '../ToolError.js';
+import { executeShellCommand, ShellCommandResult } from './InfrastructureTools.js';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 
@@ -340,19 +343,61 @@ function calculateReviewScore(issues: any[], strictness: string): number {
 
 /**
  * Safety Tools for MXF
- * 
- * Provides safety mechanisms for self-modification including rollback,
- * backup, and validation tools to ensure safe autonomous code changes.
+ *
+ * Branch, backup, rollback, test and benchmark tools used to keep autonomous
+ * code changes recoverable.
+ *
+ * Every git invocation here goes through executeShellCommand, so it is validated
+ * by the security guard first. That matters most for rollback_changes, which
+ * runs `git reset --hard` and `git checkout` — the guard is what stands between
+ * a model's rollback request and an unrecoverable working tree.
  */
 
-export const createFeatureBranchTool = {
+/** Run a git subcommand, throwing a ToolError when git reports failure. */
+async function runGit(
+    args: string[],
+    workingDirectory: string,
+    context: ToolRunContext
+): Promise<ShellCommandResult> {
+    const result = await executeShellCommand('git', args, {
+        context: {
+            agentId: context.agentId,
+            channelId: context.channelId,
+            requestId: context.requestId
+        },
+        workingDirectory,
+        captureOutput: true
+    });
+
+    if (result.exitCode !== 0) {
+        throw ToolError.executionFailed(
+            `git ${args.join(' ')} failed (exit ${result.exitCode}): ` +
+            `${result.stderr?.trim() || 'no error output'}`,
+            { details: { exitCode: result.exitCode, args } }
+        );
+    }
+
+    return result;
+}
+
+const workingDirectoryProperty = {
+    type: 'string',
+    description: 'Working directory (defaults to the server working directory)'
+};
+
+export const createFeatureBranchTool = defineTool<
+    { branchName: string; baseBranch?: string; workingDirectory?: string },
+    { branchName: string; baseBranch: string; headCommit: string; pulled: boolean }
+>({
     name: 'create_feature_branch',
-    description: 'Create a new feature branch to isolate experimental changes',
+    category: TOOL_CATEGORIES.VERSION_CONTROL,
+    description: 'Create and switch to a new branch off a base branch, to isolate changes.',
     inputSchema: {
         type: 'object',
         properties: {
             branchName: {
                 type: 'string',
+                minLength: 1,
                 description: 'Name for the new feature branch'
             },
             baseBranch: {
@@ -360,294 +405,284 @@ export const createFeatureBranchTool = {
                 default: 'main',
                 description: 'Base branch to create the feature branch from'
             },
-            workingDirectory: {
-                type: 'string',
-                description: 'Working directory (defaults to current directory)'
-            }
+            workingDirectory: workingDirectoryProperty
         },
         required: ['branchName']
     },
-    handler: async (args: any, context: any) => {
-        
-        try {
-            const workingDir = args.workingDirectory || process.cwd();
-            
-            // Ensure we're on the base branch and it's up to date
-            const checkoutResult = await executeShellCommand('git', ['checkout', args.baseBranch || 'main'], {
-                workingDirectory: workingDir,
-                captureOutput: true
-            });
-            
-            if (checkoutResult.exitCode !== 0) {
-                return {
-                    success: false,
-                    branchName: args.branchName,
-                    error: `Failed to checkout base branch: ${checkoutResult.stderr}`
-                };
-            }
-            
-            // Pull latest changes
-            const pullResult = await executeShellCommand('git', ['pull', 'origin', args.baseBranch || 'main'], {
-                workingDirectory: workingDir,
-                captureOutput: true
-            });
-            
-            if (pullResult.exitCode !== 0) {
-                logger.warn('Failed to pull latest changes', { error: pullResult.stderr });
-            }
-            
-            // Create and checkout new branch
-            const branchResult = await executeShellCommand('git', ['checkout', '-b', args.branchName], {
-                workingDirectory: workingDir,
-                captureOutput: true
-            });
-            
-            if (branchResult.exitCode !== 0) {
-                return {
-                    success: false,
-                    branchName: args.branchName,
-                    error: `Failed to create branch: ${branchResult.stderr}`
-                };
-            }
-            
-            // Get current commit hash for reference
-            const hashResult = await executeShellCommand('git', ['rev-parse', 'HEAD'], {
-                workingDirectory: workingDir,
-                captureOutput: true
-            });
-            
-            const currentHash = hashResult.stdout?.trim() || 'unknown';
-            
-            return {
-                success: true,
-                branchName: args.branchName,
-                baseBranch: args.baseBranch || 'main',
-                currentHash,
-                error: null
-            };
-        } catch (error) {
-            logger.error('Create feature branch failed', { error });
-            return {
-                success: false,
-                branchName: args.branchName,
-                error: error instanceof Error ? error.message : String(error)
-            };
-        }
-    }
-};
+    run: async (input, context) => {
+        const workingDir = input.workingDirectory || process.cwd();
+        const baseBranch = input.baseBranch ?? 'main';
 
-export const runFullTestSuiteTool = {
+        await runGit(['checkout', baseBranch], workingDir, context);
+
+        // A pull can fail for reasons that do not invalidate the branch (no
+        // remote, offline). Record whether it worked rather than failing the tool
+        // or pretending it succeeded.
+        let pulled = true;
+        try {
+            await runGit(['pull', 'origin', baseBranch], workingDir, context);
+        } catch (error) {
+            pulled = false;
+            logger.warn(
+                `Could not pull ${baseBranch} before branching: ` +
+                `${error instanceof Error ? error.message : String(error)}`
+            );
+        }
+
+        await runGit(['checkout', '-b', input.branchName], workingDir, context);
+
+        const hashResult = await runGit(['rev-parse', 'HEAD'], workingDir, context);
+
+        return {
+            branchName: input.branchName,
+            baseBranch,
+            headCommit: hashResult.stdout?.trim() ?? '',
+            pulled
+        };
+    }
+});
+
+export const runFullTestSuiteTool = defineTool<
+    { testCommand?: string; coverage?: boolean; bail?: boolean; workingDirectory?: string },
+    {
+        passed: boolean;
+        command: string;
+        durationMs: number;
+        testResults: ReturnType<typeof parseTestResults>;
+        coverage: ReturnType<typeof parseCoverageResults> | null;
+        output: string;
+    }
+>({
     name: 'run_full_test_suite',
-    description: 'Run the complete test suite to validate changes',
+    category: TOOL_CATEGORIES.INFRASTRUCTURE,
+    description:
+        'Run the project test suite. passed is false when tests fail. ' +
+        'Uses the project test script unless a command is given.',
     inputSchema: {
         type: 'object',
         properties: {
             testCommand: {
                 type: 'string',
-                description: 'Custom test command (defaults to npm test)'
+                description: 'Test command to run (defaults to the project test script)'
             },
             coverage: {
                 type: 'boolean',
                 default: true,
-                description: 'Generate test coverage report'
+                description: 'Generate a coverage report (jest only)'
             },
             bail: {
                 type: 'boolean',
                 default: false,
-                description: 'Stop on first test failure'
+                description: 'Stop at the first failure (jest only)'
             },
-            workingDirectory: {
-                type: 'string',
-                description: 'Working directory (defaults to current directory)'
-            }
+            workingDirectory: workingDirectoryProperty
         }
     },
-    handler: async (args: any, context: any) => {
-        
-        try {
-            const workingDir = args.workingDirectory || process.cwd();
-            
-            // Determine test command
-            let testCmd: string[];
-            if (args.testCommand) {
-                testCmd = args.testCommand.split(' ');
-            } else {
-                // Try to detect test framework
-                const packageJsonPath = path.join(workingDir, 'package.json');
-                try {
-                    const packageJson = await fs.readFile(packageJsonPath, 'utf-8');
-                    const pkg = JSON.parse(packageJson);
-                    
-                    if (pkg.scripts?.test) {
-                        testCmd = ['npm', 'test'];
-                    } else if (pkg.devDependencies?.jest || pkg.dependencies?.jest) {
-                        testCmd = ['npx', 'jest'];
-                    } else if (pkg.devDependencies?.mocha || pkg.dependencies?.mocha) {
-                        testCmd = ['npx', 'mocha'];
-                    } else {
-                        testCmd = ['npm', 'test'];
-                    }
-                } catch {
-                    testCmd = ['npm', 'test'];
-                }
-            }
-            
-            // Add coverage if requested
-            if (args.coverage && testCmd.includes('jest')) {
-                testCmd.push('--coverage');
-            }
-            
-            // Add bail if requested
-            if (args.bail && testCmd.includes('jest')) {
-                testCmd.push('--bail');
-            }
-            
-            const startTime = Date.now();
-            
-            const result = await executeShellCommand(testCmd[0], testCmd.slice(1), {
-                workingDirectory: workingDir,
-                captureOutput: true
-            });
-            
-            const duration = Date.now() - startTime;
-            
-            // Parse test results
-            const testResults = parseTestResults(result.stdout || '');
-            
-            return {
-                success: result.exitCode === 0,
-                output: result.stdout || '',
-                errors: result.stderr || '',
-                duration,
-                testResults,
-                coverage: args.coverage ? parseCoverageResults(result.stdout || '') : null,
-                error: result.exitCode !== 0 ? result.stderr : null
-            };
-        } catch (error) {
-            logger.error('Run full test suite failed', { error });
-            return {
-                success: false,
-                output: '',
-                errors: '',
-                duration: 0,
-                testResults: null,
-                coverage: null,
-                error: error instanceof Error ? error.message : String(error)
-            };
-        }
-    }
-};
+    run: async (input, context) => {
+        const workingDir = input.workingDirectory || process.cwd();
 
-export const performanceBenchmarkTool = {
+        // Work out what to run. An explicit command wins; otherwise read
+        // package.json. A project with no test script and no known runner is a
+        // precondition failure — running `npm test` anyway would fail confusingly.
+        let testCmd: string[];
+
+        if (input.testCommand) {
+            testCmd = input.testCommand.split(/\s+/).filter(Boolean);
+        } else {
+            const packageJsonPath = path.join(workingDir, 'package.json');
+            let pkg: { scripts?: Record<string, string>; dependencies?: Record<string, string>; devDependencies?: Record<string, string> };
+
+            try {
+                pkg = JSON.parse(await fs.readFile(packageJsonPath, 'utf-8'));
+            } catch {
+                throw ToolError.notFound(
+                    `Could not read ${packageJsonPath}. ` +
+                    `Pass testCommand explicitly, or run this from the project root.`
+                );
+            }
+
+            const deps = { ...pkg.dependencies, ...pkg.devDependencies };
+
+            if (pkg.scripts?.test) {
+                testCmd = ['npm', 'test'];
+            } else if (deps.jest) {
+                testCmd = ['npx', 'jest'];
+            } else if (deps.mocha) {
+                testCmd = ['npx', 'mocha'];
+            } else if (deps.vitest) {
+                testCmd = ['npx', 'vitest', 'run'];
+            } else {
+                throw ToolError.notFound(
+                    `${packageJsonPath} has no "test" script and no jest, mocha or vitest dependency. ` +
+                    `Pass testCommand explicitly.`
+                );
+            }
+        }
+
+        const isJest = testCmd.includes('jest');
+        if (input.coverage !== false && isJest) {
+            testCmd.push('--coverage');
+        }
+        if (input.bail && isJest) {
+            testCmd.push('--bail');
+        }
+
+        const startedAt = Date.now();
+
+        const result = await executeShellCommand(testCmd[0], testCmd.slice(1), {
+            context: {
+                agentId: context.agentId,
+                channelId: context.channelId,
+                requestId: context.requestId
+            },
+            workingDirectory: workingDir,
+            captureOutput: true
+        });
+
+        // A failing suite exits non-zero. That is the tool working, so it comes
+        // back as passed: false rather than as a tool error.
+        const output = [result.stdout, result.stderr].filter(Boolean).join('\n');
+
+        return {
+            passed: result.exitCode === 0,
+            command: testCmd.join(' '),
+            durationMs: Date.now() - startedAt,
+            testResults: parseTestResults(output),
+            coverage: input.coverage !== false ? parseCoverageResults(output) : null,
+            output
+        };
+    }
+});
+
+export const performanceBenchmarkTool = defineTool<
+    { benchmarkCommand?: string; baselineFile?: string; thresholdPercent?: number; workingDirectory?: string },
+    {
+        passed: boolean;
+        command: string;
+        durationMs: number;
+        benchmarkResults: ReturnType<typeof parseBenchmarkResults>;
+        baselineComparison: ReturnType<typeof compareWithBaseline> | null;
+        output: string;
+    }
+>({
     name: 'performance_benchmark',
-    description: 'Run performance benchmarks to ensure changes don\'t degrade performance',
+    category: TOOL_CATEGORIES.INFRASTRUCTURE,
+    description:
+        'Run the project benchmark script and, when a baseline file is given, compare ' +
+        'against it and flag regressions past the threshold.',
     inputSchema: {
         type: 'object',
         properties: {
             benchmarkCommand: {
                 type: 'string',
-                description: 'Custom benchmark command (defaults to npm run benchmark)'
+                description: 'Benchmark command (defaults to the project benchmark script)'
             },
             baselineFile: {
                 type: 'string',
-                description: 'Path to baseline performance file'
+                description: 'Path to a JSON baseline file to compare against'
             },
             thresholdPercent: {
                 type: 'number',
                 default: 10,
-                description: 'Performance degradation threshold percentage'
+                minimum: 0,
+                description: 'Regression threshold, as a percentage'
             },
-            workingDirectory: {
-                type: 'string',
-                description: 'Working directory (defaults to current directory)'
-            }
+            workingDirectory: workingDirectoryProperty
         }
     },
-    handler: async (args: any, context: any) => {
-        
-        try {
-            const workingDir = args.workingDirectory || process.cwd();
-            
-            // Determine benchmark command
-            let benchmarkCmd: string[];
-            if (args.benchmarkCommand) {
-                benchmarkCmd = args.benchmarkCommand.split(' ');
-            } else {
-                // Check for common benchmark scripts
-                const packageJsonPath = path.join(workingDir, 'package.json');
-                try {
-                    const packageJson = await fs.readFile(packageJsonPath, 'utf-8');
-                    const pkg = JSON.parse(packageJson);
-                    
-                    if (pkg.scripts?.benchmark) {
-                        benchmarkCmd = ['npm', 'run', 'benchmark'];
-                    } else if (pkg.scripts?.perf) {
-                        benchmarkCmd = ['npm', 'run', 'perf'];
-                    } else {
-                        return {
-                            success: false,
-                            benchmarkResults: null,
-                            baselineComparison: null,
-                            error: 'No benchmark script found in package.json'
-                        };
-                    }
-                } catch {
-                    return {
-                        success: false,
-                        benchmarkResults: null,
-                        baselineComparison: null,
-                        error: 'Could not read package.json'
-                    };
-                }
-            }
-            
-            const startTime = Date.now();
-            
-            const result = await executeShellCommand(benchmarkCmd[0], benchmarkCmd.slice(1), {
-                workingDirectory: workingDir,
-                captureOutput: true
-            });
-            
-            const duration = Date.now() - startTime;
-            
-            // Parse benchmark results
-            const benchmarkResults = parseBenchmarkResults(result.stdout || '');
-            
-            // Compare with baseline if provided
-            let baselineComparison = null;
-            if (args.baselineFile) {
-                try {
-                    const baselineContent = await fs.readFile(args.baselineFile, 'utf-8');
-                    const baseline = JSON.parse(baselineContent);
-                    baselineComparison = compareWithBaseline(benchmarkResults, baseline, args.thresholdPercent);
-                } catch (error) {
-                    logger.warn('Could not read baseline file', { error });
-                }
-            }
-            
-            return {
-                success: result.exitCode === 0,
-                output: result.stdout || '',
-                benchmarkResults,
-                baselineComparison,
-                duration,
-                error: result.exitCode !== 0 ? result.stderr : null
-            };
-        } catch (error) {
-            logger.error('Performance benchmark failed', { error });
-            return {
-                success: false,
-                benchmarkResults: null,
-                baselineComparison: null,
-                error: error instanceof Error ? error.message : String(error)
-            };
-        }
-    }
-};
+    run: async (input, context) => {
+        const workingDir = input.workingDirectory || process.cwd();
 
-export const rollbackChangesTool = {
+        let benchmarkCmd: string[];
+
+        if (input.benchmarkCommand) {
+            benchmarkCmd = input.benchmarkCommand.split(/\s+/).filter(Boolean);
+        } else {
+            const packageJsonPath = path.join(workingDir, 'package.json');
+            let pkg: { scripts?: Record<string, string> };
+
+            try {
+                pkg = JSON.parse(await fs.readFile(packageJsonPath, 'utf-8'));
+            } catch {
+                throw ToolError.notFound(
+                    `Could not read ${packageJsonPath}. Pass benchmarkCommand explicitly.`
+                );
+            }
+
+            if (pkg.scripts?.benchmark) {
+                benchmarkCmd = ['npm', 'run', 'benchmark'];
+            } else if (pkg.scripts?.perf) {
+                benchmarkCmd = ['npm', 'run', 'perf'];
+            } else {
+                throw ToolError.notFound(
+                    `${packageJsonPath} has no "benchmark" or "perf" script. ` +
+                    `Pass benchmarkCommand explicitly.`
+                );
+            }
+        }
+
+        const startedAt = Date.now();
+
+        const result = await executeShellCommand(benchmarkCmd[0], benchmarkCmd.slice(1), {
+            context: {
+                agentId: context.agentId,
+                channelId: context.channelId,
+                requestId: context.requestId
+            },
+            workingDirectory: workingDir,
+            captureOutput: true
+        });
+
+        const output = [result.stdout, result.stderr].filter(Boolean).join('\n');
+        const benchmarkResults = parseBenchmarkResults(output);
+
+        // A baseline the caller named but that cannot be read is an error: a
+        // silent null here would read as "no regression".
+        let baselineComparison = null;
+        if (input.baselineFile) {
+            let baseline: unknown;
+            try {
+                baseline = JSON.parse(await fs.readFile(input.baselineFile, 'utf-8'));
+            } catch (error) {
+                throw ToolError.notFound(
+                    `Could not read the baseline file ${input.baselineFile}: ` +
+                    `${error instanceof Error ? error.message : String(error)}`
+                );
+            }
+            baselineComparison = compareWithBaseline(
+                benchmarkResults,
+                baseline,
+                input.thresholdPercent ?? 10
+            );
+        }
+
+        return {
+            passed: result.exitCode === 0,
+            command: benchmarkCmd.join(' '),
+            durationMs: Date.now() - startedAt,
+            benchmarkResults,
+            baselineComparison,
+            output
+        };
+    }
+});
+
+export const rollbackChangesTool = defineTool<
+    {
+        rollbackType?: 'commit' | 'branch' | 'stash';
+        targetCommit?: string;
+        targetBranch?: string;
+        preserveChanges?: boolean;
+        workingDirectory?: string;
+    },
+    { rollbackType: string; currentBranch: string; hasUncommittedChanges: boolean; preservedChanges: boolean }
+>({
     name: 'rollback_changes',
-    description: 'Rollback changes to a previous safe state',
+    category: TOOL_CATEGORIES.VERSION_CONTROL,
+    description:
+        'Roll the repository back to a previous state: reset to a commit, switch to a ' +
+        'branch, or pop the latest stash. With preserveChanges the working tree is kept ' +
+        '(soft reset / stash); without it, a commit rollback discards uncommitted work.',
     inputSchema: {
         type: 'object',
         properties: {
@@ -655,138 +690,90 @@ export const rollbackChangesTool = {
                 type: 'string',
                 enum: ['commit', 'branch', 'stash'],
                 default: 'commit',
-                description: 'Type of rollback to perform'
+                description: 'What to roll back to'
             },
             targetCommit: {
                 type: 'string',
-                description: 'Commit hash to rollback to (for commit rollback)'
+                description: 'Commit to reset to (required when rollbackType is "commit")'
             },
             targetBranch: {
                 type: 'string',
-                description: 'Branch to rollback to (for branch rollback)'
+                description: 'Branch to switch to (required when rollbackType is "branch")'
             },
             preserveChanges: {
                 type: 'boolean',
                 default: false,
-                description: 'Preserve changes in working directory'
+                description: 'Keep uncommitted work (soft reset, or stash before switching)'
             },
-            workingDirectory: {
-                type: 'string',
-                description: 'Working directory (defaults to current directory)'
-            }
+            workingDirectory: workingDirectoryProperty
         }
     },
-    handler: async (args: any, context: any) => {
-        
-        try {
-            const workingDir = args.workingDirectory || process.cwd();
-            let result;
-            
-            switch (args.rollbackType) {
-                case 'commit':
-                    if (!args.targetCommit) {
-                        return {
-                            success: false,
-                            rollbackType: args.rollbackType,
-                            error: 'Target commit required for commit rollback'
-                        };
-                    }
-                    
-                    if (args.preserveChanges) {
-                        // Soft reset to preserve changes
-                        result = await executeShellCommand('git', ['reset', '--soft', args.targetCommit], {
-                            workingDirectory: workingDir,
-                            captureOutput: true
-                        });
-                    } else {
-                        // Hard reset to discard changes
-                        result = await executeShellCommand('git', ['reset', '--hard', args.targetCommit], {
-                            workingDirectory: workingDir,
-                            captureOutput: true
-                        });
-                    }
-                    break;
-                    
-                case 'branch':
-                    if (!args.targetBranch) {
-                        return {
-                            success: false,
-                            rollbackType: args.rollbackType,
-                            error: 'Target branch required for branch rollback'
-                        };
-                    }
-                    
-                    // Stash current changes if preserving
-                    if (args.preserveChanges) {
-                        await executeShellCommand('git', ['stash', 'push', '-m', 'Rollback preservation stash'], {
-                            workingDirectory: workingDir,
-                            captureOutput: true
-                        });
-                    }
-                    
-                    // Checkout target branch
-                    result = await executeShellCommand('git', ['checkout', args.targetBranch], {
-                        workingDirectory: workingDir,
-                        captureOutput: true
-                    });
-                    break;
-                    
-                case 'stash':
-                    // Pop the latest stash
-                    result = await executeShellCommand('git', ['stash', 'pop'], {
-                        workingDirectory: workingDir,
-                        captureOutput: true
-                    });
-                    break;
-                    
-                default:
-                    return {
-                        success: false,
-                        rollbackType: args.rollbackType,
-                        error: 'Invalid rollback type'
-                    };
-            }
-            
-            if (result.exitCode !== 0) {
-                return {
-                    success: false,
-                    rollbackType: args.rollbackType,
-                    error: result.stderr || 'Rollback failed'
-                };
-            }
-            
-            // Get current status after rollback
-            const statusResult = await executeShellCommand('git', ['status', '--porcelain'], {
-                workingDirectory: workingDir,
-                captureOutput: true
-            });
-            
-            const currentBranchResult = await executeShellCommand('git', ['branch', '--show-current'], {
-                workingDirectory: workingDir,
-                captureOutput: true
-            });
-            
-            return {
-                success: true,
-                rollbackType: args.rollbackType,
-                currentBranch: currentBranchResult.stdout?.trim() || 'unknown',
-                hasUncommittedChanges: (statusResult.stdout || '').trim().length > 0,
-                error: null
-            };
-        } catch (error) {
-            logger.error('Rollback changes failed', { error });
-            return {
-                success: false,
-                rollbackType: args.rollbackType,
-                error: error instanceof Error ? error.message : String(error)
-            };
-        }
-    }
-};
+    run: async (input, context) => {
+        const workingDir = input.workingDirectory || process.cwd();
+        const rollbackType = input.rollbackType ?? 'commit';
+        const preserveChanges = input.preserveChanges ?? false;
 
-export const createBackupTool = {
+        switch (rollbackType) {
+            case 'commit': {
+                if (!input.targetCommit) {
+                    throw ToolError.invalidInput(
+                        'targetCommit is required when rollbackType is "commit".'
+                    );
+                }
+                // --hard discards uncommitted work irrecoverably; --soft keeps it.
+                const mode = preserveChanges ? '--soft' : '--hard';
+                await runGit(['reset', mode, input.targetCommit], workingDir, context);
+                break;
+            }
+
+            case 'branch': {
+                if (!input.targetBranch) {
+                    throw ToolError.invalidInput(
+                        'targetBranch is required when rollbackType is "branch".'
+                    );
+                }
+                if (preserveChanges) {
+                    await runGit(
+                        ['stash', 'push', '-m', 'Rollback preservation stash'],
+                        workingDir,
+                        context
+                    );
+                }
+                await runGit(['checkout', input.targetBranch], workingDir, context);
+                break;
+            }
+
+            case 'stash':
+                await runGit(['stash', 'pop'], workingDir, context);
+                break;
+        }
+
+        const statusResult = await runGit(['status', '--porcelain'], workingDir, context);
+        const branchResult = await runGit(['branch', '--show-current'], workingDir, context);
+
+        return {
+            rollbackType,
+            currentBranch: branchResult.stdout?.trim() ?? '',
+            hasUncommittedChanges: (statusResult.stdout ?? '').trim().length > 0,
+            preservedChanges: preserveChanges
+        };
+    }
+});
+
+export const createBackupTool = defineTool<
+    {
+        backupType?: 'commit' | 'branch' | 'stash' | 'archive';
+        backupName?: string;
+        includeUntracked?: boolean;
+        workingDirectory?: string;
+    },
+    { backupType: string; backupName: string; backupId: string; timestamp: string }
+>({
     name: 'create_backup',
-    description: 'Create a backup of the current state before making changes',
+    category: TOOL_CATEGORIES.VERSION_CONTROL,
+    description:
+        'Snapshot the current state before making changes, as a commit, a branch, a stash, ' +
+        'or a tar.gz archive. Returns the identifier needed to restore it.',
     inputSchema: {
         type: 'object',
         properties: {
@@ -794,157 +781,114 @@ export const createBackupTool = {
                 type: 'string',
                 enum: ['commit', 'branch', 'stash', 'archive'],
                 default: 'commit',
-                description: 'Type of backup to create'
+                description: 'How to store the backup'
             },
             backupName: {
                 type: 'string',
-                description: 'Name for the backup'
+                description: 'Name for the backup (defaults to a timestamp)'
             },
             includeUntracked: {
                 type: 'boolean',
                 default: true,
-                description: 'Include untracked files in backup'
+                description: 'Include untracked files'
             },
-            workingDirectory: {
-                type: 'string',
-                description: 'Working directory (defaults to current directory)'
-            }
+            workingDirectory: workingDirectoryProperty
         }
     },
-    handler: async (args: any, context: any) => {
-        
-        try {
-            const workingDir = args.workingDirectory || process.cwd();
-            const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-            const backupName = args.backupName || `backup-${timestamp}`;
-            
-            let result;
-            let backupId;
-            
-            switch (args.backupType) {
-                case 'commit':
-                    // Add all changes
-                    if (args.includeUntracked) {
-                        await executeShellCommand('git', ['add', '-A'], {
-                            workingDirectory: workingDir,
-                            captureOutput: true
-                        });
-                    } else {
-                        await executeShellCommand('git', ['add', '-u'], {
-                            workingDirectory: workingDir,
-                            captureOutput: true
-                        });
-                    }
-                    
-                    // Create commit
-                    result = await executeShellCommand('git', ['commit', '-m', `Backup: ${backupName}`], {
-                        workingDirectory: workingDir,
-                        captureOutput: true
-                    });
-                    
-                    if (result.exitCode === 0) {
-                        const hashResult = await executeShellCommand('git', ['rev-parse', 'HEAD'], {
-                            workingDirectory: workingDir,
-                            captureOutput: true
-                        });
-                        backupId = hashResult.stdout?.trim();
-                    }
-                    break;
-                    
-                case 'branch':
-                    // Create backup branch
-                    result = await executeShellCommand('git', ['checkout', '-b', backupName], {
-                        workingDirectory: workingDir,
-                        captureOutput: true
-                    });
-                    
-                    if (result.exitCode === 0) {
-                        backupId = backupName;
-                        
-                        // Switch back to original branch
-                        const originalBranchResult = await executeShellCommand('git', ['checkout', '-'], {
-                            workingDirectory: workingDir,
-                            captureOutput: true
-                        });
-                        
-                        if (originalBranchResult.exitCode !== 0) {
-                            logger.warn('Could not switch back to original branch');
-                        }
-                    }
-                    break;
-                    
-                case 'stash':
-                    // Create stash
-                    const stashArgs = ['stash', 'push', '-m', backupName];
-                    if (args.includeUntracked) {
-                        stashArgs.push('--include-untracked');
-                    }
-                    
-                    result = await executeShellCommand('git', stashArgs, {
-                        workingDirectory: workingDir,
-                        captureOutput: true
-                    });
-                    
-                    if (result.exitCode === 0) {
-                        backupId = backupName;
-                    }
-                    break;
-                    
-                case 'archive':
-                    // Create archive file
-                    const archiveName = `${backupName}.tar.gz`;
-                    const archivePath = path.join(workingDir, archiveName);
-                    
-                    result = await executeShellCommand('git', ['archive', '--format=tar.gz', '--output', archivePath, 'HEAD'], {
-                        workingDirectory: workingDir,
-                        captureOutput: true
-                    });
-                    
-                    if (result.exitCode === 0) {
-                        backupId = archivePath;
-                    }
-                    break;
-                    
-                default:
-                    return {
-                        success: false,
-                        backupType: args.backupType,
-                        error: 'Invalid backup type'
-                    };
-            }
-            
-            if (result.exitCode !== 0) {
-                return {
-                    success: false,
-                    backupType: args.backupType,
-                    backupName,
-                    error: result.stderr || 'Backup creation failed'
-                };
-            }
-            
-            return {
-                success: true,
-                backupType: args.backupType,
-                backupName,
-                backupId,
-                timestamp,
-                error: null
-            };
-        } catch (error) {
-            logger.error('Create backup failed', { error });
-            return {
-                success: false,
-                backupType: args.backupType,
-                backupName: args.backupName,
-                error: error instanceof Error ? error.message : String(error)
-            };
-        }
-    }
-};
+    run: async (input, context) => {
+        const workingDir = input.workingDirectory || process.cwd();
+        const backupType = input.backupType ?? 'commit';
+        const includeUntracked = input.includeUntracked ?? true;
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+        const backupName = input.backupName || `backup-${timestamp}`;
 
-export const codeReviewAgentTool = {
+        let backupId: string;
+
+        switch (backupType) {
+            case 'commit': {
+                await runGit(['add', includeUntracked ? '-A' : '-u'], workingDir, context);
+                await runGit(['commit', '-m', `Backup: ${backupName}`], workingDir, context);
+
+                const hashResult = await runGit(['rev-parse', 'HEAD'], workingDir, context);
+                backupId = hashResult.stdout?.trim() ?? '';
+                break;
+            }
+
+            case 'branch': {
+                await runGit(['checkout', '-b', backupName], workingDir, context);
+                // Return to where we were — a backup that leaves the caller on the
+                // backup branch is a trap.
+                await runGit(['checkout', '-'], workingDir, context);
+                backupId = backupName;
+                break;
+            }
+
+            case 'stash': {
+                const stashArgs = ['stash', 'push', '-m', backupName];
+                if (includeUntracked) {
+                    stashArgs.push('--include-untracked');
+                }
+                await runGit(stashArgs, workingDir, context);
+                backupId = backupName;
+                break;
+            }
+
+            case 'archive': {
+                const archivePath = path.join(workingDir, `${backupName}.tar.gz`);
+                await runGit(
+                    ['archive', '--format=tar.gz', '--output', archivePath, 'HEAD'],
+                    workingDir,
+                    context
+                );
+                backupId = archivePath;
+                break;
+            }
+        }
+
+        return {
+            backupType,
+            backupName,
+            backupId,
+            timestamp
+        };
+    }
+});
+
+export const codeReviewAgentTool = defineTool<
+    {
+        reviewType?: 'diff' | 'files' | 'pull_request';
+        files?: string[];
+        focusAreas?: string[];
+        strictness?: 'low' | 'medium' | 'high';
+        workingDirectory?: string;
+    },
+    {
+        summary: {
+            filesReviewed: number;
+            totalIssues: number;
+            criticalIssues: number;
+            highIssues: number;
+            mediumIssues: number;
+            lowIssues: number;
+            overallScore: number;
+        };
+        issues: any[];
+        recommendations: any[];
+        score: number;
+    }
+>({
     name: 'code_review_agent',
-    description: 'AI-powered code review agent that analyzes changes for quality, security, and best practices',
+    category: TOOL_CATEGORIES.INFRASTRUCTURE,
+    // What this actually does: match a fixed set of regex patterns per focus area
+    // (eval(, innerHTML=, hardcoded secrets, TODO/FIXME, debugger, console.log,
+    // `any`, long functions...) and score the hits. No model is involved. The old
+    // description called it an "AI-powered code review agent", which set an
+    // expectation the implementation cannot meet.
+    description:
+        'Scan changed files for a fixed set of known-bad patterns (eval, innerHTML assignment, ' +
+        'hardcoded secrets, debugger statements, TODO comments, long functions) and return the ' +
+        'hits with a score. This is pattern matching, not a semantic review — it will not catch ' +
+        'logic errors, and it will flag patterns that are fine in context.',
     inputSchema: {
         type: 'object',
         properties: {
@@ -952,117 +896,95 @@ export const codeReviewAgentTool = {
                 type: 'string',
                 enum: ['diff', 'files', 'pull_request'],
                 default: 'diff',
-                description: 'Type of code review to perform'
+                description: 'Which files to scan: the working diff, an explicit list, or the diff against main'
             },
             files: {
                 type: 'array',
                 items: { type: 'string' },
-                description: 'Specific files to review (for files review type)'
+                description: 'Files to scan (required when reviewType is "files")'
             },
             focusAreas: {
                 type: 'array',
-                items: { type: 'string' },
+                items: {
+                    type: 'string',
+                    enum: ['quality', 'security', 'performance', 'maintainability']
+                },
                 default: ['quality', 'security', 'performance', 'maintainability'],
-                description: 'Areas to focus on during review'
+                description: 'Which pattern sets to apply'
             },
             strictness: {
                 type: 'string',
                 enum: ['low', 'medium', 'high'],
                 default: 'medium',
-                description: 'Review strictness level'
+                description: 'How heavily each finding counts against the score'
             },
-            workingDirectory: {
-                type: 'string',
-                description: 'Working directory (defaults to current directory)'
-            }
+            workingDirectory: workingDirectoryProperty
         }
     },
-    handler: async (args: any, context: any) => {
-        
-        try {
-            const workingDir = args.workingDirectory || process.cwd();
-            const reviewResults: {
-                summary: any;
-                issues: any[];
-                recommendations: any[];
-                score: number;
-            } = {
-                summary: {},
-                issues: [],
-                recommendations: [],
-                score: 0
-            };
-            
-            let filesToReview: string[] = [];
-            
-            // Get files to review based on type
-            switch (args.reviewType) {
-                case 'diff':
-                    const diffResult = await executeShellCommand('git', ['diff', '--name-only', 'HEAD'], {
-                        workingDirectory: workingDir,
-                        captureOutput: true
-                    });
-                    
-                    if (diffResult.exitCode === 0) {
-                        filesToReview = diffResult.stdout?.split('\n').filter(f => f.trim()) || [];
-                    }
-                    break;
-                    
-                case 'files':
-                    filesToReview = args.files || [];
-                    break;
-                    
-                case 'pull_request':
-                    // Compare with main branch
-                    const prDiffResult = await executeShellCommand('git', ['diff', '--name-only', 'main...HEAD'], {
-                        workingDirectory: workingDir,
-                        captureOutput: true
-                    });
-                    
-                    if (prDiffResult.exitCode === 0) {
-                        filesToReview = prDiffResult.stdout?.split('\n').filter(f => f.trim()) || [];
-                    }
-                    break;
-            }
-            
-            // Review each file
-            for (const file of filesToReview) {
-                const fileReview = await reviewFile(file, args.focusAreas, args.strictness, workingDir);
-                reviewResults.issues.push(...fileReview.issues);
-                reviewResults.recommendations.push(...fileReview.recommendations);
-            }
-            
-            // Calculate overall score
-            reviewResults.score = calculateReviewScore(reviewResults.issues, args.strictness);
-            
-            // Generate summary
-            reviewResults.summary = {
-                filesReviewed: filesToReview.length,
-                totalIssues: reviewResults.issues.length,
-                criticalIssues: reviewResults.issues.filter(i => i.severity === 'critical').length,
-                highIssues: reviewResults.issues.filter(i => i.severity === 'high').length,
-                mediumIssues: reviewResults.issues.filter(i => i.severity === 'medium').length,
-                lowIssues: reviewResults.issues.filter(i => i.severity === 'low').length,
-                overallScore: reviewResults.score
-            };
-            
-            return {
-                success: true,
-                reviewResults,
-                error: null
-            };
-        } catch (error) {
-            logger.error('Code review agent failed', { error });
-            return {
-                success: false,
-                reviewResults: null,
-                error: error instanceof Error ? error.message : String(error)
-            };
-        }
-    }
-};
+    run: async (input, context) => {
+        const workingDir = input.workingDirectory || process.cwd();
+        const reviewType = input.reviewType ?? 'diff';
+        const strictness = input.strictness ?? 'medium';
+        const focusAreas = input.focusAreas ?? ['quality', 'security', 'performance', 'maintainability'];
 
-// Export all safety tools
+        let filesToReview: string[];
+
+        switch (reviewType) {
+            case 'diff': {
+                const diffResult = await runGit(['diff', '--name-only', 'HEAD'], workingDir, context);
+                filesToReview = (diffResult.stdout ?? '').split('\n').filter(f => f.trim());
+                break;
+            }
+
+            case 'pull_request': {
+                const prDiffResult = await runGit(
+                    ['diff', '--name-only', 'main...HEAD'],
+                    workingDir,
+                    context
+                );
+                filesToReview = (prDiffResult.stdout ?? '').split('\n').filter(f => f.trim());
+                break;
+            }
+
+            case 'files':
+            default:
+                if (!input.files || input.files.length === 0) {
+                    throw ToolError.invalidInput(
+                        'files is required and must be non-empty when reviewType is "files".'
+                    );
+                }
+                filesToReview = input.files;
+                break;
+        }
+
+        const issues: any[] = [];
+        const recommendations: any[] = [];
+
+        for (const file of filesToReview) {
+            const fileReview = await reviewFile(file, focusAreas, strictness, workingDir);
+            issues.push(...fileReview.issues);
+            recommendations.push(...fileReview.recommendations);
+        }
+
+        const score = calculateReviewScore(issues, strictness);
+
+        return {
+            summary: {
+                filesReviewed: filesToReview.length,
+                totalIssues: issues.length,
+                criticalIssues: issues.filter(i => i.severity === 'critical').length,
+                highIssues: issues.filter(i => i.severity === 'high').length,
+                mediumIssues: issues.filter(i => i.severity === 'medium').length,
+                lowIssues: issues.filter(i => i.severity === 'low').length,
+                overallScore: score
+            },
+            issues,
+            recommendations,
+            score
+        };
+    }
+});
+
 export const safetyTools = [
     createFeatureBranchTool,
     runFullTestSuiteTool,

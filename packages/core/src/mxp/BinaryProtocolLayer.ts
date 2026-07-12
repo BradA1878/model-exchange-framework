@@ -60,15 +60,27 @@ export interface MxpMessage {
 
 export class BinaryProtocolLayer {
     private static instance: BinaryProtocolLayer | null = null;
-    
+
     private readonly logger: Logger;
     private readonly validator = createStrictValidator('BinaryProtocolLayer');
-    
+
     // Compression thresholds and settings
     private readonly compressionThresholds = {
         minSize: 1024,      // Only compress messages > 1KB
-        brotliThreshold: 10240,  // Use Brotli for messages > 10KB
-        gzipThreshold: 1024      // Use Gzip for smaller messages
+        brotliThreshold: 10240   // Use Brotli for messages > 10KB
+    };
+
+    /** Counters for getCompressionStats(). Updated on every encode. */
+    private readonly stats = {
+        totalCompressions: 0,
+        totalOriginalBytes: 0,
+        totalCompressedBytes: 0,
+        algorithmUsage: {
+            none: 0,
+            gzip: 0,
+            brotli: 0,
+            msgpack: 0
+        } as Record<CompressionAlgorithm, number>
     };
 
     private constructor() {
@@ -166,6 +178,12 @@ export class BinaryProtocolLayer {
                     throw new Error(`Unknown encoding format: ${format}`);
             }
 
+            // Record the measured result so getCompressionStats() reports reality
+            this.stats.totalCompressions++;
+            this.stats.totalOriginalBytes += originalSize;
+            this.stats.totalCompressedBytes += result.compressedSize;
+            this.stats.algorithmUsage[result.algorithm]++;
+
             // Emit compression event for analytics using proper payload creator
             const bandwidthEventPayload = createMxpBandwidthOptimizationEventPayload(
                 Events.Mxp.BANDWIDTH_OPTIMIZATION_COMPLETE,
@@ -183,82 +201,69 @@ export class BinaryProtocolLayer {
             );
             EventBus.server.emit(Events.Mxp.BANDWIDTH_OPTIMIZATION_COMPLETE, bandwidthEventPayload);
 
-            //     format: result.format,
-            //     algorithm: result.algorithm,
-            //     originalSize,
-            //     compressedSize: result.compressedSize,
-            //     compressionRatio: result.compressionRatio,
-            //     bandwidthSaved: originalSize - result.compressedSize
-            // });
-
             return result;
 
         } catch (error) {
+            const message_ = error instanceof Error ? error.message : String(error);
             this.logger.error('Message encoding failed', {
-                error: error instanceof Error ? error.message : String(error),
+                error: message_,
                 channelId,
                 messageType: message.type
             });
-            
-            // Fallback: return original JSON
-            const jsonData = JSON.stringify(message);
-            const originalBuffer = Buffer.from(jsonData, 'utf8');
-            return {
-                data: originalBuffer,
-                format: 'json',
-                algorithm: 'none',
-                originalSize: originalBuffer.length,
-                compressedSize: originalBuffer.length,
-                compressionRatio: 1.0
-            };
+
+            // No silent fallback to plain JSON: the caller asked for an encoded
+            // message and must find out that it did not get one.
+            throw new Error(`Binary protocol encoding failed for '${message.type}': ${message_}`);
         }
     }
 
     /**
-     * Decode compressed message back to original format
+     * Decode an encoded message back to its original form.
+     *
+     * @throws If the payload cannot be decoded. A corrupt message is an error,
+     *         not an empty result.
      */
-    public decodeMessage(compressedData: CompressionResult): MxpMessage | null {
+    public decodeMessage(compressedData: CompressionResult): MxpMessage {
         try {
-            let message: MxpMessage;
-
             switch (compressedData.format) {
-                case 'json':
-                    // Plain JSON
+                case 'json': {
                     const jsonString = compressedData.data.toString('utf8');
-                    message = JSON.parse(jsonString) as MxpMessage;
-                    break;
-                    
+                    return JSON.parse(jsonString) as MxpMessage;
+                }
+
                 case 'msgpack':
-                    // MessagePack format
-                    message = msgpack.decode(compressedData.data) as MxpMessage;
-                    break;
-                    
-                case 'msgpack-compressed':
-                    // MessagePack + Brotli compression
+                    return msgpack.decode(compressedData.data) as MxpMessage;
+
+                case 'msgpack-compressed': {
                     const decompressedMsgpack = zlib.brotliDecompressSync(compressedData.data);
-                    message = msgpack.decode(decompressedMsgpack) as MxpMessage;
-                    break;
-                    
+                    return msgpack.decode(decompressedMsgpack) as MxpMessage;
+                }
+
                 default:
                     throw new Error(`Unknown encoding format: ${compressedData.format}`);
             }
-
-            // ;
-
-            return message;
-
         } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
             this.logger.error('Message decoding failed', {
-                error: error instanceof Error ? error.message : String(error),
+                error: message,
                 format: compressedData.format,
                 algorithm: compressedData.algorithm
             });
-            return null;
+            throw new Error(`Binary protocol decoding failed (${compressedData.format}): ${message}`);
         }
     }
 
     /**
-     * Batch compress multiple messages with intelligent batching
+     * Encode a group of messages as one or more batches.
+     *
+     * Batches that exceed maxBatchSize are split in half recursively until each
+     * part fits, and EVERY part is returned. An earlier version encoded only the
+     * first half and discarded the rest, silently losing messages.
+     *
+     * @returns One CompressionResult per batch, or null when bandwidth
+     *          optimization is disabled or there is nothing to send.
+     * @throws If a batch cannot be encoded, or a single message is too large to
+     *         fit in maxBatchSize on its own.
      */
     public batchEncode(
         messages: MxpMessage[],
@@ -268,9 +273,9 @@ export class BinaryProtocolLayer {
             maxBatchSize?: number;
             compressionLevel?: 'light' | 'standard' | 'aggressive';
         } = {}
-    ): CompressionResult | null {
+    ): CompressionResult[] | null {
         this.validator.assertIsArray(messages, 'Messages must be an array');
-        
+
         // Check if bandwidth optimization is enabled
         const isBandwidthOptEnabled = MxpConfigManager.getInstance().isFeatureEnabled(
             channelId,
@@ -287,54 +292,44 @@ export class BinaryProtocolLayer {
         }
 
         const maxBatchSize = options.maxBatchSize || 32768; // 32KB default
-        
-        try {
-            // Create batch envelope
-            const batchMessage: MxpMessage = {
-                type: 'mxp_batch',
-                payload: {
-                    version: '2.0',
-                    messageCount: messages.length,
-                    messages: messages
-                },
-                metadata: {
-                    batchId: `batch_${uuidv4()}`,
-                    timestamp: Date.now(),
-                    compressionLevel: options.compressionLevel || 'standard'
-                }
-            };
 
-            // Check if batch exceeds size limit
-            const batchJson = JSON.stringify(batchMessage);
-            const batchBuffer = Buffer.from(batchJson, 'utf8');
-            
-            if (batchBuffer.length > maxBatchSize) {
-                this.logger.warn(`Batch size ${batchBuffer.length} exceeds limit ${maxBatchSize}, splitting`);
-                
-                // Split into smaller batches (recursive approach)
-                const midpoint = Math.floor(messages.length / 2);
-                const firstHalf = messages.slice(0, midpoint);
-                const secondHalf = messages.slice(midpoint);
-                
-                // Process first half only for now (in full implementation would handle both)
-                return this.batchEncode(firstHalf, channelId, agentId, options);
+        // Create batch envelope
+        const batchMessage: MxpMessage = {
+            type: 'mxp_batch',
+            payload: {
+                version: '2.0',
+                messageCount: messages.length,
+                messages: messages
+            },
+            metadata: {
+                batchId: `batch_${uuidv4()}`,
+                timestamp: Date.now(),
+                compressionLevel: options.compressionLevel || 'standard'
             }
+        };
 
-            // Compress the batch
-            const compressionResult = this.encodeMessage(batchMessage, channelId, agentId);
-            
-            if (compressionResult) {
-            }
+        // Check if batch exceeds size limit
+        const batchBuffer = Buffer.from(JSON.stringify(batchMessage), 'utf8');
 
-            return compressionResult;
-
-        } catch (error) {
-            this.logger.error('Batch encoding failed', {
-                error: error instanceof Error ? error.message : String(error),
-                messageCount: messages.length
-            });
-            return null;
+        if (batchBuffer.length <= maxBatchSize) {
+            const encoded = this.encodeMessage(batchMessage, channelId, agentId);
+            return encoded ? [encoded] : null;
         }
+
+        if (messages.length === 1) {
+            throw new Error(
+                `Message '${messages[0].type}' is ${batchBuffer.length} bytes, which exceeds the ` +
+                `maximum batch size of ${maxBatchSize} bytes and cannot be split further.`
+            );
+        }
+
+        this.logger.warn(`Batch size ${batchBuffer.length} exceeds limit ${maxBatchSize}, splitting`);
+
+        const midpoint = Math.floor(messages.length / 2);
+        const firstHalf = this.batchEncode(messages.slice(0, midpoint), channelId, agentId, options);
+        const secondHalf = this.batchEncode(messages.slice(midpoint), channelId, agentId, options);
+
+        return [...(firstHalf ?? []), ...(secondHalf ?? [])];
     }
 
     /**
@@ -372,7 +367,10 @@ export class BinaryProtocolLayer {
     }
 
     /**
-     * Get compression statistics for monitoring
+     * Compression statistics measured from the encodes this instance performed.
+     *
+     * averageCompressionRatio is compressedBytes/originalBytes across all
+     * encodes (1.0 = no reduction), and is 0 before anything has been encoded.
      */
     public getCompressionStats(): {
         totalCompressions: number;
@@ -380,40 +378,26 @@ export class BinaryProtocolLayer {
         totalBandwidthSaved: number;
         algorithmUsage: Record<CompressionAlgorithm, number>;
     } {
-        // In full implementation, these would be tracked
+        const { totalCompressions, totalOriginalBytes, totalCompressedBytes } = this.stats;
+
         return {
-            totalCompressions: 0,
-            averageCompressionRatio: 0.3, // 70% reduction typical
-            totalBandwidthSaved: 0,
-            algorithmUsage: {
-                'none': 0,
-                'gzip': 0,
-                'brotli': 0,
-                'msgpack': 0
-            }
+            totalCompressions,
+            averageCompressionRatio: totalOriginalBytes > 0
+                ? totalCompressedBytes / totalOriginalBytes
+                : 0,
+            totalBandwidthSaved: totalOriginalBytes - totalCompressedBytes,
+            algorithmUsage: { ...this.stats.algorithmUsage }
         };
     }
 
     /**
-     * Create streaming compression for real-time communication
-     * Placeholder for future implementation with Socket.IO streaming
+     * Reset the compression counters (used by tests).
      */
-    public createCompressionStream(channelId: string, agentId?: string): any {
-        // Check if compression is enabled
-        if (!this.shouldApplyCompression(channelId, agentId)) {
-            return null;
-        }
-
-        
-        // In full implementation, would return Transform stream
-        // For now, return configuration object
-        return {
-            channelId,
-            agentId,
-            compressionEnabled: true,
-            algorithm: 'gzip', // Start with gzip for streaming
-            flushInterval: 100  // Flush every 100ms for low latency
-        };
+    public resetCompressionStats(): void {
+        this.stats.totalCompressions = 0;
+        this.stats.totalOriginalBytes = 0;
+        this.stats.totalCompressedBytes = 0;
+        this.stats.algorithmUsage = { none: 0, gzip: 0, brotli: 0, msgpack: 0 };
     }
 }
 

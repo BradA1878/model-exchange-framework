@@ -54,7 +54,6 @@ export class EventBusImplementation {
      */
     public constructor() {
         this.eventSubject = new Subject<EventMessage>();
-        //;
     }
     
     /**
@@ -86,23 +85,23 @@ export class EventBusImplementation {
      * This is primarily used for testing.
      */
     public reset(): void {
-        // Reset the event subject
+        // Completing the Subject disposes every subscription both buses hold,
+        // and their completion callbacks clear their registries.
         this.eventSubject.complete();
         this.eventSubject = new Subject<EventMessage>();
-        
-        // Reset client and server instances
+
+        // Reset client and server instances so they bind to the new Subject
         this.clientEventBus = null;
         this.serverEventBus = null;
-        
     }
-    
+
     /**
-     * Debug method to log all events being processed by the EventBus
+     * Log every event passing through the bus.
      * @returns A subscription that can be unsubscribed to stop debugging
      */
     public debug() {
-        
         return this.eventSubject.subscribe(event => {
+            logger.debug(`event '${event.type}': ${JSON.stringify(event.payload)}`);
         });
     }
 }

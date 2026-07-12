@@ -724,7 +724,7 @@ describe('PredictiveAnalyticsService — Anomaly Autoencoder (Phase 3)', () => {
             // Model metadata should have been updated via updateAnomalyHeuristicMetadata.
             // Heuristics have no measured validation accuracy — null, never fabricated.
             const metadata = service.getModelMetadata();
-            const anomalyMeta = metadata.find(m => m.type === 'isolation_forest');
+            const anomalyMeta = metadata.find(m => m.name === 'anomaly_detection');
             expect(anomalyMeta).toBeDefined();
             expect(anomalyMeta!.accuracy).toBeNull();
         });
@@ -747,7 +747,7 @@ describe('PredictiveAnalyticsService — Anomaly Autoencoder (Phase 3)', () => {
 
             // Check that model metadata was updated with real metrics
             const metadata = service.getModelMetadata();
-            const anomalyMeta = metadata.find(m => m.type === 'isolation_forest');
+            const anomalyMeta = metadata.find(m => m.name === 'anomaly_detection');
             expect(anomalyMeta).toBeDefined();
             // For autoencoders: accuracy = max(0, min(1, 1 - loss)) = 1 - 0.05 = 0.95
             expect(anomalyMeta!.accuracy).toBeCloseTo(0.95, 1);
@@ -815,7 +815,7 @@ describe('PredictiveAnalyticsService — Anomaly Autoencoder (Phase 3)', () => {
             (service as any).updateAnomalyHeuristicMetadata();
 
             const metadata = service.getModelMetadata();
-            const anomalyMeta = metadata.find(m => m.type === 'isolation_forest');
+            const anomalyMeta = metadata.find(m => m.name === 'anomaly_detection');
             expect(anomalyMeta).toBeDefined();
             // Heuristic mode never fabricates an accuracy number.
             expect(anomalyMeta!.accuracy).toBeNull();

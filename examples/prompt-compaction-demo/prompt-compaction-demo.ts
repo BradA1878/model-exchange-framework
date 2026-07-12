@@ -413,7 +413,7 @@ async function demo() {
       description: 'Demonstrating prompt auto-compaction'
     });
 
-    const keys = await sdk.generateKey(channelId, undefined, 'Compaction Demo Agent Key');
+    const keys = await sdk.generateKey(channelId, 'CompactionDemoAgent', 'Compaction Demo Agent Key');
 
     agent = await sdk.createAgent({
       agentId: 'CompactionDemoAgent',

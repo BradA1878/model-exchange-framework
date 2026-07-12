@@ -35,6 +35,12 @@ Include a clear summary of all work completed in the task_complete tool's summar
 
 Be concise but thorough. Focus on delivering actionable results.`;
 
+/** How long a seen message ID is remembered for de-duplication */
+const DEDUP_TTL_MS = 5000;
+
+/** Grace period after a terminal task event, so trailing agent messages still print */
+const FINAL_MESSAGE_GRACE_MS = 500;
+
 /** Configuration for a one-shot session run */
 export interface SessionRunnerConfig {
     /** Server URL (e.g., http://localhost:3001) */
@@ -178,10 +184,8 @@ export class SessionRunner {
                 temperature: 0.3,
                 maxTokens: 8000,
             });
-            const connected = await this.agent.connect();
-            if (!connected) {
-                throw new Error('Agent failed to connect to MXF server. Check server logs for details.');
-            }
+            // connect() throws on failure — no boolean to check.
+            await this.agent.connect();
 
             // Step 5b: Ensure tools are loaded before creating a task.
             // connect() loads tools as part of performFullConnection(); refreshTools()
@@ -209,12 +213,21 @@ export class SessionRunner {
                 },
             });
 
-            // Step 7: Wait for completion or timeout
+            // Step 7: Wait for completion or timeout.
+            // The timer handle is kept so it can be cleared once the race settles —
+            // an uncleared timer keeps the event loop alive, which left `mxf run`
+            // idling until the full timeout elapsed even after the task succeeded.
+            let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
             const timeoutPromise = new Promise<{ timedOut: true }>((resolve) => {
-                setTimeout(() => resolve({ timedOut: true }), this.config.timeoutMs);
+                timeoutHandle = setTimeout(() => resolve({ timedOut: true }), this.config.timeoutMs);
             });
 
-            const result = await Promise.race([completionPromise, timeoutPromise]);
+            let result: { timedOut: true } | { success: boolean; output: string; error?: string };
+            try {
+                result = await Promise.race([completionPromise, timeoutPromise]);
+            } finally {
+                if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
+            }
 
             const elapsedMs = Date.now() - startTime;
 
@@ -285,7 +298,9 @@ export class SessionRunner {
                     `${payload.agentId}-${payload.timestamp || Date.now()}`;
                 if (processedIds.has(messageId)) return;
                 processedIds.add(messageId);
-                setTimeout(() => processedIds.delete(messageId), 5000);
+                // Evict the dedup key later. unref'd so a pending eviction never
+                // keeps the process alive after the task has finished.
+                setTimeout(() => processedIds.delete(messageId), DEDUP_TTL_MS).unref();
 
                 // Extract message content (handle different payload shapes)
                 let content = payload.data?.content || payload.data?.message || '';
@@ -331,7 +346,7 @@ export class SessionRunner {
             // Brief delay for any final messages to arrive
             setTimeout(() => {
                 resolveCompletion!({ success: true, output: summary });
-            }, 500);
+            }, FINAL_MESSAGE_GRACE_MS);
         });
 
         // Listen for task failure
@@ -342,7 +357,7 @@ export class SessionRunner {
             const error = payload.data?.error || 'Task failed';
             setTimeout(() => {
                 resolveCompletion!({ success: false, output: '', error });
-            }, 500);
+            }, FINAL_MESSAGE_GRACE_MS);
         });
 
         return { completionPromise, resolveCompletion: resolveCompletion! };

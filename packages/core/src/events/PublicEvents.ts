@@ -154,12 +154,15 @@ export const PUBLIC_USER_INPUT_EVENTS = [
 
 /**
  * Public Meilisearch Events - Semantic search operations
+ *
+ * Result events only. The *:request events stay internal, and there is no
+ * search event: search is a request/response call, not something the framework
+ * publishes.
  */
 export const PUBLIC_MEILISEARCH_EVENTS = [
-    'meilisearch:index',
-    'meilisearch:backfill:complete',
-    'meilisearch:backfill:partial',
-    'meilisearch:search',
+    Events.Meilisearch.INDEX,
+    Events.Meilisearch.BACKFILL_COMPLETE,
+    Events.Meilisearch.BACKFILL_PARTIAL,
 ] as const;
 
 /**

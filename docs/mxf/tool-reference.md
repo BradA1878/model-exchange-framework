@@ -112,29 +112,26 @@ await agent.callTool('orpar_reflect', {
 });
 ```
 
-### Control Loop Tools (Server-Orchestrated)
+### Control Loop Tools (removed)
 
-These tools interact directly with the server-side control loop for automated orchestration.
+The `controlLoop_*` family has been removed. There were two parallel ORPAR tool
+families with different state machines, different result shapes, and different
+vocabularies — and agents could see both, with no way to tell which one to use.
 
-#### Lifecycle Management
+Use the `orpar_*` tools above. They are the family the memory-integration work
+builds on.
 
-| Tool | Description |
-|------|-------------|
-| `controlLoop_start` | Initialize and start the control loop |
-| `controlLoop_status` | Get current control loop status |
-| `controlLoop_stop` | Stop the running control loop |
+| Removed | Use instead |
+|---------|-------------|
+| `controlLoop_observe` | `orpar_observe` |
+| `controlLoop_reason` | `orpar_reason` |
+| `controlLoop_plan` | `orpar_plan` |
+| `controlLoop_execute` | `orpar_act` |
+| `controlLoop_reflect` | `orpar_reflect` |
+| `controlLoop_status` | `orpar_status` |
+| `controlLoop_start` / `controlLoop_stop` | no equivalent — an ORPAR cycle is implied by `orpar_observe` |
 
-#### ORPAR Phases
-
-| Tool | Description |
-|------|-------------|
-| `controlLoop_observe` | Execute observation phase - gather environmental context |
-| `controlLoop_reason` | Execute reasoning phase - analyze and decide |
-| `controlLoop_plan` | Execute planning phase - create action plans |
-| `controlLoop_execute` | Execute action phase - perform planned actions |
-| `controlLoop_reflect` | Execute reflection phase - evaluate outcomes |
-
-**Source Files:** `OrparTools.ts`, `ControlLoopLifecycle.ts`, `ControlLoopPhases.ts`, `ControlLoopTools.ts`
+**Source Files:** `OrparTools.ts`
 
 ---
 

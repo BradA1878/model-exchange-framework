@@ -25,6 +25,23 @@ import { CredentialService } from './CredentialService';
 const MXF_CONFIG_DIR = path.join(os.homedir(), '.mxf');
 const MXF_CONFIG_FILE = path.join(MXF_CONFIG_DIR, 'config.json');
 
+/**
+ * Byte length of the generated MXP encryption salt.
+ * 16 bytes → 32 hex chars, matching the `openssl rand -hex 16` form
+ * documented for MXP_ENCRYPTION_SALT.
+ */
+const MXP_SALT_BYTES = 16;
+
+/**
+ * Generate a random hex salt for MXP channel encryption.
+ *
+ * Kept here rather than in CredentialService so `createDefault()` and the
+ * backfill for pre-existing configs share one generator.
+ */
+function generateMxpSalt(): string {
+    return crypto.randomBytes(MXP_SALT_BYTES).toString('hex');
+}
+
 export class ConfigService {
     private static instance: ConfigService;
     private configPath: string;
@@ -192,6 +209,7 @@ export class ConfigService {
                 domainKey: credentials.domainKey,
                 jwtSecret: credentials.jwtSecret,
                 mxpEncryptionKey: credentials.mxpEncryptionKey,
+                mxpEncryptionSalt: generateMxpSalt(),
                 agentApiKey: credentials.agentApiKey,
             },
 
@@ -212,12 +230,50 @@ export class ConfigService {
     }
 
     /**
+     * Backfill auto-generated credentials that an older config predates.
+     *
+     * This is a one-time migration, not a fallback: the generated value is
+     * random and persisted per install, which is exactly the property the
+     * credential is required to have. Configs created before
+     * `credentials.mxpEncryptionSalt` existed ran against a hardcoded salt, so
+     * they are migrated to a unique one here. Rotating the salt only affects
+     * in-flight MXP messages, never data at rest.
+     *
+     * Idempotent — a config that already has every credential is left untouched
+     * and not rewritten.
+     *
+     * @returns Names of the credentials that were generated (empty if none)
+     */
+    ensureGeneratedCredentials(): string[] {
+        const config = this.cachedConfig || this.load();
+        if (!config) return [];
+
+        const generated: string[] = [];
+
+        if (!config.credentials?.mxpEncryptionSalt) {
+            config.credentials.mxpEncryptionSalt = generateMxpSalt();
+            generated.push('credentials.mxpEncryptionSalt');
+        }
+
+        if (generated.length > 0) {
+            this.save(config);
+        }
+
+        return generated;
+    }
+
+    /**
      * Convert config to environment variables that the MXF server expects.
      * This is the bridge between ~/.mxf/config.json and the server's process.env.
+     *
+     * Materializing the environment requires every generated credential to
+     * exist, so any missing one is generated and persisted first.
      */
     toEnvironmentVariables(): Record<string, string> {
         const config = this.cachedConfig || this.load();
         if (!config) return {};
+
+        this.ensureGeneratedCredentials();
 
         const env: Record<string, string> = {};
 
@@ -250,7 +306,10 @@ export class ConfigService {
         env.AGENT_API_KEY = config.credentials.agentApiKey;
         env.MXP_ENCRYPTION_KEY = config.credentials.mxpEncryptionKey;
         env.MXP_ENCRYPTION_ENABLED = 'true';
-        env.MXP_ENCRYPTION_SALT = 'mxf-default-salt';
+        // Per-install salt (see ensureGeneratedCredentials). Never a constant:
+        // core rejects MXP encryption without a unique salt precisely because a
+        // shared one is precomputable.
+        env.MXP_ENCRYPTION_SALT = config.credentials.mxpEncryptionSalt;
 
         // User access token (for demos)
         if (config.user?.accessToken) {
@@ -311,45 +370,22 @@ export class ConfigService {
     }
 
     /**
-     * Parse an existing .env file into a key-value map.
-     * Handles KEY=VALUE lines, ignoring comments and blank lines.
-     * Strips optional surrounding quotes from values.
-     *
-     * @param envPath - Absolute path to the .env file
-     * @returns Map of environment variable names to their values
-     */
-    private parseExistingEnvFile(envPath: string): Record<string, string> {
-        const existing: Record<string, string> = {};
-        if (!fs.existsSync(envPath)) {
-            return existing;
-        }
-        const content = fs.readFileSync(envPath, { encoding: 'utf-8' });
-        for (const line of content.split('\n')) {
-            const trimmed = line.trim();
-            // Skip comments and blank lines
-            if (!trimmed || trimmed.startsWith('#')) continue;
-            const eqIndex = trimmed.indexOf('=');
-            if (eqIndex === -1) continue;
-            const key = trimmed.substring(0, eqIndex).trim();
-            let value = trimmed.substring(eqIndex + 1).trim();
-            // Strip surrounding quotes (single or double)
-            if ((value.startsWith('"') && value.endsWith('"')) ||
-                (value.startsWith("'") && value.endsWith("'"))) {
-                value = value.slice(1, -1);
-            }
-            existing[key] = value;
-        }
-        return existing;
-    }
-
-    /**
      * Write a .env file from the current config to the project root.
      * This bridges ~/.mxf/config.json to the existing bun run dev / dotenv pattern.
      * The .env file is already gitignored.
      *
-     * If a .env file already exists, its content is left untouched — only
-     * missing keys are appended to the end. If all keys are already present,
-     * the file is not modified at all.
+     * The keys this method emits are derived from ~/.mxf/config.json, so config
+     * is authoritative for them: an existing key is rewritten in place (keeping
+     * its position in the file) and a missing one is appended. Lines the CLI does
+     * not manage — comments, blank lines, and any variable the user added
+     * themselves — are preserved untouched.
+     *
+     * Updating in place is what makes `mxf config set server.port 3002` actually
+     * take effect; appending only missing keys left the stale value in the file
+     * while reporting success.
+     *
+     * The file holds infrastructure passwords, the JWT secret and the LLM API
+     * key, so it is written owner-only (0600).
      *
      * @param projectRoot - Path to the project root where .env will be written
      */
@@ -361,34 +397,46 @@ export class ConfigService {
 
         const envPath = path.join(projectRoot, '.env');
 
-        // If .env already exists, only append missing keys
+        // If .env already exists, update managed keys in place and append new ones
         if (fs.existsSync(envPath)) {
-            const existing = this.parseExistingEnvFile(envPath);
+            const content = fs.readFileSync(envPath, { encoding: 'utf-8' });
+            const lines = content.split('\n');
+            const written = new Set<string>();
 
-            // Find keys present in config but missing from .env
-            const missing: Array<[string, string]> = [];
-            for (const [key, value] of Object.entries(envVars)) {
-                if (!(key in existing)) {
-                    missing.push([key, value]);
+            const updated = lines.map((line) => {
+                const trimmed = line.trim();
+                // Preserve comments and blank lines exactly as they are
+                if (!trimmed || trimmed.startsWith('#')) return line;
+
+                const eqIndex = trimmed.indexOf('=');
+                if (eqIndex === -1) return line;
+
+                const key = trimmed.substring(0, eqIndex).trim();
+                // Not a key we manage — leave the user's own variable alone
+                if (!(key in envVars)) return line;
+
+                written.add(key);
+                return `${key}=${envVars[key]}`;
+            });
+
+            // Append any managed key that wasn't already in the file
+            const missing = Object.entries(envVars).filter(([key]) => !written.has(key));
+            if (missing.length > 0) {
+                if (updated.length > 0 && updated[updated.length - 1].trim() !== '') {
+                    updated.push('');
                 }
+                updated.push(`# Added by MXF CLI (${new Date().toISOString()})`);
+                for (const [key, value] of missing) {
+                    updated.push(`${key}=${value}`);
+                }
+                updated.push('');
             }
 
-            // Nothing to add — leave the file completely untouched
-            if (missing.length === 0) {
-                return;
-            }
-
-            // Append only the missing keys to the end of the existing file
-            const appendLines: string[] = [
-                '',
-                `# Added by MXF CLI (${new Date().toISOString()})`,
-            ];
-            for (const [key, value] of missing) {
-                appendLines.push(`${key}=${value}`);
-            }
-            appendLines.push('');
-
-            fs.appendFileSync(envPath, appendLines.join('\n'), { encoding: 'utf-8' });
+            fs.writeFileSync(envPath, updated.join('\n'), { encoding: 'utf-8', mode: 0o600 });
+            // writeFileSync's mode only applies when creating the file, so an
+            // existing .env keeps its old (possibly 0644) permissions unless we
+            // tighten them explicitly.
+            fs.chmodSync(envPath, 0o600);
             return;
         }
 
@@ -427,7 +475,8 @@ export class ConfigService {
             }
         }
 
-        fs.writeFileSync(envPath, lines.join('\n'), { encoding: 'utf-8' });
+        // Owner-only: this file holds infra passwords, the JWT secret and the LLM API key.
+        fs.writeFileSync(envPath, lines.join('\n'), { encoding: 'utf-8', mode: 0o600 });
     }
 
     /**
@@ -473,6 +522,9 @@ export class ConfigService {
         }
         if (!config.credentials?.mxpEncryptionKey) {
             errors.push('Missing credentials.mxpEncryptionKey');
+        }
+        if (!config.credentials?.mxpEncryptionSalt) {
+            errors.push('Missing credentials.mxpEncryptionSalt (unique per-install salt for MXP encryption)');
         }
 
         // Server checks

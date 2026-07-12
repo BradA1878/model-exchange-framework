@@ -45,6 +45,32 @@ const validate = createStrictValidator('ChannelContextController');
 const logger = new Logger('debug','ChannelContextController', 'server');
 
 /**
+ * Who is making this request.
+ *
+ * Every route in this controller is behind requireChannelAccess, so the principal
+ * is known by the time a handler runs. Actor fields taken from the request body —
+ * `updatedBy`, `agentId` — are the caller telling us who they are, which is not
+ * something we have any reason to believe. The authenticated identity is used to
+ * attribute the change instead.
+ *
+ * @param req - Incoming request
+ * @returns The agent id (key auth) or user id (JWT auth) behind the request
+ */
+const actorFor = (req: Request): string => {
+    const agent = (req as any).agent;
+    if (agent?.agentId) {
+        return String(agent.agentId);
+    }
+
+    const user = (req as any).user;
+    if (user?.id) {
+        return String(user.id);
+    }
+
+    throw new Error('Authentication required');
+};
+
+/**
  * Create a new channel context
  * @param req - Express request object
  * @param res - Express response object
@@ -128,13 +154,15 @@ export const updateContext = async (req: Request, res: Response): Promise<void> 
     try {
         const channelContextService = ChannelContextService.getInstance();
         const { channelId } = req.params;
-        const { updatedBy, ...updates } = req.body;
-        
+        // `updatedBy` is discarded if present — the change is attributed to the
+        // authenticated caller, not to whoever the body names.
+        const { updatedBy: _ignoredUpdatedBy, ...updates } = req.body;
+        const updatedBy = actorFor(req);
+
         // Validate required fields
         validate.assertIsNonEmptyString(channelId, 'Channel ID is required');
         validate.assertIsObject(updates, 'Updates must be an object');
-        validate.assertIsNonEmptyString(updatedBy, 'Agent ID making the update is required');
-        
+
         // Update the context using the service
         const updatedContext = await channelContextService.updateContext(
             channelId,
@@ -328,13 +356,14 @@ export const setChannelMetadata = async (req: Request, res: Response): Promise<v
     try {
         const channelContextService = ChannelContextService.getInstance();
         const { channelId, key } = req.params;
-        const { value, agentId } = req.body;
-        
+        const { value } = req.body;
+        // Attributed to the authenticated caller, not to a body field
+        const agentId = actorFor(req);
+
         // Validate required fields
         validate.assertIsNonEmptyString(channelId, 'Channel ID is required');
         validate.assertIsNonEmptyString(key, 'Metadata key is required');
-        validate.assertIsNonEmptyString(agentId, 'Agent ID is required');
-        
+
         // Get context first
         let context = await channelContextService.getContext(channelId).toPromise();
         
@@ -429,13 +458,16 @@ export const addChannelMessage = async (req: Request, res: Response): Promise<vo
         const channelContextService = ChannelContextService.getInstance();
         const { channelId } = req.params;
         const message: any = req.body; // Type as any to reflect current dynamic property assignment
-        
+
         // Validate required fields with fail-fast behavior
         validate.assertIsNonEmptyString(channelId, 'Channel ID is required');
         validate.assertIsObject(message, 'Message must be an object');
         validate.assertIsNonEmptyString(message.content, 'Message content is required');
-        validate.assertIsNonEmptyString(message.senderId, 'Sender ID is required');
-        
+
+        // The sender is the authenticated caller. A client-supplied senderId would
+        // let anyone with access to a channel post as anyone else in it.
+        message.senderId = actorFor(req);
+
         // Ensure message has all required fields (defaults)
         if (!message.messageId) {
             message.messageId = uuidv4();

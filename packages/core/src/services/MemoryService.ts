@@ -30,6 +30,8 @@
  */
 
 import { Observable, of } from 'rxjs';
+import { IMemoryPersistence } from '../interfaces/IMemoryPersistence.js';
+import { MxfMeilisearchService } from './MxfMeilisearchService.js';
 import { v4 as uuidv4 } from 'uuid';
 
 import { 
@@ -160,7 +162,7 @@ export interface IEnhancedChannelMemory extends IChannelMemory {
 interface MemoryServiceConfig {
     enablePersistence?: boolean;
     cacheSize?: number;
-    persistenceService?: any; // Optional persistence service (server-only)
+    persistenceService?: IMemoryPersistence; // Optional persistence service (server-only, injected at boot)
 }
 
 /**
@@ -191,7 +193,7 @@ export class MemoryService {
     private config: MemoryServiceConfig;
 
     // Optional persistence service (server-only)
-    private persistenceService?: any;
+    private persistenceService?: IMemoryPersistence;
 
     // Validator
     private validator = createMemoryValidator('MemoryService');
@@ -612,9 +614,10 @@ export class MemoryService {
         }
 
         // If persistence service is available, try loading from MongoDB
-        if (this.persistenceService) {
+        const persistence = this.persistenceService;
+        if (persistence) {
             return new Observable<IEnhancedAgentMemory>(observer => {
-                this.persistenceService.getAgentMemory(agentId).subscribe({
+                persistence.getAgentMemory(agentId).subscribe({
                     next: (loadedMemory: any) => {
                         // Enhance the loaded memory with cognitive memory structure
                         const enhancedMemory: IEnhancedAgentMemory = {
@@ -1628,50 +1631,63 @@ export class MemoryService {
 
         const semanticSearchStart = Date.now();
 
-        // Phase A: Semantic search to get candidates
-        // This would typically integrate with MxfMeilisearchService
-        // For now, we search cognitive memory as a fallback
-        const candidates: MemoryCandidate[] = [];
+        // Phase A: semantic search over the real memory index.
+        //
+        // Meilisearch is the only retrieval path agents actually use, so utility scoring
+        // has to sit on top of it to influence anything. (This previously searched an
+        // in-process cognitiveMemory Map with keyword counting, which nothing populated
+        // in production — so the whole two-phase retrieval could never return a result.)
+        const meilisearch = MxfMeilisearchService.getInstance();
+        const maxCandidates = options.maxCandidates ?? 20;
+        const similarityThreshold = options.similarityThreshold ?? 0.3;
 
-        // Search cognitive memory entries matching the query
-        const allCognitiveEntries = Array.from(this.cognitiveMemory.values());
-        for (const entry of allCognitiveEntries) {
-            // Filter by agent/channel if specified
-            if (options.agentId && entry.agentId !== options.agentId) continue;
-            if (options.channelId && entry.channelId !== options.channelId) continue;
-
-            // Simple text similarity for cognitive memory (in production, use Meilisearch)
-            const contentStr = JSON.stringify(entry.content).toLowerCase();
-            const queryWords = options.query.toLowerCase().split(/\s+/);
-            const matchCount = queryWords.filter(word => contentStr.includes(word)).length;
-            const similarity = matchCount / Math.max(queryWords.length, 1);
-
-            // Apply similarity threshold
-            const threshold = options.similarityThreshold ?? 0.3;
-            if (similarity >= threshold) {
-                // Get Q-value from manager or use default
-                const qValue = qValueManager.getQValue(entry.id);
-
-                candidates.push({
-                    memoryId: entry.id,
-                    similarity,
-                    qValue,
-                    content: entry.content,
-                    metadata: {
-                        memoryType: entry.memoryType,
-                        labels: entry.labels,
-                        createdAt: entry.createdAt
-                    }
-                });
-            }
+        const filters: string[] = [];
+        if (options.agentId) {
+            filters.push(`agentId = "${options.agentId}"`);
         }
+        if (options.channelId) {
+            filters.push(`channelId = "${options.channelId}"`);
+        }
+
+        const searchResult = await meilisearch.searchConversations({
+            query: options.query,
+            filter: filters.length > 0 ? filters.join(' AND ') : undefined,
+            limit: maxCandidates,
+            hybridRatio: options.hybridRatio ?? 0.7
+        });
 
         const semanticSearchTimeMs = Date.now() - semanticSearchStart;
 
-        // Limit candidates for Phase B
-        const maxCandidates = options.maxCandidates ?? 20;
-        candidates.sort((a, b) => b.similarity - a.similarity);
-        const topCandidates = candidates.slice(0, maxCandidates);
+        const candidates: MemoryCandidate[] = [];
+
+        for (const hit of searchResult.hits) {
+            // Meilisearch ranking scores are already normalised to 0..1.
+            const similarity = hit._rankingScore;
+            if (similarity < similarityThreshold) {
+                continue;
+            }
+
+            candidates.push({
+                memoryId: hit.id,
+                similarity,
+                qValue: qValueManager.getQValue(hit.id),
+                content: hit.content,
+                metadata: {
+                    memoryType: hit.role,
+                    createdAt: new Date(hit.timestamp)
+                }
+            });
+        }
+
+        // Load Q-values learned in previous runs before scoring, otherwise every memory
+        // this process has not seen yet would score at the default and ranking would
+        // silently ignore everything the system has learned.
+        await this.hydrateQValues(candidates.map(c => c.memoryId));
+        for (const candidate of candidates) {
+            candidate.qValue = qValueManager.getQValue(candidate.memoryId);
+        }
+
+        const topCandidates = candidates;
 
         // Phase B: Utility scoring
         const utilityScoringStart = Date.now();
@@ -1735,28 +1751,50 @@ export class MemoryService {
     }
 
     /**
-     * Update Q-value for a specific memory
-     * Used by QValueManager persistence callback
+     * Persist the utility subdocument for a memory.
+     *
+     * Registered as QValueManager's persistence callback at server boot, so this runs
+     * on every Q-value change and on dirty-cache eviction. It must throw on failure:
+     * swallowing the error here is what previously made the whole learning system look
+     * like it worked while retaining nothing across a restart.
      */
     public async updateMemoryUtility(memoryId: string, utilityUpdate: Partial<MemoryUtilitySubdocument>): Promise<void> {
-        // Find the memory in cognitive memory cache
-        const cognitiveEntry = this.cognitiveMemory.get(memoryId);
-        if (cognitiveEntry) {
-            // Update in-memory cache (cognitive memory doesn't have utility subdoc by default)
-            // For cognitive memory, we just rely on QValueManager's cache
+        if (!this.persistenceService) {
+            throw new Error(
+                `[MemoryService] Cannot persist utility for memory ${memoryId}: no persistence service is configured. ` +
+                `MULS requires the server to inject a persistence service at boot.`
+            );
+        }
+
+        await this.persistenceService.updateAgentMemoryUtility(memoryId, utilityUpdate);
+    }
+
+    /**
+     * Load stored Q-values for a batch of memories into the QValueManager cache.
+     *
+     * Called before utility scoring so that ranking uses values learned in previous
+     * runs rather than the default for every memory the current process has not seen.
+     * Memories with no stored utility keep the configured default.
+     */
+    public async hydrateQValues(memoryIds: string[]): Promise<void> {
+        if (!this.persistenceService || memoryIds.length === 0) {
             return;
         }
 
-        // For persistent memory, delegate to persistence service
-        if (this.persistenceService) {
-            try {
-                // Update agent memory with utility subdocument
-                // This is a partial update to just the utility field
-                await this.persistenceService.updateAgentMemoryUtility?.(memoryId, utilityUpdate);
-            } catch (error) {
-                this.logger.warn(`[MemoryService] Failed to update utility for memory ${memoryId}: ${error}`);
-            }
+        const qValueManager = QValueManager.getInstance();
+        const uncached = memoryIds.filter(id => !qValueManager.isCached(id));
+        if (uncached.length === 0) {
+            return;
         }
+
+        const utilities = await this.persistenceService.getAgentMemoryUtilities(uncached);
+        for (const [memoryId, utility] of utilities) {
+            qValueManager.setQValueInCache(memoryId, utility.qValue);
+        }
+
+        this.logger.debug(
+            `[MemoryService] Hydrated ${utilities.size}/${uncached.length} Q-values from persistence`
+        );
     }
 
     /**

@@ -66,6 +66,7 @@ import { createBaseEventPayload, createLlmInstructionStartedPayload,
     validateSystemEventPayload
 } from '@mxf-dev/core/schemas/EventPayloadSchema';
 import { LlmProviderFactory } from '@mxf-dev/core/protocols/mcp/LlmProviderFactory';
+import { SystemLlmBudgetService } from './SystemLlmBudgetService';
 import { McpMessage, McpRole, McpTextContent, McpContentType, IMcpClient } from '@mxf-dev/core/protocols/mcp/IMcpClient';
 import { ChannelMessage, AgentId, ChannelId } from '@mxf-dev/core/types/ChannelContext';
 import { ConversationTopic } from '@mxf-dev/core/types/ChannelContext';
@@ -88,7 +89,6 @@ import {
     TemporalContext,
     SystemEventType
 } from '@mxf-dev/core/events/event-definitions/SystemEvents';
-import { HybridMcpService } from '../../mcp/services/HybridMcpService';
 import { createStrictValidator } from '@mxf-dev/core/utils/validation';
 import { NetworkErrorType, classifyNetworkError } from '@mxf-dev/core/types/NetworkRecoveryTypes';
 
@@ -406,7 +406,6 @@ export class SystemLlmService {
     private config: Required<SystemLlmServiceConfig>;
     private clientInstance: IMcpClient | null = null;
     private eventBus = EventBus.server;
-    private hybridMcpService?: HybridMcpService;
     private configManager = ConfigManager.getInstance();
 
     // Real-time coordination tracking
@@ -488,7 +487,7 @@ export class SystemLlmService {
     private cleanupTimer?: NodeJS.Timeout;
     private coordinationCleanupTimer?: NodeJS.Timeout;
 
-    constructor(config: SystemLlmServiceConfig = {}, hybridMcpService?: HybridMcpService) {
+    constructor(config: SystemLlmServiceConfig = {}) {
         
         const providerType = config.providerType || LlmProviderType.OPENROUTER;
         
@@ -511,7 +510,6 @@ export class SystemLlmService {
         };
 
         this.providerType = this.config.providerType;
-        this.hybridMcpService = hybridMcpService;
 
 
         // Subscribe to config change events
@@ -2191,23 +2189,29 @@ export class SystemLlmService {
      * Internal LLM request implementation (original sendLlmRequest logic)
      */
     private async sendLlmRequestInternal(
-        prompt: string, 
-        schema?: any, 
+        prompt: string,
+        schema?: any,
         options: any = {}
     ): Promise<string> {
         // Abort if service is shutting down
         if (this.isShuttingDown) {
             throw new Error('Service is shutting down');
         }
-        
+
         const startTime = Date.now();
         const operation = options.operation as OrparOperationType || 'observation';
-        
+
         try {
             const client = await this.initClient();
             const model = options.model || this.defaultModel;
             const temperature = options.temperature || this.defaultTemperature;
             const maxTokens = options.maxTokens || this.defaultMaxTokens;
+
+            // Hard spend gate. SystemLlmServiceManager already refuses to hand out a
+            // service once the daily ceiling is reached, but instances handed out
+            // before that are still alive and holding a reference — so the ceiling is
+            // checked here too, immediately before the call that would cost money.
+            SystemLlmBudgetService.getInstance().assertWithinBudget(model);
 
             const messages: McpMessage[] = [{
                 role: McpRole.USER,
@@ -2287,6 +2291,24 @@ export class SystemLlmService {
                         // Track successful metrics
                         const responseTime = Date.now() - startTime;
                         this.trackMetrics(operation, responseTime, model);
+
+                        // Charge the call against the daily budget using the token counts
+                        // the provider billed, not an estimate. A response without usage
+                        // means the provider told us nothing to charge — recorded as zero
+                        // and logged, rather than guessed at.
+                        const usage = response?.usage;
+                        if (usage && typeof usage.input_tokens === 'number' && typeof usage.output_tokens === 'number') {
+                            SystemLlmBudgetService.getInstance().recordUsage(model, {
+                                inputTokens: usage.input_tokens,
+                                outputTokens: usage.output_tokens
+                            });
+                        } else {
+                            this.logger.warn(
+                                `[SystemLLM] ${model} returned no token usage — this call is not counted ` +
+                                'against the daily budget'
+                            );
+                        }
+
                         this.logger.debug(`[SystemLLM:Internal] LLM call completed - model: ${model}, time: ${responseTime}ms, response: ${responseText.length} chars`);
 
                         resolve(responseText);
@@ -3453,37 +3475,19 @@ ${JSON.stringify(TOOL_RECOMMENDATION_SCHEMA, null, 2)}`;
     }
 
     /**
-     * Get rich temporal context via existing Time MCP server integration
+     * Current temporal context, computed locally.
+     *
+     * This used to route through a Time MCP server and "fall back" to the local
+     * computation on failure. That branch could never run: the service it called was never
+     * instantiated, and the time server package it needed does not exist (its config is
+     * autoStart:false, "Disable until package is available"). The local computation was
+     * always the real implementation, so it is now simply the implementation.
+     *
      * @param channelId - Channel identifier for timezone context
      * @returns Promise resolving to temporal context data
      */
     private async getTemporalContext(channelId: ChannelId): Promise<TemporalContext> {
-        try {
-            if (!this.hybridMcpService) {
-                return this.getFallbackTemporalContext();
-            }
-
-            // Use existing Time MCP server for temporal intelligence
-            const timeData = await this.hybridMcpService.executeTool('get_current_time', {
-                timezone: 'UTC', // Can be enhanced with channel-specific timezone detection
-                include_relative: true,
-                include_business_hours: true
-            });
-
-            // Process time server response into temporal context
-            const temporalContext: TemporalContext = createTemporalContext(timeData);
-
-            validator.assertIsObject(temporalContext, 'TemporalContext must be an object');
-            validator.assertIsString(temporalContext.currentTime, 'TemporalContext.currentTime must be a string');
-            validator.assertIsString(temporalContext.localTime, 'TemporalContext.localTime must be a string');
-            validator.assertIsString(temporalContext.timeZone, 'TemporalContext.timeZone must be a string');
-
-            return temporalContext;
-
-        } catch (error) {
-            this.logger.warn(`⚠️ Time server unavailable, using fallback temporal context: ${error}`);
-            return this.getFallbackTemporalContext();
-        }
+        return this.computeTemporalContext();
     }
 
     /**
@@ -3910,7 +3914,7 @@ Create a helpful, contextual hint that provides value without being intrusive. K
     /**
      * Get fallback temporal context when Time server unavailable
      */
-    private getFallbackTemporalContext(): TemporalContext {
+    private computeTemporalContext(): TemporalContext {
         const now = new Date();
         return {
             currentTime: now.toISOString(),

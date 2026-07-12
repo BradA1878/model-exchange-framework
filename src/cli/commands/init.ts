@@ -14,42 +14,15 @@ import { ConfigService } from '../services/ConfigService';
 import { MxfLlmConfig } from '../types/config';
 import { logSuccess, logError, logInfo, logWarning, logHeader } from '../utils/output';
 import { loadAll } from '../tui/agents/AgentLoader';
+import { getModelIds } from '../models';
 
-/** Model choices organized by provider */
-const MODEL_CHOICES: Record<string, Array<{ title: string; value: string }>> = {
-    openrouter: [
-        { title: 'anthropic/claude-sonnet-4.6', value: 'anthropic/claude-sonnet-4.6' },
-        { title: 'anthropic/claude-sonnet-4.5', value: 'anthropic/claude-sonnet-4.5' },
-        { title: 'anthropic/claude-haiku-4.5', value: 'anthropic/claude-haiku-4.5' },
-        { title: 'openai/gpt-4.1', value: 'openai/gpt-4.1' },
-        { title: 'openai/gpt-4.1-mini', value: 'openai/gpt-4.1-mini' },
-        { title: 'google/gemini-3-pro-preview', value: 'google/gemini-3-pro-preview' },
-        { title: 'google/gemini-3-flash-preview', value: 'google/gemini-3-flash-preview' },
-        { title: 'google/gemini-2.5-pro', value: 'google/gemini-2.5-pro' },
-        { title: 'google/gemini-2.5-flash', value: 'google/gemini-2.5-flash' },
-    ],
-    anthropic: [
-        { title: 'claude-sonnet-4-6', value: 'claude-sonnet-4-6' },
-        { title: 'claude-sonnet-4-5', value: 'claude-sonnet-4-5' },
-        { title: 'claude-haiku-4-5', value: 'claude-haiku-4-5' },
-        { title: 'claude-opus-4-6', value: 'claude-opus-4-6' },
-    ],
-    openai: [
-        { title: 'gpt-4.1', value: 'gpt-4.1' },
-        { title: 'gpt-4.1-mini', value: 'gpt-4.1-mini' },
-        { title: 'gpt-4o', value: 'gpt-4o' },
-    ],
-    gemini: [
-        { title: 'gemini-3-pro-preview', value: 'gemini-3-pro-preview' },
-        { title: 'gemini-3-flash-preview', value: 'gemini-3-flash-preview' },
-        { title: 'gemini-2.5-pro', value: 'gemini-2.5-pro' },
-        { title: 'gemini-2.5-flash', value: 'gemini-2.5-flash' },
-    ],
-    xai: [
-        { title: 'grok-3', value: 'grok-3' },
-        { title: 'grok-3-mini', value: 'grok-3-mini' },
-    ],
-};
+/**
+ * Model choices for a provider in the shape `prompts` expects.
+ * Sourced from the shared catalog in src/cli/models.ts.
+ */
+function modelChoices(provider: string): Array<{ title: string; value: string }> {
+    return getModelIds(provider).map(id => ({ title: id, value: id }));
+}
 
 /** LLM provider choices for the selection prompt */
 const PROVIDER_CHOICES = [
@@ -133,12 +106,11 @@ async function promptDefaultModel(provider: string): Promise<string> {
         return response.model;
     }
 
-    const choices = MODEL_CHOICES[provider];
     const response = await prompts({
         type: 'select',
         name: 'model',
         message: 'Select default model',
-        choices,
+        choices: modelChoices(provider),
     }, { onCancel });
 
     if (response.model === undefined) {
@@ -184,7 +156,8 @@ async function promptPerAgentModels(
         return {};
     }
 
-    const choices = MODEL_CHOICES[provider];
+    // Ollama takes free-text below, so only build the list for catalogued providers
+    const choices = provider === 'ollama' ? [] : modelChoices(provider);
     const models: Record<string, string> = {};
 
     console.log('');

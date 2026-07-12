@@ -47,6 +47,12 @@ import {
 } from '../../../../schemas/ShellExecutionEventPayloads.js';
 import { getSecurityGuard, SecurityContext } from '../../security/McpSecurityGuard.js';
 import { getConfirmationManager } from '../../security/McpConfirmationManager.js';
+import {
+    buildShellChildEnv,
+    getShellAllowedCommands,
+    hasShellAllowlist,
+    isShellSandboxEnabled
+} from '../../security/McpToolPolicy.js';
 import { Logger } from '../../../../utils/Logger.js';
 import { createStrictValidator } from '../../../../utils/validation.js';
 import { AgentId, ChannelId } from '../../../../types/ChannelContext.js';
@@ -56,6 +62,7 @@ import { getDestructiveWarnings } from './DestructiveCommandWarnings.js';
 import { interpretExitCode } from './CommandSemantics.js';
 import { processOutput } from './LargeOutputHandler.js';
 import { extractEffectiveCommands } from './ShellCommandParser.js';
+import { executeInSandbox } from './ShellSandbox.js';
 
 const logger = new Logger('info', 'ShellExecuteHandler', 'server');
 const validator = createStrictValidator('ShellExecuteHandler');
@@ -75,14 +82,16 @@ export interface ShellExecuteInput {
     args?: string[];
     /** Working directory for command execution */
     workingDirectory?: string;
-    /** Additional environment variables merged with process.env */
+    /**
+     * Additional environment variables for the child process. Layered on top of
+     * the minimal base environment from the tool policy — the server's own
+     * environment (secrets included) is never forwarded.
+     */
     environment?: Record<string, string>;
     /** Command timeout in milliseconds (default: 30000) */
     timeout?: number;
     /** Whether to capture and return stdout/stderr (default: true) */
     captureOutput?: boolean;
-    /** Whitelist of allowed base commands (checked before execution) */
-    allowedCommands?: string[];
     /** Human-readable description of the command's purpose */
     description?: string;
 }
@@ -307,14 +316,24 @@ export async function execute(
             );
         }
 
-        // ── 6. Check allowed commands whitelist ────────────────────────────
-        if (input.allowedCommands) {
+        // ── 6. Check the configured command allowlist ──────────────────────
+        // The allowlist comes from MXF_SHELL_ALLOWED_COMMANDS, not from the tool
+        // input. An allowlist passed as an argument is chosen by the model it is
+        // meant to restrict, which makes it decorative.
+        if (hasShellAllowlist()) {
+            const allowedCommands = getShellAllowedCommands();
             // Use the parser to extract the effective command, handling env
             // prefixes (FOO=bar cmd) and wrappers (sudo cmd, timeout 5 cmd)
             const effectiveCommands = extractEffectiveCommands(input.command);
             for (const effectiveCmd of effectiveCommands) {
-                if (!input.allowedCommands.includes(effectiveCmd)) {
-                    throw new Error(`Command '${effectiveCmd}' not in allowed commands list`);
+                // extractEffectiveCommands yields the full command line; compare
+                // on the base binary so `git status` matches an allowlisted `git`.
+                const baseCommand = effectiveCmd.trim().split(/\s+/)[0];
+                if (!allowedCommands.includes(baseCommand)) {
+                    throw new Error(
+                        `Command '${baseCommand}' is not in the configured allowlist ` +
+                        `(MXF_SHELL_ALLOWED_COMMANDS). Allowed: ${allowedCommands.join(', ')}`
+                    );
                 }
             }
         }
@@ -346,19 +365,39 @@ export async function execute(
             )
         );
 
-        // ── 9. Execute the command using spawn() ───────────────────────────
+        // ── 9. Execute the command ─────────────────────────────────────────
+        // The child gets a minimal environment built by the tool policy — PATH,
+        // HOME, locale, plus anything the caller declared. The server's own
+        // environment holds JWT_SECRET, MONGODB_URI and OPENROUTER_API_KEY and is
+        // never handed to a command an agent chose.
+        const childEnv = buildShellChildEnv(input.environment) as NodeJS.ProcessEnv;
+
         const startTime = Date.now();
         let stdout = '';
         let stderr = '';
         let exitCode = 0;
 
         try {
-            const result = await spawnCommand(
-                fullCommand,
-                input.workingDirectory || process.cwd(),
-                { ...process.env, ...input.environment } as NodeJS.ProcessEnv,
-                timeout
-            );
+            // When the sandbox is enabled the command runs inside a Docker
+            // container with no network, a read-only root, dropped capabilities
+            // and resource limits. If Docker is unavailable, executeInSandbox
+            // throws — it never falls back to running on the host.
+            const result = isShellSandboxEnabled()
+                ? await executeInSandbox(
+                    fullCommand,
+                    { enabled: true },
+                    {
+                        timeout,
+                        workingDirectory: input.workingDirectory,
+                        environment: childEnv as Record<string, string>
+                    }
+                )
+                : await spawnCommand(
+                    fullCommand,
+                    input.workingDirectory || process.cwd(),
+                    childEnv,
+                    timeout
+                );
             stdout = result.stdout;
             stderr = result.stderr;
             exitCode = result.exitCode;

@@ -67,7 +67,13 @@ export enum ModelType {
     GRADIENT_BOOSTING = 'gradient_boosting',
     NEURAL_NETWORK = 'neural_network',
     ISOLATION_FOREST = 'isolation_forest',
-    LSTM = 'lstm'
+    LSTM = 'lstm',
+    /**
+     * A rule-based heuristic, not a trained model. Exists so a heuristic result can say
+     * what it is: without it, heuristic predictions were reported to callers as
+     * GRADIENT_BOOSTING, alongside a hardcoded accuracy figure.
+     */
+    HEURISTIC = 'heuristic'
 }
 
 /**
@@ -188,14 +194,24 @@ export interface RiskScore {
  */
 export interface ModelMetadata {
     modelId: string;
+    /**
+     * Which predictor this describes ('error_prediction', 'anomaly_detection',
+     * 'pattern_forecast'). Identity has to be separate from `type`, because `type` now
+     * changes with training state — a predictor is a HEURISTIC until it is actually
+     * trained — so callers can no longer identify a predictor by its algorithm label.
+     */
+    name: string;
     type: ModelType;
     version: string;
-    trainedAt: number;
+    /** Null until the predictor has actually been trained. */
+    trainedAt: number | null;
+    /** Null for heuristics — they have no measured validation accuracy. */
     accuracy: number | null;
     features: string[];
     hyperparameters: Record<string, any>;
     trainingDataSize: number;
-    validationMetrics: Record<string, number>;
+    /** Null until a real validation run has produced metrics. */
+    validationMetrics: Record<string, number> | null;
 }
 
 /** TF.js model ID for the error prediction Dense classifier */
@@ -234,8 +250,6 @@ export class PredictiveAnalyticsService extends EventEmitter {
     // Otherwise falls back to the heuristic distance-based isolation score.
     private tfAnomalyAutoencoderReady: boolean = false;
 
-    // Models (simplified in-memory implementation)
-    private readonly models = new Map<string, any>();
     private readonly modelMetadata = new Map<string, ModelMetadata>();
     
     // Training data
@@ -601,7 +615,9 @@ export class PredictiveAnalyticsService extends EventEmitter {
             },
             features,
             model: {
-                type: usedTfModel ? ModelType.NEURAL_NETWORK : ModelType.GRADIENT_BOOSTING,
+                // Say which it actually was. A heuristic reported as GRADIENT_BOOSTING is
+                // how an unvalidated rule of thumb ends up being trusted as a trained model.
+                type: usedTfModel ? ModelType.NEURAL_NETWORK : ModelType.HEURISTIC,
                 version: modelMeta?.version || '1.0',
                 accuracy: modelMeta?.accuracy ?? null
             }
@@ -1662,37 +1678,36 @@ export class PredictiveAnalyticsService extends EventEmitter {
     /**
      * Initialize models
      */
+    /**
+     * Register metadata for the predictors this service exposes.
+     *
+     * Until a model is actually trained (see trainErrorPredictionModel and friends), every
+     * predictor here is a rule-based heuristic and is described as one. Nothing is
+     * reported as trained, and no accuracy is claimed.
+     *
+     * This previously registered three constant functions — `predict: () => ({score: 0.5,
+     * confidence: 0.7})` labelled GRADIENT_BOOSTING, and `sequence[last] * 1.1` labelled
+     * LSTM — together with a hardcoded accuracy of 0.75, a training-set size of 1000, and
+     * invented precision/recall figures, all of which were served to callers through the
+     * predictive_* tools and the REST layer. The predict functions were dead (nothing ever
+     * read this.models), but the fabricated metadata was not: it was read on every
+     * prediction. Both are gone.
+     */
     private initializeModels(): void {
-        // Initialize simplified models
-        // In production, would load actual trained models
-        
-        this.models.set('error_prediction', {
-            type: ModelType.GRADIENT_BOOSTING,
-            predict: (features: number[]) => ({ score: 0.5, confidence: 0.7 })
-        });
-        
-        this.models.set('anomaly_detection', {
-            type: ModelType.ISOLATION_FOREST,
-            predict: (features: number[]) => ({ score: 0.5 })
-        });
-        
-        this.models.set('pattern_forecast', {
-            type: ModelType.LSTM,
-            predict: (sequence: number[]) => sequence[sequence.length - 1] * 1.1
-        });
-        
-        // Set metadata
-        for (const [name, model] of this.models) {
+        const heuristicPredictors = ['error_prediction', 'anomaly_detection', 'pattern_forecast'];
+
+        for (const name of heuristicPredictors) {
             this.modelMetadata.set(name, {
                 modelId: uuidv4(),
-                type: model.type,
+                name,
+                type: ModelType.HEURISTIC,
                 version: '1.0.0',
-                trainedAt: Date.now(),
-                accuracy: 0.75,
+                trainedAt: null,
+                accuracy: null, // heuristics have no measured validation accuracy
                 features: [],
                 hyperparameters: {},
-                trainingDataSize: 1000,
-                validationMetrics: { accuracy: 0.75, precision: 0.8, recall: 0.7 }
+                trainingDataSize: 0,
+                validationMetrics: null
             });
         }
     }
@@ -1792,9 +1807,14 @@ export class PredictiveAnalyticsService extends EventEmitter {
                 // Update internal metadata with real training metrics
                 const modelMeta = this.modelMetadata.get('error_prediction');
                 if (modelMeta) {
+                    // Backed by a trained classifier now, not the heuristic.
+                    modelMeta.type = ModelType.NEURAL_NETWORK;
                     modelMeta.trainedAt = Date.now();
                     modelMeta.trainingDataSize = features.length;
-                    modelMeta.accuracy = metrics.accuracy ?? metrics.valAccuracy ?? 0.75;
+                    // If training reported no accuracy, we do not know the accuracy. Say so.
+                    // This previously fell back to 0.75 — an invented figure indistinguishable
+                    // from a measured one.
+                    modelMeta.accuracy = metrics.accuracy ?? metrics.valAccuracy ?? null;
                     modelMeta.validationMetrics = {
                         accuracy: metrics.accuracy ?? 0,
                         val_accuracy: metrics.valAccuracy ?? 0,
@@ -1916,6 +1936,9 @@ export class PredictiveAnalyticsService extends EventEmitter {
                 // Update internal metadata with real training metrics
                 const modelMeta = this.modelMetadata.get('anomaly_detection');
                 if (modelMeta) {
+                    // A real autoencoder is now backing this predictor, so it stops being a
+                    // heuristic and says so.
+                    modelMeta.type = ModelType.NEURAL_NETWORK;
                     modelMeta.trainedAt = Date.now();
                     modelMeta.trainingDataSize = features.length;
                     // For autoencoders, accuracy is not directly applicable —

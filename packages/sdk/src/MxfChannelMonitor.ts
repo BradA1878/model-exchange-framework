@@ -30,7 +30,8 @@
 
 import { Subscription } from 'rxjs';
 import { EventBus } from '@mxf-dev/core/events/EventBus';
-import { AnyEventName, EventHandler } from '@mxf-dev/core/events/EventBusBase';
+import { PayloadOf } from '@mxf-dev/core/events/EventBusBase';
+import { PublicEventName, isPublicEvent, getEventCategory } from '@mxf-dev/core/events/PublicEvents';
 import { Logger } from '@mxf-dev/core/utils/Logger';
 
 const logger = new Logger('warn', 'MxfChannelMonitor', 'client');
@@ -86,16 +87,36 @@ export class MxfChannelMonitor {
     }
 
     /**
-     * Subscribe to an event in this channel
-     * Events are filtered to only include those for this channel
+     * Subscribe to an event in this channel.
      *
-     * @param event Event name to subscribe to
-     * @param handler Event handler function
+     * Only events in the PUBLIC_EVENTS whitelist can be listened to — the same rule
+     * agent.on() and channelService.on() enforce. The monitor previously accepted any
+     * event name at all, which quietly contradicted the whitelist the other two claim
+     * to be there for security.
+     *
+     * Events are filtered to only those belonging to this channel.
+     *
+     * @param event Public event name to subscribe to
+     * @param handler Event handler, typed from the event name
      * @returns Subscription that can be unsubscribed
+     * @throws Error if the monitor has been destroyed
+     * @throws Error if the event is not in the public whitelist
      */
-    public on<T extends AnyEventName>(event: T, handler: EventHandler<any>): Subscription {
+    public on<E extends PublicEventName>(
+        event: E,
+        handler: (payload: PayloadOf<E>) => void
+    ): Subscription {
         if (this.isDestroyed) {
             throw new Error(`Cannot subscribe to event '${event}' on destroyed monitor for channel: ${this.channelId}`);
+        }
+
+        if (!isPublicEvent(event)) {
+            const category = getEventCategory(event as any);
+            throw new Error(
+                `Event '${event}' is not in the public whitelist and cannot be monitored. ` +
+                `It looks like an internal ${category} event. ` +
+                `Use an event from the Events namespace that appears in PUBLIC_EVENTS.`
+            );
         }
 
         // Subscribe to EventBus.client and filter by channelId
@@ -128,11 +149,11 @@ export class MxfChannelMonitor {
     }
 
     /**
-     * Unsubscribe from an event
+     * Unsubscribe from an event, removing every handler registered for it.
      *
-     * @param event Event name to unsubscribe from
+     * @param event Public event name to unsubscribe from
      */
-    public off(event: AnyEventName): void {
+    public off(event: PublicEventName): void {
         const subs = this.subscriptions.get(event);
         if (subs) {
             subs.forEach(sub => sub.unsubscribe());

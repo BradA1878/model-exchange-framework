@@ -25,6 +25,12 @@
 import { McpToolDefinition, McpToolHandlerContext, McpToolHandlerResult, McpToolResultContent } from '../McpServerTypes.js';
 import { Logger } from '../../../utils/Logger.js';
 import { MxfMeilisearchService, SearchParams } from '../../../services/MxfMeilisearchService.js';
+import { MemoryService } from '../../../services/MemoryService.js';
+import { QValueManager } from '../../../services/QValueManager.js';
+import { UtilityScorerService } from '../../../services/UtilityScorerService.js';
+import { RewardSignalProcessor } from '../../../services/RewardSignalProcessor.js';
+import { MemoryCandidate } from '../../../types/MemoryUtilityTypes.js';
+import { getCurrentMemoryPhase } from './OrparTools.js';
 import { paginationInputSchema, checkResultSize, PaginationMetadata } from '../../../utils/ToolPaginationUtils.js';
 
 const logger = new Logger('info', 'MemorySearchTools', 'server');
@@ -32,6 +38,73 @@ const logger = new Logger('info', 'MemorySearchTools', 'server');
 /**
  * Search conversation history semantically
  */
+/**
+ * Re-rank search hits by learned utility, and record what was retrieved.
+ *
+ * This is the join between semantic search and the Memory Utility Learning System.
+ * Before this existed, Q-values were computed and stored but no reachable retrieval
+ * path consulted them, so learning could not change anything an agent saw — and no
+ * production code recorded which memories a task used, so no reward was ever
+ * attributed. Both halves of the loop close here.
+ *
+ * When MULS is disabled this returns the hits untouched, so search behaves exactly as
+ * it did before.
+ */
+async function applyUtilityRanking<T extends { id: string; _rankingScore: number }>(
+    query: string,
+    hits: T[],
+    context: McpToolHandlerContext
+): Promise<T[]> {
+    const qValueManager = QValueManager.getInstance();
+    if (!qValueManager.isEnabled() || hits.length === 0) {
+        return hits;
+    }
+
+    const { agentId, channelId } = context;
+    const memoryIds = hits.map(hit => hit.id);
+
+    // Load Q-values learned in previous runs; without this every memory this process
+    // has not seen yet would score at the default and ranking would ignore all learning.
+    const memoryService = MemoryService.getInstance();
+    await memoryService.hydrateQValues(memoryIds);
+
+    const candidates: MemoryCandidate[] = hits.map(hit => ({
+        memoryId: hit.id,
+        similarity: hit._rankingScore,
+        qValue: qValueManager.getQValue(hit.id)
+    }));
+
+    // Phase-specific lambda when the agent is inside an ORPAR cycle; otherwise the
+    // configured default. We do not guess a phase.
+    const phase = agentId && channelId ? getCurrentMemoryPhase(agentId, channelId) : null;
+    const scorer = UtilityScorerService.getInstance();
+    const scoringResult = phase
+        ? scorer.scoreForPhase(query, candidates, phase)
+        : scorer.scoreMemories(query, candidates);
+
+    // Record the retrieval so RewardSignalProcessor can attribute the task's outcome to
+    // these memories when it completes.
+    if (agentId && channelId) {
+        RewardSignalProcessor.getInstance().trackAgentMemoriesUsage(
+            agentId,
+            channelId,
+            scoringResult.memories.map(m => m.memoryId),
+            phase ?? 'observation',
+            'context'
+        );
+    }
+
+    const hitsById = new Map(hits.map(hit => [hit.id, hit]));
+    const ranked: T[] = [];
+    for (const scored of scoringResult.memories) {
+        const hit = hitsById.get(scored.memoryId);
+        if (hit) {
+            ranked.push(hit);
+        }
+    }
+    return ranked;
+}
+
 export const memory_search_conversations = {
     name: 'memory_search_conversations',
     description: 'Search your entire conversation history using semantic search. Find relevant past discussions even if they happened hundreds of messages ago. Use this when you need to recall "that time we talked about X".',
@@ -159,7 +232,10 @@ export const memory_search_conversations = {
 
             const result = await meilisearch.searchConversations(searchParams);
 
-            const formattedResults = result.hits.map(hit => ({
+            // Re-rank by learned utility and record the retrieval for reward attribution.
+            const rankedHits = await applyUtilityRanking(input.query, result.hits, context);
+
+            const formattedResults = rankedHits.map(hit => ({
                 content: hit.content,
                 role: hit.role,
                 agentId: hit.agentId,

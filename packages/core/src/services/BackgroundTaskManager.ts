@@ -39,6 +39,7 @@ import { AgentId, ChannelId } from '../types/ChannelContext.js';
 import { Logger } from '../utils/Logger.js';
 import { Events } from '../events/EventNames.js';
 import { EventBus } from '../events/EventBus.js';
+import { buildShellChildEnv } from '../protocols/mcp/security/McpToolPolicy.js';
 import {
     createShellExecutionProgressPayload,
     createShellBackgroundStartedPayload,
@@ -183,13 +184,16 @@ export class BackgroundTaskManager {
 
         const taskId = crypto.randomUUID();
 
-        // Build spawn options
+        // Build spawn options.
+        //
+        // Background tasks are spawned directly rather than through the shell tool, so this
+        // path bypassed the security guard entirely and handed every child the full server
+        // environment — JWT_SECRET, MONGODB_URI, OPENROUTER_API_KEY and the rest. Children
+        // get the same stripped environment the guarded shell path builds.
         const spawnOptions: SpawnOptions = {
             shell: true,
             cwd: options.workingDirectory || process.cwd(),
-            env: options.environment
-                ? { ...process.env, ...options.environment }
-                : process.env,
+            env: buildShellChildEnv(options.environment),
         };
 
         const childProcess = spawn(command, [], spawnOptions);

@@ -43,6 +43,7 @@ import {
 } from '@mxf-dev/core/schemas/EventPayloadSchema';
 import { CORE_MXF_TOOLS, getCoreToolsArray } from '@mxf-dev/core/constants/CoreTools';
 import { Channel } from '@mxf-dev/core/models/channel';
+import { getHybridMcpToolRegistry } from '../../mcp/services/HybridMcpRegistryAccess';
 
 /**
  * Simplified tool definition for socket communication
@@ -240,7 +241,7 @@ export class McpService {
         }
 
         // Check if hybrid registry is available for external tools
-        const hybridRegistry = (global as any).hybridMcpToolRegistry;
+        const hybridRegistry = getHybridMcpToolRegistry();
         let allTools: SocketMcpTool[] = [];
 
         if (hybridRegistry) {
@@ -418,7 +419,7 @@ export class McpService {
         this.validator.assertIsNonEmptyString(name, 'Tool name is required');
         
         // Check hybrid registry first
-        const hybridRegistry = (global as any).hybridMcpToolRegistry;
+        const hybridRegistry = getHybridMcpToolRegistry();
         if (hybridRegistry) {
             const hybridTool = hybridRegistry.findTool(name);
             if (hybridTool) {
@@ -457,7 +458,7 @@ export class McpService {
      * Get tool count
      */
     public getToolCount(): number {
-        const hybridRegistry = (global as any).hybridMcpToolRegistry;
+        const hybridRegistry = getHybridMcpToolRegistry();
         if (hybridRegistry) {
             const tools = hybridRegistry.getAllToolsSnapshot();
             return tools.length;

@@ -11,6 +11,10 @@
  *   Ctrl+S   — Stop all agents
  *   Ctrl+A   — Toggle detail mode (full vs truncated tool args)
  *
+ * Esc and Ctrl+S run the real cancel path (StopController) rather than only
+ * flipping the working flag — see StopController for why that distinction costs
+ * money.
+ *
  * Arrow key history is handled in InputLine.tsx since it needs
  * to control the input value directly.
  *
@@ -20,6 +24,8 @@
 import { useInput } from 'ink';
 import type { Dispatch } from 'react';
 import type { AppAction, AppState } from '../state';
+import type { InteractiveSessionManager } from '../services/InteractiveSessionManager';
+import { stopAgentActivity } from '../services/StopController';
 
 /**
  * Hook that registers global keyboard shortcuts for the TUI.
@@ -27,11 +33,13 @@ import type { AppAction, AppState } from '../state';
  * @param dispatch - React dispatch function for state updates
  * @param state - Current app state (to check isAgentWorking)
  * @param requestExit - Callback to trigger graceful TUI exit
+ * @param session - Session manager, used to actually cancel in-flight agent work
  */
 export function useKeyboardShortcuts(
     dispatch: Dispatch<AppAction>,
     state: AppState,
     requestExit: () => void,
+    session: InteractiveSessionManager,
 ): void {
     useInput((input, key) => {
         // Ctrl+C — exit the TUI
@@ -40,9 +48,12 @@ export function useKeyboardShortcuts(
             return;
         }
 
-        // Esc — stop active agent work (only when agent is working)
+        // Esc — stop active agent work (only when an agent is actually working).
+        // useInput's callback is sync; stopAgentActivity reports its own outcome
+        // through dispatch, so the promise is intentionally not awaited here.
         if (key.escape && state.isAgentWorking) {
-            dispatch({ type: 'SET_AGENT_WORKING', working: false });
+            void stopAgentActivity(session, dispatch);
+            return;
         }
 
         // Ctrl+L — clear conversation history
@@ -52,7 +63,7 @@ export function useKeyboardShortcuts(
 
         // Ctrl+S — stop all agents
         if (input === 's' && key.ctrl) {
-            dispatch({ type: 'SET_AGENT_WORKING', working: false });
+            void stopAgentActivity(session, dispatch);
         }
 
         // Ctrl+A — toggle detail mode (verbose tool output)

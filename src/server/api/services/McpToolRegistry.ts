@@ -147,12 +147,20 @@ export class McpToolRegistry {
             for (const tool of tools) {
                 // Check if this tool has a server-side handler available
                 const mxfTool = mxfMcpToolRegistry.get(tool.name as any);
-                
-                // Convert database model to tool definition
+
+                // Convert database model to tool definition.
+                //
+                // Code is the source of truth for everything the model sees. The
+                // description and the inputSchema are both prompt surface, and
+                // serving one from the database and the other from code let them
+                // drift apart within a single tool: an edited description did
+                // nothing until the collection was wiped, while the schema updated
+                // immediately. reconcileTools() writes both back to the database on
+                // startup, so a code-defined tool is read from code here.
                 const toolDef: ExtendedMcpToolDefinition = {
                     name: tool.name,
-                    description: tool.description || '',
-                    inputSchema: mxfTool?.inputSchema || {},
+                    description: mxfTool?.description ?? tool.description ?? '',
+                    inputSchema: mxfTool?.inputSchema ?? {},
                     enabled: true,
                     providerId: tool.providerId,
                     channelId: tool.channelId,
@@ -219,34 +227,32 @@ export class McpToolRegistry {
                             };
                         }
                     }) : (async (input, context) => {
-                        // Fallback handler for tools without server-side implementation
-                        // This routes the call back to the agent for execution
-                        this.logger.warn(`No server-side handler found for tool ${tool.name}, routing to agent`);
-                        
-                        // Strict validation before routing
+                        // A tool row in the database with no code handler is a tool
+                        // that cannot run here. The old code emitted TOOL_CALL and
+                        // returned the string 'Tool execution routed to agent' as the
+                        // tool RESULT — indistinguishable, to the caller and to the
+                        // model, from a real result. Nothing consumed the event and
+                        // no result ever came back.
+                        //
+                        // Fail instead, and say why. Rows like this are left over from
+                        // tools that were removed from code; reconcileTools() prunes
+                        // them on startup.
                         if (!context.agentId || typeof context.agentId !== 'string') {
                             throw new Error('Missing or invalid agentId in tool execution context. agentId is required for all MCP operations.');
                         }
                         if (!context.channelId || typeof context.channelId !== 'string') {
                             throw new Error('Missing or invalid channelId in tool execution context. channelId is required for all MCP operations.');
                         }
-                        
-                        EventBus.server.emit(Events.Mcp.TOOL_CALL, createMcpToolCallPayload(
-                            Events.Mcp.TOOL_CALL,
-                            context.agentId,
-                            context.channelId,
-                            {
-                                toolName: tool.name,
-                                callId: context.requestId,
-                                arguments: input
-                            }
-                        ));
-                        return { 
-                            content: {
-                                type: 'text',
-                                data: 'Tool execution routed to agent'
-                            }
-                        };
+
+                        this.logger.error(
+                            `Tool "${tool.name}" is registered in the database but has no handler in code. ` +
+                            `It cannot be executed.`
+                        );
+
+                        throw new Error(
+                            `Tool "${tool.name}" has no implementation on this server. ` +
+                            `It exists in the tool database but no code defines it, so it cannot run.`
+                        );
                     })
                 };
                 
@@ -515,15 +521,25 @@ export class McpToolRegistry {
             // Check if the tool already exists
             if (this.tools.has(tool.name)) {
                 const existingTool = this.tools.get(tool.name)!;
-                
-                // If it's the same tool from the same provider and channel, just return success
+
+                // Re-registering the identical tool from the same provider and channel
+                // is a no-op, not a conflict — startup can run more than once.
                 if (existingTool.providerId === providerId && existingTool.channelId === channelId) {
-                    //;
                     return of(true);
                 }
-                
-                // If different provider or channel, log a warning but return success to avoid noise
-                return of(true);
+
+                // A different provider or channel claiming a name that is already taken
+                // is a collision. The old code returned of(true) here: the caller was
+                // told the registration succeeded, while the existing tool silently kept
+                // the name and every subsequent call went to the wrong handler.
+                const message =
+                    `Tool name collision: "${tool.name}" is already registered by ` +
+                    `provider "${existingTool.providerId}" on channel "${existingTool.channelId}"; ` +
+                    `provider "${providerId}" on channel "${channelId}" tried to claim the same name. ` +
+                    `Tool names must be unique — rename one of them.`;
+
+                this.logger.error(message);
+                return throwError(() => new Error(message));
             }
             
             // Add provider ID to the tool definition
@@ -576,6 +592,133 @@ export class McpToolRegistry {
         }
     }
     
+    /**
+     * Reconcile the code-defined tool set into the database and into memory.
+     *
+     * Call this once at startup with every tool the code defines. Code wins: for
+     * each tool this writes the current description, inputSchema and metadata into
+     * the database, whether or not a row already existed.
+     *
+     * This replaces the old startup behavior, which registered only tools whose
+     * NAMES were new. Under that rule an edited description never reached the
+     * model — the database kept serving the original text until someone wiped the
+     * collection — while the schema, read from code, updated immediately. The two
+     * halves of one tool's contract drifted apart, silently, and descriptions are
+     * prompt text.
+     *
+     * Rows for tools the code no longer defines are removed: they can never
+     * execute (there is no handler), so leaving them listed only advertises tools
+     * that fail when called.
+     *
+     * @param tools Every tool defined in code
+     * @param providerId Provider that owns them
+     * @param channelId Channel they are registered against
+     * @returns A summary of what changed
+     */
+    public async reconcileTools(
+        tools: McpToolDefinition[],
+        providerId: string = 'mxf-server',
+        channelId: string = 'system'
+    ): Promise<{ added: number; updated: number; unchanged: number; removed: number }> {
+        validate.assertIsArray(tools, 'Tools must be an array');
+        validate.assertIsNonEmptyString(providerId, 'Provider ID must be a non-empty string');
+        validate.assertIsNonEmptyString(channelId, 'Channel ID must be a non-empty string');
+
+        // Duplicate names inside the code-defined set would make "which handler runs"
+        // depend on registration order. Catch it here as well as at the tool index,
+        // since tools can also arrive from a caller that assembled its own list.
+        const seen = new Set<string>();
+        const duplicates = new Set<string>();
+        for (const tool of tools) {
+            if (seen.has(tool.name)) {
+                duplicates.add(tool.name);
+            }
+            seen.add(tool.name);
+        }
+        if (duplicates.size > 0) {
+            throw new Error(
+                `Cannot reconcile tools: duplicate tool names in the code-defined set: ` +
+                `${Array.from(duplicates).sort().join(', ')}`
+            );
+        }
+
+        const existingRows = await listAllMcpTools(false);
+        const existingByName = new Map(existingRows.map(row => [row.name, row]));
+
+        const summary = { added: 0, updated: 0, unchanged: 0, removed: 0 };
+        const changedNames: string[] = [];
+
+        for (const tool of tools) {
+            const existing = existingByName.get(tool.name);
+            const description = tool.description ?? '';
+            const inputSchema = tool.inputSchema ?? {};
+            const metadata = tool.metadata ?? {};
+
+            if (!existing) {
+                await createMcpTool({
+                    name: tool.name,
+                    description,
+                    inputSchema,
+                    enabled: tool.enabled !== undefined ? tool.enabled : true,
+                    providerId,
+                    channelId,
+                    parameters: [],
+                    metadata,
+                    createdAt: new Date(),
+                    updatedAt: new Date()
+                } as any);
+                summary.added++;
+                changedNames.push(`+${tool.name}`);
+                continue;
+            }
+
+            // Compare on the fields the model actually sees.
+            const descriptionChanged = existing.description !== description;
+            const schemaChanged =
+                JSON.stringify(existing.inputSchema ?? {}) !== JSON.stringify(inputSchema);
+
+            if (descriptionChanged || schemaChanged) {
+                await updateMcpTool(tool.name, {
+                    description,
+                    inputSchema,
+                    metadata,
+                    enabled: tool.enabled !== undefined ? tool.enabled : true,
+                    providerId,
+                    channelId
+                } as any);
+                summary.updated++;
+                changedNames.push(`~${tool.name}`);
+            } else {
+                summary.unchanged++;
+            }
+        }
+
+        // Prune rows the code no longer defines.
+        for (const row of existingRows) {
+            if (!seen.has(row.name)) {
+                await deleteMcpTool(row.name);
+                summary.removed++;
+                changedNames.push(`-${row.name}`);
+            }
+        }
+
+        // One line, so a description edit is visible in the startup log.
+        this.logger.info(
+            `MCP tool reconciliation: ${summary.added} added, ${summary.updated} updated, ` +
+            `${summary.unchanged} unchanged, ${summary.removed} removed` +
+            (changedNames.length > 0 ? ` [${changedNames.join(' ')}]` : '')
+        );
+
+        // Force the next read to pick up what we just wrote.
+        this.databaseLoaded = false;
+        this.tools.clear();
+        await this.loadToolsFromDatabase();
+
+        this.notifyToolRegistryChanged();
+
+        return summary;
+    }
+
     /**
      * Register multiple MCP tools in bulk
      * @param tools Array of tools to register

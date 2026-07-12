@@ -29,14 +29,15 @@ import { EventBus } from '@mxf-dev/core/events/EventBus';
 import { Events } from '@mxf-dev/core/events/EventNames';
 import { MxfService, IInternalChannelService } from '../services/MxfService.js';
 import { v4 as uuidv4 } from 'uuid';
-import { 
-    BaseEventPayload, 
-    McpToolRegisteredEventPayload, 
-    McpToolUnregisteredEventPayload, 
-    McpToolCallEventPayload, 
-    McpToolResultEventPayload, 
-    McpToolErrorEventPayload, 
-    McpToolEventData, 
+import { awaitEventResponse, EventRequestError } from '../services/internal/EventRequest.js';
+import {
+    BaseEventPayload,
+    McpToolRegisteredEventPayload,
+    McpToolUnregisteredEventPayload,
+    McpToolCallEventPayload,
+    McpToolResultEventPayload,
+    McpToolErrorEventPayload,
+    McpToolEventData,
     createBaseEventPayload,
     createMcpToolRegisterPayload,
     createMcpToolUnregisterPayload,
@@ -44,6 +45,9 @@ import {
     createMcpToolResultPayload,
     createMcpToolErrorPayload
 } from '@mxf-dev/core/schemas/EventPayloadSchema';
+
+/** How long to wait for the server to answer a tool register/unregister request. */
+const TOOL_REGISTRATION_TIMEOUT_MS = 30_000;
 
 /**
  * Handles MCP tool events for provider and consumer agents
@@ -81,110 +85,100 @@ export class McpToolHandlers extends McpHandler {
     }
     
     /**
-     * Register a tool with the MCP server
+     * Register a tool with the MCP server.
+     *
      * @param tool Tool definition to register
      * @param channelId Channel ID where the tool should be registered
-     * @returns Promise resolving to success status
+     * @returns Promise that resolves once the server has accepted the tool
+     * @throws EventRequestError if the server rejects the registration
+     * @throws EventRequestTimeoutError if the server does not answer
      */
-    public registerTool = (tool: any, channelId: string): Promise<boolean> => {
-        return new Promise((resolve, reject) => {
-            try {
-                
-                // Validate inputs
-                this.validator.assertIsObject(tool);
-                this.validator.assertIsNonEmptyString(tool.name);
-                this.validator.assertIsNonEmptyString(tool.description);
-                this.validator.assertIsObject(tool.inputSchema);
-                this.validator.assertIsNonEmptyString(channelId);
-                
-                // Set up one-time handler for registration response
-                const subscription = EventBus.client.on(Events.Mcp.TOOL_REGISTERED, (payload: McpToolRegisteredEventPayload): void => {
-                    if (payload.data.toolName === tool.name) { 
-                        // Remove one-time handler using the subscription
-                        subscription.unsubscribe();
-                        
-                        if (payload.data.success) {
-                            this.registeredTools.set(tool.name, tool);
-                            resolve(true);
-                        } else {
-                            this.logger.error(`Failed to register tool ${tool.name}: ${payload.data.error || 'Unknown error'}`);
-                            resolve(false);
-                        }
-                    }
-                });
-                
-                // Send registration request using proper MCP payload helper
-                const mcpDataForRegister: McpToolEventData & { registrationDetails: any } = {
-                    toolName: tool.name,
-                    description: tool.description,
-                    inputSchema: tool.inputSchema,
-                    registrationDetails: {
-                        metadata: tool.metadata,
-                        enabled: tool.enabled
-                    }
-                };
-                
-                // Use the proper MCP payload creation helper
-                const registerPayload = createMcpToolRegisterPayload(
-                    Events.Mcp.TOOL_REGISTER,
-                    this.agentId,
-                    channelId,
-                    mcpDataForRegister
-                );
-                
-                EventBus.client.emitOn(this.agentId,Events.Mcp.TOOL_REGISTER, registerPayload);
-            } catch (error) {
-                this.logger.error(`Error registering tool: ${error instanceof Error ? error.message : String(error)}`);
-                reject(error);
+    public registerTool = async (tool: any, channelId: string): Promise<void> => {
+        this.validator.assertIsObject(tool);
+        this.validator.assertIsNonEmptyString(tool.name);
+        this.validator.assertIsNonEmptyString(tool.description);
+        this.validator.assertIsObject(tool.inputSchema);
+        this.validator.assertIsNonEmptyString(channelId);
+
+        const mcpDataForRegister: McpToolEventData & { registrationDetails: any } = {
+            toolName: tool.name,
+            description: tool.description,
+            inputSchema: tool.inputSchema,
+            registrationDetails: {
+                metadata: tool.metadata,
+                enabled: tool.enabled
             }
+        };
+
+        await awaitEventResponse<void>({
+            emitEvent: Events.Mcp.TOOL_REGISTER,
+            payload: createMcpToolRegisterPayload(
+                Events.Mcp.TOOL_REGISTER,
+                this.agentId,
+                channelId,
+                mcpDataForRegister
+            ),
+            route: { via: 'agent', agentId: this.agentId },
+            successEvent: Events.Mcp.TOOL_REGISTERED,
+            correlate: (payload: McpToolRegisteredEventPayload) => payload?.data?.toolName === tool.name,
+            mapResult: (payload: McpToolRegisteredEventPayload) => {
+                // The server answers on TOOL_REGISTERED even when it refused the tool,
+                // so success:false has to become a rejection here. It used to resolve
+                // `false` and the caller had no idea why.
+                if (!payload.data.success) {
+                    throw new EventRequestError(
+                        payload.data.error || `Failed to register tool '${tool.name}'`,
+                        Events.Mcp.TOOL_REGISTERED,
+                        payload
+                    );
+                }
+                this.registeredTools.set(tool.name, tool);
+            },
+            timeoutMs: TOOL_REGISTRATION_TIMEOUT_MS,
+            description: `Tool registration for '${tool.name}'`,
+            logger: this.logger,
         });
     };
-    
+
     /**
-     * Unregister a tool from the MCP server
+     * Unregister a tool from the MCP server.
+     *
      * @param name Tool name to unregister
      * @param channelId Channel ID where the tool is registered
-     * @returns Promise resolving to success status
+     * @returns Promise that resolves once the server has removed the tool
+     * @throws EventRequestError if the server rejects the request
+     * @throws EventRequestTimeoutError if the server does not answer
      */
-    public unregisterTool = (name: string, channelId: string): Promise<boolean> => {
-        return new Promise((resolve, reject) => {
-            try {
-                
-                // Validate inputs
-                this.validator.assertIsNonEmptyString(name);
-                this.validator.assertIsNonEmptyString(channelId);
-                
-                // Set up one-time handler for unregistration response
-                const subscription = EventBus.client.on(Events.Mcp.TOOL_UNREGISTERED, (payload: McpToolUnregisteredEventPayload): void => {
-                    if (payload.data.toolName === name) { 
-                        // Remove one-time handler using the subscription
-                        subscription.unsubscribe();
-                        
-                        if (payload.data.success) {
-                            this.registeredTools.delete(name);
-                            resolve(true);
-                        } else {
-                            this.logger.error(`Failed to unregister tool ${name}: ${payload.data.error || 'Unknown error'}`);
-                            resolve(false);
-                        }
-                    }
-                });
-                
-                // Send unregistration request using proper MCP payload helper
-                const mcpDataForUnregister: McpToolEventData = {
-                    toolName: name
-                };
-                const unregisterPayload = createMcpToolUnregisterPayload(
-                    Events.Mcp.TOOL_UNREGISTER,
-                    this.agentId,
-                    channelId,
-                    mcpDataForUnregister
-                );
-                EventBus.client.emitOn(this.agentId,Events.Mcp.TOOL_UNREGISTER, unregisterPayload);
-            } catch (error) {
-                this.logger.error(`Error unregistering tool: ${error instanceof Error ? error.message : String(error)}`);
-                reject(error);
-            }
+    public unregisterTool = async (name: string, channelId: string): Promise<void> => {
+        this.validator.assertIsNonEmptyString(name);
+        this.validator.assertIsNonEmptyString(channelId);
+
+        const mcpDataForUnregister: McpToolEventData = { toolName: name };
+
+        await awaitEventResponse<void>({
+            emitEvent: Events.Mcp.TOOL_UNREGISTER,
+            payload: createMcpToolUnregisterPayload(
+                Events.Mcp.TOOL_UNREGISTER,
+                this.agentId,
+                channelId,
+                mcpDataForUnregister
+            ),
+            route: { via: 'agent', agentId: this.agentId },
+            successEvent: Events.Mcp.TOOL_UNREGISTERED,
+            correlate: (payload: McpToolUnregisteredEventPayload) => payload?.data?.toolName === name,
+            mapResult: (payload: McpToolUnregisteredEventPayload) => {
+                if (!payload.data.success) {
+                    throw new EventRequestError(
+                        payload.data.error || `Failed to unregister tool '${name}'`,
+                        Events.Mcp.TOOL_UNREGISTERED,
+                        payload
+                    );
+                }
+                this.registeredTools.delete(name);
+            },
+            timeoutMs: TOOL_REGISTRATION_TIMEOUT_MS,
+            description: `Tool unregistration for '${name}'`,
+            logger: this.logger,
         });
     };
     

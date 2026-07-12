@@ -70,8 +70,7 @@
  * ```
  */
 
-import { v4 as uuidv4 } from 'uuid';
-import { Events } from '@mxf-dev/core/events/EventNames';
+import { Events, CoreSocketEvents, AuthEvents } from '@mxf-dev/core/events/EventNames';
 import { EventBus } from '@mxf-dev/core/events/EventBus';
 import { McpEvents } from '@mxf-dev/core/events/event-definitions/McpEvents';
 import { MxfAgent } from './MxfAgent.js';
@@ -81,9 +80,17 @@ import { createBaseEventPayload } from '@mxf-dev/core/schemas/EventPayloadSchema
 import { LlmProviderType } from '@mxf-dev/core/protocols/mcp/LlmProviders';
 import { AgentConfig, LlmReasoningConfig } from '@mxf-dev/core/interfaces/AgentInterfaces';
 import { ChannelConfig } from '@mxf-dev/core/interfaces/ChannelConfig';
+import { awaitEventResponse, EventRequestError } from './services/internal/EventRequest.js';
+import type { McpServerRegistrationResult } from './MxfClient.js';
 import { default as socketIO } from 'socket.io-client';
 
 const moduleLogger = new Logger('debug', 'MxfSDK', 'client');
+
+/** How long to wait for an MCP server registration/unregistration to come back. */
+const MCP_REGISTRATION_TIMEOUT_MS = 30_000;
+
+/** How long to wait for a channel-create or key-generate to come back. */
+const ADMIN_OPERATION_TIMEOUT_MS = 10_000;
 
 /**
  * MxfSDK configuration interface
@@ -165,6 +172,12 @@ export class MxfSDK {
     private userToken: string | null = null;
     private agents: Map<string, MxfAgent> = new Map();
     private userId: string = 'sdk-user';  // Default user ID for socket events
+    /**
+     * The user id the server confirmed at auth:success — the real Mongo ObjectId.
+     * Distinct from `userId`, which starts as a placeholder, and from `config.userId`,
+     * which PAT auth (the recommended path) never sets at all.
+     */
+    private authenticatedUserId: string | null = null;
     private channelMonitors: Map<string, MxfChannelMonitor> = new Map();  // Track channel monitors for cleanup
 
     constructor(config: MxfSDKConfig) {
@@ -250,24 +263,26 @@ export class MxfSDK {
 
             this.socket = socketIO(this.config.serverUrl, socketOptions);
 
-            this.socket.on('connect', () => {
-            });
-
-            this.socket.on('connect_error', (error: Error) => {
+            // Socket lifecycle uses the CoreSocketEvents/AuthEvents constants rather than
+            // raw 'connect'/'auth:success'/'auth:error' string literals, matching MxfService.
+            this.socket.on(CoreSocketEvents.CONNECT_ERROR, (error: Error) => {
                 moduleLogger.error(`SDK socket connection error: ${error.message}`);
                 reject(new Error(`Socket connection failed: ${error.message}`));
             });
 
-            this.socket.on('disconnect', (reason: string) => {
+            this.socket.on(CoreSocketEvents.DISCONNECT, (reason: string) => {
                 moduleLogger.warn(`SDK socket disconnected: ${reason}`);
             });
 
             // Wait for authentication to complete before resolving
-            this.socket.on('auth:success', (data: any) => {
+            this.socket.on(AuthEvents.SUCCESS, (data: any) => {
 
-                // Update userId from server response (it's the MongoDB ObjectId, not username)
+                // The server returns the real Mongo user id — not the username, and not
+                // whatever the caller put in config.userId (which PAT auth never sets).
+                // getUserId() reads this.
                 if (data.userId) {
                     this.userId = data.userId;
+                    this.authenticatedUserId = data.userId;
                 }
 
                 // Initialize EventBus.client with the authenticated socket
@@ -277,17 +292,28 @@ export class MxfSDK {
                 resolve();
             });
 
-            this.socket.on('auth:error', (data: any) => {
+            this.socket.on(AuthEvents.ERROR, (data: any) => {
                 moduleLogger.error(`Authentication failed: ${JSON.stringify(data)}`);
                 reject(new Error(`Authentication failed: ${data.error || 'Unknown error'}`));
             });
         });
     }
 
+    /**
+     * Fail fast if the SDK socket is not up.
+     *
+     * @throws Error if connect() has not run, or the socket has since dropped
+     * @private
+     */
+    private assertSocketConnected(): void {
+        if (!this.socket || !this.socket.connected) {
+            throw new Error('SDK socket not connected. Call sdk.connect() first.');
+        }
+    }
 
     /**
      * Create an agent instance
-     * 
+     *
      * @param config Agent creation configuration
      * @returns Configured MxfAgent instance (not yet connected)
      */
@@ -375,9 +401,7 @@ export class MxfSDK {
      * ```
      */
     async createChannel(channelId: string, config: Partial<ChannelConfig> & { name: string }): Promise<MxfChannelMonitor> {
-        if (!this.socket || !this.socket.connected) {
-            throw new Error('SDK socket not connected. Call sdk.connect() first.');
-        }
+        this.assertSocketConnected();
 
         // Destructure config with defaults
         const {
@@ -393,81 +417,56 @@ export class MxfSDK {
             mcpServers = []
         } = config;
 
-        return new Promise((resolve, reject) => {
-            const timeout = setTimeout(() => {
-                createdSub.unsubscribe();
-                failedSub.unsubscribe();
-                reject(new Error('Channel creation timeout'));
-            }, 10000);
-
-            // Listen for success via EventBus.client
-            const createdSub = EventBus.client.on(Events.Channel.CREATED, async (payload: any) => {
-                if (payload.channelId === channelId) {
-                    clearTimeout(timeout);
-                    createdSub.unsubscribe();
-                    failedSub.unsubscribe();
-
-                    // Register MCP servers if provided
-                    if (mcpServers.length > 0) {
-                        for (const serverConfig of mcpServers) {
-                            try {
-                                await this.registerChannelMcpServer(channelId, serverConfig);
-                            } catch (error) {
-                                moduleLogger.error(`Failed to register MCP server ${serverConfig.id}: ${error}`);
-                            }
-                        }
-                    }
-
-                    // Create and return channel monitor, track for cleanup
-                    const channelMonitor = new MxfChannelMonitor(channelId);
-                    this.channelMonitors.set(channelId, channelMonitor);
-                    resolve(channelMonitor);
-                }
-            });
-
-            // Listen for failure via EventBus.client
-            const failedSub = EventBus.client.on(Events.Channel.CREATION_FAILED, (payload: any) => {
-                if (payload.channelId === channelId) {
-                    clearTimeout(timeout);
-                    createdSub.unsubscribe();
-                    failedSub.unsubscribe();
-                    reject(new Error(payload.data?.error || 'Channel creation failed'));
-                }
-            });
-
-            // Emit channel creation event with full config including new fields
-            const payloadData = {
-                name,
-                description,
-                isPrivate,
-                requireApproval,
-                maxAgents,
-                allowAnonymous,
-                metadata,
-                allowedTools,
-                systemLlmEnabled
-            };
-
-            const payload = createBaseEventPayload(
+        await awaitEventResponse<void>({
+            emitEvent: Events.Channel.CREATE,
+            payload: createBaseEventPayload(
                 Events.Channel.CREATE,
                 this.userId,
                 channelId,
-                payloadData
-            );
-
-            // Emit via EventBus.client
-            EventBus.client.emit(Events.Channel.CREATE, payload);
+                {
+                    name,
+                    description,
+                    isPrivate,
+                    requireApproval,
+                    maxAgents,
+                    allowAnonymous,
+                    metadata,
+                    allowedTools,
+                    systemLlmEnabled
+                }
+            ),
+            route: { via: 'primary' },
+            successEvent: Events.Channel.CREATED,
+            failureEvent: Events.Channel.CREATION_FAILED,
+            correlate: (payload: any) => payload?.channelId === channelId,
+            mapResult: () => undefined,
+            timeoutMs: ADMIN_OPERATION_TIMEOUT_MS,
+            description: `Channel creation for '${channelId}'`,
+            logger: moduleLogger,
         });
+
+        // Register any MCP servers the caller asked for. A failure here is a failure of
+        // createChannel — it used to be logged and swallowed, leaving the caller with a
+        // channel monitor and no tools, and no way to tell.
+        for (const serverConfig of mcpServers) {
+            await this.registerChannelMcpServer(channelId, serverConfig);
+        }
+
+        const channelMonitor = new MxfChannelMonitor(channelId);
+        this.channelMonitors.set(channelId, channelMonitor);
+        return channelMonitor;
     }
 
     /**
-     * Register an MCP server for a channel via EventBus
-     * 
-     * This allows registering MCP servers at the SDK level without requiring an agent.
-     * 
+     * Register an MCP server for a channel.
+     *
+     * Registers at the SDK level, without needing an agent.
+     *
      * @param channelId Channel identifier
      * @param serverConfig MCP server configuration
-     * @returns Promise resolving to registration result
+     * @returns Promise resolving to the discovered tool names
+     * @throws EventRequestError if the server rejects the registration
+     * @throws EventRequestTimeoutError if no response arrives in 30s
      */
     async registerChannelMcpServer(channelId: string, serverConfig: {
         id: string;
@@ -480,116 +479,82 @@ export class MxfSDK {
         environmentVariables?: Record<string, string>;
         restartOnCrash?: boolean;
         keepAliveMinutes?: number;
-    }): Promise<{ success: boolean; toolsDiscovered?: string[] }> {
-        if (!this.socket || !this.socket.connected) {
-            throw new Error('SDK socket not connected. Call sdk.connect() first.');
-        }
+    }): Promise<McpServerRegistrationResult> {
+        this.assertSocketConnected();
 
-        return new Promise((resolve, reject) => {
-            let registrationCompleted = false;
-            let registeredSub: any;
-            let failedSub: any;
-
-            // Handler for successful registration via EventBus.client
-            registeredSub = EventBus.client.on(McpEvents.CHANNEL_SERVER_REGISTERED, (payload: any) => {
-                if (payload.data?.serverId === serverConfig.id &&
-                    payload.data?.scopeId === channelId &&
-                    !registrationCompleted) {
-                    registrationCompleted = true;
-                    registeredSub.unsubscribe();
-                    failedSub.unsubscribe();
-
-                    const discoveredTools = payload.data?.tools?.map((t: any) => t.name) || [];
-                    resolve({ success: true, toolsDiscovered: discoveredTools });
+        return awaitEventResponse<McpServerRegistrationResult>({
+            emitEvent: McpEvents.CHANNEL_SERVER_REGISTER,
+            payload: createBaseEventPayload(
+                McpEvents.CHANNEL_SERVER_REGISTER,
+                this.userId,
+                channelId,
+                { ...serverConfig, channelId }
+            ),
+            route: { via: 'primary' },
+            successEvent: McpEvents.CHANNEL_SERVER_REGISTERED,
+            failureEvent: McpEvents.CHANNEL_SERVER_REGISTRATION_FAILED,
+            correlate: (payload: any) =>
+                payload?.data?.serverId === serverConfig.id &&
+                payload?.data?.scopeId === channelId,
+            mapResult: (payload: any) => {
+                if (payload?.data?.success === false) {
+                    throw new EventRequestError(
+                        payload?.data?.error || `Failed to register channel MCP server '${serverConfig.id}'`,
+                        McpEvents.CHANNEL_SERVER_REGISTERED,
+                        payload
+                    );
                 }
-            });
-
-            // Handler for registration failure via EventBus.client
-            failedSub = EventBus.client.on(McpEvents.CHANNEL_SERVER_REGISTRATION_FAILED, (payload: any) => {
-                if (payload.data?.serverId === serverConfig.id && !registrationCompleted) {
-                    registrationCompleted = true;
-                    registeredSub.unsubscribe();
-                    failedSub.unsubscribe();
-
-                    reject(new Error(payload.data?.error || 'Channel server registration failed'));
-                }
-            });
-
-            // Emit registration request via EventBus.client
-            const registrationPayload = {
-                eventId: uuidv4(),
-                eventType: McpEvents.CHANNEL_SERVER_REGISTER,
-                timestamp: Date.now(),
-                agentId: this.userId,
-                channelId: channelId,
-                data: {
-                    ...serverConfig,
-                    channelId: channelId
-                }
-            };
-
-            EventBus.client.emit(McpEvents.CHANNEL_SERVER_REGISTER, registrationPayload);
-
-            // Timeout after 30 seconds
-            setTimeout(() => {
-                if (!registrationCompleted) {
-                    registrationCompleted = true;
-                    registeredSub.unsubscribe();
-                    failedSub.unsubscribe();
-                    reject(new Error('Channel server registration timeout after 30 seconds'));
-                }
-            }, 30000);
+                return { toolsDiscovered: (payload?.data?.tools ?? []).map((t: any) => t.name) };
+            },
+            timeoutMs: MCP_REGISTRATION_TIMEOUT_MS,
+            description: `Channel MCP server registration for '${serverConfig.id}'`,
+            logger: moduleLogger,
         });
     }
 
     /**
-     * Unregister an MCP server from a channel
-     * 
+     * Unregister an MCP server from a channel.
+     *
      * @param channelId Channel identifier
      * @param serverId Server identifier
-     * @returns Promise resolving to true if successful
+     * @returns Promise that resolves once the server has been removed
+     * @throws EventRequestError if the server reports the removal failed
+     * @throws EventRequestTimeoutError if no response arrives in 30s
      */
-    async unregisterChannelMcpServer(channelId: string, serverId: string): Promise<boolean> {
-        if (!this.socket || !this.socket.connected) {
-            throw new Error('SDK socket not connected. Call sdk.connect() first.');
-        }
+    async unregisterChannelMcpServer(channelId: string, serverId: string): Promise<void> {
+        this.assertSocketConnected();
 
-        return new Promise((resolve, reject) => {
-            let completed = false;
-
-            // Handler for unregistration response via EventBus.client
-            const responseSub = EventBus.client.on(McpEvents.CHANNEL_SERVER_UNREGISTERED, (payload: any) => {
-                if (payload.data?.serverId === serverId && !completed) {
-                    completed = true;
-                    responseSub.unsubscribe();
-                    resolve(payload.data?.success ?? true);
+        await awaitEventResponse<void>({
+            emitEvent: McpEvents.CHANNEL_SERVER_UNREGISTER,
+            payload: createBaseEventPayload(
+                McpEvents.CHANNEL_SERVER_UNREGISTER,
+                this.userId,
+                channelId,
+                { serverId, channelId }
+            ),
+            route: { via: 'primary' },
+            successEvent: McpEvents.CHANNEL_SERVER_UNREGISTERED,
+            correlate: (payload: any) =>
+                payload?.data?.serverId === serverId &&
+                payload?.data?.scopeId === channelId,
+            mapResult: (payload: any) => {
+                if (payload?.data?.success === false) {
+                    throw new EventRequestError(
+                        payload?.data?.error || `Failed to unregister channel MCP server '${serverId}'`,
+                        McpEvents.CHANNEL_SERVER_UNREGISTERED,
+                        payload
+                    );
                 }
-            });
-
-            // Emit unregistration request via EventBus.client
-            EventBus.client.emit(McpEvents.CHANNEL_SERVER_UNREGISTER, {
-                eventId: uuidv4(),
-                eventType: McpEvents.CHANNEL_SERVER_UNREGISTER,
-                timestamp: Date.now(),
-                agentId: this.userId,
-                channelId: channelId,
-                data: { serverId, channelId }
-            });
-
-            // Timeout after 30 seconds
-            setTimeout(() => {
-                if (!completed) {
-                    completed = true;
-                    responseSub.unsubscribe();
-                    reject(new Error('Channel server unregistration timeout'));
-                }
-            }, 30000);
+            },
+            timeoutMs: MCP_REGISTRATION_TIMEOUT_MS,
+            description: `Channel MCP server unregistration for '${serverId}'`,
+            logger: moduleLogger,
         });
     }
 
     /**
      * Generate a channel key via socket event
-     * 
+     *
      * @param channelId Channel identifier
      * @param agentId Agent identifier (optional)
      * @param name Key name (optional)
@@ -597,43 +562,11 @@ export class MxfSDK {
      * @returns Promise resolving to key generation result
      */
     async generateKey(channelId: string, agentId?: string, name?: string, expiresAt?: Date): Promise<{ keyId: string; secretKey: string; channelId: string }> {
-        if (!this.socket || !this.socket.connected) {
-            throw new Error('SDK socket not connected. Call sdk.connect() first.');
-        }
+        this.assertSocketConnected();
 
-        return new Promise((resolve, reject) => {
-            const timeout = setTimeout(() => {
-                generatedSub.unsubscribe();
-                failedSub.unsubscribe();
-                reject(new Error('Key generation timeout'));
-            }, 10000);
-
-            // Listen for success via EventBus.client
-            const generatedSub = EventBus.client.on(Events.Key.GENERATED, (payload: any) => {
-                if (payload.data.channelId === channelId) {
-                    clearTimeout(timeout);
-                    generatedSub.unsubscribe();
-                    failedSub.unsubscribe();
-                    resolve({
-                        keyId: payload.data.keyId,
-                        secretKey: payload.data.secretKey,
-                        channelId: payload.data.channelId
-                    });
-                }
-            });
-
-            // Listen for failure via EventBus.client
-            const failedSub = EventBus.client.on(Events.Key.GENERATION_FAILED, (payload: any) => {
-                if (payload.data?.channelId === channelId) {
-                    clearTimeout(timeout);
-                    generatedSub.unsubscribe();
-                    failedSub.unsubscribe();
-                    reject(new Error(payload.data?.error || 'Key generation failed'));
-                }
-            });
-
-            // Emit key generation event via EventBus.client
-            const payload = createBaseEventPayload(
+        return awaitEventResponse<{ keyId: string; secretKey: string; channelId: string }>({
+            emitEvent: Events.Key.GENERATE,
+            payload: createBaseEventPayload(
                 Events.Key.GENERATE,
                 this.userId,
                 channelId,
@@ -643,9 +576,19 @@ export class MxfSDK {
                     name,
                     expiresAt: expiresAt?.toISOString()
                 }
-            );
-
-            EventBus.client.emit(Events.Key.GENERATE, payload);
+            ),
+            route: { via: 'primary' },
+            successEvent: Events.Key.GENERATED,
+            failureEvent: Events.Key.GENERATION_FAILED,
+            correlate: (payload: any) => payload?.data?.channelId === channelId,
+            mapResult: (payload: any) => ({
+                keyId: payload.data.keyId,
+                secretKey: payload.data.secretKey,
+                channelId: payload.data.channelId
+            }),
+            timeoutMs: ADMIN_OPERATION_TIMEOUT_MS,
+            description: `Key generation for channel '${channelId}'`,
+            logger: moduleLogger,
         });
     }
 
@@ -664,17 +607,23 @@ export class MxfSDK {
     }
 
     /**
-     * Register an external MCP server
+     * Register an external MCP server.
      *
-     * This allows developers to add their own MCP servers to MXF dynamically.
-     * The server will be started and its tools will become available to agents.
+     * Adds a developer-supplied MCP server to MXF. Resolves once its tools have been
+     * discovered, so a resolved promise means the tools are usable.
+     *
+     * Responses are correlated by `serverId` — this used to resolve on the first
+     * TOOLS_DISCOVERED event it saw regardless of origin, so two concurrent
+     * registrations could complete each other with the wrong server's tools.
      *
      * @param serverConfig External server configuration
-     * @returns Promise resolving to true if registration was successful
+     * @returns Promise resolving to the discovered tool names
+     * @throws EventRequestError if the server rejects the registration
+     * @throws EventRequestTimeoutError if no response arrives in 30s
      *
      * @example
      * ```typescript
-     * await sdk.registerExternalMcpServer({
+     * const { toolsDiscovered } = await sdk.registerExternalMcpServer({
      *   id: 'my-custom-server',
      *   name: 'My Custom Server',
      *   command: 'npx',
@@ -693,142 +642,66 @@ export class MxfSDK {
         environmentVariables?: Record<string, string>;
         restartOnCrash?: boolean;
         maxRestartAttempts?: number;
-    }): Promise<{ success: boolean; toolsDiscovered?: string[] }> {
-        if (!this.socket || !this.socket.connected) {
-            throw new Error('SDK socket not connected. Call sdk.connect() first.');
-        }
+    }): Promise<McpServerRegistrationResult> {
+        this.assertSocketConnected();
 
-        return new Promise((resolve, reject) => {
-            try {
-                let registrationCompleted = false;
-                let registeredSub: any;
-                let errorSub: any;
-                let toolsSub: any;
-
-                // Set up handler for registration response via EventBus.client
-                registeredSub = EventBus.client.on(McpEvents.EXTERNAL_SERVER_REGISTERED, (payload: any) => {
-                    if (payload.data?.serverId === serverConfig.id && !registrationCompleted) {
-                        if (!payload.data?.success) {
-                            registrationCompleted = true;
-                            registeredSub.unsubscribe();
-                            errorSub.unsubscribe();
-                            toolsSub.unsubscribe();
-                            moduleLogger.error(`Failed to register server ${serverConfig.name}`);
-                            resolve({ success: false });
-                        }
-                        // Don't resolve yet - wait for tools to be discovered
-                    }
-                });
-
-                // Set up handler for tool discovery (this is when tools are actually available)
-                toolsSub = EventBus.client.on(McpEvents.EXTERNAL_SERVER_TOOLS_DISCOVERED, (payload: any) => {
-                    if (!registrationCompleted) {
-                        const discoveredTools = payload.data?.tools?.map((t: any) => t.name) || [];
-
-                        registrationCompleted = true;
-                        registeredSub.unsubscribe();
-                        errorSub.unsubscribe();
-                        toolsSub.unsubscribe();
-
-                        resolve({ success: true, toolsDiscovered: discoveredTools });
-                    }
-                });
-
-                // Set up handler for registration failure via EventBus.client
-                errorSub = EventBus.client.on(McpEvents.EXTERNAL_SERVER_REGISTRATION_FAILED, (payload: any) => {
-                    if (payload.data?.serverId === serverConfig.id && !registrationCompleted) {
-                        registrationCompleted = true;
-                        registeredSub.unsubscribe();
-                        errorSub.unsubscribe();
-                        toolsSub.unsubscribe();
-
-                        reject(new Error(payload.data?.error || 'Server registration failed'));
-                    }
-                });
-
-                // Emit registration request via EventBus.client
-                EventBus.client.emit(McpEvents.EXTERNAL_SERVER_REGISTER, {
-                    eventId: uuidv4(),
-                    eventType: McpEvents.EXTERNAL_SERVER_REGISTER,
-                    timestamp: Date.now(),
-                    agentId: this.userId,
-                    channelId: 'system',
-                    data: serverConfig
-                });
-
-                // Timeout after 30 seconds
-                setTimeout(() => {
-                    if (!registrationCompleted) {
-                        registrationCompleted = true;
-                        registeredSub.unsubscribe();
-                        errorSub.unsubscribe();
-                        toolsSub.unsubscribe();
-                        reject(new Error('External server registration timeout after 30 seconds (tools not discovered)'));
-                    }
-                }, 30000);
-
-            } catch (error) {
-                moduleLogger.error(`Error registering external server: ${error}`);
-                reject(error);
-            }
+        return awaitEventResponse<McpServerRegistrationResult>({
+            emitEvent: McpEvents.EXTERNAL_SERVER_REGISTER,
+            payload: createBaseEventPayload(
+                McpEvents.EXTERNAL_SERVER_REGISTER,
+                this.userId,
+                'system',
+                serverConfig
+            ),
+            route: { via: 'primary' },
+            // Tools discovered — not "registered" — is the point at which the server
+            // is actually usable, so that is what we wait for.
+            successEvent: McpEvents.EXTERNAL_SERVER_TOOLS_DISCOVERED,
+            failureEvent: McpEvents.EXTERNAL_SERVER_REGISTRATION_FAILED,
+            correlate: (payload: any) => payload?.data?.serverId === serverConfig.id,
+            mapResult: (payload: any) => ({
+                toolsDiscovered: (payload?.data?.tools ?? []).map((t: any) => t.name)
+            }),
+            timeoutMs: MCP_REGISTRATION_TIMEOUT_MS,
+            description: `External MCP server registration for '${serverConfig.id}'`,
+            logger: moduleLogger,
         });
     }
 
     /**
-     * Unregister an external MCP server
-     *
-     * Stops and removes an external MCP server from MXF.
+     * Unregister an external MCP server.
      *
      * @param serverId ID of the server to unregister
-     * @returns Promise resolving to true if unregistration was successful
+     * @returns Promise that resolves once the server has been removed
+     * @throws EventRequestError if the server reports the removal failed
+     * @throws EventRequestTimeoutError if no response arrives in 30s
      */
-    async unregisterExternalMcpServer(serverId: string): Promise<boolean> {
-        if (!this.socket || !this.socket.connected) {
-            throw new Error('SDK socket not connected. Call sdk.connect() first.');
-        }
+    async unregisterExternalMcpServer(serverId: string): Promise<void> {
+        this.assertSocketConnected();
 
-        return new Promise((resolve, reject) => {
-            try {
-                let completed = false;
-
-                // Set up handler for response via EventBus.client
-                const responseSub = EventBus.client.on(McpEvents.EXTERNAL_SERVER_UNREGISTERED, (payload: any) => {
-                    if (payload.data?.serverId === serverId && !completed) {
-                        completed = true;
-                        responseSub.unsubscribe();
-
-                        if (payload.data?.success) {
-                            resolve(true);
-                        } else {
-                            moduleLogger.error(`Failed to unregister server ${serverId}`);
-                            resolve(false);
-                        }
-                    }
-                });
-
-                // Emit unregistration request via EventBus.client
-                EventBus.client.emit(McpEvents.EXTERNAL_SERVER_UNREGISTER, {
-                    eventId: uuidv4(),
-                    eventType: McpEvents.EXTERNAL_SERVER_UNREGISTER,
-                    timestamp: Date.now(),
-                    agentId: this.userId,
-                    channelId: 'system',
-                    data: { serverId }
-                });
-
-                // Timeout after 30 seconds
-                setTimeout(() => {
-                    if (!completed) {
-                        completed = true;
-                        responseSub.unsubscribe();
-                        reject(new Error('External server unregistration timeout after 30 seconds'));
-                    }
-                }, 30000);
-
-            } catch (error) {
-                moduleLogger.error(`Error unregistering external server: ${error}`);
-                reject(error);
-            }
+        await awaitEventResponse<void>({
+            emitEvent: McpEvents.EXTERNAL_SERVER_UNREGISTER,
+            payload: createBaseEventPayload(
+                McpEvents.EXTERNAL_SERVER_UNREGISTER,
+                this.userId,
+                'system',
+                { serverId }
+            ),
+            route: { via: 'primary' },
+            successEvent: McpEvents.EXTERNAL_SERVER_UNREGISTERED,
+            correlate: (payload: any) => payload?.data?.serverId === serverId,
+            mapResult: (payload: any) => {
+                if (payload?.data?.success === false) {
+                    throw new EventRequestError(
+                        payload?.data?.error || `Failed to unregister external MCP server '${serverId}'`,
+                        McpEvents.EXTERNAL_SERVER_UNREGISTERED,
+                        payload
+                    );
+                }
+            },
+            timeoutMs: MCP_REGISTRATION_TIMEOUT_MS,
+            description: `External MCP server unregistration for '${serverId}'`,
+            logger: moduleLogger,
         });
     }
 
@@ -863,6 +736,7 @@ export class MxfSDK {
         }
 
         this.authenticated = false;
+        this.authenticatedUserId = null;
         this.agents.clear();
 
     }
@@ -875,10 +749,19 @@ export class MxfSDK {
     }
 
     /**
-     * Get the authenticated user ID
+     * Get the authenticated user ID.
+     *
+     * This is the id the server confirmed at auth:success — the Mongo ObjectId of the
+     * user this SDK is acting as. It returns `undefined` until connect() completes.
+     *
+     * It used to return `config.userId`, which is only ever set on the JWT path.
+     * Under PAT auth — the recommended path — config.userId is never provided, so a
+     * fully connected SDK returned `undefined` for a user it knew perfectly well.
+     *
+     * @returns The authenticated user ID, or undefined if not yet connected
      */
     getUserId(): string | undefined {
-        return this.config.userId;
+        return this.authenticatedUserId ?? undefined;
     }
 
     /**

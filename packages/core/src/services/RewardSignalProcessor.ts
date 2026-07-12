@@ -91,6 +91,15 @@ export class RewardSignalProcessor {
     // Memory usage tracking (task ID -> memories used)
     private taskMemoryUsage: Map<string, MemoryUsageRecord[]> = new Map();
 
+    /**
+     * Memories retrieved by an agent that are not yet attributed to a completed task,
+     * keyed by `${agentId}:${channelId}`. Drained on task completion.
+     */
+    private agentMemoryUsage: Map<string, MemoryUsageRecord[]> = new Map();
+
+    /** Cap on buffered memories per agent+channel, so the buffer cannot grow unbounded. */
+    private static readonly MAX_BUFFERED_MEMORIES_PER_AGENT = 200;
+
     // Event listener cleanup functions
     private eventCleanupFns: (() => void)[] = [];
 
@@ -157,6 +166,15 @@ export class RewardSignalProcessor {
             EventBus.server.on(Events.Task.COMPLETED, taskCompletedHandler);
             this.eventCleanupFns.push(() => EventBus.server.off(Events.Task.COMPLETED, taskCompletedHandler));
 
+            // A failed task is the strongest signal MULS has that the memories it surfaced
+            // were unhelpful, and it was being thrown away: nothing listened for
+            // Events.Task.FAILED, so failure could never lower a Q-value.
+            const taskFailedHandler = (payload: any) => {
+                this.handleTaskCompleted(payload, 'failure');
+            };
+            EventBus.server.on(Events.Task.FAILED, taskFailedHandler);
+            this.eventCleanupFns.push(() => EventBus.server.off(Events.Task.FAILED, taskFailedHandler));
+
             // Listen for analytics task completed events (may have evaluation scores)
             const analyticsCompletedHandler = (payload: any) => {
                 this.handleAnalyticsTaskCompleted(payload);
@@ -183,17 +201,48 @@ export class RewardSignalProcessor {
     /**
      * Handle task completion event
      */
-    private async handleTaskCompleted(payload: any): Promise<void> {
+    private async handleTaskCompleted(payload: any, forcedStatus?: TaskOutcomeStatus): Promise<void> {
         if (!this.enabled) return;
 
         try {
             const taskId = payload.data?.taskId ?? payload.taskId;
-            const status = this.mapStatusToOutcome(payload.data?.status ?? payload.status);
             const agentId = payload.agentId ?? payload.data?.agentId;
             const channelId = payload.channelId ?? payload.data?.channelId;
 
-            // Get memories used during this task
-            const memoriesUsed = this.taskMemoryUsage.get(taskId) ?? [];
+            // Task events carry the task object in `data.task` (see TaskEventData), so the
+            // real status lives at data.task.status. Reading only data.status meant the
+            // status was always undefined, which the mapper then turned into 'partial' —
+            // giving every task, successful or not, the same small positive reward.
+            const rawStatus =
+                payload.data?.task?.status ??
+                payload.data?.status ??
+                payload.status;
+
+            const status = forcedStatus ?? this.mapStatusToOutcome(rawStatus);
+
+            // Never invent an outcome. Attributing a reward from a status we could not read
+            // would teach the system from a number nobody measured.
+            if (!status) {
+                this.logger.warn(
+                    `[RewardSignalProcessor] Task ${taskId} completed with an unrecognised status ` +
+                    `(${String(rawStatus)}); skipping reward attribution rather than guessing one.`
+                );
+                return;
+            }
+
+            // Memories used during this task: anything explicitly tracked against the task
+            // id, plus anything the agent retrieved in this channel since its last
+            // completion (retrieval has no task id to attribute to — see
+            // trackAgentMemoriesUsage).
+            const explicitlyTracked = this.taskMemoryUsage.get(taskId) ?? [];
+            const bufferedForAgent = this.drainAgentMemories(agentId, channelId);
+
+            const memoriesUsed: MemoryUsageRecord[] = [...explicitlyTracked];
+            for (const record of bufferedForAgent) {
+                if (!memoriesUsed.some(m => m.memoryId === record.memoryId)) {
+                    memoriesUsed.push(record);
+                }
+            }
 
             if (memoriesUsed.length === 0) {
                 this.logger.debug(`[RewardSignalProcessor] No memories tracked for task ${taskId}`);
@@ -259,7 +308,14 @@ export class RewardSignalProcessor {
     /**
      * Map task status string to TaskOutcomeStatus
      */
-    private mapStatusToOutcome(status: string): TaskOutcomeStatus {
+    /**
+     * Map a task status to a reward outcome, or null when the status is unrecognised.
+     *
+     * Returns null rather than defaulting to 'partial'. The old default meant an
+     * unreadable status still earned a positive reward, so memories were reinforced by
+     * tasks whose outcome was never actually known.
+     */
+    private mapStatusToOutcome(status: string): TaskOutcomeStatus | null {
         switch (status?.toLowerCase()) {
             case 'completed':
             case 'success':
@@ -276,7 +332,7 @@ export class RewardSignalProcessor {
             case 'timed_out':
                 return 'timeout';
             default:
-                return 'partial'; // Default to partial for unknown statuses
+                return null; // Unknown status — the caller must skip attribution, not guess.
         }
     }
 
@@ -495,6 +551,66 @@ export class RewardSignalProcessor {
     }
 
     /**
+     * Track memories retrieved by an agent, without needing a task id.
+     *
+     * Retrieval happens inside MCP tool handlers, and the tool context carries only
+     * agentId/channelId — never the task the agent is working on. Rather than plumb a
+     * task id through the whole MCP execution path, retrieval records what it returned
+     * against the agent+channel, and handleTaskCompleted drains that buffer when the
+     * agent's task finishes. A task is executed by one agent in one channel, so the
+     * memories buffered for that pair are exactly the ones the task used.
+     *
+     * This is the call that was missing: nothing in production ever recorded which
+     * memories were used, so every task completed with an empty usage list and no
+     * reward was ever attributed.
+     */
+    public trackAgentMemoriesUsage(
+        agentId: string,
+        channelId: string,
+        memoryIds: string[],
+        phase: OrparPhase,
+        usageType?: MemoryUsageRecord['usageType']
+    ): void {
+        if (!this.enabled || !this.config.trackMemoryUsage) return;
+        if (!agentId || !channelId || memoryIds.length === 0) return;
+
+        const key = `${agentId}:${channelId}`;
+        let records = this.agentMemoryUsage.get(key);
+        if (!records) {
+            records = [];
+            this.agentMemoryUsage.set(key, records);
+        }
+
+        for (const memoryId of memoryIds) {
+            if (!records.some(r => r.memoryId === memoryId)) {
+                records.push({ memoryId, phase, retrievedAt: new Date(), usageType });
+            }
+        }
+
+        // Bound the buffer. An agent that retrieves memories without ever completing a
+        // task would otherwise grow this map without limit.
+        if (records.length > RewardSignalProcessor.MAX_BUFFERED_MEMORIES_PER_AGENT) {
+            records.splice(0, records.length - RewardSignalProcessor.MAX_BUFFERED_MEMORIES_PER_AGENT);
+        }
+
+        this.logger.debug(
+            `[RewardSignalProcessor] Buffered ${memoryIds.length} memories for ${key} (phase=${phase})`
+        );
+    }
+
+    /**
+     * Take and clear the memories buffered for an agent in a channel.
+     */
+    private drainAgentMemories(agentId?: string, channelId?: string): MemoryUsageRecord[] {
+        if (!agentId || !channelId) return [];
+
+        const key = `${agentId}:${channelId}`;
+        const records = this.agentMemoryUsage.get(key) ?? [];
+        this.agentMemoryUsage.delete(key);
+        return records;
+    }
+
+    /**
      * Track multiple memories for a task
      */
     public trackMemoriesUsage(
@@ -605,16 +721,29 @@ export class RewardSignalProcessor {
     }
 
     /**
-     * Get tracking statistics
+     * Get tracking statistics.
+     *
+     * `bufferedMemories` counts memories retrieved by agents that are not yet attributed
+     * to a completed task (see trackAgentMemoriesUsage).
      */
-    public getTrackingStats(): { activeTasks: number; totalMemoriesTracked: number } {
+    public getTrackingStats(): {
+        activeTasks: number;
+        totalMemoriesTracked: number;
+        bufferedMemories: number;
+    } {
         let totalMemories = 0;
         for (const [, records] of this.taskMemoryUsage) {
             totalMemories += records.length;
         }
+
+        let bufferedMemories = 0;
+        for (const [, records] of this.agentMemoryUsage) {
+            bufferedMemories += records.length;
+        }
         return {
             activeTasks: this.taskMemoryUsage.size,
-            totalMemoriesTracked: totalMemories
+            totalMemoriesTracked: totalMemories,
+            bufferedMemories
         };
     }
 

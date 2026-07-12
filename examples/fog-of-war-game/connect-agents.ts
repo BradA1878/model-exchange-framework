@@ -476,14 +476,11 @@ async function connectAgents() {
         }
     });
 
-    if (mcpResult.success) {
-        console.log('✅ Channel MCP server registered successfully!');
-        console.log(`   Tools: ${mcpResult.toolsDiscovered?.join(', ')}`);
-        console.log('   All channel agents can now use these tools!\n');
-    } else {
-        console.error('❌ MCP server registration failed');
-        process.exit(1);
-    }
+    // registerChannelMcpServer() throws if registration fails, so reaching this line
+    // means the server is up and its tools are discovered.
+    console.log('✅ Channel MCP server registered successfully!');
+    console.log(`   Tools: ${mcpResult.toolsDiscovered.join(', ')}`);
+    console.log('   All channel agents can now use these tools!\n');
 
     // Now connect admin agent after MCP server is registered
     await adminAgent.connect();

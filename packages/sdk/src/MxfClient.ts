@@ -27,16 +27,24 @@
 
 import { McpEvents } from '@mxf-dev/core/events/event-definitions/McpEvents';
 import { v4 as uuidv4 } from 'uuid';
+import { Subscription } from 'rxjs';
 import { ConnectionStatus } from '@mxf-dev/core/types/types';
 import { ChannelConnectionConfig } from '@mxf-dev/core/interfaces/ChannelConnectionConfig';
 import { buildServerUrl, getServerConfig } from '@mxf-dev/core/config/ServerConfig';
 import { Logger } from '@mxf-dev/core/utils/Logger';
 import { Events } from '@mxf-dev/core/events/EventNames';
 import { EventBus } from '@mxf-dev/core/events/EventBus';
+import { PayloadOf } from '@mxf-dev/core/events/EventBusBase';
 import { PublicEventName, isPublicEvent, getEventCategory } from '@mxf-dev/core/events/PublicEvents';
 import { AgentContext, ApiService } from './services/MxfApiService.js';
 import { createStrictValidator } from '@mxf-dev/core/utils/validation';
-import { AgentEventPayload, AgentEventData, BaseEventPayload, BaseMemoryOperationData } from '@mxf-dev/core/schemas/EventPayloadSchema';
+import {
+    AgentEventPayload,
+    BaseEventPayload,
+    BaseMemoryOperationData,
+    createAgentEventPayload,
+    createBaseEventPayload,
+} from '@mxf-dev/core/schemas/EventPayloadSchema';
 import { SimpleTaskResponse, TaskRequestHandler } from '@mxf-dev/core/interfaces/TaskInterfaces';
 import { AgentConfig, InternalAgentConfig } from '@mxf-dev/core/interfaces/AgentInterfaces';
 import { MxfService } from './services/MxfService.js';
@@ -51,6 +59,25 @@ import { UserInputHandlers, UserInputHandler } from './handlers/UserInputHandler
 import { MxfToolService, IToolService, ClientTool } from './services/MxfToolService.js';
 import { ClientToolExecutor } from './services/ClientToolExecutor.js';
 import { ClientExternalMcpManager } from './services/ClientExternalMcpManager.js';
+import { awaitEventResponse, EventRequestError } from './services/internal/EventRequest.js';
+import { SDK_VERSION } from './version.js';
+
+/** How long to wait for an MCP server registration/unregistration to come back. */
+const MCP_REGISTRATION_TIMEOUT_MS = 30_000;
+
+/** How long to wait for the server to acknowledge agent registration. */
+const AGENT_REGISTRATION_TIMEOUT_MS = 10_000;
+
+/**
+ * Result of registering an MCP server.
+ *
+ * There is no `success` flag: a failed registration rejects. A resolved value
+ * always means the server is registered and its tools are discovered.
+ */
+export interface McpServerRegistrationResult {
+    /** Names of the tools the newly registered server exposes. */
+    toolsDiscovered: string[];
+}
 
 /**
  * MxfClient class for connecting to the MXF
@@ -58,13 +85,9 @@ import { ClientExternalMcpManager } from './services/ClientExternalMcpManager.js
 export class MxfClient {
 
     /**
-     * Static identifier for SDK version tracking 
-     * Used to verify which version of the SDK is being loaded
+     * The installed @mxf-dev/sdk version, read from the package manifest.
      */
-    public static readonly SDK_VERSION = "DEV-BUILD-" + new Date().toISOString();
-
-    /** Constructor log - to verify the SDK version being loaded */
-    private static readonly SDK_VERSION_IDENTIFIER = MxfClient.SDK_VERSION;
+    public static readonly SDK_VERSION: string = SDK_VERSION;
 
     // Properties from the config
     public agentId: string;
@@ -123,8 +146,13 @@ export class MxfClient {
     // Client-side external MCP server manager (spawns external MCP servers locally)
     protected clientExternalMcpManager: ClientExternalMcpManager | null = null;
 
-    // Event listener subscriptions for cleanup
-    private eventListeners: Map<string, any[]> = new Map();
+    // Public-API subscriptions created by on(), keyed by event name, for off()/disconnect() cleanup.
+    // The handler is kept alongside its subscription so off(event, handler) can remove exactly one.
+    private eventListeners: Map<string, Array<{ handler: (data: any) => void; subscription: Subscription }>> = new Map();
+
+    // Subscriptions created by initializeEventHandlers(). Tracked so a disconnect()
+    // tears them down instead of leaving a duplicate set behind on every reconnect.
+    private lifecycleSubscriptions: Subscription[] = [];
 
     // Heartbeat mechanism to keep connection alive
     private heartbeatInterval: NodeJS.Timeout | null = null;
@@ -340,9 +368,14 @@ export class MxfClient {
      */
     private async performFullConnection(): Promise<void> {
         try {
+            // Step 0: (Re-)register the agent lifecycle listeners. Idempotent — a no-op
+            // on the first connect (the constructor already ran it) and the thing that
+            // restores ORPAR/task/control-loop forwarding after a disconnect() torn them down.
+            this.initializeEventHandlers();
+
             // Step 1: Connect socket and register agent using internal connection logic
             await this.connectSocketAndRegister();
-            
+
             // Step 2: Subscribe to the channel (if channelId provided)
             if (this.channelId) {
                 await this.subscribeToChannel(this.channelId);
@@ -385,24 +418,38 @@ export class MxfClient {
     }
 
     /**
-     * Connect to the framework server and join the specified channel
-     * This method is public to allow developers to explicitly connect agents that need to listen for messages
-     * Sending methods (sendMessage, sendObservation) will auto-connect if not already connected
-     * @returns Promise resolving to true if connection successful
+     * Connect to the framework server and join the specified channel.
+     *
+     * Sending methods (sendMessage, sendObservation) auto-connect if not already
+     * connected; call this explicitly for agents that need to listen for messages.
+     *
+     * @returns Promise that resolves when the agent is connected and registered
+     * @throws Error if the socket fails to connect, credentials are rejected,
+     *         or registration times out. Failures are never swallowed — this used
+     *         to return `false` and log through a client Logger that is disabled by
+     *         default, so a bad key or a registration timeout looked like silence.
      * @public
+     *
+     * @example
+     * ```typescript
+     * try {
+     *     await agent.connect();
+     * } catch (error) {
+     *     console.error('Agent failed to connect:', error.message);
+     *     process.exit(1);
+     * }
+     * ```
      */
-    public async connect(): Promise<boolean> {
-        try {
-            await this.ensureConnected();
-            return true;
-        } catch (error) {
-            this.logger.error(`Failed to connect agent: ${error instanceof Error ? error.message : String(error)}`);
-            return false;
-        }
+    public async connect(): Promise<void> {
+        await this.ensureConnected();
     }
 
     /**
      * Disconnect from MXF
+     *
+     * Tears down every subscription and socket handler this client created, so a
+     * later connect() starts from a clean slate rather than stacking a second set
+     * of listeners on top of the first.
      *
      * @returns Promise that resolves when disconnected
      * @public
@@ -426,6 +473,15 @@ export class MxfClient {
         this.toolService?.cleanup();
         this.clientToolExecutor?.cleanup();
 
+        // Drop the agent-lifecycle subscriptions created by initializeEventHandlers().
+        // Without this, every disconnect()/connect() cycle added another full set and
+        // each status change fired N times.
+        this.lifecycleSubscriptions.forEach(sub => sub.unsubscribe());
+        this.lifecycleSubscriptions = [];
+
+        // Drop any listeners the consumer registered with agent.on()
+        this.removeAllListeners();
+
         // Shut down client-side external MCP servers
         if (this.clientExternalMcpManager) {
             this.clientExternalMcpManager.cleanup().catch((error: Error) => {
@@ -434,7 +490,7 @@ export class MxfClient {
         }
 
         // Disconnect from the channel service
-        this.mxfService?.disconnect();
+        await this.mxfService?.disconnect();
 
         // Reset status
         this.status = ConnectionStatus.DISCONNECTED;
@@ -463,13 +519,16 @@ export class MxfClient {
         // Update local config
         this.config.allowedTools = tools;
 
-        // Emit event to update server-side AgentService
-        if (this.mxfService) {
-            this.mxfService.socketEmit(Events.Agent.ALLOWED_TOOLS_UPDATE, {
-                agentId: this.agentId,
-                allowedTools: tools
-            });
-        }
+        // Tell the server-side AgentService. This goes through EventBus.client with a
+        // proper payload helper — it used to bypass the bus entirely via
+        // mxfService.socketEmit() and a hand-built object.
+        const payload: AgentEventPayload = createAgentEventPayload(
+            Events.Agent.ALLOWED_TOOLS_UPDATE,
+            this.agentId,
+            this.config.channelId,
+            { allowedTools: tools }
+        );
+        EventBus.client.emitOn(this.agentId, Events.Agent.ALLOWED_TOOLS_UPDATE, payload);
 
         // Refresh local tool cache from server
         await this.refreshTools();
@@ -682,165 +741,70 @@ export class MxfClient {
     }
 
     /**
-     * Register the agent with the hub
-     * 
-     * @param options Registration options
-     * @returns Promise resolving to true if registration was successful
-     * @private
-     */
-    private async register(options: { 
-        agentId?: string; 
-        name?: string; 
-        type?: string; 
-        capabilities?: string[];
-        channelId?: string;
-        metadata?: Record<string, any>;
-    }): Promise<boolean> {
-        
-        // If we're already registered, just return true
-        if (this.status === ConnectionStatus.REGISTERED) {
-            return true;
-        }
-        
-        // Build a valid agent ID and name
-        const agentId = this.config.agentId;
-        const name = options.name || this.config.name;
-        
-        // Return a promise that resolves when registration is complete
-        return new Promise<boolean>((resolve, reject) => {
-            // Handle registration success
-            const onRegistered = (registered: any) => {
-                if (registered.agentId === agentId) {
-                    this.status = ConnectionStatus.REGISTERED;
-                    this.emitStatusChange(this.status);
-                    
-                    // Clean up subscriptions properly
-                    registeredSubscription.unsubscribe();
-                    registrationFailedSubscription.unsubscribe();
-                    
-                    // Clear registration timeout
-                    clearTimeout(registrationTimeout);
-                    
-                    resolve(true);
-                }
-            };
-            
-            // Handle registration failure
-            const onError = (error: any) => {
-                if (error.agentId === agentId) {
-                    this.logger.error(`Agent ${agentId} registration failed: ${error.error}`);
-                    this.status = ConnectionStatus.ERROR;
-                    this.emitStatusChange(this.status);
-                    
-                    // Clean up subscriptions properly
-                    registeredSubscription.unsubscribe();
-                    registrationFailedSubscription.unsubscribe();
-                    
-                    // Clear registration timeout
-                    clearTimeout(registrationTimeout);
-                    
-                    reject(new Error(error.error));
-                }
-            };
-            
-            // Listen for registration events using RxJS subscriptions
-            const registeredSubscription = EventBus.client.on(Events.Agent.REGISTERED, onRegistered);
-            
-            // Listen for registration failed events
-            const registrationFailedSubscription = EventBus.client.on(Events.Agent.REGISTRATION_FAILED, onError);
-            
-            if (options.channelId && typeof options.channelId !== 'string') {
-                throw new Error('options.channelId must be a string if provided');
-            }
-            const eventChannelId = options.channelId || this.config.channelId;
-            const agentDataForRegistration: AgentEventData = {
-                name: name,
-                type: options.type,
-                capabilities: options.capabilities || this.config.capabilities || ['basic'],
-                allowedTools: this.config.allowedTools, // Include allowedTools in registration - don't default to []
-                metadata: options.metadata || this.config.metadata,
-                status: 'registering' // Indicate the action
-            };
-
-
-            const registrationPayload: AgentEventPayload = {
-                eventId: uuidv4(),
-                eventType: Events.Agent.REGISTER,
-                timestamp: Date.now(),
-                agentId: this.agentId,
-                channelId: eventChannelId,
-                data: agentDataForRegistration
-            };
-
-            // Set a timeout for registration
-            const registrationTimeout = setTimeout(() => {
-                this.logger.error(`register() - Registration timed out after 10 seconds`);
-                
-                // Clean up subscriptions properly
-                registeredSubscription.unsubscribe();
-                registrationFailedSubscription.unsubscribe();
-                
-                // Update status
-                this.status = ConnectionStatus.ERROR;
-                this.emitStatusChange(this.status);
-                
-                reject(new Error('[REJECT] register() - Registration timed out after 10 seconds'));
-            }, 10000);
-
-            EventBus.client.emitOn(this.agentId, Events.Agent.REGISTER, registrationPayload);
-        });
-    }
-
-    /**
-     * Initialize event handlers
+     * Register the agent-lifecycle event listeners.
+     *
+     * Idempotent: calling it twice without an intervening disconnect() is a no-op.
+     * Every subscription lands in `lifecycleSubscriptions` so disconnect() can drop
+     * them. Before this, the listeners were registered once in the constructor and
+     * never tracked, and the per-handler `initialize()` calls were torn down by
+     * disconnect() but never restored — a disconnect()/connect() cycle produced an
+     * agent with no task or control-loop handling at all.
+     *
+     * @protected
      */
     protected initializeEventHandlers(): void {
-        
-        
-        // Listen for connection events
-        EventBus.client.on(Events.Agent.CONNECTED, (data: any) => {
-            if (data && data.agentId === this.config.agentId) {
-                //;
-                this.status = ConnectionStatus.CONNECTED;
-                this.emitStatusChange(this.status);
-            }
-        });
+        if (this.lifecycleSubscriptions.length > 0) {
+            return;
+        }
 
-        // Listen for disconnect events
-        EventBus.client.on(Events.Agent.DISCONNECTED, (data: any) => {
-            if (data && data.agentId === this.config.agentId) {
-                //;
-                this.status = ConnectionStatus.DISCONNECTED;
-                this.emitStatusChange(this.status);
-            }
-        });
+        const isForThisAgent = (data: any): boolean =>
+            !!data && data.agentId === this.config.agentId;
 
-        // Listen for error events
-        EventBus.client.on(Events.Agent.ERROR, (data: any) => {
-            if (data && data.agentId === this.config.agentId) {
-                this.status = ConnectionStatus.ERROR;
-                this.emitStatusChange(this.status);
-            }
-        });
-        
-        // Track registration events
-        EventBus.client.on(Events.Agent.REGISTERED as string, (data: any) => {
-            if (data && data.agentId === this.config.agentId) {
-                
-                // Update status
-                if (this.status !== ConnectionStatus.REGISTERED) {
+        // Connected
+        this.lifecycleSubscriptions.push(
+            EventBus.client.on(Events.Agent.CONNECTED, (data: any) => {
+                if (isForThisAgent(data)) {
+                    this.status = ConnectionStatus.CONNECTED;
+                    this.emitStatusChange(this.status);
+                }
+            })
+        );
+
+        // Disconnected
+        this.lifecycleSubscriptions.push(
+            EventBus.client.on(Events.Agent.DISCONNECTED, (data: any) => {
+                if (isForThisAgent(data)) {
+                    this.status = ConnectionStatus.DISCONNECTED;
+                    this.emitStatusChange(this.status);
+                }
+            })
+        );
+
+        // Error
+        this.lifecycleSubscriptions.push(
+            EventBus.client.on(Events.Agent.ERROR, (data: any) => {
+                if (isForThisAgent(data)) {
+                    this.status = ConnectionStatus.ERROR;
+                    this.emitStatusChange(this.status);
+                }
+            })
+        );
+
+        // Registered
+        this.lifecycleSubscriptions.push(
+            EventBus.client.on(Events.Agent.REGISTERED, (data: any) => {
+                if (isForThisAgent(data) && this.status !== ConnectionStatus.REGISTERED) {
                     this.status = ConnectionStatus.REGISTERED;
                     this.emitStatusChange(this.status);
                 }
-            }
-        });
-        
+            })
+        );
+
         this.controlLoopHandlers?.initialize();
         this.taskHandlers?.initialize();
         // userInputHandlers initialized lazily in onUserInput()
-        
     }
-    
+
     /**
      * Check if the socket is connected
      * 
@@ -1187,66 +1151,41 @@ export class MxfClient {
     }
     
     /**
-     * Send multiple channel messages efficiently in bulk (public API)
-     * 
+     * Send several channel messages in one call (public API)
+     *
+     * Each message goes out through the normal Events.Message.CHANNEL_MESSAGE flow,
+     * so the server persists them exactly as it does for sendMessage().
+     *
+     * This used to emit a `'PERSIST_BULK_CHANNEL_MESSAGES_REQUEST'` string literal with
+     * a hand-built payload — which is not a registered event, and whose payload was
+     * assembled with a bare CommonJS require of uuid, which threw
+     * `ReferenceError: require is not defined` on every Node consumer (this is an ESM
+     * package). It is now routed through the event system like every other message.
+     *
      * @param channelId The channel ID to send the messages to
      * @param type The type of messages to send
      * @param messages Array of message contents
-     * @returns Promise that resolves when all messages are sent
+     * @returns Promise that resolves once every message has been sent
+     * @throws Error if any message fails to send
      * @public
      */
-    public async sendMessages(channelId: string, type: string, messages: any[]): Promise<boolean> {
-        try {
-            await this.ensureConnected();
-            
-            if (!messages || messages.length === 0) {
-                this.logger.warn('No messages provided to sendMessages');
-                return true;
+    public async sendMessages(channelId: string, type: string, messages: any[]): Promise<void> {
+        await this.ensureConnected();
+
+        this.validator.assert(Array.isArray(messages), 'messages must be an array');
+
+        if (messages.length === 0) {
+            return;
+        }
+
+        for (const content of messages) {
+            const sent = await this.sendChannelMessage(channelId, type, content);
+            if (!sent) {
+                throw new Error(
+                    `Failed to send message to channel '${channelId}' ` +
+                    `(${messages.length} message(s) requested)`
+                );
             }
-
-
-            // Convert messages to ChannelMessage format
-            const channelMessages = messages.map(content => {
-                const messageId = uuidv4();
-                const timestamp = Date.now();
-                
-                return {
-                    senderId: this.agentId,
-                    content: {
-                        format: 'text' as const,
-                        data: content
-                    },
-                    metadata: {
-                        messageId: messageId,
-                        timestamp: timestamp,
-                        type: type,
-                        messageType: type
-                    },
-                    context: {
-                        channelId: channelId,
-                        channelContextType: 'CONVERSATION_HISTORY' as const
-                    }
-                };
-            });
-
-            // Emit bulk persistence request event
-            EventBus.client.emitOn(this.agentId, 'PERSIST_BULK_CHANNEL_MESSAGES_REQUEST', {
-                eventId: require('uuid').v4(),
-                eventType: 'PERSIST_BULK_CHANNEL_MESSAGES_REQUEST',
-                agentId: this.agentId,
-                channelId: channelId,
-                timestamp: Date.now(),
-                data: {
-                    channelId: channelId,
-                    messages: channelMessages
-                }
-            });
-
-            return true;
-
-        } catch (error) {
-            this.logger.error(`Failed to send ${messages.length} messages in bulk:`, error instanceof Error ? error.message : String(error));
-            return false;
         }
     }
 
@@ -1306,20 +1245,24 @@ export class MxfClient {
     }
 
     /**
-     * Properly emit a status change event using the standardized payload format
+     * Emit a status change event using the standard payload helper.
+     *
+     * The payload was hand-built here using a bare CommonJS require of uuid. This is an
+     * ESM package, so that threw `ReferenceError: require is not defined` on Node —
+     * and because this sits on the connect() path (connectSocketAndRegister →
+     * emitStatusChange), every single agent.connect() on Node blew up. Bun's CommonJS
+     * polyfill is the only reason it was never caught.
+     *
      * @param status - The status to emit
+     * @private
      */
     private emitStatusChange(status: ConnectionStatus): void {
-        // Use the proper EventPayloadSchema format for the event
-        const agentDataForStatusChange: AgentEventData = { status: status as string };
-        const payload: AgentEventPayload = {
-            eventId: require('uuid').v4(),
-            eventType: Events.Agent.STATUS_CHANGE,
-            timestamp: Date.now(),
-            agentId: this.agentId,
-            channelId: this.config.channelId,
-            data: agentDataForStatusChange
-        };
+        const payload: AgentEventPayload = createAgentEventPayload(
+            Events.Agent.STATUS_CHANGE,
+            this.agentId,
+            this.config.channelId,
+            { status: status as string }
+        );
 
         EventBus.client.emitOn(this.agentId, Events.Agent.STATUS_CHANGE, payload);
     }
@@ -1354,7 +1297,11 @@ export class MxfClient {
     }
 
     /**
-     * Send a heartbeat message to the server
+     * Send a heartbeat message to the server.
+     *
+     * Uses Events.Heartbeat.HEARTBEAT and the standard payload helper — this was
+     * a `'heartbeat'` string literal with a hand-built payload.
+     *
      * @private
      */
     private sendHeartbeat(): void {
@@ -1363,25 +1310,27 @@ export class MxfClient {
                 return;
             }
 
-            const heartbeatPayload = {
-                eventId: uuidv4(),
-                eventType: 'heartbeat',
-                timestamp: Date.now(),
-                agentId: this.agentId,
-                channelId: this.config.channelId || 'system',
-                data: {
-                    clientTimestamp: Date.now()
-                }
-            };
+            const heartbeatPayload = createBaseEventPayload(
+                Events.Heartbeat.HEARTBEAT,
+                this.agentId,
+                this.config.channelId || 'system',
+                { clientTimestamp: Date.now() }
+            );
 
-            EventBus.client.emitOn(this.agentId, 'heartbeat', heartbeatPayload);
+            EventBus.client.emitOn(this.agentId, Events.Heartbeat.HEARTBEAT, heartbeatPayload);
         } catch (error) {
             this.logger.error(`Error sending heartbeat: ${error}`);
         }
     }
 
     /**
-     * Internal method to handle socket connection and agent registration
+     * Connect the socket and register the agent with the server.
+     *
+     * Resolves only once BOTH Agent.CONNECTED and Agent.REGISTERED have arrived for
+     * this agent. Every subscription and the timeout go through one teardown, so no
+     * listener survives the call — the CONNECTED subscription used to be created and
+     * never unsubscribed on any path, leaking one listener per connect.
+     *
      * @private
      */
     private async connectSocketAndRegister(): Promise<void> {
@@ -1389,164 +1338,109 @@ export class MxfClient {
         if (this.status !== ConnectionStatus.DISCONNECTED) {
             return;
         }
-        
-        
+
         // Update the agent status to connecting
         this.status = ConnectionStatus.CONNECTING;
         this.emitStatusChange(this.status);
-        
+
         // If already connected, just return
         if (this.isConnected()) {
             return;
         }
-        
-        
-        // Connect to the socket and wait for completion
+
         await new Promise<void>((resolve, reject) => {
-            // Track both events before resolving
+            let settled = false;
             let registeredReceived = false;
             let connectedReceived = false;
-            
-            const checkBothEventsReceived = (): void => {
-                if (registeredReceived && connectedReceived) {
-                    // Clean up all event listeners
-                    registeredSubscription.unsubscribe();
-                    registrationFailedSubscription.unsubscribe();
-                    
-                    // Clear timeout
+
+            const subscriptions: Subscription[] = [];
+            let timeout: ReturnType<typeof setTimeout> | null = null;
+
+            const teardown = (): void => {
+                if (timeout !== null) {
                     clearTimeout(timeout);
-                    
-                    // Resolve the promise
-                    resolve();
+                    timeout = null;
                 }
+                subscriptions.forEach(sub => sub.unsubscribe());
+                subscriptions.length = 0;
             };
-            
-            // Listen for agent registered event
-            const registeredSubscription = EventBus.client.on(Events.Agent.REGISTERED, (data: any) => {
-                if (data && data.agentId === this.config.agentId) {
-                    
-                    // Update internal status
-                    this.status = ConnectionStatus.REGISTERED;
-                    this.emitStatusChange(this.status);
-                    
-                    // Mark registered as received
-                    registeredReceived = true;
-                    checkBothEventsReceived();
-                } else {
-                }
-            });
-            
-            const registrationFailedSubscription = EventBus.client.on(Events.Agent.REGISTRATION_FAILED, (data: any) => {
-                this.logger.error(`Registration failed event received: ${JSON.stringify(data)}`);
-                
-                if (data && data.agentId === this.config.agentId) {
-                    this.logger.error(`Agent ${this.config.agentId} registration failed: ${data.error || 'Unknown error'}`);
-                    
-                    // Update status
-                    this.status = ConnectionStatus.ERROR;
-                    this.emitStatusChange(this.status);
-                    
-                    // Clean up event listeners
-                    registeredSubscription.unsubscribe();
-                    registrationFailedSubscription.unsubscribe();
-                    
-                    // Clear timeout
-                    clearTimeout(timeout);
-                    
-                    reject(new Error(`Agent registration failed: ${data.error || 'Unknown error'}`));
-                } else {
-                }
-            });
-            
-            // Listen for the connected event
-            const connectedSubscription = EventBus.client.on(Events.Agent.CONNECTED, (data: any) => {
-                if (data && data.agentId === this.config.agentId) {
-                    
-                    // Update status to connected
-                    this.status = ConnectionStatus.CONNECTED;
-                    this.emitStatusChange(this.status);
-                    
-                    // Mark connected as received
-                    connectedReceived = true;
-                    checkBothEventsReceived();
-                }
-            });
-            
-            // Set registration timeout
-            const timeout = setTimeout(() => {
-                this.logger.error(`connectSocketAndRegister() - Registration timed out after 10 seconds`);
-                
-                // Clean up event listeners
-                registeredSubscription.unsubscribe();
-                registrationFailedSubscription.unsubscribe();
-                
-                // Update status
+
+            const settleResolve = (): void => {
+                if (settled) return;
+                settled = true;
+                teardown();
+                resolve();
+            };
+
+            const settleReject = (error: Error): void => {
+                if (settled) return;
+                settled = true;
+                teardown();
                 this.status = ConnectionStatus.ERROR;
                 this.emitStatusChange(this.status);
-                
-                reject(new Error('[REJECT] connectSocketAndRegister() - Registration timed out after 10 seconds'));
-            }, 10000);
+                reject(error);
+            };
 
-            // Initialize the channel socket connection
+            const isForThisAgent = (data: any): boolean =>
+                !!data && data.agentId === this.config.agentId;
+
+            subscriptions.push(
+                EventBus.client.on(Events.Agent.REGISTERED, (data: any) => {
+                    if (!isForThisAgent(data)) return;
+                    this.status = ConnectionStatus.REGISTERED;
+                    this.emitStatusChange(this.status);
+                    registeredReceived = true;
+                    if (connectedReceived) settleResolve();
+                })
+            );
+
+            subscriptions.push(
+                EventBus.client.on(Events.Agent.CONNECTED, (data: any) => {
+                    if (!isForThisAgent(data)) return;
+                    this.status = ConnectionStatus.CONNECTED;
+                    this.emitStatusChange(this.status);
+                    connectedReceived = true;
+                    if (registeredReceived) settleResolve();
+                })
+            );
+
+            subscriptions.push(
+                EventBus.client.on(Events.Agent.REGISTRATION_FAILED, (data: any) => {
+                    if (!isForThisAgent(data)) return;
+                    const reason = (data as any).error || 'Unknown error';
+                    this.logger.error(`Agent ${this.config.agentId} registration failed: ${reason}`);
+                    settleReject(new Error(`Agent registration failed: ${reason}`));
+                })
+            );
+
+            timeout = setTimeout(() => {
+                settleReject(new Error(
+                    `Agent '${this.config.agentId}' registration timed out after ` +
+                    `${AGENT_REGISTRATION_TIMEOUT_MS}ms (connected=${connectedReceived}, registered=${registeredReceived})`
+                ));
+            }, AGENT_REGISTRATION_TIMEOUT_MS);
+
+            // Initialize the channel socket connection, then register the agent.
             this.mxfService.setAgentId(this.config.agentId);
-            this.mxfService.connect().then(async () => {
-                
-                // Now trigger agent registration with capabilities via EventBus
-                try {
-                    
-                    const agentDataForRegistration = {
+            this.mxfService.connect().then(() => {
+                const registrationPayload: AgentEventPayload = createAgentEventPayload(
+                    Events.Agent.REGISTER,
+                    this.config.agentId,
+                    this.config.channelId,
+                    {
                         name: this.config.name,
                         type: 'agent',
                         capabilities: this.config.capabilities || ['basic'],
-                        allowedTools: this.config.allowedTools, // Add allowedTools to registration - don't default to []
+                        allowedTools: this.config.allowedTools,
                         metadata: this.config.metadata,
                         status: 'registering'
-                    };
-                    
+                    }
+                );
 
-                    const registrationPayload = {
-                        eventId: uuidv4(),
-                        eventType: Events.Agent.REGISTER,
-                        timestamp: Date.now(),
-                        agentId: this.config.agentId,
-                        channelId: this.config.channelId,
-                        data: agentDataForRegistration
-                    };
-
-                    EventBus.client.emitOn(this.agentId, Events.Agent.REGISTER, registrationPayload);
-                } catch (regError) {
-                    this.logger.error(`Failed to send agent registration event:`, regError);
-                    
-                    // Clean up event listeners
-                    registeredSubscription.unsubscribe();
-                    registrationFailedSubscription.unsubscribe();
-                    
-                    // Clear timeout
-                    clearTimeout(timeout);
-                    
-                    // Update status
-                    this.status = ConnectionStatus.ERROR;
-                    this.emitStatusChange(this.status);
-                    
-                    reject(regError);
-                    return;
-                }
-                
+                EventBus.client.emitOn(this.agentId, Events.Agent.REGISTER, registrationPayload);
             }).catch(error => {
-                this.logger.error(`Channel service socket connection failed:`, error);
-                
-                // Clean up event listeners
-                registeredSubscription.unsubscribe();
-                registrationFailedSubscription.unsubscribe();
-                
-                // Clear timeout
-                clearTimeout(timeout);
-                
-                // Update status
-                this.status = ConnectionStatus.ERROR;
-                this.emitStatusChange(this.status);
-                
-                reject(error);
+                this.logger.error(`Channel service socket connection failed: ${error instanceof Error ? error.message : String(error)}`);
+                settleReject(error instanceof Error ? error : new Error(String(error)));
             });
         });
     }
@@ -1586,49 +1480,85 @@ export class MxfClient {
     
     /**
      * Register an MCP tool
-     * 
+     *
      * @param tool Tool definition to register
      * @param channelId Channel ID where the tool should be registered
-     * @returns Promise resolving to true if registration was successful
+     * @returns Promise that resolves once the server has accepted the tool
+     * @throws Error if the server rejects the registration or does not answer
      * @public
      */
-    public async registerTool(tool: any, channelId?: string): Promise<boolean> {
+    public async registerTool(tool: any, channelId?: string): Promise<void> {
         // Ensure we're connected before registering tools
         await this.ensureConnected();
-        
+
         // Validate optional channelId parameter if provided
         if (channelId && typeof channelId !== 'string') {
             throw new Error('channelId must be a string if provided');
         }
         const targetChannelId = channelId || this.channelId!;
         // targetChannelId is guaranteed to be valid since this.channelId is validated in constructor
-        
+
         if (!this.mcpToolHandlers) {
             throw new Error('MCP tool handlers not initialized');
         }
-        
-        return this.mcpToolHandlers.registerTool(tool, targetChannelId);
+
+        await this.mcpToolHandlers.registerTool(tool, targetChannelId);
     }
-    
+
+    /**
+     * Unregister an MCP tool
+     *
+     * @param toolName Name of the tool to unregister
+     * @param channelId Channel ID where the tool should be unregistered
+     * @returns Promise that resolves once the server has removed the tool
+     * @throws Error if the server rejects the request or does not answer
+     * @public
+     */
+    public async unregisterTool(toolName: string, channelId?: string): Promise<void> {
+        // Ensure we're connected before unregistering tools
+        await this.ensureConnected();
+
+        // Validate optional channelId parameter if provided
+        if (channelId && typeof channelId !== 'string') {
+            throw new Error('channelId must be a string if provided');
+        }
+        const targetChannelId = channelId || this.channelId!;
+        // targetChannelId is guaranteed to be valid since this.channelId is validated in constructor
+
+        if (!this.mcpToolHandlers) {
+            throw new Error('MCP tool handlers not initialized');
+        }
+
+        await this.mcpToolHandlers.unregisterTool(toolName, targetChannelId);
+    }
+
     /**
      * Register an external MCP server
      *
-     * This allows developers to add their own MCP servers to MXF dynamically.
-     * The server will be started and its tools will become available to agents.
+     * Adds a developer-supplied MCP server to MXF. The server is started and its
+     * tools become available to agents. Resolves only once the server's tools have
+     * actually been discovered — a resolved promise means the tools are usable.
+     *
+     * Responses are correlated by `serverId`. Two concurrent registrations can no
+     * longer complete each other: this used to resolve on the first
+     * TOOLS_DISCOVERED event it saw, regardless of which server it came from.
      *
      * @param serverConfig External server configuration
-     * @returns Promise resolving to true if registration was successful
+     * @returns Promise resolving to the discovered tool names
+     * @throws EventRequestError if the server rejects the registration
+     * @throws EventRequestTimeoutError if no response arrives in 30s
      * @public
      *
      * @example
      * ```typescript
-     * await sdk.registerExternalMcpServer({
+     * const { toolsDiscovered } = await agent.registerExternalMcpServer({
      *   id: 'my-custom-server',
      *   name: 'My Custom Server',
      *   command: 'npx',
      *   args: ['-y', 'my-mcp-package'],
      *   autoStart: true
      * });
+     * console.log('Tools:', toolsDiscovered.join(', '));
      * ```
      */
     public async registerExternalMcpServer(serverConfig: {
@@ -1642,98 +1572,33 @@ export class MxfClient {
         environmentVariables?: Record<string, string>;
         restartOnCrash?: boolean;
         maxRestartAttempts?: number;
-    }): Promise<{ success: boolean; toolsDiscovered?: string[] }> {
+    }): Promise<McpServerRegistrationResult> {
         await this.ensureConnected();
 
-        return new Promise((resolve, reject) => {
-            try {
-
-                let registrationCompleted = false;
-
-                // Set up handler for registration response
-                const registrationSubscription = EventBus.client.on(Events.Mcp.EXTERNAL_SERVER_REGISTERED, (payload: any) => {
-                    if (payload.data?.serverId === serverConfig.id && !registrationCompleted) {
-                        if (!payload.data?.success) {
-                            registrationSubscription.unsubscribe();
-                            errorSubscription.unsubscribe();
-                            toolsSubscription.unsubscribe();
-                            this.logger.error(`Failed to register server ${serverConfig.name}`);
-                            resolve({ success: false });
-                        }
-                        // Don't resolve yet - wait for tools to be discovered
-                    }
-                });
-
-                // Set up handler for tool discovery (this is when we know it's ready)
-                const toolsSubscription = EventBus.client.on(Events.Mcp.EXTERNAL_SERVER_TOOLS_DISCOVERED, (payload: any) => {
-                    // Check if this is for our server (match by checking if discovered tools match our server)
-                    // Since we don't have serverId in this event, we'll use a timeout-based approach
-                    if (!registrationCompleted) {
-                        const discoveredTools = payload.data?.tools?.map((t: any) => t.name) || [];
-
-                        // If we're the only server being registered, assume these are our tools
-                        // Better approach: add serverId to TOOLS_DISCOVERED event
-                        registrationCompleted = true;
-                        registrationSubscription.unsubscribe();
-                        errorSubscription.unsubscribe();
-                        toolsSubscription.unsubscribe();
-
-
-                        // Reload tool cache BEFORE resolving promise
-                        if (this.toolService) {
-                            this.toolService.loadTools(undefined, true).then((tools) => {  // force=true to bypass cache
-                                resolve({ success: true, toolsDiscovered: discoveredTools });
-                            }).catch(err => {
-                                this.logger.error(`❌ Failed to refresh tool cache: ${err}`);
-                                resolve({ success: true, toolsDiscovered: discoveredTools }); // Still resolve, tools might work
-                            });
-                        } else {
-                            this.logger.warn('No toolService available - tool cache not refreshed');
-                            resolve({ success: true, toolsDiscovered: discoveredTools });
-                        }
-                    }
-                });
-
-                // Set up error handler
-                const errorSubscription = EventBus.client.on(Events.Mcp.EXTERNAL_SERVER_REGISTRATION_FAILED, (payload: any) => {
-                    if (payload.data?.serverId === serverConfig.id && !registrationCompleted) {
-                        registrationCompleted = true;
-                        registrationSubscription.unsubscribe();
-                        errorSubscription.unsubscribe();
-                        toolsSubscription.unsubscribe();
-
-                        this.logger.error(`Server registration failed: ${payload.data?.error || 'Unknown error'}`);
-                        reject(new Error(payload.data?.error || 'Server registration failed'));
-                    }
-                });
-
-                // Emit registration request
-                const registrationPayload = {
-                    eventId: uuidv4(),
-                    eventType: Events.Mcp.EXTERNAL_SERVER_REGISTER,
-                    timestamp: Date.now(),
-                    agentId: this.config.agentId || 'sdk-user',
-                    channelId: this.channelId || 'system',
-                    data: serverConfig
-                };
-
-                EventBus.client.emitOn(this.agentId, Events.Mcp.EXTERNAL_SERVER_REGISTER, registrationPayload);
-
-                // Timeout after 30 seconds
-                setTimeout(() => {
-                    if (!registrationCompleted) {
-                        registrationCompleted = true;
-                        registrationSubscription.unsubscribe();
-                        errorSubscription.unsubscribe();
-                        toolsSubscription.unsubscribe();
-                        reject(new Error('External server registration timeout after 30 seconds (tools not discovered)'));
-                    }
-                }, 30000);
-
-            } catch (error) {
-                this.logger.error(`Error registering external server: ${error}`);
-                reject(error);
-            }
+        return awaitEventResponse<McpServerRegistrationResult>({
+            emitEvent: Events.Mcp.EXTERNAL_SERVER_REGISTER,
+            payload: createBaseEventPayload(
+                Events.Mcp.EXTERNAL_SERVER_REGISTER,
+                this.agentId,
+                this.channelId || 'system',
+                serverConfig
+            ),
+            route: { via: 'agent', agentId: this.agentId },
+            // Tools discovered — not "registered" — is the point at which the server
+            // is actually usable, so that is what we wait for.
+            successEvent: Events.Mcp.EXTERNAL_SERVER_TOOLS_DISCOVERED,
+            failureEvent: Events.Mcp.EXTERNAL_SERVER_REGISTRATION_FAILED,
+            correlate: (payload: any) => payload?.data?.serverId === serverConfig.id,
+            mapResult: async (payload: any) => {
+                const toolsDiscovered: string[] = (payload?.data?.tools ?? []).map((t: any) => t.name);
+                // Refresh the tool cache before resolving so the caller can use the new
+                // tools on the very next line.
+                await this.toolService?.loadTools(undefined, true);
+                return { toolsDiscovered };
+            },
+            timeoutMs: MCP_REGISTRATION_TIMEOUT_MS,
+            description: `External MCP server registration for '${serverConfig.id}'`,
+            logger: this.logger,
         });
     }
 
@@ -1743,68 +1608,57 @@ export class MxfClient {
      * Stops and removes an external MCP server from MXF.
      *
      * @param serverId ID of the server to unregister
-     * @returns Promise resolving to true if unregistration was successful
+     * @returns Promise that resolves once the server has been removed
+     * @throws EventRequestError if the server reports the removal failed
+     * @throws EventRequestTimeoutError if no response arrives in 30s
      * @public
      */
-    public async unregisterExternalMcpServer(serverId: string): Promise<boolean> {
+    public async unregisterExternalMcpServer(serverId: string): Promise<void> {
         await this.ensureConnected();
 
-        return new Promise((resolve, reject) => {
-            try {
-
-                // Set up one-time handler for response
-                const subscription = EventBus.client.on(Events.Mcp.EXTERNAL_SERVER_UNREGISTERED, (payload: any) => {
-                    if (payload.data?.serverId === serverId) {
-                        subscription.unsubscribe();
-
-                        if (payload.data?.success) {
-                            resolve(true);
-                        } else {
-                            this.logger.error(`Failed to unregister server ${serverId}: ${payload.data?.error || 'Unknown error'}`);
-                            resolve(false);
-                        }
-                    }
-                });
-
-                // Emit unregistration request
-                const unregistrationPayload = {
-                    eventId: uuidv4(),
-                    eventType: Events.Mcp.EXTERNAL_SERVER_UNREGISTER,
-                    timestamp: Date.now(),
-                    agentId: this.config.agentId || 'sdk-user',
-                    channelId: this.channelId || 'system',
-                    data: { serverId }
-                };
-
-                EventBus.client.emitOn(this.agentId, Events.Mcp.EXTERNAL_SERVER_UNREGISTER, unregistrationPayload);
-
-                // Timeout after 30 seconds
-                setTimeout(() => {
-                    subscription.unsubscribe();
-                    reject(new Error('External server unregistration timeout after 30 seconds'));
-                }, 30000);
-
-            } catch (error) {
-                this.logger.error(`Error unregistering external server: ${error}`);
-                reject(error);
-            }
+        await awaitEventResponse<void>({
+            emitEvent: Events.Mcp.EXTERNAL_SERVER_UNREGISTER,
+            payload: createBaseEventPayload(
+                Events.Mcp.EXTERNAL_SERVER_UNREGISTER,
+                this.agentId,
+                this.channelId || 'system',
+                { serverId }
+            ),
+            route: { via: 'agent', agentId: this.agentId },
+            successEvent: Events.Mcp.EXTERNAL_SERVER_UNREGISTERED,
+            correlate: (payload: any) => payload?.data?.serverId === serverId,
+            mapResult: (payload: any) => {
+                // The server answers on the success event even when it failed, so the
+                // success flag has to be checked here and turned into a rejection.
+                if (payload?.data?.success === false) {
+                    throw new EventRequestError(
+                        payload?.data?.error || `Failed to unregister external MCP server '${serverId}'`,
+                        Events.Mcp.EXTERNAL_SERVER_UNREGISTERED,
+                        payload
+                    );
+                }
+            },
+            timeoutMs: MCP_REGISTRATION_TIMEOUT_MS,
+            description: `External MCP server unregistration for '${serverId}'`,
+            logger: this.logger,
         });
     }
 
     /**
      * Register a channel-scoped MCP server
      *
-     * This allows all agents in a channel to share the same MCP server instance.
-     * The server is automatically started when the first agent joins and stopped
-     * after a keepAlive period when the last agent leaves.
+     * Every agent in the channel shares the one server instance. It starts when the
+     * first agent joins and stops after a keepAlive period once the last agent leaves.
      *
      * @param serverConfig Channel server configuration
-     * @returns Promise resolving to registration result
+     * @returns Promise resolving to the discovered tool names
+     * @throws EventRequestError if the server rejects the registration
+     * @throws EventRequestTimeoutError if no response arrives in 30s
      * @public
      *
      * @example
      * ```typescript
-     * await client.registerChannelMcpServer({
+     * const { toolsDiscovered } = await client.registerChannelMcpServer({
      *   id: 'chess-game',
      *   name: 'Chess Game Server',
      *   command: 'npx',
@@ -1825,105 +1679,49 @@ export class MxfClient {
         restartOnCrash?: boolean;
         maxRestartAttempts?: number;
         keepAliveMinutes?: number;
-    }): Promise<{ success: boolean; toolsDiscovered?: string[] }> {
+    }): Promise<McpServerRegistrationResult> {
         await this.ensureConnected();
 
         if (!this.channelId) {
             throw new Error('Cannot register channel MCP server: agent not in a channel');
         }
 
-        return new Promise((resolve, reject) => {
-            try {
+        const channelId = this.channelId;
 
-                let registrationCompleted = false;
-
-                // Set up handler for registration response
-                const registrationSubscription = EventBus.client.on(McpEvents.CHANNEL_SERVER_REGISTERED, (payload: any) => {
-                    if (payload.data?.serverId === serverConfig.id &&
-                        payload.data?.scopeId === this.channelId &&
-                        !registrationCompleted) {
-
-                        if (!payload.data?.success) {
-                            registrationSubscription.unsubscribe();
-                            errorSubscription.unsubscribe();
-                            toolsSubscription.unsubscribe();
-                            this.logger.error(`Failed to register channel server ${serverConfig.name}`);
-                            resolve({ success: false });
-                        }
-                        // Don't resolve yet - wait for tools to be discovered
-                    }
-                });
-
-                // Set up handler for tool discovery
-                const toolsSubscription = EventBus.client.on(Events.Mcp.EXTERNAL_SERVER_TOOLS_DISCOVERED, (payload: any) => {
-                    if (!registrationCompleted) {
-                        const discoveredTools = payload.data?.tools?.map((t: any) => t.name) || [];
-
-                        registrationCompleted = true;
-                        registrationSubscription.unsubscribe();
-                        errorSubscription.unsubscribe();
-                        toolsSubscription.unsubscribe();
-
-                        // Reload tool cache
-                        if (this.toolService) {
-                            this.toolService.loadTools(undefined, true).then(() => {
-                                resolve({ success: true, toolsDiscovered: discoveredTools });
-                            }).catch(err => {
-                                this.logger.error(`❌ Failed to refresh tool cache: ${err}`);
-                                resolve({ success: true, toolsDiscovered: discoveredTools });
-                            });
-                        } else {
-                            resolve({ success: true, toolsDiscovered: discoveredTools });
-                        }
-                    }
-                });
-
-                // Set up error handler
-                const errorSubscription = EventBus.client.on(McpEvents.CHANNEL_SERVER_REGISTRATION_FAILED, (payload: any) => {
-                    if (payload.data?.serverId === serverConfig.id &&
-                        payload.data?.scopeId === this.channelId &&
-                        !registrationCompleted) {
-
-                        registrationCompleted = true;
-                        registrationSubscription.unsubscribe();
-                        errorSubscription.unsubscribe();
-                        toolsSubscription.unsubscribe();
-
-                        this.logger.error(`Channel server registration failed: ${payload.data?.error || 'Unknown error'}`);
-                        reject(new Error(payload.data?.error || 'Channel server registration failed'));
-                    }
-                });
-
-                // Emit registration request
-                const registrationPayload = {
-                    eventId: uuidv4(),
-                    eventType: McpEvents.CHANNEL_SERVER_REGISTER,
-                    timestamp: Date.now(),
-                    agentId: this.config.agentId || 'sdk-user',
-                    channelId: this.channelId,
-                    data: {
-                        ...serverConfig,
-                        channelId: this.channelId
-                    }
-                };
-
-                EventBus.client.emitOn(this.agentId, McpEvents.CHANNEL_SERVER_REGISTER, registrationPayload);
-
-                // Timeout after 30 seconds
-                setTimeout(() => {
-                    if (!registrationCompleted) {
-                        registrationCompleted = true;
-                        registrationSubscription.unsubscribe();
-                        errorSubscription.unsubscribe();
-                        toolsSubscription.unsubscribe();
-                        reject(new Error('Channel server registration timeout after 30 seconds'));
-                    }
-                }, 30000);
-
-            } catch (error) {
-                this.logger.error(`Error registering channel server: ${error}`);
-                reject(error);
-            }
+        return awaitEventResponse<McpServerRegistrationResult>({
+            emitEvent: McpEvents.CHANNEL_SERVER_REGISTER,
+            payload: createBaseEventPayload(
+                McpEvents.CHANNEL_SERVER_REGISTER,
+                this.agentId,
+                channelId,
+                { ...serverConfig, channelId }
+            ),
+            route: { via: 'agent', agentId: this.agentId },
+            successEvent: McpEvents.CHANNEL_SERVER_REGISTERED,
+            failureEvent: McpEvents.CHANNEL_SERVER_REGISTRATION_FAILED,
+            // Correlate on BOTH serverId and scopeId. This used to resolve off
+            // Events.Mcp.EXTERNAL_SERVER_TOOLS_DISCOVERED with no correlation at all,
+            // so any unrelated tool discovery anywhere completed this registration.
+            correlate: (payload: any) =>
+                payload?.data?.serverId === serverConfig.id &&
+                payload?.data?.scopeId === channelId,
+            mapResult: async (payload: any) => {
+                if (payload?.data?.success === false) {
+                    throw new EventRequestError(
+                        payload?.data?.error || `Failed to register channel MCP server '${serverConfig.id}'`,
+                        McpEvents.CHANNEL_SERVER_REGISTERED,
+                        payload
+                    );
+                }
+                const toolsDiscovered: string[] = (payload?.data?.tools ?? []).map((t: any) => t.name);
+                // Refresh the tool cache before resolving so the caller can use the new
+                // tools on the very next line.
+                await this.toolService?.loadTools(undefined, true);
+                return { toolsDiscovered };
+            },
+            timeoutMs: MCP_REGISTRATION_TIMEOUT_MS,
+            description: `Channel MCP server registration for '${serverConfig.id}'`,
+            logger: this.logger,
         });
     }
 
@@ -1949,14 +1747,8 @@ export class MxfClient {
             throw new Error('API service not initialized');
         }
 
-        try {
-            // Use REST API for read operation
-            const response = await this.apiService.get(`/channels/${targetChannelId}/mcp-servers`);
-            return response.servers || [];
-        } catch (error) {
-            this.logger.error(`Error listing channel servers: ${error}`);
-            throw error;
-        }
+        const response = await this.apiService.get(`/channels/${targetChannelId}/mcp-servers`);
+        return response.servers || [];
     }
 
     /**
@@ -1966,10 +1758,12 @@ export class MxfClient {
      *
      * @param serverId ID of the server to unregister
      * @param channelId Optional channel ID (defaults to current channel)
-     * @returns Promise resolving to true if unregistration was successful
+     * @returns Promise that resolves once the server has been removed
+     * @throws EventRequestError if the server reports the removal failed
+     * @throws EventRequestTimeoutError if no response arrives in 30s
      * @public
      */
-    public async unregisterChannelMcpServer(serverId: string, channelId?: string): Promise<boolean> {
+    public async unregisterChannelMcpServer(serverId: string, channelId?: string): Promise<void> {
         await this.ensureConnected();
 
         const targetChannelId = channelId || this.channelId;
@@ -1977,75 +1771,32 @@ export class MxfClient {
             throw new Error('Cannot unregister channel MCP server: no channel specified');
         }
 
-        return new Promise((resolve, reject) => {
-            try {
-
-                // Set up one-time handler for response
-                const subscription = EventBus.client.on(McpEvents.CHANNEL_SERVER_UNREGISTERED, (payload: any) => {
-                    if (payload.data?.serverId === serverId && payload.data?.scopeId === targetChannelId) {
-                        subscription.unsubscribe();
-
-                        if (payload.data?.success) {
-                            resolve(true);
-                        } else {
-                            this.logger.error(`Failed to unregister channel server ${serverId}: ${payload.data?.error || 'Unknown error'}`);
-                            resolve(false);
-                        }
-                    }
-                });
-
-                // Emit unregistration request
-                const unregistrationPayload = {
-                    eventId: uuidv4(),
-                    eventType: McpEvents.CHANNEL_SERVER_UNREGISTER,
-                    timestamp: Date.now(),
-                    agentId: this.config.agentId || 'sdk-user',
-                    channelId: targetChannelId,
-                    data: {
-                        serverId,
-                        channelId: targetChannelId
-                    }
-                };
-
-                EventBus.client.emitOn(this.agentId, McpEvents.CHANNEL_SERVER_UNREGISTER, unregistrationPayload);
-
-                // Timeout after 30 seconds
-                setTimeout(() => {
-                    subscription.unsubscribe();
-                    reject(new Error('Channel server unregistration timeout after 30 seconds'));
-                }, 30000);
-
-            } catch (error) {
-                this.logger.error(`Error unregistering channel server: ${error}`);
-                reject(error);
-            }
+        await awaitEventResponse<void>({
+            emitEvent: McpEvents.CHANNEL_SERVER_UNREGISTER,
+            payload: createBaseEventPayload(
+                McpEvents.CHANNEL_SERVER_UNREGISTER,
+                this.agentId,
+                targetChannelId,
+                { serverId, channelId: targetChannelId }
+            ),
+            route: { via: 'agent', agentId: this.agentId },
+            successEvent: McpEvents.CHANNEL_SERVER_UNREGISTERED,
+            correlate: (payload: any) =>
+                payload?.data?.serverId === serverId &&
+                payload?.data?.scopeId === targetChannelId,
+            mapResult: (payload: any) => {
+                if (payload?.data?.success === false) {
+                    throw new EventRequestError(
+                        payload?.data?.error || `Failed to unregister channel MCP server '${serverId}'`,
+                        McpEvents.CHANNEL_SERVER_UNREGISTERED,
+                        payload
+                    );
+                }
+            },
+            timeoutMs: MCP_REGISTRATION_TIMEOUT_MS,
+            description: `Channel MCP server unregistration for '${serverId}'`,
+            logger: this.logger,
         });
-    }
-
-    /**
-     * Unregister an MCP tool
-     *
-     * @param toolName Name of the tool to unregister
-     * @param channelId Channel ID where the tool should be unregistered
-     * @returns Promise resolving to true if unregistration was successful
-     * @public
-     */
-    public async unregisterTool(toolName: string, channelId?: string): Promise<boolean> {
-        // Ensure we're connected before unregistering tools
-        await this.ensureConnected();
-        
-        // Validate optional channelId parameter if provided
-        if (channelId && typeof channelId !== 'string') {
-            throw new Error('channelId must be a string if provided');
-        }
-        const targetChannelId = channelId || this.channelId!;
-        // targetChannelId is guaranteed to be valid since this.channelId is validated in constructor
-        
-        if (!this.mcpToolHandlers) {
-            throw new Error('MCP tool handlers not initialized');
-        }
-        
-        return this.mcpToolHandlers.unregisterTool(toolName, targetChannelId);
     }
 
     /**
@@ -2113,118 +1864,158 @@ export class MxfClient {
     // ==================== PUBLIC EVENT API ====================
 
     /**
-     * Listen to a public event
-     * 
-     * Only events in the PUBLIC_EVENTS whitelist can be listened to.
-     * Internal/sensitive framework events are blocked for security.
-     * 
-     * @param eventName - Public event name from Events namespace
-     * @param handler - Event handler function
+     * Listen to a public event.
+     *
+     * Only events in the PUBLIC_EVENTS whitelist can be listened to. Internal
+     * framework events are not exposed.
+     *
+     * The handler is typed from the event name: `PayloadOf<E>` resolves to the
+     * event's real payload, so `agent.on(Events.Task.ASSIGNED, task => ...)` gives
+     * you a typed `task` instead of `any`.
+     *
+     * @param eventName - Public event name from the Events namespace
+     * @param handler - Event handler, typed from the event name
      * @returns This agent instance for method chaining
-     * @throws Error if event is not in public whitelist
-     * 
+     * @throws Error if the event is not in the public whitelist. It previously only
+     *         logged a warning through a client Logger that is disabled by default
+     *         and then silently ignored the listener, so a typo'd event name meant a
+     *         handler that never fired and no feedback at all.
+     *
      * @example
      * ```typescript
      * agent.on(Events.Message.CHANNEL_MESSAGE, (message) => {
-     *     console.log('Received:', message.content);
+     *     console.log('Received:', message.data);
      * });
-     * 
+     *
      * agent.on(Events.Task.ASSIGNED, (task) => {
-     *     console.log('New task:', task.taskId);
+     *     console.log('New task:', task.data.taskId);
      * });
      * ```
      */
-    public on(eventName: PublicEventName, handler: (data: any) => void): this {
-        // Validate event is in public whitelist
+    public on<E extends PublicEventName>(
+        eventName: E,
+        handler: (payload: PayloadOf<E>) => void
+    ): this {
         if (!isPublicEvent(eventName)) {
             const category = getEventCategory(eventName as any);
-            this.logger.warn(
-                `Event '${eventName}' is not in the public whitelist. ` +
-                `Only events from PUBLIC_EVENTS can be monitored. ` +
-                `This appears to be an internal ${category} event. Ignoring listener.`
+            throw new Error(
+                `Event '${eventName}' is not in the public whitelist and cannot be listened to. ` +
+                `It looks like an internal ${category} event. ` +
+                `Use an event from the Events namespace that appears in PUBLIC_EVENTS.`
             );
-            return this;
         }
 
-        // Subscribe to event through EventBus
         const subscription = EventBus.client.on(eventName, handler);
 
-        // Track subscription for cleanup
+        // Keep the handler next to its subscription so off(event, handler) can find it.
         if (!this.eventListeners.has(eventName)) {
             this.eventListeners.set(eventName, []);
         }
-        this.eventListeners.get(eventName)!.push(subscription);
+        this.eventListeners.get(eventName)!.push({
+            handler: handler as (data: any) => void,
+            subscription,
+        });
 
         return this; // Allow chaining
     }
 
     /**
-     * Remove an event listener
-     * 
+     * Remove an event listener.
+     *
+     * Passing a handler removes exactly that handler; omitting it removes every
+     * handler registered for the event. Removing a single handler is fully
+     * supported — this used to warn that it wasn't and then do nothing.
+     *
      * @param eventName - Public event name
-     * @param handler - Handler function to remove (optional, removes all if not provided)
+     * @param handler - Handler to remove. Omit to remove all handlers for the event.
      * @returns This agent instance for method chaining
-     * 
+     *
      * @example
      * ```typescript
      * const messageHandler = (msg) => console.log(msg);
      * agent.on(Events.Message.CHANNEL_MESSAGE, messageHandler);
-     * 
-     * // Later, remove specific handler
+     *
+     * // Remove that one handler
      * agent.off(Events.Message.CHANNEL_MESSAGE, messageHandler);
-     * 
-     * // Or remove all handlers for an event
+     *
+     * // Or remove every handler for the event
      * agent.off(Events.Message.CHANNEL_MESSAGE);
      * ```
      */
-    public off(eventName: PublicEventName, handler?: (data: any) => void): this {
-        const subscriptions = this.eventListeners.get(eventName);
-        
-        if (subscriptions) {
-            if (handler) {
-                // Remove specific handler (not easily possible with RxJS subscriptions)
-                // This would require storing handler references
-                this.logger.warn('Removing specific handler not fully supported. Use removeAllListeners() instead.');
-            } else {
-                // Remove all handlers for this event
-                subscriptions.forEach(sub => sub.unsubscribe());
+    public off<E extends PublicEventName>(
+        eventName: E,
+        handler?: (payload: PayloadOf<E>) => void
+    ): this {
+        const entries = this.eventListeners.get(eventName);
+        if (!entries) {
+            return this;
+        }
+
+        if (handler) {
+            const index = entries.findIndex(entry => entry.handler === handler);
+            if (index !== -1) {
+                entries[index].subscription.unsubscribe();
+                entries.splice(index, 1);
+            }
+            if (entries.length === 0) {
                 this.eventListeners.delete(eventName);
             }
+        } else {
+            entries.forEach(entry => entry.subscription.unsubscribe());
+            this.eventListeners.delete(eventName);
         }
 
         return this;
     }
 
     /**
-     * Emit an event (for advanced use cases)
-     * 
-     * Note: Most events are emitted automatically by the framework.
-     * This is provided for custom event emission in advanced scenarios.
-     * 
-     * @param eventName - Public event name
-     * @param data - Event data
+     * Remove every listener registered through on().
+     *
      * @returns This agent instance for method chaining
-     * 
+     * @public
+     */
+    public removeAllListeners(): this {
+        for (const entries of this.eventListeners.values()) {
+            entries.forEach(entry => entry.subscription.unsubscribe());
+        }
+        this.eventListeners.clear();
+        return this;
+    }
+
+    /**
+     * Emit a public event.
+     *
+     * Most events are emitted by the framework itself; this exists for custom
+     * emission in advanced scenarios.
+     *
+     * @param eventName - Public event name
+     * @param payload - Event payload, typed from the event name. Build it with a
+     *                  helper from EventPayloadSchema.
+     * @returns This agent instance for method chaining
+     * @throws Error if the event is not in the public whitelist. It previously only
+     *         warned and silently dropped the emit.
+     *
      * @example
      * ```typescript
-     * // Custom status change
-     * agent.emit(Events.Agent.STATUS_CHANGE, {
-     *     agentId: agent.agentId,
-     *     status: 'busy'
-     * });
+     * import { createAgentEventPayload } from '@mxf-dev/core/schemas/EventPayloadSchema';
+     *
+     * agent.emit(
+     *     Events.Agent.STATUS_CHANGE,
+     *     createAgentEventPayload(Events.Agent.STATUS_CHANGE, agent.agentId, channelId, { status: 'busy' })
+     * );
      * ```
      */
-    public emit(eventName: PublicEventName, data: any): this {
-        // Validate event is in public whitelist
+    public emit<E extends PublicEventName>(eventName: E, payload: PayloadOf<E>): this {
         if (!isPublicEvent(eventName)) {
-            this.logger.warn(
-                `Event '${eventName}' is not in the public whitelist. ` +
-                `Only events from PUBLIC_EVENTS can be emitted. Ignoring emit.`
+            const category = getEventCategory(eventName as any);
+            throw new Error(
+                `Event '${eventName}' is not in the public whitelist and cannot be emitted. ` +
+                `It looks like an internal ${category} event. ` +
+                `Use an event from the Events namespace that appears in PUBLIC_EVENTS.`
             );
-            return this;
         }
 
-        EventBus.client.emitOn(this.agentId, eventName, data);
+        EventBus.client.emitOn(this.agentId, eventName, payload);
         return this;
     }
 }

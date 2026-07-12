@@ -19,7 +19,36 @@
  */
 
 import mongoose, { Document, Schema } from 'mongoose';
-import bcrypt from 'bcrypt';
+// bcrypt is an OPTIONAL peer dependency: it is a native module that has to be
+// compiled at install time, and only applications that store user passwords need
+// it. Loaded on demand; a clear error is thrown if a password operation is
+// attempted without it installed.
+import type * as BcryptModule from 'bcrypt';
+
+let bcryptModule: typeof BcryptModule | null = null;
+
+/**
+ * Load bcrypt on demand.
+ *
+ * @throws If bcrypt is not installed. Passwords are never stored unhashed.
+ */
+const loadBcrypt = async (): Promise<typeof BcryptModule> => {
+    if (bcryptModule) {
+        return bcryptModule;
+    }
+
+    try {
+        const imported = await import('bcrypt');
+        bcryptModule = (imported.default ?? imported) as typeof BcryptModule;
+        return bcryptModule;
+    } catch (error) {
+        throw new Error(
+            'Password hashing requires the optional peer dependency "bcrypt", which is not installed. ' +
+            'Install it with `bun add bcrypt` (or `npm install bcrypt`) to use the User model. ' +
+            `Underlying error: ${error instanceof Error ? error.message : String(error)}`
+        );
+    }
+};
 
 /**
  * User role enum
@@ -123,15 +152,17 @@ UserSchema.pre('save', async function(next) {
     }
     
     try {
+        const bcrypt = await loadBcrypt();
+
         // Generate a salt
         const salt = await bcrypt.genSalt(10);
-        
+
         // Hash the password along with the new salt
         this.password = await bcrypt.hash(this.password, salt);
-        
+
         // Update the updatedAt field
         this.updatedAt = new Date();
-        
+
         next();
     } catch (error) {
         next(error as Error);
@@ -140,6 +171,7 @@ UserSchema.pre('save', async function(next) {
 
 // Method to compare passwords
 UserSchema.methods.comparePassword = async function(candidatePassword: string): Promise<boolean> {
+    const bcrypt = await loadBcrypt();
     return bcrypt.compare(candidatePassword, this.password);
 };
 

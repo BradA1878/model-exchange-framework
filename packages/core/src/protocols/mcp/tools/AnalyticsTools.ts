@@ -347,7 +347,7 @@ export const analytics_task_completion: McpToolDefinition = {
                                timeRange === '7d' ? 7 * 24 * 60 * 60 * 1000 :
                                30 * 24 * 60 * 60 * 1000;
             const startTime = now - timeRangeMs;
-            const taskAnalytics = effectivenessService.getAnalytics(startTime, now, channelId);
+            const taskAnalytics = await effectivenessService.getAnalytics(startTime, now, channelId);
             
             return createToolResult(true, {
                 timeRange,

@@ -149,9 +149,11 @@ export const handleSocketAuthentication = async (socket: Socket, authData: any):
             }
         }
 
-        // Try key-based authentication (for agents)
+        // Try key-based authentication (for agents).
+        // authData.agentId is deliberately not passed through — the agent identity
+        // is derived from the key. See tryKeySocketAuthentication.
         if (authData.keyId && authData.secretKey) {
-            const keyResult = await tryKeySocketAuthentication(socket, authData.keyId, authData.secretKey, authData.agentId);
+            const keyResult = await tryKeySocketAuthentication(socket, authData.keyId, authData.secretKey);
             if (keyResult) {
                 return keyResult;
             }
@@ -279,19 +281,31 @@ const tryJwtSocketAuthentication = async (socket: Socket, token: string): Promis
  */
 const tryUsernamePasswordSocketAuthentication = async (socket: Socket, username: string, password: string): Promise<string | null> => {
     try {
-        
+        // Reject non-string credentials before they reach the Mongo query. Socket
+        // handshake auth is JSON, so `{ username: { $gt: "" } }` would otherwise be
+        // interpolated as a query operator and match the first user in the collection.
+        if (typeof username !== 'string' || typeof password !== 'string') {
+            moduleLogger.warn(`Rejected socket credentials with non-string username or password for socket ${socket.id}`);
+            return null;
+        }
+
+        const usernameValue = username.trim();
+        if (usernameValue.length === 0 || password.length === 0) {
+            return null;
+        }
+
         // Find user by username or email
         const user = await User.findOne({
             $or: [
-                { username: username },
-                { email: username }
+                { username: usernameValue },
+                { email: usernameValue }
             ]
         });
-        
+
         if (!user || !user.isActive) {
             return null;
         }
-        
+
         // Verify password (password field contains the hashed password)
         const isValidPassword = await bcrypt.compare(password, user.password);
         if (!isValidPassword) {
@@ -315,35 +329,49 @@ const tryUsernamePasswordSocketAuthentication = async (socket: Socket, username:
 
 /**
  * Try key-based authentication for socket connection
- * 
+ *
+ * The agent identity is derived from the key, never taken from the client.
+ * ChannelKeyService.validateKey returns the agentId that the keyId and channelId
+ * hash to — the same derivation HTTP key auth uses — so one key always maps to
+ * one agent, on both transports.
+ *
+ * This used to prefer a client-supplied `agentId` from the handshake, which made
+ * agent identity self-asserted: any holder of any valid channel key could claim
+ * to be any agent, and every downstream check that trusts socket.data.agentId
+ * (task assignment, message sender, memory scope) trusted that claim.
+ *
  * @param socket Socket instance
  * @param keyId Key identifier
  * @param secretKey Secret key
- * @param clientAgentId Optional client-provided agent ID
  * @returns Agent ID if successful, null otherwise
  */
-const tryKeySocketAuthentication = async (socket: Socket, keyId: string, secretKey: string, clientAgentId?: string): Promise<string | null> => {
+const tryKeySocketAuthentication = async (socket: Socket, keyId: string, secretKey: string): Promise<string | null> => {
     try {
-        
+        // Reject non-string credentials before they reach the key lookup
+        if (typeof keyId !== 'string' || typeof secretKey !== 'string') {
+            moduleLogger.warn(`Rejected socket key credentials with non-string keyId or secretKey for socket ${socket.id}`);
+            return null;
+        }
+
         // Validate key credentials using the same logic as HTTP authentication
         const validation = await KeyAuthHelper.getInstance().validateKey(keyId, secretKey);
-        
-        
+
         if (!validation.valid) {
             moduleLogger.warn(`Key validation failed for socket ${socket.id}: keyId=${keyId}`);
             return null;
         }
-        
-        // Use client-provided agentId if available, otherwise use server-generated agentId
-        const agentId = clientAgentId && clientAgentId.trim() ? clientAgentId.trim() : validation.agentId;
-        
+
+        // Identity comes from the key, not from the handshake
+        const agentId = validation.agentId;
+
         if (!agentId) {
+            moduleLogger.error(`Key ${keyId} validated but resolved no agentId — refusing to authenticate socket ${socket.id}`);
             return null;
         }
-        
+
         // Generate normalized room name if channel provided
         const room = validation.channelId ? getNormalizedChannelName(validation.channelId) : null;
-        
+
         // Store agent auth data
         socket.data = {
             agentId: agentId,
@@ -352,15 +380,14 @@ const tryKeySocketAuthentication = async (socket: Socket, keyId: string, secretK
             authType: 'key',
             authenticated: true
         };
-        
+
         // Add socket to room if channel provided
         if (room) {
             socket.join(room);
-            //;
         }
-        
+
         return agentId;
-        
+
     } catch (error) {
         moduleLogger.error(`Key authentication failed for socket: ${error instanceof Error ? error.message : String(error)}`);
         return null;

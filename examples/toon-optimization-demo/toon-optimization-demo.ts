@@ -234,7 +234,7 @@ async function demo() {
     });
 
     // Generate keys for agent
-    const keys = await sdk.generateKey(channelId, undefined, 'TOON Demo Agent Key');
+    const keys = await sdk.generateKey(channelId, 'ToonDemoAgent', 'TOON Demo Agent Key');
 
     // Create agent for data analysis
     agent = await sdk.createAgent({

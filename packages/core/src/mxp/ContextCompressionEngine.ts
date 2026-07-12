@@ -20,10 +20,31 @@
 
 /**
  * MXP 2.0 Context Compression Engine
- * 
- * Implements intelligent context compression using SystemLLM and existing MXF services.
- * Features sliding window compression, context references, and semantic deduplication.
- * Only activates when MXP token optimization is enabled.
+ *
+ * Shrinks conversation context by keeping the most recent messages verbatim and
+ * replacing older ones with a summary. Only activates when MXP token
+ * optimization is enabled for the channel/agent.
+ *
+ * ## What this actually does — no LLM is involved
+ *
+ * Compression is deterministic and local:
+ *
+ * - **Recency window**: the last `windowSize` messages are kept untouched.
+ * - **Structured summary**: older messages are run through StructuredSummaryBuilder,
+ *   which extracts the primary request, key decisions, tool executions, errors,
+ *   verbatim user directives, and current state.
+ * - **Exact-duplicate removal**: byte-identical messages (after whitespace and
+ *   punctuation normalization) are collapsed.
+ * - **Context references**: very large blocks can be swapped for a reference ID
+ *   and retrieved later with getContextByReference().
+ *
+ * This is LOSSY. Anything not captured by a summary section is gone. Callers get
+ * measured token counts and a measured ratio so they can see exactly how much was
+ * dropped.
+ *
+ * A previous version had a method called `compressWithSystemLLM` that called no
+ * LLM: it concatenated the messages and cut the string at a byte offset, mid-word,
+ * then reported a compression ratio for it. That is gone.
  */
 
 import { Logger } from '../utils/Logger.js';
@@ -43,19 +64,27 @@ import { getContextLimit, getCompactionThreshold } from '../config/ModelContextL
 import { ConversationMessage } from '../interfaces/ConversationMessage.js';
 
 export interface CompressedContext {
-    recent: any[];                    // Uncompressed recent messages
-    compressed: string;               // Compressed older content
+    /** The most recent messages, kept verbatim. */
+    recent: any[];
+    /** Structured summary standing in for the older messages. Lossy. */
+    compressed: string;
+    /** Measured token estimate of the messages that were summarized. */
     originalTokens: number;
+    /** Measured token estimate of the summary that replaced them. */
     compressedTokens: number;
+    /** compressedTokens / originalTokens, measured after the fact. */
     ratio: number;
-    contextReferences: string[];      // Reference IDs for stored context
+    /** Reference IDs for context stored instead of summarized. */
+    contextReferences: string[];
 }
 
 export interface CompressionOptions {
-    windowSize?: number;              // Full context window (default: 5 messages)
-    compressionRatio?: number;        // Target compression (default: 0.3 = 70% reduction)
-    preserveKeywords?: string[];      // Important terms to preserve
-    useContextReferences?: boolean;   // Store large contexts as references
+    /** Number of recent messages kept verbatim (default: 5). */
+    windowSize?: number;
+    /** Terms that must appear in the summary even if no section captured them. */
+    preserveKeywords?: string[];
+    /** Store large blocks as retrievable references instead of summarizing. */
+    useContextReferences?: boolean;
     channelId: string;
     agentId?: string;
 }
@@ -67,6 +96,13 @@ export class ContextCompressionEngine {
     private readonly validator = createStrictValidator('ContextCompressionEngine');
     private contextCache = new Map<string, any>(); // LRU cache for compressed contexts
     private readonly maxCacheSize = 100;
+
+    /** Counters for getCompressionStats(). Updated on every compression. */
+    private readonly stats = {
+        totalCompressions: 0,
+        totalOriginalTokens: 0,
+        totalCompressedTokens: 0
+    };
 
     private constructor() {
         this.logger = new Logger('info', 'ContextCompressionEngine', 'server');
@@ -83,8 +119,17 @@ export class ContextCompressionEngine {
     }
 
     /**
-     * Compress conversation history using intelligent sliding window approach
-     * Only processes if context compression is enabled for the channel/agent
+     * Replace older conversation history with a structured summary, keeping the
+     * most recent `windowSize` messages verbatim.
+     *
+     * This is LOSSY: detail in the older messages that no summary section
+     * captures is discarded. The returned token counts and ratio are measured,
+     * not projected, so the caller can see how much was dropped.
+     *
+     * @returns null when context compression is disabled for this channel/agent.
+     * @throws If summarization fails. There is no "return the recent messages and
+     *         pretend it worked" path — a caller that thinks it has the earlier
+     *         context when it does not will act on missing information.
      */
     public async compressConversation(
         messages: (ChannelMessage | AgentMessage)[],
@@ -104,16 +149,13 @@ export class ContextCompressionEngine {
             return null; // No compression - return null to indicate no processing
         }
 
-        const startTime = Date.now();
         const windowSize = options.windowSize || 5;
-        const targetRatio = options.compressionRatio || 0.3;
 
-
-        // Sliding window logic: keep recent messages, compress older ones
+        // Recency window: keep the newest messages, summarize the rest
         const recentMessages = messages.slice(-windowSize);
         const olderMessages = messages.slice(0, -windowSize);
 
-        // If no older messages, no compression needed
+        // If no older messages, there is nothing to summarize
         if (olderMessages.length === 0) {
             return {
                 recent: recentMessages,
@@ -127,108 +169,87 @@ export class ContextCompressionEngine {
 
         // Get effective configuration for compression settings
         const effectiveConfig = MxpConfigManager.getInstance().getEffectiveConfig(
-            options.channelId, 
+            options.channelId,
             options.agentId
         );
 
         const compressionSettings = effectiveConfig.modules.tokenOptimization?.settings.contextWindow;
-        const actualCompressionRatio = compressionSettings?.compressionRatio || targetRatio;
 
-        try {
-            // Apply semantic deduplication if enabled
-            let processedOlderMessages = olderMessages;
-            
-            const isDeduplicationEnabled = MxpConfigManager.getInstance().isTokenStrategyEnabled(
-                options.channelId,
-                'entityDeduplication',
-                options.agentId
-            );
+        // Collapse byte-identical messages if enabled
+        let processedOlderMessages = olderMessages;
 
-            if (isDeduplicationEnabled) {
-                processedOlderMessages = await this.applySemanticDeduplication(olderMessages);
-            }
+        const isDeduplicationEnabled = MxpConfigManager.getInstance().isTokenStrategyEnabled(
+            options.channelId,
+            'entityDeduplication',
+            options.agentId
+        );
 
-            // Create context reference if messages are too large
-            let compressed: string;
-            let contextReferences: string[] = [];
-
-            const shouldUseReferences = options.useContextReferences && 
-                compressionSettings?.referenceMode &&
-                processedOlderMessages.length > 20; // Reference mode for > 20 messages
-
-            if (shouldUseReferences) {
-                const contextRef = await this.createContextReference(
-                    options.channelId,
-                    processedOlderMessages
-                );
-                contextReferences.push(contextRef);
-                compressed = `[Context Reference: ${contextRef} - ${processedOlderMessages.length} earlier messages]`;
-            } else {
-                // Use SystemLLM for intelligent summarization (only if enabled)
-                compressed = await this.compressWithSystemLLM(
-                    processedOlderMessages,
-                    actualCompressionRatio,
-                    options.preserveKeywords || []
-                );
-            }
-
-            const originalTokens = this.estimateTokens(olderMessages);
-            const compressedTokens = this.estimateTokens([{ content: compressed }]);
-            const actualRatio = compressedTokens / originalTokens;
-
-            // Emit compression event for analytics using proper payload creator
-            const compressionEventPayload = createMxpTokenOptimizationEventPayload(
-                Events.Mxp.CONTEXT_COMPRESSED,
-                options.agentId || 'system',
-                options.channelId,
-                {
-                    operationId: crypto.randomUUID(),
-                    originalTokens,
-                    optimizedTokens: compressedTokens,
-                    compressionRatio: actualRatio,
-                    strategy: 'context_compression',
-                    timestamp: Date.now(),
-                    contextWindowReduction: olderMessages.length
-                },
-                { source: 'ContextCompressionEngine' }
-            );
-            EventBus.server.emit(Events.Mxp.CONTEXT_COMPRESSED, compressionEventPayload);
-
-            const result: CompressedContext = {
-                recent: recentMessages,
-                compressed,
-                originalTokens,
-                compressedTokens,
-                ratio: actualRatio,
-                contextReferences
-            };
-
-
-            return result;
-
-        } catch (error) {
-            this.logger.error('Context compression failed', { 
-                error: error instanceof Error ? error.message : String(error),
-                channelId: options.channelId,
-                messageCount: messages.length
-            });
-            
-            // Fallback: return recent messages only
-            return {
-                recent: recentMessages,
-                compressed: `[Compression failed, showing recent ${windowSize} messages only]`,
-                originalTokens: this.estimateTokens(messages),
-                compressedTokens: this.estimateTokens(recentMessages),
-                ratio: recentMessages.length / messages.length,
-                contextReferences: []
-            };
+        if (isDeduplicationEnabled) {
+            processedOlderMessages = this.removeExactDuplicates(olderMessages);
         }
+
+        // Store the block as a retrievable reference, or summarize it
+        let compressed: string;
+        const contextReferences: string[] = [];
+
+        const shouldUseReferences = options.useContextReferences &&
+            compressionSettings?.referenceMode &&
+            processedOlderMessages.length > 20; // Reference mode for > 20 messages
+
+        if (shouldUseReferences) {
+            const contextRef = this.createContextReference(
+                options.channelId,
+                processedOlderMessages
+            );
+            contextReferences.push(contextRef);
+            compressed = `[Context Reference: ${contextRef} - ${processedOlderMessages.length} earlier messages]`;
+        } else {
+            compressed = this.summarizeMessages(
+                processedOlderMessages,
+                options.preserveKeywords || []
+            );
+        }
+
+        const originalTokens = this.estimateTokens(olderMessages);
+        const compressedTokens = this.estimateTokens([{ content: compressed }]);
+        const actualRatio = originalTokens > 0 ? compressedTokens / originalTokens : 1.0;
+
+        this.stats.totalCompressions++;
+        this.stats.totalOriginalTokens += originalTokens;
+        this.stats.totalCompressedTokens += compressedTokens;
+
+        // Emit compression event for analytics using proper payload creator
+        const compressionEventPayload = createMxpTokenOptimizationEventPayload(
+            Events.Mxp.CONTEXT_COMPRESSED,
+            options.agentId || 'system',
+            options.channelId,
+            {
+                operationId: crypto.randomUUID(),
+                originalTokens,
+                optimizedTokens: compressedTokens,
+                compressionRatio: actualRatio,
+                strategy: 'context_compression',
+                timestamp: Date.now(),
+                contextWindowReduction: olderMessages.length
+            },
+            { source: 'ContextCompressionEngine' }
+        );
+        EventBus.server.emit(Events.Mxp.CONTEXT_COMPRESSED, compressionEventPayload);
+
+        return {
+            recent: recentMessages,
+            compressed,
+            originalTokens,
+            compressedTokens,
+            ratio: actualRatio,
+            contextReferences
+        };
     }
 
     /**
      * Create short reference ID for large context blocks using existing memory system
      */
-    private async createContextReference(channelId: string, context: any[]): Promise<string> {
+    private createContextReference(channelId: string, context: any[]): string {
         // Generate hash-based ID (e.g., "ctx_a3f2d1")
         const contextId = `ctx_${crypto.createHash('sha256')
             .update(JSON.stringify(context))
@@ -268,37 +289,28 @@ export class ContextCompressionEngine {
     }
 
     /**
-     * Apply semantic deduplication to remove similar messages
-     * This is a simplified version - in full implementation would use PatternLearningService
+     * Drop messages whose content is identical to one already seen.
+     *
+     * This is an exact-match filter: content is lowercased, stripped of
+     * punctuation and repeated whitespace, then hashed. Messages that merely
+     * say the same thing in different words are both kept — there is no
+     * semantic similarity here, and the method no longer claims otherwise.
      */
-    private async applySemanticDeduplication(messages: any[]): Promise<any[]> {
+    private removeExactDuplicates(messages: any[]): any[] {
         if (messages.length <= 1) return messages;
 
         const deduplicated: any[] = [];
         const seenContent = new Set<string>();
 
         for (const message of messages) {
-            // Extract content from different possible structures
-            let contentText = '';
-            if (typeof message.content === 'string') {
-                contentText = message.content;
-            } else if (message.content?.data) {
-                contentText = message.content.data;
-            } else if (message.directContent) {
-                contentText = message.directContent;
-            } else {
-                // Fallback to message itself as string
-                contentText = JSON.stringify(message);
-            }
+            const contentText = this.extractContent(message) ?? JSON.stringify(message);
 
-            // Simple content-based deduplication (in full implementation would use semantic similarity)
             const normalizedContent = this.normalizeContent(contentText);
-            const contentHash = crypto.createHash('md5').update(normalizedContent).digest('hex').substring(0, 8);
-            
+            const contentHash = crypto.createHash('md5').update(normalizedContent).digest('hex');
+
             if (!seenContent.has(contentHash)) {
                 seenContent.add(contentHash);
                 deduplicated.push(message);
-            } else {
             }
         }
 
@@ -306,51 +318,80 @@ export class ContextCompressionEngine {
     }
 
     /**
-     * Compress content using SystemLLM (placeholder - integrates with existing SystemLlmService)
+     * Summarize messages into a structured digest.
+     *
+     * Delegates to StructuredSummaryBuilder, which extracts the primary request,
+     * key decisions, tool executions, errors, verbatim user directives, and
+     * current state. Deterministic, local, and lossy — no model is called.
+     *
+     * @throws If the summary cannot be built.
      */
-    private async compressWithSystemLLM(
-        messages: any[], 
-        compressionRatio: number,
-        preserveKeywords: string[]
-    ): Promise<string> {
-        // In full implementation, this would call SystemLlmService.optimizeContextForMxp()
-        // For now, return a simple summary
-        
-        const totalContent = messages.map(m => {
-            // Extract content from different possible structures
-            let contentText = '';
-            if (typeof m.content === 'string') {
-                contentText = m.content;
-            } else if (m.content?.data) {
-                contentText = m.content.data;
-            } else if (m.directContent) {
-                contentText = m.directContent;
-            } else {
-                contentText = 'unknown content';
-            }
-            return `${m.senderId}: ${contentText}`;
-        }).join('\n');
-        
-        const targetLength = Math.floor(totalContent.length * compressionRatio);
-        
-        // Simple truncation with ellipsis (placeholder for SystemLLM integration)
-        if (totalContent.length <= targetLength) {
-            return totalContent;
+    private summarizeMessages(messages: any[], preserveKeywords: string[]): string {
+        const conversationMessages = messages.map((m, index) => this.toConversationMessage(m, index));
+
+        const builder = StructuredSummaryBuilder.getInstance();
+        const summary = builder.buildSummary(conversationMessages);
+        const summaryText = builder.formatAsPrompt(summary);
+
+        // Terms the caller asked to keep, which no summary section may have captured.
+        const missingKeywords = preserveKeywords.filter(
+            keyword => !summaryText.toLowerCase().includes(keyword.toLowerCase())
+        );
+
+        if (missingKeywords.length === 0) {
+            return summaryText;
         }
-        
-        const compressed = totalContent.substring(0, targetLength - 3) + '...';
-        
-        // Ensure preserved keywords are included
-        if (preserveKeywords.length > 0) {
-            const keywordSection = `\nKey terms: ${preserveKeywords.join(', ')}`;
-            return compressed + keywordSection;
-        }
-        
-        return compressed;
+
+        return `${summaryText}\n\nKey terms: ${missingKeywords.join(', ')}`;
     }
 
     /**
-     * Normalize message content for deduplication
+     * Adapt a ChannelMessage/AgentMessage onto the ConversationMessage shape the
+     * summary builder consumes.
+     */
+    private toConversationMessage(message: any, index: number): ConversationMessage {
+        const content = this.extractContent(message);
+        if (content === null) {
+            throw new Error(
+                `Cannot summarize message at index ${index}: no readable content ` +
+                `(expected a string 'content', 'content.data', or 'directContent').`
+            );
+        }
+
+        // Messages from the framework carry a senderId rather than a chat role.
+        // Anything the system sent is 'system'; everything else is a participant
+        // turn, which the builder treats as assistant content.
+        const senderId: string | undefined = message.senderId;
+        const role: ConversationMessage['role'] = senderId === 'system' ? 'system' : 'assistant';
+
+        return {
+            id: message.id ?? message.messageId ?? `ctx-${index}`,
+            role,
+            content: senderId ? `${senderId}: ${content}` : content,
+            timestamp: typeof message.timestamp === 'number' ? message.timestamp : Date.now(),
+            metadata: message.metadata
+        };
+    }
+
+    /**
+     * Pull the text out of the message shapes that flow through the framework.
+     * Returns null when there is no readable content.
+     */
+    private extractContent(message: any): string | null {
+        if (typeof message?.content === 'string') {
+            return message.content;
+        }
+        if (typeof message?.content?.data === 'string') {
+            return message.content.data;
+        }
+        if (typeof message?.directContent === 'string') {
+            return message.directContent;
+        }
+        return null;
+    }
+
+    /**
+     * Normalize message content for exact-duplicate detection
      */
     private normalizeContent(content: string): string {
         return content
@@ -388,7 +429,11 @@ export class ContextCompressionEngine {
     }
 
     /**
-     * Get compression statistics for monitoring
+     * Compression statistics measured from the work this instance actually did.
+     *
+     * averageCompressionRatio is summarizedTokens/originalTokens across every
+     * compression (1.0 = no reduction), and is 0 before anything has been
+     * compressed.
      */
     public getCompressionStats(): {
         totalCompressions: number;
@@ -396,12 +441,25 @@ export class ContextCompressionEngine {
         cacheSize: number;
         contextReferencesCreated: number;
     } {
+        const { totalCompressions, totalOriginalTokens, totalCompressedTokens } = this.stats;
+
         return {
-            totalCompressions: 0, // Would be tracked in full implementation
-            averageCompressionRatio: 0.3,
+            totalCompressions,
+            averageCompressionRatio: totalOriginalTokens > 0
+                ? totalCompressedTokens / totalOriginalTokens
+                : 0,
             cacheSize: this.contextCache.size,
             contextReferencesCreated: this.contextCache.size
         };
+    }
+
+    /**
+     * Reset the compression counters (used by tests).
+     */
+    public resetCompressionStats(): void {
+        this.stats.totalCompressions = 0;
+        this.stats.totalOriginalTokens = 0;
+        this.stats.totalCompressedTokens = 0;
     }
 
     /**

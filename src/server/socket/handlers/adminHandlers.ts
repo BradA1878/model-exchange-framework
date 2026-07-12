@@ -148,10 +148,21 @@ export const setupAdminEventHandlers = (): void => {
             validator.assert(!!payload.data, 'Key generation data is required');
             validator.assertIsNonEmptyString(payload.data.channelId, 'Channel ID is required');
             validator.assertIsNonEmptyString(payload.agentId, 'Agent ID is required');
-            
+
             const { channelId, agentId, name, expiresAt } = payload.data;
-            const createdBy = payload.agentId; // The agent requesting the key creation
-            
+            const createdBy = payload.agentId; // The user requesting the key creation
+
+            // A key names the agent it authenticates. The caller has always been
+            // able to pass this — sdk.generateKey(channelId, agentId, name) — but
+            // the server used to echo it back and drop it, leaving the key
+            // anonymous and the connecting client free to name itself.
+            if (typeof agentId !== 'string' || agentId.trim().length === 0) {
+                throw new Error(
+                    'agentId is required when generating a channel key — it is the identity the key authenticates as'
+                );
+            }
+            const keyAgentId = agentId.trim();
+
             // Parse expiration date if provided
             let expirationDate: Date | undefined;
             if (expiresAt) {
@@ -160,29 +171,31 @@ export const setupAdminEventHandlers = (): void => {
                     throw new Error('Invalid expiration date format');
                 }
             }
-            
-            // Generate the key using the service
-            const keyRecord = await channelKeyService.createChannelKey(
+
+            // Generate the key using the service. The plaintext secret comes back
+            // here once and is never stored.
+            const createdKey = await channelKeyService.createChannelKey(
                 channelId,
                 createdBy,
-                name || `Key for ${agentId || 'agent'}`,
+                keyAgentId,
+                name || `Key for ${keyAgentId}`,
                 expirationDate
             );
-            
+
             // Emit success event
             const generatedPayload = createBaseEventPayload(
                 Events.Key.GENERATED,
                 payload.agentId,
                 channelId,
                 {
-                    keyId: keyRecord.keyId,
-                    secretKey: keyRecord.secretKey,
-                    channelId: keyRecord.channelId,
-                    agentId: agentId,
-                    expiresAt: keyRecord.expiresAt?.toISOString()
+                    keyId: createdKey.keyId,
+                    secretKey: createdKey.secretKey,
+                    channelId: createdKey.channelId,
+                    agentId: createdKey.agentId,
+                    expiresAt: createdKey.expiresAt?.toISOString()
                 }
             );
-            
+
             EventBus.server.emit(Events.Key.GENERATED, generatedPayload);
             
         } catch (error: any) {

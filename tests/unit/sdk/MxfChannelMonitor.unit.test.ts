@@ -6,6 +6,7 @@
 import { Subject, Subscription } from 'rxjs';
 import { EventBus } from '@mxf-dev/core/events/EventBus';
 import { MxfChannelMonitor } from '@mxf-dev/sdk/MxfChannelMonitor';
+import { Events } from '@mxf-dev/core/events/EventNames';
 
 // Mock EventBus.client
 jest.mock('@mxf-dev/core/events/EventBus', () => {
@@ -86,7 +87,7 @@ describe('MxfChannelMonitor Unit Tests', () => {
     describe('Channel Filtering - Strict Mode', () => {
         it('should deliver events with matching channelId', () => {
             const handler = jest.fn();
-            const testEvent = 'message:agent_message';
+            const testEvent = Events.Message.AGENT_MESSAGE;
             const payload = {
                 channelId: TEST_CHANNEL_ID,
                 agentId: 'agent-1',
@@ -102,7 +103,7 @@ describe('MxfChannelMonitor Unit Tests', () => {
 
         it('should NOT deliver events with different channelId', () => {
             const handler = jest.fn();
-            const testEvent = 'message:agent_message';
+            const testEvent = Events.Message.AGENT_MESSAGE;
             const payload = {
                 channelId: OTHER_CHANNEL_ID,
                 agentId: 'agent-1',
@@ -117,7 +118,7 @@ describe('MxfChannelMonitor Unit Tests', () => {
 
         it('should NOT deliver events without channelId', () => {
             const handler = jest.fn();
-            const testEvent = 'system:heartbeat';
+            const testEvent = Events.Task.COMPLETED;
             const payload = {
                 agentId: 'agent-1',
                 timestamp: Date.now()
@@ -132,7 +133,7 @@ describe('MxfChannelMonitor Unit Tests', () => {
 
         it('should NOT deliver non-object payloads', () => {
             const handler = jest.fn();
-            const testEvent = 'some:event';
+            const testEvent = Events.Task.ASSIGNED;
 
             monitor.on(testEvent, handler);
 
@@ -148,7 +149,7 @@ describe('MxfChannelMonitor Unit Tests', () => {
 
         it('should NOT deliver array payloads (arrays are objects but lack channelId property)', () => {
             const handler = jest.fn();
-            const testEvent = 'some:event';
+            const testEvent = Events.Task.ASSIGNED;
 
             monitor.on(testEvent, handler);
             (EventBus.client as any)._emit(testEvent, [{ channelId: TEST_CHANNEL_ID }]);
@@ -164,7 +165,7 @@ describe('MxfChannelMonitor Unit Tests', () => {
             const monitor2 = new MxfChannelMonitor('channel-B');
             const handler1 = jest.fn();
             const handler2 = jest.fn();
-            const testEvent = 'message:agent_message';
+            const testEvent = Events.Message.AGENT_MESSAGE;
 
             monitor1.on(testEvent, handler1);
             monitor2.on(testEvent, handler2);
@@ -194,7 +195,7 @@ describe('MxfChannelMonitor Unit Tests', () => {
         it('should not cross-contaminate between multiple monitors', () => {
             const monitors: MxfChannelMonitor[] = [];
             const handlers: jest.Mock[] = [];
-            const testEvent = 'message:agent_message';
+            const testEvent = Events.Message.AGENT_MESSAGE;
 
             // Create 5 monitors for different channels
             for (let i = 0; i < 5; i++) {
@@ -229,19 +230,19 @@ describe('MxfChannelMonitor Unit Tests', () => {
         it('should track subscription count', () => {
             expect(monitor.getSubscriptionCount()).toBe(0);
 
-            monitor.on('event:one', jest.fn());
+            monitor.on(Events.Message.CHANNEL_MESSAGE, jest.fn());
             expect(monitor.getSubscriptionCount()).toBe(1);
 
-            monitor.on('event:two', jest.fn());
+            monitor.on(Events.Task.FAILED, jest.fn());
             expect(monitor.getSubscriptionCount()).toBe(2);
 
-            monitor.on('event:one', jest.fn()); // Same event, another handler
+            monitor.on(Events.Message.CHANNEL_MESSAGE, jest.fn()); // Same event, another handler
             expect(monitor.getSubscriptionCount()).toBe(3);
         });
 
         it('should unsubscribe from specific event via off()', () => {
             const handler = jest.fn();
-            const testEvent = 'message:agent_message';
+            const testEvent = Events.Message.AGENT_MESSAGE;
 
             monitor.on(testEvent, handler);
             expect(monitor.getSubscriptionCount()).toBe(1);
@@ -258,9 +259,9 @@ describe('MxfChannelMonitor Unit Tests', () => {
         });
 
         it('should remove all listeners via removeAllListeners()', () => {
-            monitor.on('event:one', jest.fn());
-            monitor.on('event:two', jest.fn());
-            monitor.on('event:three', jest.fn());
+            monitor.on(Events.Message.CHANNEL_MESSAGE, jest.fn());
+            monitor.on(Events.Task.FAILED, jest.fn());
+            monitor.on(Events.Task.PROGRESS_UPDATED, jest.fn());
             expect(monitor.getSubscriptionCount()).toBe(3);
 
             monitor.removeAllListeners();
@@ -269,7 +270,7 @@ describe('MxfChannelMonitor Unit Tests', () => {
 
         it('should return subscription from on() that can be unsubscribed', () => {
             const handler = jest.fn();
-            const testEvent = 'message:agent_message';
+            const testEvent = Events.Message.AGENT_MESSAGE;
 
             const subscription = monitor.on(testEvent, handler);
             expect(monitor.getSubscriptionCount()).toBe(1);
@@ -290,8 +291,8 @@ describe('MxfChannelMonitor Unit Tests', () => {
         });
 
         it('should clear all subscriptions on destroy', () => {
-            monitor.on('event:one', jest.fn());
-            monitor.on('event:two', jest.fn());
+            monitor.on(Events.Message.CHANNEL_MESSAGE, jest.fn());
+            monitor.on(Events.Task.FAILED, jest.fn());
             expect(monitor.getSubscriptionCount()).toBe(2);
 
             monitor.destroy();
@@ -302,7 +303,7 @@ describe('MxfChannelMonitor Unit Tests', () => {
             monitor.destroy();
 
             expect(() => {
-                monitor.on('some:event', jest.fn());
+                monitor.on(Events.Task.ASSIGNED, jest.fn());
             }).toThrow('Cannot subscribe to event');
         });
 
@@ -316,7 +317,7 @@ describe('MxfChannelMonitor Unit Tests', () => {
     describe('Edge Cases', () => {
         it('should handle payload with null channelId', () => {
             const handler = jest.fn();
-            const testEvent = 'message:agent_message';
+            const testEvent = Events.Message.AGENT_MESSAGE;
 
             monitor.on(testEvent, handler);
             (EventBus.client as any)._emit(testEvent, {
@@ -330,7 +331,7 @@ describe('MxfChannelMonitor Unit Tests', () => {
 
         it('should handle payload with undefined channelId', () => {
             const handler = jest.fn();
-            const testEvent = 'message:agent_message';
+            const testEvent = Events.Message.AGENT_MESSAGE;
 
             monitor.on(testEvent, handler);
             (EventBus.client as any)._emit(testEvent, {
@@ -344,7 +345,7 @@ describe('MxfChannelMonitor Unit Tests', () => {
 
         it('should handle empty object payload', () => {
             const handler = jest.fn();
-            const testEvent = 'message:agent_message';
+            const testEvent = Events.Message.AGENT_MESSAGE;
 
             monitor.on(testEvent, handler);
             (EventBus.client as any)._emit(testEvent, {});
@@ -355,7 +356,7 @@ describe('MxfChannelMonitor Unit Tests', () => {
 
         it('should handle deeply nested channelId (should NOT match)', () => {
             const handler = jest.fn();
-            const testEvent = 'message:agent_message';
+            const testEvent = Events.Message.AGENT_MESSAGE;
 
             monitor.on(testEvent, handler);
             (EventBus.client as any)._emit(testEvent, {
@@ -366,6 +367,32 @@ describe('MxfChannelMonitor Unit Tests', () => {
 
             // channelId must be at top level of payload
             expect(handler).not.toHaveBeenCalled();
+        });
+    });
+
+    describe('Public event whitelist', () => {
+        // The monitor now enforces the same PUBLIC_EVENTS whitelist that agent.on() and
+        // channelService.on() enforce. It previously accepted ANY event name at all,
+        // which quietly contradicted the whitelist the other two claim to exist for.
+        it('should THROW when subscribing to an event outside the public whitelist', () => {
+            const monitor = new MxfChannelMonitor(TEST_CHANNEL_ID);
+
+            expect(() => monitor.on('internal:not:public' as any, jest.fn()))
+                .toThrow(/not in the public whitelist/);
+        });
+
+        it('should register no subscription at all for a rejected event', () => {
+            const monitor = new MxfChannelMonitor(TEST_CHANNEL_ID);
+
+            expect(() => monitor.on('internal:not:public' as any, jest.fn())).toThrow();
+            expect(monitor.getSubscriptionCount()).toBe(0);
+        });
+
+        it('should accept an event that IS in the public whitelist', () => {
+            const monitor = new MxfChannelMonitor(TEST_CHANNEL_ID);
+
+            expect(() => monitor.on(Events.Task.COMPLETED, jest.fn())).not.toThrow();
+            expect(monitor.getSubscriptionCount()).toBe(1);
         });
     });
 });

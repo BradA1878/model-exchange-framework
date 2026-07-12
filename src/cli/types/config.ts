@@ -92,6 +92,15 @@ export interface MxfCredentialsConfig {
     /** MXP encryption key for channel encryption */
     mxpEncryptionKey: string;
 
+    /**
+     * Per-install PBKDF2 salt for MXP channel encryption (hex).
+     *
+     * Must be unique per install. A shared value would let an attacker
+     * precompute the key derivation for every MXF user at once, which is why
+     * core refuses to enable MXP encryption without one.
+     */
+    mxpEncryptionSalt: string;
+
     /** Agent API key */
     agentApiKey: string;
 }

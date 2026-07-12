@@ -272,7 +272,7 @@ async function demo() {
       description: 'Demonstrating MCP prompts integration'
     });
 
-    const keys = await sdk.generateKey(channelId, undefined, 'Prompts Demo Agent Key');
+    const keys = await sdk.generateKey(channelId, 'PromptsDemoAgent', 'Prompts Demo Agent Key');
 
     agent = await sdk.createAgent({
       agentId: 'PromptsDemoAgent',

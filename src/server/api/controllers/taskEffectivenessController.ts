@@ -59,7 +59,7 @@ export const getTaskEffectiveness = async (req: Request, res: Response): Promise
             return;
         }
         
-        const comparison = effectivenessService.compareWithBaseline(taskId);
+        const comparison = await effectivenessService.compareWithBaseline(taskId);
         
         res.json({
             success: true,
@@ -109,7 +109,7 @@ export const getChannelEffectivenessAnalytics = async (req: Request, res: Respon
         };
         
         const startTime = now - (ranges[timeRange as keyof typeof ranges] || ranges.day);
-        const analytics = await effectivenessService.getEnhancedAnalytics(
+        const analytics = await effectivenessService.getAnalytics(
             startTime,
             now,
             channelId as ChannelId
@@ -232,7 +232,7 @@ export const compareTaskEffectiveness = async (req: Request, res: Response): Pro
             return;
         }
         
-        const comparison = effectivenessService.compareWithBaseline(taskId);
+        const comparison = await effectivenessService.compareWithBaseline(taskId);
         if (!comparison) {
             res.status(404).json({
                 success: false,

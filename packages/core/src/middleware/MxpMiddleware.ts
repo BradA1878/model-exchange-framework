@@ -97,23 +97,23 @@ export class MxpMiddleware {
             this.stats.mxpMessages++;
             const mxpMsg = message as MxpMessage;
             
-            // Decrypt if needed
+            // Decrypt if needed. decryptMessage() throws on failure — an
+            // undecryptable message must not be passed on as if it were fine.
             if (mxpMsg.encrypted && isEncryptedPayload(mxpMsg.payload)) {
-                const decrypted = mxpEncryption.decryptMessage(mxpMsg.payload);
-                if (decrypted) {
+                try {
+                    const decrypted = mxpEncryption.decryptMessage(mxpMsg.payload);
                     this.stats.messagesDecrypted++;
                     return {
                         ...mxpMsg,
                         payload: decrypted,
                         encrypted: false
                     };
-                } else {
-                    logger.error('Failed to decrypt MXP message');
+                } catch (error) {
                     this.stats.encryptionFailures++;
-                    throw new Error('Decryption failed');
+                    throw error;
                 }
             }
-            
+
             return mxpMsg;
         }
         
@@ -206,7 +206,14 @@ export class MxpMiddleware {
     }
     
     /**
-     * Handle encryption for MXP messages
+     * Handle encryption for MXP messages.
+     *
+     * `forceEncryption` means exactly that: if the message cannot be encrypted,
+     * this throws rather than putting the plaintext on the wire. An earlier
+     * version incremented an `encryptionFailures` counter and returned the
+     * message unencrypted, so callers that asked for encryption silently got none.
+     *
+     * @throws If forceEncryption is set and encryption is unavailable or fails.
      */
     private static handleMxpEncryption(
         message: MxpMessage,
@@ -216,26 +223,46 @@ export class MxpMiddleware {
         if (message.encrypted && isEncryptedPayload(message.payload)) {
             return message;
         }
-        
-        // Check if encryption should be applied
-        const shouldEncrypt = forceEncryption || 
-            (mxpEncryption.isEncryptionEnabled() && message.type !== MxpMessageType.REASONING);
-        
-        if (shouldEncrypt && !isEncryptedPayload(message.payload)) {
-            const encrypted = mxpEncryption.encrypt(message.payload as MxpPayload);
-            if (encrypted) {
-                this.stats.messagesEncrypted++;
-                return {
-                    ...message,
-                    encrypted: true,
-                    payload: encrypted
-                };
-            } else {
-                this.stats.encryptionFailures++;
-            }
+
+        if (isEncryptedPayload(message.payload)) {
+            return message;
         }
-        
-        return message;
+
+        if (forceEncryption && !mxpEncryption.isEncryptionEnabled()) {
+            this.stats.encryptionFailures++;
+            throw new Error(
+                'forceEncryption was requested but MXP encryption is not configured. ' +
+                'Set MXP_ENCRYPTION_KEY and MXP_ENCRYPTION_SALT, or stop forcing encryption.'
+            );
+        }
+
+        // Reasoning messages stay in the clear unless encryption is forced:
+        // they carry no operational payload and are meant to be human-readable.
+        const shouldEncrypt = forceEncryption ||
+            (mxpEncryption.isEncryptionEnabled() && message.type !== MxpMessageType.REASONING);
+
+        if (!shouldEncrypt) {
+            return message;
+        }
+
+        try {
+            // Throws on cipher failure; returns null only when encryption is off,
+            // which forceEncryption has already ruled out above.
+            const encrypted = mxpEncryption.encrypt(message.payload as MxpPayload);
+            if (!encrypted) {
+                return message;
+            }
+
+            this.stats.messagesEncrypted++;
+            return {
+                ...message,
+                encrypted: true,
+                payload: encrypted
+            };
+        } catch (error) {
+            this.stats.encryptionFailures++;
+            throw error;
+        }
     }
     
     /**

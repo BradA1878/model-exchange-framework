@@ -34,7 +34,7 @@ import { Logger } from '@mxf-dev/core/utils/Logger';
 import { EventBus } from '@mxf-dev/core/events/EventBus';
 import { Events, ChannelActionTypes, ChannelActionType } from '@mxf-dev/core/events/EventNames';
 import { ChannelService } from '../../socket/services/ChannelService';
-import channelKeyService from '../../socket/services/ChannelKeyService';
+import channelKeyService, { CreatedChannelKey } from '../../socket/services/ChannelKeyService';
 import { createChannelEventPayload } from '@mxf-dev/core/schemas/EventPayloadSchema';
 import { MemoryPersistenceService } from '../services/MemoryPersistenceService';
 import { MemoryScope } from '@mxf-dev/core/types/MemoryTypes';
@@ -45,6 +45,49 @@ const validate = createStrictValidator('ChannelController');
 
 // Initialize logger for channel controller
 const logger = new Logger('info', 'ChannelController', 'server');
+
+/** Longest accepted channel search term. Bounds the work a single query can cause. */
+const MAX_SEARCH_TERM_LENGTH = 100;
+
+/**
+ * Neutralize regex metacharacters in a user-supplied search term.
+ *
+ * The channel search and domain listing build `$regex` filters from caller
+ * input. Unescaped, `.*` scans every channel and a nested quantifier such as
+ * `(a+)+$` makes the regex engine backtrack exponentially — one request, one
+ * pinned CPU. After escaping, the term can only ever match itself literally.
+ *
+ * @param value - Raw search term
+ * @returns The term with every regex metacharacter escaped
+ */
+const escapeRegex = (value: string): string => {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+};
+
+/**
+ * Validate and escape a search term before it becomes a Mongo `$regex`.
+ *
+ * @param value - Raw term from the query string or path
+ * @returns The escaped term
+ * @throws If the term is not a string, is empty, or exceeds MAX_SEARCH_TERM_LENGTH
+ */
+const toSafeSearchPattern = (value: unknown): string => {
+    if (typeof value !== 'string') {
+        throw new Error('Search term must be a string');
+    }
+
+    const trimmed = value.trim();
+
+    if (trimmed.length === 0) {
+        throw new Error('Search term must not be empty');
+    }
+
+    if (trimmed.length > MAX_SEARCH_TERM_LENGTH) {
+        throw new Error(`Search term must be ${MAX_SEARCH_TERM_LENGTH} characters or fewer`);
+    }
+
+    return escapeRegex(trimmed);
+};
 
 // Channel discovery service - real database implementations
 const channelDiscoveryService = {
@@ -133,20 +176,23 @@ const channelDiscoveryService = {
     
     listChannelsByDomain: async (domain: string, verifiedOnly: boolean = true) => {
         try {
+            // Escape before building the $regex — see toSafeSearchPattern
+            const pattern = toSafeSearchPattern(domain);
+
             // Search in channelId, customChannelId, or name for domain pattern
             const query: any = {
                 $or: [
-                    { channelId: { $regex: domain, $options: 'i' } },
-                    { customChannelId: { $regex: domain, $options: 'i' } },
-                    { name: { $regex: domain, $options: 'i' } }
+                    { channelId: { $regex: pattern, $options: 'i' } },
+                    { customChannelId: { $regex: pattern, $options: 'i' } },
+                    { name: { $regex: pattern, $options: 'i' } }
                 ],
                 active: true
             };
-            
+
             if (verifiedOnly) {
                 query.verified = true;
             }
-            
+
             const channels = await Channel.find(query).limit(20).lean();
             return channels;
         } catch (error) {
@@ -154,22 +200,25 @@ const channelDiscoveryService = {
             return [];
         }
     },
-    
+
     searchChannels: async (query: string, verifiedOnly: boolean = true) => {
         try {
+            // Escape before building the $regex — see toSafeSearchPattern
+            const pattern = toSafeSearchPattern(query);
+
             const searchQuery: any = {
                 $or: [
-                    { name: { $regex: query, $options: 'i' } },
-                    { description: { $regex: query, $options: 'i' } },
-                    { channelId: { $regex: query, $options: 'i' } }
+                    { name: { $regex: pattern, $options: 'i' } },
+                    { description: { $regex: pattern, $options: 'i' } },
+                    { channelId: { $regex: pattern, $options: 'i' } }
                 ],
                 active: true
             };
-            
+
             if (verifiedOnly) {
                 searchQuery.verified = true;
             }
-            
+
             const channels = await Channel.find(searchQuery).limit(20).lean();
             return channels;
         } catch (error) {
@@ -411,12 +460,23 @@ export const listChannelsByDomain = async (req: Request, res: Response): Promise
     try {
         const { domain } = req.params;
         const verifiedOnly = req.query.verifiedOnly !== 'false';
-        
+
+        // Reject over-long terms with a 400 rather than letting them reach the
+        // regex builder. The builder escapes them anyway, but the caller should
+        // hear about a bad request instead of getting an empty result set.
+        if (typeof domain !== 'string' || domain.trim().length === 0 || domain.length > MAX_SEARCH_TERM_LENGTH) {
+            res.status(400).json({
+                success: false,
+                message: `Domain must be a non-empty string of at most ${MAX_SEARCH_TERM_LENGTH} characters`
+            });
+            return;
+        }
+
         const channels = await channelDiscoveryService.listChannelsByDomain(
             domain,
             verifiedOnly
         );
-        
+
         res.status(200).json({
             success: true,
             count: channels.length,
@@ -443,15 +503,24 @@ export const searchChannels = async (req: Request, res: Response): Promise<void>
     try {
         const { query } = req.query;
         const verifiedOnly = req.query.verifiedOnly !== 'false';
-        
-        if (!query || typeof query !== 'string') {
+
+        // typeof guard also keeps query operators out: ?query[$ne]= arrives as an object.
+        if (!query || typeof query !== 'string' || query.trim().length === 0) {
             res.status(400).json({
                 success: false,
                 message: 'Search query is required'
             });
             return;
         }
-        
+
+        if (query.length > MAX_SEARCH_TERM_LENGTH) {
+            res.status(400).json({
+                success: false,
+                message: `Search query must be ${MAX_SEARCH_TERM_LENGTH} characters or fewer`
+            });
+            return;
+        }
+
         const channels = await channelDiscoveryService.searchChannels(
             query,
             verifiedOnly
@@ -847,14 +916,15 @@ export const getAllChannels = async (req: Request, res: Response): Promise<void>
  */
 export const createChannelWorkspace = async (req: Request, res: Response): Promise<void> => {
     try {
-        const { 
-            channelId, 
-            name, 
-            description, 
+        const {
+            channelId,
+            name,
+            description,
             isPrivate = false,
             generateKey = false,
+            keyAgentId,
             keyName,
-            keyExpiresAt 
+            keyExpiresAt
         } = req.body;
         // Get user ID from JWT auth or agent ID from key auth
         const userId = (req as any).user?.id;
@@ -901,47 +971,57 @@ export const createChannelWorkspace = async (req: Request, res: Response): Promi
             return;
         }
         
-        let generatedKey: any = null;
-        
-        // Generate key if requested
+        let generatedKey: CreatedChannelKey | null = null;
+
+        // Generate key if requested. A key names the agent it authenticates, so
+        // keyAgentId is required whenever generateKey is set — see ChannelKeyService.
         if (generateKey) {
-            try {
-                // Parse expiration date if provided
-                let expirationDate: Date | undefined;
-                if (keyExpiresAt) {
-                    expirationDate = new Date(keyExpiresAt);
-                    if (isNaN(expirationDate.getTime())) {
-                        logger.warn(`Invalid keyExpiresAt date format: ${keyExpiresAt}`);
-                        expirationDate = undefined;
-                    }
-                }
-                
-                generatedKey = await channelKeyService.createChannelKey(
-                    channelId,
-                    createdBy,
-                    keyName || `Initial key for ${name || channelId}`,
-                    expirationDate
-                );
-                
-            } catch (keyError) {
-                logger.error(`Failed to generate key for channel ${channelId}:`, keyError);
-                // Continue without key generation - don't fail channel creation
+            if (typeof keyAgentId !== 'string' || keyAgentId.trim().length === 0) {
+                res.status(400).json({
+                    success: false,
+                    message: 'keyAgentId is required when generateKey is set — it is the identity the key authenticates as'
+                });
+                return;
             }
+
+            // Parse expiration date if provided
+            let expirationDate: Date | undefined;
+            if (keyExpiresAt) {
+                expirationDate = new Date(keyExpiresAt);
+                if (isNaN(expirationDate.getTime())) {
+                    res.status(400).json({
+                        success: false,
+                        message: `Invalid keyExpiresAt date format: ${keyExpiresAt}`
+                    });
+                    return;
+                }
+            }
+
+            // A key generation failure is not swallowed: the caller asked for a key,
+            // and returning a channel without one would leave them with no way in.
+            generatedKey = await channelKeyService.createChannelKey(
+                channelId,
+                createdBy,
+                keyAgentId.trim(),
+                keyName || `Initial key for ${name || channelId}`,
+                expirationDate
+            );
         }
-        
-        
+
+
         const responseData: any = {
             channelId: channel.id,
             name: channel.name,
             active: channel.active,
             createdAt: channel.createdAt
         };
-        
+
         // Include key information if generated
         if (generatedKey) {
             responseData.generatedKey = {
                 keyId: generatedKey.keyId,
                 secretKey: generatedKey.secretKey, // Only returned on creation
+                agentId: generatedKey.agentId,
                 name: generatedKey.name,
                 isActive: generatedKey.isActive,
                 expiresAt: generatedKey.expiresAt,

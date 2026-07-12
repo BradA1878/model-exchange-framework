@@ -171,8 +171,9 @@ const App: React.FC<AppProps> = ({ config, session }) => {
         exit();
     }, [exit]);
 
-    // Global keyboard shortcuts — Ctrl+C, Esc, Ctrl+L, Ctrl+S, Ctrl+A
-    useKeyboardShortcuts(dispatch, state, requestExit);
+    // Global keyboard shortcuts — Ctrl+C, Esc, Ctrl+L, Ctrl+S, Ctrl+A.
+    // session is passed so Esc/Ctrl+S can actually cancel in-flight LLM calls.
+    useKeyboardShortcuts(dispatch, state, requestExit, session);
 
     // Compute estimated cost from per-agent token usage
     const estimatedCost = useMemo(() => {
@@ -187,9 +188,10 @@ const App: React.FC<AppProps> = ({ config, session }) => {
         return total;
     }, [state.costData]);
 
-    // Input handler — routes /, !, @mentions, and natural language
+    // Input handler — routes /, !, @mentions, and natural language.
+    // Passes the ref-backed getState so slash commands read live state.
     const handleInput = useInputHandler(
-        session, dispatch, state, submitTask, submitTaskToAgent, requestExit, permissionService,
+        session, dispatch, getState, submitTask, submitTaskToAgent, requestExit, permissionService,
     );
 
     // Selection handler — resolves pending selections (e.g., model picker)
@@ -431,10 +433,12 @@ export async function launchTUI(sessionName?: string, agentIds?: string[], worki
             for (const def of newBuiltIn) {
                 enabledIds.push(def.agentId);
             }
-            // Persist the updated list so we don't re-detect next time
+            // Persist the updated list so we don't re-detect next time.
+            // Spread the existing agents object so sibling keys set by `mxf init`
+            // (notably `models`, the per-agent model overrides) survive.
             configService.set('agents', {
+                ...config.agents,
                 enabled: enabledIds,
-                customAgentsDir: config.agents?.customAgentsDir,
             });
             logInfo(`New built-in agents detected and enabled: ${newBuiltIn.map(d => d.name).join(', ')}`);
         }
@@ -442,10 +446,10 @@ export async function launchTUI(sessionName?: string, agentIds?: string[], worki
         // First run — prompt user to select agents
         enabledIds = await promptAgentSelection(allAvailable);
 
-        // Save selection to config so we don't ask again
+        // Save selection to config so we don't ask again (preserving sibling keys)
         configService.set('agents', {
+            ...config.agents,
             enabled: enabledIds,
-            customAgentsDir: config.agents?.customAgentsDir,
         });
         logSuccess(`Agent selection saved to config (${enabledIds.length} agents enabled).`);
     }

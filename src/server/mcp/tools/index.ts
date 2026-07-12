@@ -36,7 +36,6 @@
 // Import all tool categories
 import { agentCommunicationTools } from './AgentCommunicationTools';
 import { coordinationTools } from './CoordinationTools';
-import { controlLoopTools } from './ControlLoopTools';
 import { infrastructureTools } from '@mxf-dev/core/protocols/mcp/tools/InfrastructureTools';
 import { contextMemoryTools } from './ContextMemoryTools';
 import { metaTools } from './MetaTools';
@@ -78,9 +77,6 @@ export const mxfMcpTools = {
     
     // Advanced coordination and collaboration tools
     coordination: coordinationTools,
-    
-    // ORPAR control loop management tools
-    controlLoop: controlLoopTools,
     
     // Core infrastructure tools
     infrastructure: infrastructureTools,
@@ -171,12 +167,14 @@ export const mxfMcpTools = {
 };
 
 /**
- * Flattened array of all MXF MCP tools for easy registration
+ * Every tool the framework defines, in one array.
+ *
+ * Names must be unique across the whole array — see assertUniqueToolNames below,
+ * which runs at module load.
  */
 export const allMxfMcpTools = [
     ...agentCommunicationTools,
     ...coordinationTools,
-    ...controlLoopTools,
     ...infrastructureTools,
     ...contextMemoryTools,
     ...MemorySearchTools,
@@ -212,6 +210,43 @@ export const allMxfMcpTools = [
 ];
 
 /**
+ * Fail at import if two tools share a name.
+ *
+ * A duplicate name is never benign. `new Map(tools.map(t => [t.name, t]))` keeps
+ * the LAST definition and silently drops the earlier one, so the tool that
+ * actually runs depends on the order of the spreads above. The model, meanwhile,
+ * sees whichever description reached the database first. Both halves of the
+ * contract are then decided by accident.
+ *
+ * This throws at module load, which means the server refuses to start rather than
+ * running with a tool set it cannot describe correctly.
+ *
+ * @throws Error listing every duplicated name
+ */
+function assertUniqueToolNames(tools: Array<{ name: string }>): void {
+    const counts = new Map<string, number>();
+
+    for (const tool of tools) {
+        counts.set(tool.name, (counts.get(tool.name) ?? 0) + 1);
+    }
+
+    const duplicates = Array.from(counts.entries())
+        .filter(([, count]) => count > 1)
+        .map(([name, count]) => `${name} (x${count})`)
+        .sort();
+
+    if (duplicates.length > 0) {
+        throw new Error(
+            `Duplicate MCP tool names in allMxfMcpTools: ${duplicates.join(', ')}. ` +
+            `Tool names must be unique — the duplicate would silently shadow the original. ` +
+            `Rename one of them in its defining file.`
+        );
+    }
+}
+
+assertUniqueToolNames(allMxfMcpTools);
+
+/**
  * Tool registry for quick lookup by name
  */
 export const mxfMcpToolRegistry = new Map(
@@ -233,7 +268,6 @@ export const getMxfMcpToolNames = () => {
     return {
         communication: agentCommunicationTools.map(tool => tool.name),
         coordination: coordinationTools.map(tool => tool.name),
-        controlLoop: controlLoopTools.map(tool => tool.name),
         infrastructure: infrastructureTools.map(tool => tool.name),
         contextMemory: contextMemoryTools.map(tool => tool.name),
         actionValidation: actionValidationTools.map(tool => tool.name),
@@ -264,7 +298,7 @@ export const getMxfMcpToolNames = () => {
 export const mxfMcpToolMetadata = {
     version: '1.0.0',
     description: 'MXF-specific MCP tools for enhanced agent capabilities',
-    categories: ['communication', 'coordination', 'controlLoop', 'infrastructure', 'contextMemory', 'actionValidation', 'meta', 'web', 'git', 'typescript', 'taskBridge', 'test', 'codeAnalysis', 'safety', 'planning', 'effectiveness', 'analytics', 'dateTime', 'memoryUtility', 'dag', 'knowledgeGraph', 'predictive', 'userInput', 'projectContext', 'search', 'progress'],
+    categories: ['communication', 'coordination', 'orpar', 'infrastructure', 'contextMemory', 'actionValidation', 'meta', 'web', 'git', 'typescript', 'taskBridge', 'test', 'codeAnalysis', 'safety', 'planning', 'effectiveness', 'analytics', 'dateTime', 'memoryUtility', 'dag', 'knowledgeGraph', 'predictive', 'userInput', 'projectContext', 'search', 'progress'],
     totalTools: allMxfMcpTools.length,
     capabilities: [
         'agent-to-agent messaging',
@@ -274,12 +308,6 @@ export const mxfMcpToolMetadata = {
         'collaboration requests',
         'workflow management',
         'coordination tracking',
-        'ORPAR cycle management',
-        'observation handling',
-        'reasoning control',
-        'planning operations',
-        'action execution',
-        'reflection generation',
         'filesystem operations',
         'memory management',
         'shell command execution',
@@ -306,8 +334,9 @@ export const mxfMcpToolMetadata = {
         'test suite execution',
         'performance benchmarking',
         'change rollback',
+        'ORPAR cognitive cycle (orpar_observe/reason/plan/act/reflect/status)',
+        'pattern-based code scanning',
         'backup creation',
-        'AI code review',
         'structured planning',
         'task breakdown',
         'plan tracking',
@@ -357,7 +386,7 @@ export const mxfMcpToolMetadata = {
 };
 
 // Re-export individual tool arrays for selective imports
-export { agentCommunicationTools, coordinationTools, controlLoopTools, infrastructureTools, contextMemoryTools, MemorySearchTools, actionValidationTools, metaTools, webTools, gitTools, typescriptTools, taskBridgeTools, testTools, codeAnalysisTools, safetyTools, planningTools, effectivenessTools, taskPlanningTools, analyticsTools, dateTimeTools, inferenceParameterTools, MemoryUtilityTools, dagTools, knowledgeGraphTools, predictiveTools, userInputTools, wolframTools, projectContextTools, searchProjectTools, progressTools, userMemoryTools };
+export { agentCommunicationTools, coordinationTools, infrastructureTools, contextMemoryTools, MemorySearchTools, actionValidationTools, metaTools, webTools, gitTools, typescriptTools, taskBridgeTools, testTools, codeAnalysisTools, safetyTools, planningTools, effectivenessTools, taskPlanningTools, analyticsTools, dateTimeTools, inferenceParameterTools, MemoryUtilityTools, dagTools, knowledgeGraphTools, predictiveTools, userInputTools, wolframTools, projectContextTools, searchProjectTools, progressTools, userMemoryTools };
 
 // Re-export individual tools for direct imports
 export {
@@ -367,18 +396,6 @@ export {
     agentDiscoverTool,
     agentCoordinateTool
 } from './AgentCommunicationTools';
-
-export {
-    // Control Loop Tools
-    controlLoopStartTool,
-    controlLoopObserveTool,
-    controlLoopReasonTool,
-    controlLoopPlanTool,
-    controlLoopExecuteTool,
-    controlLoopReflectTool,
-    controlLoopStatusTool,
-    controlLoopStopTool
-} from './ControlLoopTools';
 
 export {
     // Infrastructure Tools

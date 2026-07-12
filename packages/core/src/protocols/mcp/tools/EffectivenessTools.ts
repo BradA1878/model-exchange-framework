@@ -279,7 +279,7 @@ export const task_effectiveness_complete: McpToolDefinition = {
                 });
             }
             
-            const comparison = effectivenessService.compareWithBaseline(taskId);
+            const comparison = await effectivenessService.compareWithBaseline(taskId);
             
             return createToolResult(true, {
                 message: 'Task completed and effectiveness measured',
@@ -338,7 +338,7 @@ export const task_effectiveness_analytics: McpToolDefinition = {
             };
             
             const startTime = now - ranges[timeRange as keyof typeof ranges];
-            const analytics = await effectivenessService.getEnhancedAnalytics(
+            const analytics = await effectivenessService.getAnalytics(
                 startTime, 
                 now, 
                 channelId as ChannelId,
@@ -395,7 +395,7 @@ export const task_effectiveness_compare: McpToolDefinition = {
     handler: async ({ taskId }: any) => {
         const effectivenessService = TaskEffectivenessService.getInstance();
         try {
-            const comparison = effectivenessService.compareWithBaseline(taskId);
+            const comparison = await effectivenessService.compareWithBaseline(taskId);
             if (!comparison) {
                 return createToolResult(false, {
                     error: 'Task not found or no comparison available'

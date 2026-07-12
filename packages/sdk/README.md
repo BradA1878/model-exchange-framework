@@ -81,6 +81,8 @@ const agent = await sdk.createAgent({
     agentConfigPrompt: 'You are a helpful AI assistant.'
 });
 
+// connect() throws on failure — a bad key, a rejected registration, or a timeout.
+// Do not test its return value; there isn't one.
 await agent.connect();
 ```
 
@@ -89,6 +91,7 @@ await agent.connect();
 ```typescript
 import { Events } from '@mxf-dev/sdk';
 
+// The handler is typed from the event name — `payload` is not `any`.
 agent.on(Events.Message.AGENT_MESSAGE, (payload) => {
     console.log('Message:', payload.data.content);
 });
@@ -117,11 +120,42 @@ The `MxfSDK` class is the **only** entry point for all MXF functionality:
 4. **Use Agent** → Send messages, execute tools, listen to events
 5. **Disconnect** → Clean shutdown when done
 
+### Errors
+
+The SDK fails fast. Operations that can fail **throw**; none of them report failure by
+returning `false` or a `{ success: false }` object.
+
+```typescript
+try {
+    await agent.connect();
+} catch (error) {
+    // Missing API key, bad channel key, registration timeout, socket refused…
+    console.error('Agent failed to connect:', error.message);
+    process.exit(1);
+}
+```
+
+This applies to `connect()`, `registerTool()` / `unregisterTool()`, all four MCP server
+register/unregister methods, and the memory operations. MCP registration failures throw
+`EventRequestError`; a server that never answers throws `EventRequestTimeoutError`.
+
 ### Event Patterns
 
 **Agent Events** (`agent.on()`):
 - Listen to events specific to this agent's operations
 - Examples: `AGENT_MESSAGE`, `TASK_COMPLETED`, `CONTROL_LOOP_UPDATE`
+- Only events in the public whitelist are accepted. `on()` and `emit()` **throw** on
+  anything else, so a typo'd event name fails loudly instead of producing a listener
+  that never fires.
+- `off(event, handler)` removes exactly that handler; `off(event)` removes all of them.
+
+```typescript
+const onMessage = (payload) => console.log(payload.data.content);
+
+agent.on(Events.Message.AGENT_MESSAGE, onMessage);
+agent.off(Events.Message.AGENT_MESSAGE, onMessage);  // removes just this one
+agent.off(Events.Message.AGENT_MESSAGE);             // removes every handler
+```
 
 **Channel Monitoring** (`sdk.createChannelMonitor()`):
 - Monitor ALL events from ALL agents in a channel

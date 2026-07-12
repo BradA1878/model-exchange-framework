@@ -35,10 +35,10 @@
 import { Logger } from '@mxf-dev/core/utils/Logger';
 import { ChannelId } from '@mxf-dev/core/types/ChannelContext';
 import { SystemLlmService, SystemLlmServiceConfig } from './SystemLlmService';
+import { SystemLlmBudgetService, BudgetStatus } from './SystemLlmBudgetService';
 import { EventBus } from '@mxf-dev/core/events/EventBus';
 import { Events } from '@mxf-dev/core/events/EventNames';
 import { LlmProviderType } from '@mxf-dev/core/protocols/mcp/LlmProviders';
-import { HybridMcpService } from '../../mcp/services/HybridMcpService';
 import { ConfigManager } from '@mxf-dev/core/config/ConfigManager';
 
 const logger = new Logger('debug', 'SystemLlmServiceManager', 'server');
@@ -69,13 +69,12 @@ export class SystemLlmServiceManager {
     private static instance: SystemLlmServiceManager;
     private services: Map<ChannelId, SystemLlmService> = new Map();
     private defaultConfig: SystemLlmServiceConfig;
-    private hybridMcpService?: HybridMcpService;
     private cleanupListenerRegistered = false;
 
     /**
      * Private constructor for singleton pattern
      */
-    private constructor(defaultConfig?: SystemLlmServiceConfig, hybridMcpService?: HybridMcpService) {
+    private constructor(defaultConfig?: SystemLlmServiceConfig) {
         // Check if SystemLLM is enabled
         const isEnabled = process.env.SYSTEMLLM_ENABLED !== 'false';
         
@@ -86,7 +85,6 @@ export class SystemLlmServiceManager {
                 defaultTemperature: 0.7,
                 defaultMaxTokens: 4096
             };
-            this.hybridMcpService = hybridMcpService;
             return;
         }
         
@@ -108,7 +106,6 @@ export class SystemLlmServiceManager {
             this.defaultConfig = defaultConfig;
         }
         
-        this.hybridMcpService = hybridMcpService;
         
         // Register cleanup listeners
         this.registerCleanupListeners();
@@ -135,16 +132,25 @@ export class SystemLlmServiceManager {
     /**
      * Get the singleton instance
      */
-    public static getInstance(defaultConfig?: SystemLlmServiceConfig, hybridMcpService?: HybridMcpService): SystemLlmServiceManager {
+    public static getInstance(defaultConfig?: SystemLlmServiceConfig): SystemLlmServiceManager {
         if (!SystemLlmServiceManager.instance) {
-            SystemLlmServiceManager.instance = new SystemLlmServiceManager(defaultConfig, hybridMcpService);
+            SystemLlmServiceManager.instance = new SystemLlmServiceManager(defaultConfig);
         }
         return SystemLlmServiceManager.instance;
     }
 
     /**
      * Get or create a SystemLlmService instance for a channel
-     * Returns null if SYSTEMLLM_ENABLED=false or if disabled by channel config
+     *
+     * Returns null when SystemLLM is off for this process, off for this channel,
+     * or when the daily spend ceiling has been reached. Callers already treat null
+     * as "no SystemLLM available" and take their heuristic path, so the budget
+     * ceiling degrades the system the same way an unconfigured provider does —
+     * rather than by quietly spending more money.
+     *
+     * @param channelId - Channel the service is for
+     * @param config - Optional per-channel overrides
+     * @returns The service, or null when SystemLLM must not be used
      */
     public getServiceForChannel(channelId: ChannelId, config?: SystemLlmServiceConfig): SystemLlmService | null {
         // Check if SystemLLM is globally disabled via environment
@@ -155,6 +161,16 @@ export class SystemLlmServiceManager {
                 this.removeServiceForChannel(channelId);
             }
 
+            return null;
+        }
+
+        // Hard spend ceiling. SystemLlmService checks again immediately before each
+        // request — this gate stops new work being started, that one stops work
+        // already holding a service reference.
+        if (SystemLlmBudgetService.getInstance().isExhausted()) {
+            logger.warn(
+                `SystemLLM daily budget exhausted — refusing to start SystemLLM work for channel ${channelId}`
+            );
             return null;
         }
 
@@ -176,7 +192,7 @@ export class SystemLlmServiceManager {
         if (!service) {
             // Create new service instance for this channel
             const serviceConfig = config || this.defaultConfig;
-            service = new SystemLlmService(serviceConfig, this.hybridMcpService);
+            service = new SystemLlmService(serviceConfig);
 
             this.services.set(channelId, service);
 
@@ -341,5 +357,17 @@ export class SystemLlmServiceManager {
      */
     public hasService(channelId: ChannelId): boolean {
         return this.services.has(channelId);
+    }
+
+    /**
+     * Current SystemLLM spend against the daily ceiling.
+     *
+     * Exposed here so health and analytics can report it without reaching for the
+     * budget singleton directly.
+     *
+     * @returns Spend, ceiling, and whether calls are currently refused
+     */
+    public getBudgetStatus(): BudgetStatus {
+        return SystemLlmBudgetService.getInstance().getStatus();
     }
 }

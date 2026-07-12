@@ -23,7 +23,41 @@
  * Adapted from MCP-WWW server for internal MXF use
  */
 
-import puppeteer, { Browser, Page } from 'puppeteer';
+// puppeteer is an OPTIONAL peer dependency: it pulls down a ~170MB Chromium,
+// which no consumer who never opens a browser should pay for. The type import is
+// erased at compile time; the runtime module is loaded on first launch and
+// throws a clear install message if it is not present.
+import type { Browser, Page, LaunchOptions } from 'puppeteer';
+
+type PuppeteerModule = {
+    launch: (options?: LaunchOptions) => Promise<Browser>;
+};
+
+let puppeteerModule: PuppeteerModule | null = null;
+
+/**
+ * Load puppeteer on demand.
+ *
+ * @throws If puppeteer is not installed. There is no headless-less fallback —
+ *         a browser tool that quietly does nothing is worse than one that fails.
+ */
+const loadPuppeteer = async (): Promise<PuppeteerModule> => {
+    if (puppeteerModule) {
+        return puppeteerModule;
+    }
+
+    try {
+        const imported = await import('puppeteer');
+        puppeteerModule = (imported.default ?? imported) as unknown as PuppeteerModule;
+        return puppeteerModule;
+    } catch (error) {
+        throw new Error(
+            'Browser automation requires the optional peer dependency "puppeteer", which is not installed. ' +
+            'Install it with `bun add puppeteer` (or `npm install puppeteer`) to use BrowserManager. ' +
+            `Underlying error: ${error instanceof Error ? error.message : String(error)}`
+        );
+    }
+};
 
 export interface BrowserInstance {
     browser: Browser;
@@ -134,6 +168,7 @@ export class BrowserManager {
     }
 
     private async createBrowser(): Promise<BrowserInstance> {
+        const puppeteer = await loadPuppeteer();
         const browser = await puppeteer.launch({
             headless: this.config.headless ?? true,
             args: [
