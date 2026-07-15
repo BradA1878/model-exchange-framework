@@ -193,7 +193,7 @@ MXF now includes an opt-in **TensorFlow.js integration** for on-device machine l
 - **Real TF.js Error Prediction Model**: Dense(12->32->16->1) binary classifier with binary cross-entropy loss replaces the heuristic-only prediction when `TENSORFLOW_ENABLED=true`
 - **12-Feature Input Vector**: Tool complexity, parameter count, pattern match, agent experience, error rate, time-of-day, day-of-week, system load, concurrent requests, recent errors, recent successes, average latency
 - **Automatic Training**: Collects labeled training data from tool execution results; trains via `MxfMLService.train()` when 100+ samples are available (batch size 32, 10 epochs, 0.2 validation split)
-- **Auto-Retrain Scheduling**: Retraining managed by `MxfMLService.scheduleRetrain()` with configurable intervals
+- **Auto-Retrain Scheduling**: A single hourly interval in `PredictiveAnalyticsService` retrains the error predictor and the anomaly autoencoder sequentially (TF.js rejects overlapping `fit()` calls on one model); `TENSORFLOW_AUTO_TRAIN_ENABLED` gates it. Training is skipped when the collected labels are all one class -- one-class data cannot train a discriminator
 - **Three-Tier Fallback**: TF.js model inference -> heuristic rule-based prediction -> conservative default (30% error probability, 50% confidence)
 - **INFERENCE_FALLBACK Events**: Emitted when falling back to heuristic, enabling monitoring of model readiness
 - **Model Persistence**: Trained model saved to/loaded from GridFS automatically

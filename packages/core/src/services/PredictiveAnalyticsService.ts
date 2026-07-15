@@ -460,13 +460,10 @@ export class PredictiveAnalyticsService extends EventEmitter {
             );
         }
 
-        // Schedule automatic retraining with MxfMLService
-        const config = getTensorFlowConfig();
-        if (config.autoTrainEnabled) {
-            mlService.scheduleRetrain(TF_ERROR_PREDICTION_MODEL_ID, async () => {
-                await this.trainErrorPredictionModel();
-            });
-        }
+        // Retraining is owned by this service's own interval (startRetrainSchedule),
+        // which trains both models sequentially. Do NOT also register an
+        // MxfMLService.scheduleRetrain() timer — a second schedule for the same
+        // model trains twice per interval and collides on concurrent fit() calls.
     }
 
     // =============================================================================
@@ -563,13 +560,8 @@ export class PredictiveAnalyticsService extends EventEmitter {
             );
         }
 
-        // Schedule automatic retraining with MxfMLService
-        const config = getTensorFlowConfig();
-        if (config.autoTrainEnabled) {
-            mlService.scheduleRetrain(TF_ANOMALY_AUTOENCODER_MODEL_ID, async () => {
-                await this.trainAnomalyDetectionModel();
-            });
-        }
+        // Retraining is owned by this service's own interval (startRetrainSchedule) —
+        // see the note in initializeTfErrorPrediction().
     }
 
     // =============================================================================
@@ -1739,6 +1731,8 @@ export class PredictiveAnalyticsService extends EventEmitter {
      *
      * When TF.js is enabled and sufficient training samples exist:
      * - Vectorizes features and binary labels from collected training data
+     * - Requires both label classes to be present (see the class-balance guard
+     *   below) — one-class data cannot train a discriminator
      * - Calls MxfMLService.train() to run supervised training on the Dense classifier
      * - Updates internal model metadata with real training metrics
      * - Saves the trained model to persistent storage (GridFS)
@@ -1794,6 +1788,28 @@ export class PredictiveAnalyticsService extends EventEmitter {
                     return;
                 }
 
+                // One-class data cannot train a discriminator: binary crossentropy
+                // drives the sigmoid to a constant, reporting perfect accuracy while
+                // learning nothing. Require both classes, each meeting a minority
+                // floor that scales with the sample count.
+                const positives = labels.reduce((sum, label) => sum + label, 0);
+                const negatives = labels.length - positives;
+                const minorityFloor = Math.max(3, Math.ceil(labels.length * 0.02));
+                if (positives < minorityFloor || negatives < minorityFloor) {
+                    this.logger.info(
+                        `[PredictiveAnalyticsService] Skipping TF.js error prediction training — ` +
+                        `class balance too skewed (positives=${positives}, negatives=${negatives}, ` +
+                        `minority floor=${minorityFloor}). Heuristic prediction remains active.`
+                    );
+                    if (!this.tfErrorPredictionReady) {
+                        // No usable TF model — keep heuristic bookkeeping current
+                        this.updateHeuristicMetadata(features.length);
+                    }
+                    // A previously trained model (this session or loaded from storage)
+                    // keeps serving; skipping retraining must not clobber its metadata.
+                    return;
+                }
+
                 // Format labels as 2D array for MxfMLService.train()
                 const yData = labels.map(l => [l]);
 
@@ -1811,10 +1827,11 @@ export class PredictiveAnalyticsService extends EventEmitter {
                     modelMeta.type = ModelType.NEURAL_NETWORK;
                     modelMeta.trainedAt = Date.now();
                     modelMeta.trainingDataSize = features.length;
+                    // Prefer validation accuracy — training accuracy overstates fit.
                     // If training reported no accuracy, we do not know the accuracy. Say so.
                     // This previously fell back to 0.75 — an invented figure indistinguishable
                     // from a measured one.
-                    modelMeta.accuracy = metrics.accuracy ?? metrics.valAccuracy ?? null;
+                    modelMeta.accuracy = metrics.valAccuracy ?? metrics.accuracy ?? null;
                     modelMeta.validationMetrics = {
                         accuracy: metrics.accuracy ?? 0,
                         val_accuracy: metrics.valAccuracy ?? 0,
@@ -2254,13 +2271,23 @@ export class PredictiveAnalyticsService extends EventEmitter {
     /**
      * Start retrain schedule.
      *
-     * When TF.js is enabled, both error prediction and anomaly detection
-     * retraining are managed by MxfMLService.scheduleRetrain() (configured
-     * in initializeTfErrorPrediction() and initializeTfAnomalyAutoencoder()).
-     * This interval serves as the retraining path when TF.js is disabled
-     * and as a fallback when MxfMLService scheduling is not active.
+     * This interval is the single owner of scheduled retraining. trainModels()
+     * trains the error predictor and the anomaly autoencoder sequentially —
+     * TF.js rejects overlapping fit() calls on one model, and a single timer
+     * avoids overlapping training cycles entirely. Registering per-model
+     * MxfMLService.scheduleRetrain() timers alongside this interval caused
+     * duplicate hourly training and fit() collisions.
+     *
+     * When TF.js is enabled, autoTrainEnabled gates scheduled retraining.
+     * When TF.js is disabled, the interval refreshes heuristic metadata.
      */
     private startRetrainSchedule(): void {
+        if (isTensorFlowEnabled() && !getTensorFlowConfig().autoTrainEnabled) {
+            this.logger.info(
+                '[PredictiveAnalyticsService] TF.js auto-training disabled, not scheduling model retraining'
+            );
+            return;
+        }
         this.retrainInterval = setInterval(() => {
             this.trainModels();
         }, this.config.retrainInterval);

@@ -2,7 +2,7 @@
  * Unit tests for PredictiveAnalyticsService — Phase 3 Anomaly Detection Autoencoder
  *
  * Tests the new TF.js anomaly autoencoder integration:
- * - initializeTfAnomalyAutoencoder(): model registration, building, loading, retrain scheduling
+ * - initializeTfAnomalyAutoencoder(): model registration, building, loading
  * - runParameterAnomalyDetection(): TF.js dispatch path, heuristic fallback, error handling
  * - calculateHeuristicIsolationScore(): distance-based scoring, edge cases
  * - trainAnomalyDetectionModel(): unsupervised training (input=output), model save, ready flag
@@ -253,15 +253,14 @@ describe('PredictiveAnalyticsService — Anomaly Autoencoder (Phase 3)', () => {
             expect((service as any).tfAnomalyAutoencoderReady).toBe(false);
         });
 
-        it('should schedule retrain when autoTrainEnabled is true', async () => {
+        it('should not register a per-model retrain timer (interval is the single owner)', async () => {
             service = getService();
             await service.initializeTensorFlowModels();
 
-            // scheduleRetrain should be called for the anomaly_autoencoder model
-            expect(mockScheduleRetrain).toHaveBeenCalledWith(
-                'anomaly_autoencoder',
-                expect.any(Function)
-            );
+            // Retraining is owned by the service's own interval, which trains
+            // both models sequentially. A second per-model timer trained the
+            // same models twice per interval and collided on TF.js fit() calls.
+            expect(mockScheduleRetrain).not.toHaveBeenCalled();
         });
 
         it('should skip initialization when MxfMLService is not enabled', async () => {

@@ -480,6 +480,16 @@ export class MxfMLService {
             throw new Error(`[MxfMLService] Model "${modelId}" has not been built yet`);
         }
 
+        // Fail fast on concurrent training: TF.js rejects overlapping fit() calls
+        // on a single model, and two callers would race on this entry's status
+        // and metrics. Callers must serialize training per model.
+        if (entry.status === ModelStatus.TRAINING) {
+            throw new Error(
+                `[MxfMLService] Model "${modelId}" is already training — ` +
+                `concurrent training on the same model is not allowed`
+            );
+        }
+
         if (xData.length < entry.config.minTrainingSamples) {
             throw new Error(
                 `[MxfMLService] Insufficient training data for "${modelId}": ` +
@@ -497,10 +507,14 @@ export class MxfMLService {
         entry.status = ModelStatus.TRAINING;
         const startTime = Date.now();
 
+        // fit() is async, so tf.tidy() cannot wrap it — create the tensors
+        // eagerly and dispose them in finally so a failed fit() does not leak.
+        let xs: import('@tensorflow/tfjs').Tensor2D | undefined;
+        let ys: import('@tensorflow/tfjs').Tensor2D | undefined;
+
         try {
-            // Create tensors inside tidy to prevent leaks during training setup
-            const xs = tfRef.tensor2d(xData);
-            const ys = tfRef.tensor2d(yData);
+            xs = tfRef.tensor2d(xData);
+            ys = tfRef.tensor2d(yData);
 
             const layersModel = entry.model as any;
             const result = await layersModel.fit(xs, ys, {
@@ -523,10 +537,6 @@ export class MxfMLService {
                 durationMs: Date.now() - startTime,
                 samplesUsed: xData.length,
             };
-
-            // Clean up tensors
-            xs.dispose();
-            ys.dispose();
 
             // Update model state
             entry.status = ModelStatus.TRAINED;
@@ -554,6 +564,9 @@ export class MxfMLService {
 
             this.logger.error(`[MxfMLService] Training failed for ${modelId}: ${errorMsg}`);
             throw error;
+        } finally {
+            xs?.dispose();
+            ys?.dispose();
         }
     }
 
@@ -584,6 +597,14 @@ export class MxfMLService {
 
         if (!entry.model) {
             throw new Error(`[MxfMLService] Model "${modelId}" has not been built yet`);
+        }
+
+        // Fail fast on concurrent training (same contract as train())
+        if (entry.status === ModelStatus.TRAINING) {
+            throw new Error(
+                `[MxfMLService] Model "${modelId}" is already training — ` +
+                `concurrent training on the same model is not allowed`
+            );
         }
 
         // Emit training started (we don't know sample count upfront for custom training)
@@ -1067,6 +1088,11 @@ export class MxfMLService {
      *
      * Calls the provided trainCallback at the model's retrainIntervalMs.
      * The callback is responsible for collecting training data and calling train().
+     * No-ops when auto-training is disabled (autoTrainEnabled=false).
+     *
+     * A model must have exactly one retraining owner: either a timer registered
+     * here or a consumer-managed schedule — never both. Overlapping schedules
+     * train on the same data twice and collide on TF.js fit() calls.
      *
      * @param modelId - ID of a registered model
      * @param trainCallback - Function to call when retraining is due
@@ -1076,6 +1102,14 @@ export class MxfMLService {
         trainCallback: () => Promise<void>
     ): void {
         const entry = this.getModelEntry(modelId);
+
+        if (!getTensorFlowConfig().autoTrainEnabled) {
+            this.logger.info(
+                `[MxfMLService] Auto-training disabled (autoTrainEnabled=false), ` +
+                `not scheduling retrain for ${modelId}`
+            );
+            return;
+        }
 
         // Clear any existing timer for this model
         const existingTimer = this.retrainTimers.get(modelId);
