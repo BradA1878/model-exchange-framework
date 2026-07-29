@@ -52,6 +52,13 @@ export class NetworkRecoveryManager {
         private config: NetworkRecoveryConfig,
         loggerContext: string
     ) {
+        // A non-finite or non-positive timeout would silently disable the bound
+        // that keeps hung requests from wedging callers — reject it up front.
+        if (!Number.isFinite(config.requestTimeoutMs) || config.requestTimeoutMs <= 0) {
+            throw new Error(
+                `NetworkRecoveryManager (${loggerContext}): requestTimeoutMs must be a positive number, got ${config.requestTimeoutMs}`
+            );
+        }
         this.circuitBreakerStatus = {
             state: CircuitBreakerState.CLOSED,
             failureCount: 0,
@@ -59,6 +66,69 @@ export class NetworkRecoveryManager {
             totalRequests: 0
         };
         this.logger = new Logger('debug', loggerContext, 'client');
+    }
+
+    /**
+     * Grace period between the operation's own timeout and this manager's net.
+     * The operation (e.g. a fetch carrying AbortSignal.timeout(requestTimeoutMs))
+     * is the primary enforcement and produces the richer error — model, elapsed,
+     * request size. The net here exists for operations that never implement their
+     * own abort, so it must fire strictly after the primary would have; firing at
+     * the same instant races it and masks the better diagnostics.
+     */
+    private static readonly REQUEST_TIMEOUT_NET_GRACE_MS = 1000;
+
+    /**
+     * Bound an operation to the configured requestTimeoutMs (plus a short grace
+     * so the operation's own abort fires first — see REQUEST_TIMEOUT_NET_GRACE_MS).
+     *
+     * A request that never settles is invisible to the retry loop — before this
+     * existed, a hung fetch held executeWithRetry (and anything queued behind it)
+     * open forever with nothing logged. The returned promise rejects with an error
+     * named 'TimeoutError' (isRequestTimeout = true), which classifyNetworkError
+     * maps to the non-retryable REQUEST_TIMEOUT type, so the failure surfaces to
+     * the caller immediately instead of entering the retry loop.
+     */
+    private withRequestTimeout<T>(operation: () => Promise<T>): Promise<T> {
+        const timeoutMs = this.config.requestTimeoutMs;
+        const startedAt = Date.now();
+
+        return new Promise<T>((resolve, reject) => {
+            const timer = setTimeout(() => {
+                const elapsedMs = Date.now() - startedAt;
+                const error = new Error(
+                    `Request exceeded the ${timeoutMs}ms request timeout without aborting on its own ` +
+                    `(elapsed: ${elapsedMs}ms) and was abandoned`
+                );
+                error.name = 'TimeoutError';
+                (error as any).isRequestTimeout = true;
+                reject(error);
+            }, timeoutMs + NetworkRecoveryManager.REQUEST_TIMEOUT_NET_GRACE_MS);
+
+            let operationPromise: Promise<T>;
+            try {
+                operationPromise = operation();
+            } catch (error) {
+                clearTimeout(timer);
+                reject(error);
+                return;
+            }
+
+            // The two-argument then() handles settlement in every ordering: if the
+            // operation settles after the timeout has already rejected this promise,
+            // the late resolve/reject is a no-op and the rejection is still observed
+            // here, so it cannot become an unhandled rejection.
+            operationPromise.then(
+                result => {
+                    clearTimeout(timer);
+                    resolve(result);
+                },
+                error => {
+                    clearTimeout(timer);
+                    reject(error);
+                }
+            );
+        });
     }
     
     /**
@@ -155,9 +225,10 @@ export class NetworkRecoveryManager {
             }
             
             try {
-                // Execute the operation
-                const result = await operation();
-                
+                // Execute the operation, bounded by requestTimeoutMs — a request
+                // that never settles must surface as an error, not silence.
+                const result = await this.withRequestTimeout(operation);
+
                 // Success! Record it and return
                 this.recordSuccess();
                 

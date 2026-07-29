@@ -115,6 +115,34 @@ interface OpenRouterResponse {
 }
 
 /**
+ * Read a positive integer from the environment, failing fast on garbage.
+ * These values bound how long a hung request can stay silent — a NaN or zero
+ * from a typo'd env var must not silently disable that bound.
+ */
+const parsePositiveIntEnv = (name: string, defaultValue: number): number => {
+    const raw = process.env[name];
+    if (raw === undefined || raw === '') {
+        return defaultValue;
+    }
+    const parsed = parseInt(raw, 10);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+        throw new Error(`${name} must be a positive integer, got "${raw}"`);
+    }
+    return parsed;
+};
+
+/**
+ * True when an error came from an aborted fetch. AbortSignal.timeout() rejects
+ * with a DOMException named 'TimeoutError' (Node and Bun); a manual
+ * controller.abort() rejects with 'AbortError'. This client owns every signal it
+ * passes to fetch, so either name means our own timeout fired.
+ */
+const isAbortOrTimeoutError = (error: unknown): boolean => {
+    const name = (error as any)?.name;
+    return name === 'TimeoutError' || name === 'AbortError';
+};
+
+/**
  * OpenRouter implementation of the MCP client with network recovery
  */
 export class OpenRouterMcpClient extends BaseMcpClient {
@@ -233,50 +261,69 @@ export class OpenRouterMcpClient extends BaseMcpClient {
         }
     }
 
-    // Request queue to prevent concurrent requests that might cause JSON parsing issues
-    private static requestQueue: Array<() => Promise<any>> = [];
-    private static isProcessingQueue = false;
+    // Per-instance request queue: keeps one client's requests ordered and spaced.
+    // This used to be static (class-level), which serialized every request from
+    // every client instance in the process through one queue — one hung request
+    // starved every agent's LLM calls, not just its own. Instance scoping plus the
+    // per-request timeout below bounds the damage a single request can do to the
+    // agent that issued it.
+    private requestQueue: Array<() => Promise<any>> = [];
+    private isProcessingQueue = false;
     // Configurable delay between requests - reduced from 500ms to 100ms default for better performance
     // Set OPENROUTER_REQUEST_QUEUE_DELAY_MS=0 to disable queueing delay entirely
     private static readonly REQUEST_DELAY_MS = parseInt(process.env.OPENROUTER_REQUEST_QUEUE_DELAY_MS || '100', 10);
-    
+
     // Network recovery manager
     private networkRecovery: NetworkRecoveryManager | null = null;
-    
+
     // JSON recovery manager
     private jsonRecovery: JsonRecoveryManager;
-    
+
+    // Hard cap on a single completion request (fetch + body). Generous because
+    // reasoning models legitimately run for minutes; finite because a request
+    // with no bound turns a hung connection into permanent silence.
+    private requestTimeoutMs = 300000;
+
+    // Max silence between SSE chunks on the streaming path. OpenRouter emits
+    // keepalive comment lines every few seconds while a model is thinking, so a
+    // long quiet gap means a dead connection, not a slow model.
+    private streamIdleTimeoutMs = 120000;
+
+    // Threshold for the slow-request WARN that makes slow-vs-hung visible in
+    // production logs before any timeout fires.
+    private slowRequestWarnMs = 60000;
+
     /**
      * Process the request queue sequentially to prevent concurrent requests
      */
-    private static async processQueue(): Promise<void> {
-        if (OpenRouterMcpClient.isProcessingQueue || OpenRouterMcpClient.requestQueue.length === 0) {
+    private async processQueue(): Promise<void> {
+        if (this.isProcessingQueue || this.requestQueue.length === 0) {
             return;
         }
-        
-        OpenRouterMcpClient.isProcessingQueue = true;
-        
-        while (OpenRouterMcpClient.requestQueue.length > 0) {
-            const request = OpenRouterMcpClient.requestQueue.shift()!;
+
+        this.isProcessingQueue = true;
+
+        while (this.requestQueue.length > 0) {
+            const request = this.requestQueue.shift()!;
             try {
                 await request();
             } catch (error) {
                 // Request will handle its own error, just continue processing
             }
-            
+
             // Wait between requests to prevent rate limiting
-            if (OpenRouterMcpClient.requestQueue.length > 0) {
+            if (this.requestQueue.length > 0) {
                 await new Promise(resolve => setTimeout(resolve, OpenRouterMcpClient.REQUEST_DELAY_MS));
             }
         }
-        
-        OpenRouterMcpClient.isProcessingQueue = false;
+
+        this.isProcessingQueue = false;
     }
-    
+
     /**
      * Add a request to the queue and process it
      */
-    private static async queueRequest<T>(requestFn: () => Promise<T>): Promise<T> {
+    private async queueRequest<T>(requestFn: () => Promise<T>): Promise<T> {
         return new Promise<T>((resolve, reject) => {
             const wrappedRequest = async () => {
                 try {
@@ -286,16 +333,105 @@ export class OpenRouterMcpClient extends BaseMcpClient {
                     reject(error);
                 }
             };
-            
-            OpenRouterMcpClient.requestQueue.push(wrappedRequest);
-            OpenRouterMcpClient.processQueue();
+
+            this.requestQueue.push(wrappedRequest);
+            this.processQueue();
         });
+    }
+
+    /**
+     * Start the slow-request watchdog for one LLM request.
+     *
+     * Emits a WARN once the request has been in flight for slowRequestWarnMs, and
+     * another WARN at completion if the total time crossed the threshold. Together
+     * with the timeout ERROR this makes slow-vs-hung distinguishable in production
+     * logs: a slow request logs WARN…WARN(completed), a hung one WARN…ERROR(timeout).
+     *
+     * Returns a finish() that must be called exactly once when the request settles.
+     */
+    private startSlowRequestWatch(
+        kind: 'completion' | 'streaming',
+        model: string,
+        agentId: string,
+        requestBytes: number
+    ): { finish: (succeeded?: boolean) => void } {
+        const startedAt = Date.now();
+        let finished = false;
+        const timer = setTimeout(() => {
+            this.logger.warn(
+                `⏱️ OpenRouter ${kind} request still in flight after ${this.slowRequestWarnMs}ms: ` +
+                `model=${model}, agent=${agentId}, request=${(requestBytes / 1024).toFixed(1)}KB`
+            );
+        }, this.slowRequestWarnMs);
+
+        return {
+            // Idempotent. The completed-WARN is success-only: failures carry their
+            // elapsed time in their own ERROR log, and a "completed" line for a
+            // request that timed out would be a lie.
+            finish: (succeeded: boolean = true) => {
+                if (finished) {
+                    return;
+                }
+                finished = true;
+                clearTimeout(timer);
+                const elapsedMs = Date.now() - startedAt;
+                if (succeeded && elapsedMs >= this.slowRequestWarnMs) {
+                    this.logger.warn(
+                        `⏱️ OpenRouter ${kind} request completed after ${elapsedMs}ms: ` +
+                        `model=${model}, agent=${agentId}`
+                    );
+                }
+            }
+        };
+    }
+
+    /**
+     * Build, log, and return the error for a timed-out LLM request.
+     *
+     * The error is named 'TimeoutError' and flagged isRequestTimeout so
+     * classifyNetworkError maps it to the non-retryable REQUEST_TIMEOUT type:
+     * the caller sees the failure immediately instead of a silent retry loop.
+     * Logged at ERROR here — unconditionally — because this is the line that
+     * turns a production stall from invisible into diagnosable.
+     */
+    private buildRequestTimeoutError(params: {
+        kind: 'completion' | 'streaming';
+        detail: string;
+        model: string;
+        agentId: string;
+        elapsedMs: number;
+        limitMs: number;
+        requestBytes: number;
+        messageCount: number;
+    }): Error {
+        const message =
+            `⛔ OpenRouter ${params.kind} request timed out (${params.detail}) after ${params.elapsedMs}ms ` +
+            `(limit ${params.limitMs}ms): model=${params.model}, agent=${params.agentId}, ` +
+            `request=${(params.requestBytes / 1024).toFixed(1)}KB, messages=${params.messageCount}`;
+        this.logger.error(message);
+
+        const error = new Error(message);
+        error.name = 'TimeoutError';
+        (error as any).isRequestTimeout = true;
+        return error;
     }
     
     /**
      * Initialize the OpenRouter provider
      */
     protected async initializeProvider(): Promise<void> {
+        // Per-request bounds. All three must be positive and finite — a missing or
+        // disabled bound is how a hung connection becomes permanent silence that
+        // only a consumer-side backstop can end.
+        //
+        // requestTimeoutMs defaults to 5 minutes: reasoning models legitimately run
+        // for minutes on large contexts, so this is a hang detector, not a latency
+        // budget. It is enforced twice: as an AbortSignal on the fetch itself and
+        // as an operation bound inside NetworkRecoveryManager.executeWithRetry.
+        this.requestTimeoutMs = parsePositiveIntEnv('OPENROUTER_REQUEST_TIMEOUT_MS', 300000);
+        this.streamIdleTimeoutMs = parsePositiveIntEnv('OPENROUTER_STREAM_IDLE_TIMEOUT_MS', 120000);
+        this.slowRequestWarnMs = parsePositiveIntEnv('OPENROUTER_SLOW_REQUEST_WARN_MS', 60000);
+
         // Initialize network recovery configuration from environment or defaults
         const networkRecoveryConfig: NetworkRecoveryConfig = {
             ...DEFAULT_NETWORK_RECOVERY_CONFIG,
@@ -305,7 +441,7 @@ export class OpenRouterMcpClient extends BaseMcpClient {
             retryMultiplier: parseFloat(process.env.OPENROUTER_RETRY_MULTIPLIER || '2'),
             circuitBreakerThreshold: parseInt(process.env.OPENROUTER_CIRCUIT_BREAKER_THRESHOLD || '5'),
             circuitBreakerCooldownMs: parseInt(process.env.OPENROUTER_CIRCUIT_BREAKER_COOLDOWN_MS || '60000'),
-            requestTimeoutMs: parseInt(process.env.OPENROUTER_REQUEST_TIMEOUT_MS || '30000'),
+            requestTimeoutMs: this.requestTimeoutMs,
             enableGracefulDegradation: process.env.OPENROUTER_ENABLE_GRACEFUL_DEGRADATION !== 'false',
             enableDetailedLogging: process.env.OPENROUTER_ENABLE_DETAILED_LOGGING !== 'false'
         };
@@ -546,13 +682,18 @@ export class OpenRouterMcpClient extends BaseMcpClient {
         }
 
         // Messages are already in OpenRouter format - send directly
-        return await OpenRouterMcpClient.queueRequest(async () => {
+        return await this.queueRequest(async () => {
             if (!this.networkRecovery) {
                 throw new Error('Network recovery not initialized');
             }
 
             const result = await this.networkRecovery.executeWithRetry(
-                () => this.executeOpenRouterRequestDirect(transformedMessages, context.availableTools as any, options),
+                () => this.executeOpenRouterRequestDirect(
+                    transformedMessages,
+                    context.availableTools as any,
+                    // agentId rides along for the slow-request WARN and timeout logs
+                    { ...options, agentId: context.agentId }
+                ),
                 extractStatusCodeFromError
             );
 
@@ -572,6 +713,12 @@ export class OpenRouterMcpClient extends BaseMcpClient {
      * Makes the same request but with `stream: true`, parses SSE chunks,
      * calls onChunk for each partial token, and returns the accumulated final response.
      *
+     * Deliberately NOT wrapped in networkRecovery.executeWithRetry: by the time a
+     * streaming request fails, chunks may already have been delivered to the
+     * consumer via onChunk, and a retry would replay them. Failures — including
+     * the idle-watchdog timeout inside executeStreamingRequest — propagate to the
+     * caller instead.
+     *
      * @param context - Complete agent context from SDK
      * @param options - Additional options (must include stream: true)
      * @param onChunk - Callback invoked for each streaming chunk
@@ -587,8 +734,14 @@ export class OpenRouterMcpClient extends BaseMcpClient {
         const converter = getMessageConverter('client');
         const transformedMessages = converter.transform(openRouterMessages, MessageFormat.OPENROUTER);
 
-        return await OpenRouterMcpClient.queueRequest(async () => {
-            return this.executeStreamingRequest(transformedMessages, context.availableTools as any, options, onChunk);
+        return await this.queueRequest(async () => {
+            return this.executeStreamingRequest(
+                transformedMessages,
+                context.availableTools as any,
+                // agentId rides along for the slow-request WARN and timeout logs
+                { ...options, agentId: context.agentId },
+                onChunk
+            );
         });
     }
 
@@ -636,22 +789,92 @@ export class OpenRouterMcpClient extends BaseMcpClient {
 
         const headers = this.buildOpenRouterHeaders(options);
 
-        const response = await fetch(`${this.baseUrl}/chat/completions`, {
-            method: 'POST',
-            headers,
-            body: JSON.stringify(requestBody)
+        // Serialize once so the logged request size is exactly what went on the wire
+        const requestBodyJson = JSON.stringify(requestBody);
+        const requestBytes = Buffer.byteLength(requestBodyJson, 'utf8');
+        const agentId = options?.agentId || 'unknown';
+        const requestStartedAt = Date.now();
+        const slowWatch = this.startSlowRequestWatch('streaming', model, agentId, requestBytes);
+
+        // Idle watchdog for the SSE stream. A healthy stream is never silent for
+        // long — OpenRouter emits keepalive comment lines every few seconds while a
+        // model is thinking — so silence past streamIdleTimeoutMs means the
+        // connection is dead, not that the model is slow. The watchdog is re-armed
+        // on every read; there is deliberately NO total-time cap here, because an
+        // actively producing stream is healthy no matter how long it runs.
+        //
+        // Each read (and the initial fetch) races against abortPromise as well as
+        // carrying the AbortController signal: the signal cancels the real network
+        // request, the race guarantees the await itself resolves even if the
+        // underlying stream implementation ignores the abort.
+        const controller = new AbortController();
+        let headersReceived = false;
+        let idleTimer: ReturnType<typeof setTimeout> | undefined;
+        const armIdleWatchdog = () => {
+            clearTimeout(idleTimer);
+            idleTimer = setTimeout(() => controller.abort(), this.streamIdleTimeoutMs);
+        };
+        // Plain sentinel rejection — enrichment and logging happen exactly once,
+        // in the catch blocks below, regardless of whether this promise or the
+        // fetch/read rejection wins the race.
+        const abortPromise = new Promise<never>((_, reject) => {
+            controller.signal.addEventListener('abort', () => {
+                const sentinel = new Error('OpenRouter streaming request aborted by idle watchdog');
+                sentinel.name = 'AbortError';
+                reject(sentinel);
+            }, { once: true });
         });
 
-        if (!response.ok) {
-            const errorText = await response.text();
-            const error = new Error(`OpenRouter API error [${response.status}]: ${errorText}`);
-            (error as any).status = response.status;
-            (error as any).statusCode = response.status;
-            throw error;
-        }
+        // Converts an abort/timeout rejection into the logged, non-retryable
+        // request-timeout error; returns any other error unchanged.
+        const normalizeStreamError = (error: unknown): unknown => {
+            if ((error as any)?.isRequestTimeout || !isAbortOrTimeoutError(error)) {
+                return error;
+            }
+            return this.buildRequestTimeoutError({
+                kind: 'streaming',
+                detail: headersReceived
+                    ? `no SSE data for ${this.streamIdleTimeoutMs}ms`
+                    : `no response headers within ${this.streamIdleTimeoutMs}ms`,
+                model,
+                agentId,
+                elapsedMs: Date.now() - requestStartedAt,
+                limitMs: this.streamIdleTimeoutMs,
+                requestBytes,
+                messageCount: openRouterMessages.length
+            });
+        };
 
-        if (!response.body) {
-            throw new Error('No response body for streaming request');
+        armIdleWatchdog();
+        let response: Response;
+        try {
+            response = await Promise.race([
+                fetch(`${this.baseUrl}/chat/completions`, {
+                    method: 'POST',
+                    headers,
+                    body: requestBodyJson,
+                    signal: controller.signal
+                }),
+                abortPromise
+            ]);
+            headersReceived = true;
+            armIdleWatchdog();
+
+            if (!response.ok) {
+                const errorText = await response.text();
+                const error = new Error(`OpenRouter API error [${response.status}]: ${errorText}`);
+                (error as any).status = response.status;
+                (error as any).statusCode = response.status;
+                throw error;
+            }
+
+            if (!response.body) {
+                throw new Error('No response body for streaming request');
+            }
+        } catch (error) {
+            clearTimeout(idleTimer);
+            slowWatch.finish(false);
+            throw normalizeStreamError(error);
         }
 
         this.logger.debug(`📡 OpenRouter SSE: Response received, status=${response.status}, starting stream parse`);
@@ -673,7 +896,10 @@ export class OpenRouterMcpClient extends BaseMcpClient {
 
         try {
             while (true) {
-                const { done, value } = await reader.read();
+                // Race against the idle watchdog: reader.read() on a dead
+                // connection can otherwise pend forever with nothing logged.
+                const { done, value } = await Promise.race([reader.read(), abortPromise]);
+                armIdleWatchdog();
                 if (done) break;
 
                 buffer += decoder.decode(value, { stream: true });
@@ -772,7 +998,16 @@ export class OpenRouterMcpClient extends BaseMcpClient {
                     }
                 }
             }
+        } catch (error) {
+            // Cancel the underlying stream so the connection is torn down; the
+            // losing reader.read() from the race is settled by the cancel/abort
+            // and its rejection is already observed by Promise.race.
+            slowWatch.finish(false);
+            reader.cancel().catch(() => undefined);
+            throw normalizeStreamError(error);
         } finally {
+            clearTimeout(idleTimer);
+            slowWatch.finish();
             reader.releaseLock();
         }
 
@@ -949,7 +1184,7 @@ export class OpenRouterMcpClient extends BaseMcpClient {
 
 
         // Send directly
-        return await OpenRouterMcpClient.queueRequest(async () => {
+        return await this.queueRequest(async () => {
             if (!this.networkRecovery) {
                 throw new Error('Network recovery not initialized');
             }
@@ -1081,51 +1316,79 @@ export class OpenRouterMcpClient extends BaseMcpClient {
                 // console.log(`   Tools: ${requestBody.tools.map((t: any) => t.function.name).join(', ')}`);
             }
 
-            // Make the API request
-            const response = await fetch(`${this.baseUrl}/chat/completions`, {
-                method: 'POST',
-                headers,
-                body: JSON.stringify(requestBody)
-            });
-            
-            // Log response status
-            
-            // Check for errors with enhanced error information
-            if (!response.ok) {
-                let errorText = await response.text();
-                this.logger.error(`🔧 DEBUG: Error response text: ${errorText}`);
-                
-                let errorMessage = errorText;
-                let rateLimitInfo: Record<string, any> = {};
-                
-                try {
-                    const errorJson = JSON.parse(errorText);
-                    errorMessage = errorJson.error?.message || errorText;
-                    
-                    // Extract rate limit information if available
-                    if (response.status === 429) {
-                        rateLimitInfo = {
-                            retryAfter: response.headers.get('retry-after'),
-                            rateLimitLimit: response.headers.get('x-ratelimit-limit'),
-                            rateLimitRemaining: response.headers.get('x-ratelimit-remaining'),
-                            rateLimitReset: response.headers.get('x-ratelimit-reset')
-                        };
+            // Serialize once so the logged request size is exactly what went on the wire
+            const requestBodyJson = JSON.stringify(requestBody);
+            const requestBytes = Buffer.byteLength(requestBodyJson, 'utf8');
+            const agentId = options?.agentId || 'unknown';
+            const requestStartedAt = Date.now();
+            const slowWatch = this.startSlowRequestWatch('completion', model, agentId, requestBytes);
+
+            let responseText: string;
+            try {
+                // AbortSignal.timeout bounds the entire request — connect, headers,
+                // and body read — so a hung connection surfaces as an error instead
+                // of indefinite silence. Reasoning models can legitimately take
+                // minutes; the default limit is sized for that (see initializeProvider).
+                const response = await fetch(`${this.baseUrl}/chat/completions`, {
+                    method: 'POST',
+                    headers,
+                    body: requestBodyJson,
+                    signal: AbortSignal.timeout(this.requestTimeoutMs)
+                });
+
+                // Check for errors with enhanced error information
+                if (!response.ok) {
+                    let errorText = await response.text();
+                    this.logger.error(`🔧 DEBUG: Error response text: ${errorText}`);
+
+                    let errorMessage = errorText;
+                    let rateLimitInfo: Record<string, any> = {};
+
+                    try {
+                        const errorJson = JSON.parse(errorText);
+                        errorMessage = errorJson.error?.message || errorText;
+
+                        // Extract rate limit information if available
+                        if (response.status === 429) {
+                            rateLimitInfo = {
+                                retryAfter: response.headers.get('retry-after'),
+                                rateLimitLimit: response.headers.get('x-ratelimit-limit'),
+                                rateLimitRemaining: response.headers.get('x-ratelimit-remaining'),
+                                rateLimitReset: response.headers.get('x-ratelimit-reset')
+                            };
+                        }
+                    } catch (e) {
+                        // Use error text as is if not JSON
                     }
-                } catch (e) {
-                    // Use error text as is if not JSON
+
+                    // Create detailed error with status code
+                    const error = new Error(`OpenRouter API error [${response.status}]: ${errorMessage}`);
+                    (error as any).status = response.status;
+                    (error as any).statusCode = response.status;
+                    (error as any).rateLimitInfo = rateLimitInfo;
+
+                    throw error;
                 }
-                
-                // Create detailed error with status code
-                const error = new Error(`OpenRouter API error [${response.status}]: ${errorMessage}`);
-                (error as any).status = response.status;
-                (error as any).statusCode = response.status;
-                (error as any).rateLimitInfo = rateLimitInfo;
-                
+
+                // Get response text for JSON parsing
+                responseText = await response.text();
+                slowWatch.finish();
+            } catch (error) {
+                slowWatch.finish(false);
+                if (isAbortOrTimeoutError(error)) {
+                    throw this.buildRequestTimeoutError({
+                        kind: 'completion',
+                        detail: 'no response within the request timeout',
+                        model,
+                        agentId,
+                        elapsedMs: Date.now() - requestStartedAt,
+                        limitMs: this.requestTimeoutMs,
+                        requestBytes,
+                        messageCount: openRouterMessages.length
+                    });
+                }
                 throw error;
             }
-            
-            // Get response text for JSON parsing
-            const responseText = await response.text();
             
             // Check if response is empty
             if (!responseText || responseText.length === 0) {
@@ -1150,6 +1413,11 @@ export class OpenRouterMcpClient extends BaseMcpClient {
             
             return this.convertToMcpResponse(openRouterResponse);
         } catch (error) {
+            // Request timeouts are already logged with full context and must keep
+            // their name/flags so NetworkRecovery classifies them as non-retryable.
+            if ((error as any)?.isRequestTimeout === true) {
+                throw error;
+            }
             this.logger.error(`🔧 ERROR in executeOpenRouterRequest: ${error instanceof Error ? error.message : String(error)}`);
             if (error instanceof Error && error.stack) {
                 this.logger.error(`🔧 ERROR STACK: ${error.stack}`);

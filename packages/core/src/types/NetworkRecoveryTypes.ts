@@ -34,6 +34,13 @@ export enum NetworkErrorType {
     NETWORK_CONNECTION_REFUSED = 'NETWORK_CONNECTION_REFUSED',
     NETWORK_DNS_RESOLUTION = 'NETWORK_DNS_RESOLUTION',
     NETWORK_SOCKET_ERROR = 'NETWORK_SOCKET_ERROR',
+
+    // Hard per-request timeout: the request ran for the full configured bound
+    // (requestTimeoutMs / a stream idle bound) without completing. Deliberately
+    // NOT retryable — retrying a request that just consumed the entire timeout
+    // budget would multiply the silence the timeout exists to end. The caller
+    // gets the failure immediately.
+    REQUEST_TIMEOUT = 'REQUEST_TIMEOUT',
     
     // API service issues
     API_BAD_GATEWAY = 'API_BAD_GATEWAY',              // 502
@@ -205,9 +212,18 @@ export function classifyNetworkError(
         }
     }
     
+    // Hard request timeouts are marked explicitly: either by AbortSignal.timeout()
+    // (DOMException named 'TimeoutError' in both Node and Bun) or by the
+    // isRequestTimeout flag set where the timeout is enforced. Checked before the
+    // message heuristics below so a hard timeout is never misclassified as a
+    // retryable NETWORK_TIMEOUT.
+    if (error?.isRequestTimeout === true || error?.name === 'TimeoutError') {
+        return NetworkErrorType.REQUEST_TIMEOUT;
+    }
+
     // Check error message for network issues
     const errorMessage = error?.message?.toLowerCase() || '';
-    
+
     if (errorMessage.includes('timeout')) {
         return NetworkErrorType.NETWORK_TIMEOUT;
     }

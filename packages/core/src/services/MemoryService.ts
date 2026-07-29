@@ -552,7 +552,14 @@ export class MemoryService {
                         // Handle agent memory UPDATE
                         if (typeof memoryEventData.id === 'string' && memoryEventData.data) {
                             // CRITICAL: Must subscribe to Observable to trigger execution!
-                            this.updateAgentMemory(memoryEventData.id, memoryEventData.data).subscribe({
+                            // The request context routes the UPDATE_RESULT back to the
+                            // requesting agent with its own operationId — without it the
+                            // SDK's pending save can never observe its result.
+                            this.updateAgentMemory(memoryEventData.id, memoryEventData.data, {
+                                operationId: memoryEventData.operationId,
+                                requesterAgentId: event.agentId,
+                                requesterChannelId: event.channelId
+                            }).subscribe({
                                 next: () => null,
                                 error: (err) => this.logger.error(`Agent memory update failed for ${memoryEventData.id}: ${err}`)
                             });
@@ -702,11 +709,27 @@ export class MemoryService {
     
     /**
      * Update agent memory
+     *
+     * When the update was requested over the wire (SDK → Events.Memory.UPDATE),
+     * requestContext carries the requester's operationId and identity. The
+     * UPDATE_RESULT emitted here must echo that operationId and be addressed to
+     * the requesting agent: the SDK matches results by operationId, and event
+     * forwarding routes them by payload.agentId. Before this parameter existed,
+     * agent-scope results were emitted with a freshly generated operationId under
+     * SYSTEM_AGENT — no SDK save round-trip could ever observe its own result, so
+     * every awaited save hung forever and every fire-and-forget save leaked its
+     * result listener.
+     *
      * @param pAgentId Agent ID
      * @param updates Memory updates
+     * @param requestContext Requester identity for result routing (wire requests only)
      * @returns Observable of updated agent memory
      */
-    public updateAgentMemory(pAgentId: string, updates: Partial<IEnhancedAgentMemory>): Observable<IEnhancedAgentMemory> {
+    public updateAgentMemory(
+        pAgentId: string,
+        updates: Partial<IEnhancedAgentMemory>,
+        requestContext?: { operationId: string; requesterAgentId: AgentId; requesterChannelId: ChannelId }
+    ): Observable<IEnhancedAgentMemory> {
         this.validator.assertIsNonEmptyString(pAgentId, 'Agent ID must be a non-empty string');
         this.validator.assertIsObject(updates, 'Updates must be an object');
         
@@ -777,8 +800,11 @@ export class MemoryService {
                     }
                 }
 
-                // Emit update event through EventBus
-                const operationId = uuidv4(); // Generate operationId for the event data
+                // Emit update event through EventBus. Echo the requester's
+                // operationId and address the result to the requesting agent so
+                // the SDK's pending save resolves; internal callers (no
+                // requestContext) keep the system-level identity.
+                const operationId = requestContext?.operationId ?? uuidv4();
                 const updateResultData: MemoryUpdateResultEventData = {
                     operationId,
                     scope: MemoryScope.AGENT,
@@ -786,14 +812,13 @@ export class MemoryService {
                     memory: updatedMemory
                 };
 
-                // Define standard agentId and channelId for system-level memory events
-                const systemAgentId: AgentId = 'SYSTEM_AGENT'; // Or a more specific system agent ID
-                const noChannelId: ChannelId = 'NO_CHANNEL';   // Or a more specific system channel ID or null if appropriate
+                const resultAgentId: AgentId = requestContext?.requesterAgentId ?? 'SYSTEM_AGENT';
+                const resultChannelId: ChannelId = requestContext?.requesterChannelId ?? 'NO_CHANNEL';
 
                 const payload = createMemoryUpdateResultEventPayload(
                     Events.Memory.UPDATE_RESULT,
-                    systemAgentId,
-                    noChannelId,
+                    resultAgentId,
+                    resultChannelId,
                     updateResultData
                 );
                 EventBus.server.emit(Events.Memory.UPDATE_RESULT, payload);
@@ -801,22 +826,21 @@ export class MemoryService {
                 observer.next(updatedMemory);
                 observer.complete();
             }, error => {
-                const operationId_agent_update_error = uuidv4();
+                // Errors must reach the requester too — a save whose failure is
+                // only logged server-side leaves the requesting SDK waiting forever.
                 const updateResultData_agent_update_error: MemoryUpdateResultEventData = {
-                    operationId: operationId_agent_update_error,
+                    operationId: requestContext?.operationId ?? uuidv4(),
                     scope: MemoryScope.AGENT,
                     id: pAgentId,
                     memory: null,
                     error: (error as Error).message
                 };
-                const systemAgentId_agent_update_error: AgentId = 'SYSTEM_AGENT'; // Or a more specific system agent ID
-                const noChannelId_agent_update_error: ChannelId = 'NO_CHANNEL';   // Or a more specific system channel ID or null if appropriate
                 EventBus.server.emit(
-                    Events.Memory.UPDATE_RESULT, 
+                    Events.Memory.UPDATE_RESULT,
                     createMemoryUpdateResultEventPayload(
                         Events.Memory.UPDATE_RESULT,
-                        systemAgentId_agent_update_error,
-                        noChannelId_agent_update_error,
+                        requestContext?.requesterAgentId ?? 'SYSTEM_AGENT',
+                        requestContext?.requesterChannelId ?? 'NO_CHANNEL',
                         updateResultData_agent_update_error
                     )
                 );
