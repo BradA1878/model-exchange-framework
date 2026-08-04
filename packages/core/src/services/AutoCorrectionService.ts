@@ -834,6 +834,14 @@ export class AutoCorrectionService {
     private convertType(value: any, targetType: 'string' | 'number' | 'boolean' | 'object'): any {
         switch (targetType) {
             case 'string':
+                // Objects and arrays are stringified as JSON so the corrected
+                // value stays faithful to what the model sent — String() would
+                // collapse an object to "[object Object]", and the "successful"
+                // correction would silently destroy the payload without the
+                // model ever seeing an error it could learn from.
+                if (typeof value === 'object' && value !== null) {
+                    return JSON.stringify(value);
+                }
                 return String(value);
             case 'number':
                 const num = Number(value);

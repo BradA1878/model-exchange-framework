@@ -20,6 +20,7 @@
 
 import { Logger } from '@mxf-dev/core/utils/Logger';
 import { TaskService } from '../../socket/services/TaskService';
+import { normalizeSummaryInput } from './helpers/toolInputNormalization';
 import { 
     ChannelTask, 
     TaskPriority, 
@@ -247,9 +248,12 @@ export const completeTaskBridgeTool = {
     inputSchema: {
         type: 'object',
         properties: {
+            // Objects are admitted (and stored as their JSON string) for the
+            // same reason as task_complete: models summarize structured work
+            // as structured data. Other non-string types are still rejected.
             summary: {
-                type: 'string',
-                description: 'Summary of the work completed and results achieved'
+                type: ['string', 'object'],
+                description: 'Summary of the work completed and results achieved. Prose is preferred; an object is stored as its JSON string.'
             },
             success: {
                 type: 'boolean',
@@ -262,13 +266,14 @@ export const completeTaskBridgeTool = {
     handler: async (args: any, context: any) => {
         try {
             const taskService = getTaskService();
-            
-            // Use the task service's completion handler
+
+            // Use the task service's completion handler. Objects are stored as
+            // their JSON string; handleTaskCompletion requires a plain string.
             const result = await taskService.handleTaskCompletion(
                 context.agentId,
                 context.channelId,
                 {
-                    summary: args.summary,
+                    summary: normalizeSummaryInput(args.summary) || 'Task completed',
                     success: args.success,
                     requestId: `bridge-${Date.now()}`
                 }

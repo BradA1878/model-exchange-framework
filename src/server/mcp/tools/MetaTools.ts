@@ -48,6 +48,7 @@ import { EnhancedParameterPattern, PatternRecommendation } from '@mxf-dev/core/t
 import { AgentId } from '@mxf-dev/core/types/Agent';
 import { ChannelId } from '@mxf-dev/core/types/ChannelContext';
 import { paginationInputSchema, paginateArray, checkResultSize, PaginationMetadata } from '@mxf-dev/core/utils/ToolPaginationUtils';
+import { normalizeSummaryInput } from './helpers/toolInputNormalization';
 
 const logger = new Logger('info', 'MetaTools', 'server');
 const validator = createStrictValidator('MetaTools');
@@ -644,13 +645,17 @@ export const task_complete = {
     inputSchema: {
         type: 'object',
         properties: {
+            // summary/result admit objects because the handler's contract is to
+            // accept any reasonable input and cheap-tier models routinely send
+            // structured data here; the handler stores objects as their JSON
+            // string. Numbers, booleans, arrays, and null are still rejected.
             summary: {
-                type: 'string',
-                description: 'Summary of the work completed and results achieved'
+                type: ['string', 'object'],
+                description: 'Summary of the work completed and results achieved. Prose is preferred; an object is stored as its JSON string. Put structured artifacts in details.'
             },
             result: {
-                type: 'string',
-                description: 'Alternative to summary - the result of the completed work'
+                type: ['string', 'object'],
+                description: 'Alternative to summary - the result of the completed work. An object is stored as its JSON string; put structured artifacts in details.'
             },
             success: {
                 type: 'boolean',
@@ -671,8 +676,8 @@ export const task_complete = {
         required: []
     },
     handler: async (input: {
-        summary?: string;
-        result?: string;
+        summary?: string | Record<string, any>;
+        result?: string | Record<string, any>;
         success?: boolean;
         details?: Record<string, any>;
         nextSteps?: string;
@@ -682,10 +687,13 @@ export const task_complete = {
         requestId: string;
     }) => {
         const startTime = Date.now();
-        
-        // Accept either 'summary' or 'result' parameter (LLMs may use either)
-        // Fall back to a default if neither is provided
-        const summaryText = input.summary || input.result || 'Task completed';
+
+        // Accept either 'summary' or 'result' parameter (LLMs may use either),
+        // as prose or as a structured object — objects are stored as their JSON
+        // string. Fall back to a default if neither is provided.
+        const summaryText = normalizeSummaryInput(input.summary)
+            || normalizeSummaryInput(input.result)
+            || 'Task completed';
         
         // Validate context (but be forgiving on input)
         validator.assertIsNonEmptyString(context.agentId, 'agentId is required');
