@@ -218,7 +218,9 @@ console.log('Game tools:', gameTools.map(t => t.name));
 await agent.executeTool('chess_move', { from: 'e2', to: 'e4' });
 ```
 
-See [External MCP Servers](external-mcp-servers.md#server-scopes-global-vs-channel) for more details.
+Channel and external tools are called by the raw name their origin server reports — the names returned in `toolsDiscovered`, and the names to put in `allowedTools`. The registry's canonical `<serverId>__<toolName>` form is accepted in allowlists too.
+
+See [External MCP Servers](external-mcp-servers.md#server-scopes-global-vs-channel) and [Tool Names](external-mcp-servers.md#tool-names) for more details.
 
 ### Tool with Complex Arguments
 

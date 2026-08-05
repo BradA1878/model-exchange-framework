@@ -684,6 +684,12 @@ Register a channel-scoped MCP server that is shared by all agents in the channel
 }
 ```
 
+`toolsDiscovered` holds the raw tool names reported by the server. Those are the names agents use in `allowedTools` and in tool calls. The registry also keeps a canonical namespaced name, `<channelId>:<serverId>__<toolName>` (for example `game-room:chess-game__chess_move`), which allowlists accept as well; the raw name is the one to prefer, since LLM providers reject `:` in function names.
+
+The response is sent after the MCP handshake and tool discovery complete, so a success means the listed tools are in the registry.
+
+Registering an id that already exists in the channel record refreshes that record — config, `registeredBy`, `registeredAt`, and `keepAliveMinutes` are overwritten. If the server is also still registered at runtime, registration fails with "already registered"; unregister it first.
+
 ### List Channel MCP Servers
 
 **GET** `/api/channels/:channelId/mcp-servers`
@@ -720,6 +726,8 @@ Get all MCP servers registered for a channel.
 **DELETE** `/api/channels/:channelId/mcp-servers/:serverId`
 
 Stop and remove a channel-scoped MCP server.
+
+Removal is idempotent: the process is stopped if it is running, and the server record, the channel scope entry, and any pending keepAlive timer are removed. A server that is already gone — or half-gone — is cleaned up rather than reported as missing.
 
 **Path Parameters:**
 - `channelId` - Channel ID
@@ -765,6 +773,7 @@ Stop and remove a channel-scoped MCP server.
    - Set appropriate keepAlive values (shorter for resources, longer for stateful servers)
    - Unregister servers when channel is archived
    - Monitor server status for health issues
+   - Re-register a server whose tools have disappeared: crashing past `maxRestartAttempts` unregisters it, and the eviction is logged at error level
 
 ## Next Steps
 

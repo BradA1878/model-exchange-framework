@@ -551,6 +551,72 @@ const result = await executor.executeTool('custom_tool', {
 });
 ```
 
+### HybridMcpToolRegistry
+
+Combines internal MXF tools with tools from external MCP servers into one registry.
+
+**Purpose:**
+- Single tool list per channel (global tools + that channel's server tools)
+- Name resolution between the agent-facing and canonical forms of an external tool
+- Routing execution to the origin MCP server
+
+**Tool naming:**
+
+External tools are stored under a canonical namespaced name, `<serverId>__<toolName>` (for a channel server the registry's server id is `<channelId>:<serverId>`). Agents see and call them by the raw name the origin server reports, because that is the only name clients ever receive and because LLM providers reject `:` in function names.
+
+```typescript
+// Agent-facing view: internal tools as-is, external tools under their raw name
+// with `canonicalName` carrying the namespaced registry name
+const tools = hybridRegistry.getAgentFacingToolsForChannel('channel-1');
+
+// Resolve either form (raw or canonical) to the canonical registry entry
+const tool = hybridRegistry.resolveToolForChannel('chess_move', 'channel-1');
+```
+
+`McpService` builds agent tool lists with `getAgentFacingToolsForChannel()`, and `McpSocketExecutor` authorizes and executes through `resolveToolForChannel()`, so allowlists work with either name.
+
+**Collisions:**
+- External raw name matching an internal tool: the internal tool wins, the external one is not exposed, and the registry logs an error.
+- Same raw name from two external servers in one channel: the lexicographically first server id wins, the other is skipped, and the registry logs an error.
+
+Tools entering or leaving the registry are logged per server — additions at info, removals at warn.
+
+### ExternalMcpServerManager
+
+Owns the lifecycle of external and channel-scoped MCP server processes (`packages/core/src/protocols/mcp/services/ExternalMcpServerManager.ts`).
+
+**Purpose:**
+- Spawn, handshake with, and monitor MCP server processes
+- Discover their tools and keep the registry in step with their state
+- Track channel scope: which agents are connected, and the keepAlive timer
+
+**Key methods:**
+```typescript
+// Register a channel-scoped server (id becomes `${channelId}:${config.id}`)
+await manager.registerChannelServer(channelId, config, registrationContext?);
+
+// Remove a channel-scoped server, or any server by its full id
+await manager.unregisterChannelServer(channelId, serverId);
+await manager.unregisterServer(serverId);
+
+// Start/restart resolve after the MCP handshake AND tool discovery
+await manager.startServer(serverId);
+await manager.restartServer(serverId);
+```
+
+The `CHANNEL_SERVER_REGISTER`, `CHANNEL_SERVER_UNREGISTER`, and `EXTERNAL_SERVER_UNREGISTER` EventBus handlers delegate to these methods.
+
+**Lifecycle rules:**
+- A resolved `startServer()`/`restartServer()` means the server's tools are in the registry. A rejection means they are not.
+- An unexpected process exit is logged at error level and its tools are removed from the registry. Any exit that was not requested counts, including `exit 0`.
+- With `restartOnCrash`, the server is restarted after `restartDelayMs` and its tools re-discovered, up to `maxRestartAttempts`. A completed startup resets the restart count.
+- Exhausting the restart budget unregisters the server (record and scope removed) at error level, rather than leaving a record agents can attach to.
+- Health checks probe `tools/list` on `healthCheckInterval`; two consecutive failures restart a `restartOnCrash` server.
+- Agent join verifies each channel server: a missing record removes the orphaned scope entry with an error log, a stopped server is started, and a "running" server is probed and restarted if it does not answer.
+- Unregistration is idempotent — it removes the record, the scope entry, and any keepAlive timer, and heals half-removed state instead of failing with "not found".
+
+**Constructor options** (beyond `toolEventEmitter` / `skipServerEventHandlers`): `restartDelayMs` and `requestTimeoutsMs` override the restart delay and the per-method JSON-RPC reply timeouts, mainly for tests and tuning.
+
 ## Pattern Services
 
 ### EphemeralEventPatternService

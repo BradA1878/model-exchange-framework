@@ -77,7 +77,7 @@ A modular component in the SDK that processes specific event types. Examples inc
 A periodic signal sent between agents and the server to verify connection health. Default: 30-second intervals with 5-minute timeout.
 
 ### Hybrid MCP
-The unified tool system that combines internal MXF tools with external MCP servers, providing a single interface for tool discovery and execution.
+The unified tool system that combines internal MXF tools with external MCP servers, providing a single interface for tool discovery and execution. External tools are stored under a canonical namespaced name (`<serverId>__<toolName>`) but are exposed to agents under the raw name their origin server reports; both forms are accepted in tool allowlists.
 
 ---
 

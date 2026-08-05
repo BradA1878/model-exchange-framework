@@ -36,6 +36,7 @@ import { EventBus } from '@mxf-dev/core/events/EventBus';
 import { validateToolInput, formatValidationError } from '@mxf-dev/core/protocols/mcp/McpToolSchema';
 import { createBaseEventPayload, createMcpToolCallPayload, createMcpToolErrorPayload, createMcpToolResultPayload, createMcpToolRegisterPayload } from '@mxf-dev/core/schemas/EventPayloadSchema';
 import { McpToolRegistry, ExtendedMcpToolDefinition } from '../../api/services/McpToolRegistry';
+import { getHybridMcpToolRegistry } from '../../mcp/services/HybridMcpRegistryAccess';
 import { v4 as uuidv4 } from 'uuid';
 import { AutoCorrectionService } from '@mxf-dev/core/services/AutoCorrectionService';
 import { AgentService } from './AgentService';
@@ -400,6 +401,20 @@ export class McpSocketExecutor {
             validator.assertIsNonEmptyString(context.agentId);
             validator.assertIsNonEmptyString(context.channelId);
 
+            // Resolve the requested name through the hybrid registry, channel-scoped.
+            // Agents call external tools by their raw name (the only name their
+            // allowlists and LLM function lists carry); the registry stores them
+            // under the namespaced canonical name. Both must authorize and execute.
+            const hybridRegistry = getHybridMcpToolRegistry();
+            const resolvedExternal = hybridRegistry?.resolveToolForChannel(toolName, context.channelId as string);
+            const acceptedNames = new Set<string>([toolName]);
+            if (resolvedExternal) {
+                acceptedNames.add(resolvedExternal.name);
+                if (resolvedExternal.externalToolName) {
+                    acceptedNames.add(resolvedExternal.externalToolName);
+                }
+            }
+
             // Check tool authorization for this agent
             // agentId is guaranteed to be a string after validation above
             const agentService = AgentService.getInstance();
@@ -409,8 +424,8 @@ export class McpSocketExecutor {
 
                 // Empty array = unrestricted (allow all tools)
                 if (allowedTools !== undefined && allowedTools.length > 0) {
-                    // Specific tools listed - check if tool is in list
-                    if (!allowedTools.includes(toolName)) {
+                    // Specific tools listed - check if tool is in list under any accepted name
+                    if (!allowedTools.some(name => acceptedNames.has(name))) {
                         return throwError(() => new Error(
                             `Tool '${toolName}' is not authorized for agent '${context.agentId}'. Allowed tools: ${allowedTools.join(', ')}`
                         ));
@@ -429,11 +444,15 @@ export class McpSocketExecutor {
 
             // Get the tool from the registry
             const toolObservable = McpToolRegistry.getInstance().listTools();
-            
+
             // Check if tool exists
             return toolObservable.pipe(
                 mergeMap(tools => {
-                    const tool = tools.find(t => t.name === toolName);
+                    // Exact match first, then the channel-scoped resolution: the
+                    // canonical entry carries the handler that routes to the
+                    // external server.
+                    const tool = tools.find(t => t.name === toolName)
+                        ?? (resolvedExternal ? tools.find(t => t.name === resolvedExternal.name) ?? resolvedExternal : undefined);
                     if (!tool) {
                         return throwError(() => new Error(`Tool with name ${toolName} does not exist`));
                     }

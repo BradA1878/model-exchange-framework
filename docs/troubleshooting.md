@@ -153,6 +153,41 @@ bun run docker:logs mxf-server
    });
    ```
 
+### External MCP Tools Not Found
+
+**Symptoms:**
+- `Requested tools NOT FOUND in registry: <tool>` on every control loop cycle
+- An external or channel MCP server's tools stop appearing after working earlier
+
+**Solutions:**
+
+1. **Use the raw tool name:**
+   ```typescript
+   // The names returned in toolsDiscovered are the names agents use
+   const { toolsDiscovered } = await agent.registerChannelMcpServer(config);
+   // toolsDiscovered -> ['game_move', 'game_status']
+
+   await agent.updateAllowedTools(['game_move', 'game_status']);
+   ```
+   The registry's canonical form, `<serverId>__<toolName>` (a channel server's registry id is `<channelId>:<serverId>`), is accepted in allowlists too, but cannot be sent to an LLM — providers reject `:` in function names.
+
+2. **Check whether the server lost its tools:**
+   ```bash
+   # Tools leaving the registry are logged per server
+   grep "removed from the registry" server.log
+   grep "exited unexpectedly" server.log
+   ```
+   A crashed server's tools are removed from the registry. With `restartOnCrash` it restarts and re-discovers them; exhausting `maxRestartAttempts` unregisters the server entirely, which is logged at error level.
+
+3. **Re-register an evicted server:**
+   ```typescript
+   // Also refreshes the channel's stored record (config, keepAliveMinutes, ...)
+   await agent.registerChannelMcpServer(config);
+   ```
+
+4. **Check for a name collision:**
+   An external tool whose raw name matches an internal MXF tool is never exposed to agents, and two servers offering the same raw name in one channel resolve to the lexicographically first server id. Both cases are logged at error level. Rename the tool on the external server.
+
 ---
 
 ## LLM Issues

@@ -170,11 +170,25 @@ interface ChannelMcpServerConfig {
   url?: string;                     // HTTP URL if transport is 'http'
   autoStart?: boolean;              // Auto-start on registration (default: true)
   environmentVariables?: Record<string, string>;  // Environment variables
-  restartOnCrash?: boolean;         // Auto-restart on crash (default: false)
-  maxRestartAttempts?: number;      // Max restart attempts (default: 3)
+  restartOnCrash?: boolean;         // Restart after an unexpected exit (default: true)
+  maxRestartAttempts?: number;      // Restart budget (default: 3)
   keepAliveMinutes?: number;        // Minutes to keep alive after last agent leaves (default: 5)
 }
 ```
+
+## Tool Names
+
+Agents call channel server tools by the raw name the server reports — the names that come back in `toolsDiscovered` (`reverse_string`, `uppercase`, `word_count` in this demo). Use those names in `allowedTools` and in `executeTool()`.
+
+The registry stores each external tool under a canonical namespaced name, `<serverId>__<toolName>`, where a channel server's registry id is `<channelId>:<serverId>` — `game-room:channel-mcp-demo__uppercase`, for example. Allowlists accept either form, but prefer the raw name: LLM providers reject `:` in function names.
+
+## Lifecycle Notes
+
+- Registration resolves after the MCP handshake and tool discovery, so a resolved call means the discovered tools are in the registry.
+- An unexpected exit is logged at error level and the server's tools are removed from the registry; with `restartOnCrash` the server restarts and re-discovers its tools, up to `maxRestartAttempts`. A completed startup resets the restart count.
+- Exhausting the restart budget unregisters the server (record and channel scope removed) — re-register it to get the tools back.
+- Agent join verifies the server is alive (probe with `tools/list`) and starts or restarts it as needed before counting the agent as connected.
+- Unregistration is idempotent and clears the record, the scope entry, and any keepAlive timer.
 
 ## API Reference
 
@@ -222,4 +236,4 @@ To create your own channel-scoped MCP server:
 4. **Register via SDK**: `await agent.registerChannelMcpServer({ ... })`
 5. **Tools automatically available** to all channel members
 
-See `docs/sdk/channel-mcp-servers.md` for complete API reference.
+See `docs/sdk/external-mcp-servers.md` for the complete API reference, including the tool naming contract and server lifecycle rules.

@@ -85,6 +85,23 @@ const gameTools = tools.filter(t => t.name.startsWith('game_'));
 console.log('Game tools available:', gameTools.map(t => t.name));
 ```
 
+**Tool names**: agents see and call channel server tools by the raw name the server reports — the same names returned in `toolsDiscovered`. Use those names in `allowedTools` and in `executeTool()`:
+
+```typescript
+const player = await sdk.createAgent({
+    agentId: 'game-player',
+    channelId: channel.id,
+    allowedTools: ['game_move', 'game_attack', 'game_status'],  // raw names
+    // ... config ...
+});
+
+await player.executeTool('game_move', { x: 3, y: 4 });
+```
+
+Internally the registry stores each external tool under a canonical namespaced name, `<serverId>__<toolName>`, where a channel server's registry id is `<channelId>:<serverId>` — so `game_move` above is `<channelId>:game-tools__game_move`. Allowlists accept either form and execution resolves both, but prefer the raw name: LLM providers reject `:` in function names.
+
+If a channel server's raw tool name collides with an internal MXF tool, the internal tool wins and the external one is not exposed to agents (the registry logs an error naming the server). Rename the tool on your server.
+
 ### 5. Other Agents in Same Channel Also See Tools
 
 ```typescript
@@ -144,6 +161,8 @@ await agent2.disconnect();
 await sdk.disconnect();
 ```
 
+Unregistration is idempotent: it stops the process if it is running and removes the server record, the channel scope entry, and any pending keepAlive timer. Unregistering a server that is already gone cleans up whatever remains and succeeds rather than failing with "not found".
+
 ## Configuration Options
 
 ```typescript
@@ -159,17 +178,27 @@ interface ChannelServerConfig {
     url?: string;
 
     // Lifecycle
-    autoStart?: boolean;
-    restartOnCrash?: boolean;
-    maxRestartAttempts?: number;
+    autoStart?: boolean;         // Start on registration (default: true)
+    restartOnCrash?: boolean;    // Restart after an unexpected exit (default: true)
+    maxRestartAttempts?: number; // Restart budget (default: 3)
 
     // Channel-specific
-    keepAliveMinutes?: number;  // How long to keep server alive after last agent leaves
+    keepAliveMinutes?: number;  // How long to keep server alive after last agent leaves (default: 5)
 
     // Environment
     environmentVariables?: Record<string, string>;
 }
 ```
+
+## Lifecycle Behavior
+
+- Registration resolves after the MCP handshake and tool discovery, so a resolved call means the tools in `toolsDiscovered` are usable.
+- An unexpected process exit is logged at error level and the server's tools are removed from the registry. Any exit that was not requested counts, including a clean `exit 0`.
+- With `restartOnCrash` (the default), the server restarts after a short delay and its tools are re-discovered, up to `maxRestartAttempts`. A completed startup resets the restart count.
+- Exhausting the restart budget unregisters the server — record and channel scope removed — so it must be re-registered. The eviction is logged at error level.
+- Two consecutive failed `tools/list` health probes restart a `restartOnCrash` server.
+- When an agent joins the channel, each channel server is verified before the agent counts as connected: a stopped server is started, a server that claims to be running is probed and restarted if it does not answer.
+- Re-registering the same server id refreshes the channel's stored record (config, `registeredBy`, `registeredAt`, `keepAliveMinutes`). If the server is still registered at runtime, unregister it first — registration fails with "already registered" while a live record exists.
 
 ## Use Cases
 

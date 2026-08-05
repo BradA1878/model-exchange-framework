@@ -245,13 +245,16 @@ export class McpService {
         let allTools: SocketMcpTool[] = [];
 
         if (hybridRegistry) {
-            // When channelId is provided, use getToolsForChannel() to get only
-            // global tools + channel-scoped tools for that specific channel.
+            // When channelId is provided, use getAgentFacingToolsForChannel() to
+            // get only global tools + channel-scoped tools for that specific
+            // channel, with external tools under their raw (agent-facing) names.
             // This prevents cross-channel tool duplication (e.g., two channels
             // both registering fetch_weather would cause duplicate function errors
-            // from LLM providers like Gemini).
+            // from LLM providers like Gemini), and it is what makes external
+            // tools reachable at all: agent allowlists and LLM function names
+            // speak raw names, never the namespaced registry names.
             const hybridTools = filter?.channelId
-                ? hybridRegistry.getToolsForChannel(filter.channelId)
+                ? hybridRegistry.getAgentFacingToolsForChannel(filter.channelId)
                 : hybridRegistry.getAllToolsSnapshot();
 
             // Convert hybrid tools to socket format, preserving scope metadata
@@ -268,7 +271,11 @@ export class McpService {
                     source: tool.source,
                     isExternal: tool.isExternal,
                     scope: tool.scope,
-                    scopeId: tool.scopeId
+                    scopeId: tool.scopeId,
+                    // The namespaced registry name behind an agent-facing external
+                    // tool. Allowlists may use either name; execution resolves
+                    // through resolveToolForChannel().
+                    canonicalName: tool.canonicalName
                 }
             }));
         } else {
@@ -321,6 +328,12 @@ export class McpService {
             }
         }
 
+        // A tool matches an allowlist entry by its agent-facing name or, for
+        // external tools, by the namespaced registry name — both are accepted
+        // so configs written against either naming keep working.
+        const matchesName = (tool: SocketMcpTool, name: string): boolean =>
+            tool.name === name || tool.metadata?.canonicalName === name;
+
         // 🚨 SECURITY: Apply channel-level tool restrictions FIRST
         // If channel has non-empty allowedTools, restrict to those tools only
         if (filter?.channelId) {
@@ -328,7 +341,7 @@ export class McpService {
             if (channelAllowedTools && channelAllowedTools.length > 0) {
                 // Channel has tool restrictions - filter to only allowed tools
                 const beforeChannelFilter = allTools.length;
-                allTools = allTools.filter(tool => channelAllowedTools.includes(tool.name));
+                allTools = allTools.filter(tool => channelAllowedTools.some(name => matchesName(tool, name)));
                 if (beforeChannelFilter !== allTools.length) {
                     this.logger.debug(`Channel ${filter.channelId} tool filter: ${beforeChannelFilter} -> ${allTools.length} tools`);
                 }
@@ -344,11 +357,11 @@ export class McpService {
                 const originalCount = allTools.length;
 
 
-                allTools = allTools.filter(tool => filter.allowedTools!.includes(tool.name));
+                allTools = allTools.filter(tool => filter.allowedTools!.some(name => matchesName(tool, name)));
 
 
                 const missing = filter.allowedTools.filter(name =>
-                    !allTools.find(t => t.name === name)
+                    !allTools.find(t => matchesName(t, name))
                 );
                 if (missing.length > 0) {
                     // Separate tools that were intentionally filtered vs truly missing

@@ -16,11 +16,11 @@ MXF uses a comprehensive three-tier testing strategy to ensure code quality and 
 
 | Category | Files |
 |----------|-------|
-| Unit Tests | 27 |
-| Property Tests | 9 |
+| Unit Tests | 84 |
+| Property Tests | 10 |
 | Integration Tests (Socket.IO) | 20 |
 | Integration Tests (API) | 6 |
-| **Total Files** | **63** |
+| **Total Files** | **120** |
 
 ### Test Coverage Categories
 
@@ -34,7 +34,7 @@ MXF uses a comprehensive three-tier testing strategy to ensure code quality and 
 | **ORPAR** | All phases + full cycle |
 | **Memory** | Agent, channel, relationship, nested learning |
 | **Meilisearch** | Conversations, actions, patterns |
-| **External MCP** | Registry, discovery, validation |
+| **External MCP** | Registry, discovery, validation, server lifecycle (crash, restart budget, eviction), raw/canonical tool name resolution |
 | **Inference** | Dynamic parameters, model selection |
 | **Code Execution** | Docker sandbox, Bun runtime |
 | **Database** | Adapter factory, MongoDB operations |

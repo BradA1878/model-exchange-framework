@@ -434,7 +434,7 @@ packages/core/src/protocols/mcp/tools/
 
 To add custom tools, see:
 - [External MCP Server Registration](../sdk/external-mcp-servers.md) - Register external MCP servers
-- [Channel-Scoped MCP Servers](../sdk/channel-mcp-servers.md) - Register channel-specific tools
+- [Channel-Scoped MCP Servers](../sdk/external-mcp-servers.md#server-scopes-global-vs-channel) - Register channel-specific tools
 
 ## Related Documentation
 

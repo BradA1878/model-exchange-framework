@@ -145,6 +145,41 @@ await agent.registerChannelMcpServer({
 
 ---
 
+## Tool Names
+
+Agents see and call external tools by the **raw name the origin server reports** — the same names that come back in `toolsDiscovered`. Use those names in `allowedTools` (agent-level and channel-level) and in `executeTool()`:
+
+```typescript
+const result = await agent.registerChannelMcpServer({
+    id: 'chess-game',
+    name: 'Chess Server',
+    command: 'npx',
+    args: ['-y', '@mcp/chess']
+});
+// result.toolsDiscovered -> ['chess_move', 'chess_board']
+
+const player = await sdk.createAgent({
+    agentId: 'player-1',
+    channelId: 'chess-room',
+    // Raw tool names, exactly as reported by the server
+    allowedTools: ['chess_move', 'chess_board', 'messaging_send'],
+    // ... config ...
+});
+
+await player.executeTool('chess_move', { from: 'e2', to: 'e4' });
+```
+
+Internally the registry stores each external tool under a canonical namespaced name, `<serverId>__<toolName>`. For a channel server the registry's server id is `<channelId>:<serverId>`, so `chess_move` on the `chess-game` server in channel `chess-room` is stored as `chess-room:chess-game__chess_move`.
+
+Allowlists accept either form, and execution resolves both, scoped to the agent's channel. Prefer the raw name: LLM providers reject `:` in function names, so the canonical name of a channel server tool cannot be sent to a model.
+
+### Name Collisions
+
+- An external tool whose raw name matches an internal MXF tool is **not** exposed to agents. The internal tool wins and the registry logs an error naming the server. Rename the tool on the external server.
+- If two external servers reachable from the same channel offer the same raw name, the lexicographically first server id wins, the other is skipped, and the registry logs an error. Give the tools distinct names rather than depending on that ordering.
+
+---
+
 ## Complete Examples
 
 ### Example 1: Register npm Package
@@ -245,6 +280,8 @@ console.log('Server stopped and removed');
 // Tools from this server are no longer available
 ```
 
+Unregistration is idempotent. It stops the process if it is running and removes the server record, any channel scope entry, and any pending keepAlive timer. Unregistering a server that is already gone (or half-gone, e.g. the record was removed but the scope entry survived) cleans up whatever remains, logs what it cleaned up, and succeeds instead of failing with "not found".
+
 ### Example 6: Channel-Scoped Game Server
 
 ```typescript
@@ -337,6 +374,8 @@ await tttAgent.registerChannelMcpServer({
 
 ## Tool Discovery After Registration
 
+Registration resolves only after the MCP handshake **and** tool discovery finish. When `registerExternalMcpServer()` / `registerChannelMcpServer()` resolves, the tools named in `toolsDiscovered` are in the registry; if it rejects, none of them are. There is no window to wait out.
+
 After registering an external MCP server, its tools become available to all agents:
 
 ```typescript
@@ -398,11 +437,16 @@ try {
 
 ### Server Lifecycle Errors
 
-The system automatically handles:
-- **Startup failures**: Retries up to `maxRestartAttempts`
-- **Crash recovery**: Auto-restarts if `restartOnCrash: true`
-- **Health check failures**: Monitors server health and attempts recovery
-- **Tool discovery failures**: Logs errors but doesn't crash MXF
+Once a server is registered, the manager handles its process:
+
+- **Unexpected exit**: logged at error level with exit code and signal, and the server's tools are removed from the registry. A clean `exit 0` counts too — any exit that was not requested is treated as a crash.
+- **Restart**: with `restartOnCrash: true` (the default) the server is restarted after a short delay and its tools are re-discovered, up to `maxRestartAttempts`.
+- **Restart budget**: a server that completes a startup gets its restart count reset, so crashes spread over days do not accumulate into a permanent outage.
+- **Budget exhausted**: the server is unregistered — process killed, server record and channel scope removed — and the removal is logged at error level. Re-register the server to get its tools back; nothing is left behind for agents to attach to.
+- **Health checks**: each running server is probed with `tools/list` every `healthCheckInterval` ms. Two consecutive failed probes restart a `restartOnCrash` server. This covers the process that is alive but no longer answering MCP, where the exit handler never fires.
+- **Agent join**: joining a channel verifies each of the channel's servers before the agent is counted as connected. A stopped server is started, a server that claims to be running is probed and restarted if it does not answer, and a scope entry whose server record is gone is removed with an error log.
+- **Registry changes**: tools entering or leaving the registry are logged per server — additions at info, removals at warn.
+- **Tool discovery failures**: reported to the caller through the failed registration; MXF itself keeps running.
 
 ---
 
@@ -428,6 +472,8 @@ restartOnCrash: false
 restartOnCrash: true,
 maxRestartAttempts: 5
 ```
+
+With `restartOnCrash: false` a crashed server stays down and its tools stay out of the registry; for a channel server, the next agent to join the channel starts it again. With `restartOnCrash: true`, exceeding `maxRestartAttempts` unregisters the server, so pick a budget that covers real restarts rather than one that hides a server that cannot stay up.
 
 ### 3. Provide Environment Variables
 
@@ -484,8 +530,11 @@ SDK                           Server
 3. MCP initialize handshake
 4. Tools discovered via tools/list
 5. HybridMcpToolRegistry updated
-6. Tools available to all agents immediately
+6. Registration resolves and the success event carries the discovered tool names
+7. Agents see those tools under their raw names
 ```
+
+Steps 3–5 happen before step 6, on registration and on every restart.
 
 ---
 
@@ -619,15 +668,28 @@ Tools from my-server not showing up
 ```
 
 **Solutions**:
-- Wait for tool discovery (can take 2-5 seconds)
-- Check server started successfully (check MXF logs)
+- Check the registration actually resolved — it resolves only after tool discovery, so a rejection means no tools were registered
+- Look for `External server <id>: N tool(s) added to the registry` in the MXF logs; a matching `removed from the registry` line at warn level means the server stopped serving them
 - Verify server implements MCP protocol correctly
 - List tools with `agent.listTools()` to debug
+
+#### Requested Tools Not Found
+
+```
+Requested tools NOT FOUND in registry: my_tool
+```
+
+The agent's `allowedTools` names a tool the registry cannot resolve for its channel.
+
+**Solutions**:
+- Use the raw tool name from `toolsDiscovered`, not a name you invented for the server (see [Tool Names](#tool-names)); the canonical `<serverId>__<toolName>` form is accepted too
+- Confirm the server is still up — a crashed server's tools are removed from the registry, and the removal is logged at warn/error level
+- Check for a collision log: a raw name that matches an internal MXF tool is never exposed to agents
 
 #### Registration Fails
 
 ```
-Error: Server ID already registered
+Error: Server with ID my-server is already registered
 ```
 
 **Solutions**:
@@ -665,11 +727,26 @@ Why can't agents in other channels see my tools?
 Channel server registered but not starting when agent joins
 ```
 
+Agent join starts a stopped channel server and awaits its handshake and tool discovery, so a server that stays down failed to start rather than being skipped.
+
 **Solutions**:
 - Check `autoStart: true` in config (default)
 - Verify agent successfully joined channel (listen for AGENT_JOINED event)
-- Check server logs for startup errors
+- Look for `Channel server <id> could not be made available for agent <agentId>` in the MXF logs — it carries the startup error
 - Ensure command/args are valid
+
+#### Orphaned Channel Server
+
+```
+Agent <id> tried to join channel server <serverId>, but its server record is gone
+```
+
+The channel still has a scope entry for a server that no longer exists — usually because the server exhausted its restart budget and was unregistered. The orphaned scope entry is removed when the error is logged.
+
+**Solutions**:
+- Re-register the channel server: `await agent.registerChannelMcpServer(config)`
+- Fix whatever made it crash repeatedly before re-registering; the earlier crash and eviction are both in the logs at error level
+- Re-registration also refreshes the channel's stored server record (config, `registeredBy`, `registeredAt`, `keepAliveMinutes`)
 
 ---
 

@@ -303,10 +303,21 @@ export class ChannelService extends EventEmitter {
                     channel.mcpServers = { servers: [], updatedAt: new Date() };
                 }
 
-                // Check if server already registered (avoid duplicates)
+                // Re-registration refreshes the stored record instead of refusing.
+                // The old warn-and-return kept stale config forever and made the
+                // database claim "already registered" for servers whose runtime
+                // record had been lost — re-registration is how clients recover
+                // from exactly that state.
                 const existingServer = channel.mcpServers.servers.find(s => s.id === serverConfig.id);
                 if (existingServer) {
-                    this.logger.warn(`Server ${serverConfig.id} already in database for channel ${channelId}`);
+                    existingServer.config = serverConfig;
+                    existingServer.registeredBy = agentId;
+                    existingServer.registeredAt = new Date();
+                    existingServer.keepAliveMinutes = serverConfig.keepAliveMinutes || 5;
+                    channel.mcpServers.updatedAt = new Date();
+                    channel.markModified('mcpServers');
+                    await channel.save();
+                    this.logger.info(`Server ${serverConfig.id} re-registered for channel ${channelId} — database record refreshed`);
                     return;
                 }
 

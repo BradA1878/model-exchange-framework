@@ -129,6 +129,23 @@ const REQUEST_TIMEOUTS_MS = {
     ping: 5000
 } as const;
 
+/** Delay before restarting a crashed server. */
+const DEFAULT_RESTART_DELAY_MS = 2000;
+
+/**
+ * Consecutive failed health probes after which a running server is declared
+ * dead and restarted. One failure can be a slow reply; two in a row on a
+ * connection that answers in milliseconds when healthy means the connection
+ * is gone.
+ */
+const HEALTH_FAILURES_BEFORE_RESTART = 2;
+
+/** A caller waiting for a starting server to finish its handshake and discovery. */
+interface ReadyWaiter {
+    resolve: () => void;
+    reject: (error: Error) => void;
+}
+
 /** MCP protocol version this client negotiates in the initialize handshake. */
 const MCP_PROTOCOL_VERSION = '2024-11-05';
 
@@ -158,6 +175,18 @@ export class ExternalMcpServerManager extends EventEmitter {
         pending: Map<string, PendingRequest>;
         /** Partial line left over from the last stdout chunk. */
         stdoutBuffer: string;
+        /**
+         * Set by stopServer() before it kills the process, so the exit handler
+         * can tell an intentional stop from a crash. A crash restarts (when
+         * configured); an intentional stop never does.
+         */
+        expectedExit?: boolean;
+        /** SIGKILL escalation timer set by stopServer; cleared when the process exits. */
+        forceKillTimer?: NodeJS.Timeout;
+        /** Callers awaiting handshake + tool discovery of a starting server. */
+        readyWaiters?: ReadyWaiter[];
+        /** Consecutive failed health probes; reset on any successful probe. */
+        consecutiveHealthFailures?: number;
     }> = new Map();
 
     // Scope tracking for channel/agent-scoped servers
@@ -183,16 +212,35 @@ export class ExternalMcpServerManager extends EventEmitter {
      *  Client-side: uses ClientToolEventEmitter (wraps EventBus.client + socketEmit). */
     private toolEventEmitter: IToolEventEmitter | null = null;
 
+    /** Delay before restarting a crashed server. Overridable for tests. */
+    private restartDelayMs: number = DEFAULT_RESTART_DELAY_MS;
+
+    /** Per-method JSON-RPC reply timeouts. Overridable for tests and tuning. */
+    private requestTimeouts: Record<keyof typeof REQUEST_TIMEOUTS_MS, number> = { ...REQUEST_TIMEOUTS_MS };
+
     /**
      * @param options.toolEventEmitter - Injectable event emitter for decoupling from EventBus.server
      * @param options.skipServerEventHandlers - Skip setting up EventBus.server listeners (for client-side usage)
+     * @param options.restartDelayMs - Delay before restarting a crashed server (default 2000)
+     * @param options.requestTimeoutsMs - Per-method JSON-RPC reply timeout overrides
      */
-    constructor(options?: { toolEventEmitter?: IToolEventEmitter; skipServerEventHandlers?: boolean }) {
+    constructor(options?: {
+        toolEventEmitter?: IToolEventEmitter;
+        skipServerEventHandlers?: boolean;
+        restartDelayMs?: number;
+        requestTimeoutsMs?: Partial<Record<keyof typeof REQUEST_TIMEOUTS_MS, number>>;
+    }) {
         super();
         this.autoCorrectionService = AutoCorrectionService.getInstance();
 
         if (options?.toolEventEmitter) {
             this.toolEventEmitter = options.toolEventEmitter;
+        }
+        if (options?.restartDelayMs !== undefined) {
+            this.restartDelayMs = options.restartDelayMs;
+        }
+        if (options?.requestTimeoutsMs) {
+            this.requestTimeouts = { ...this.requestTimeouts, ...options.requestTimeoutsMs };
         }
 
         // Set up event listeners for SDK-initiated server registration
@@ -269,8 +317,7 @@ export class ExternalMcpServerManager extends EventEmitter {
             try {
 
                 const serverId = payload.data.serverId;
-                await this.stopServer(serverId);
-                this.servers.delete(serverId);
+                await this.unregisterServer(serverId);
 
                 // Emit success response
                 EventBus.server.emit(Events.Mcp.EXTERNAL_SERVER_UNREGISTERED, {
@@ -288,7 +335,9 @@ export class ExternalMcpServerManager extends EventEmitter {
 
 
             } catch (error) {
-                logger.error(`Error unregistering external server:`, error);
+                // Interpolate the message: passing the raw error as a second console
+                // argument makes Bun print a source-code excerpt instead of the message.
+                logger.error(`Error unregistering external server: ${error instanceof Error ? error.message : String(error)}`);
 
                 // Emit error response
                 EventBus.server.emit(Events.Mcp.EXTERNAL_SERVER_UNREGISTERED, {
@@ -313,49 +362,35 @@ export class ExternalMcpServerManager extends EventEmitter {
                 
 
                 const channelId = payload.data.channelId || payload.channelId;
-                const serverId = `${channelId}:${payload.data.id}`;
 
-                const serverConfig = {
-                    id: serverId,
-                    name: payload.data.name,
-                    version: payload.data.version || '1.0.0',
-                    command: payload.data.command || '',
-                    args: payload.data.args || [],
-                    transport: (payload.data.transport || 'stdio') as 'stdio' | 'http',
-                    url: payload.data.url,
-                    autoStart: payload.data.autoStart !== false,
-                    restartOnCrash: payload.data.restartOnCrash !== false,
-                    maxRestartAttempts: payload.data.maxRestartAttempts || 3,
-                    healthCheckInterval: payload.data.healthCheckInterval || 30000,
-                    startupTimeout: payload.data.startupTimeout || 10000,
-                    environmentVariables: payload.data.environmentVariables || {}
-                };
-
-                // Track scope BEFORE registration so we can store the registration context
-                // Note: connectedAgents starts empty - only actual game agents are counted, not the admin who registers
-                this.serverScopes.set(serverId, {
-                    scope: 'channel',
-                    scopeId: channelId,
-                    connectedAgents: new Set(),
-                    keepAliveMinutes: payload.data.keepAliveMinutes || 5,
-                    // Store registration context for deferred success emission
-                    registrationContext: {
+                await this.registerChannelServer(
+                    channelId,
+                    {
+                        id: payload.data.id,
+                        name: payload.data.name,
+                        version: payload.data.version || '1.0.0',
+                        command: payload.data.command || '',
+                        args: payload.data.args || [],
+                        autoStart: payload.data.autoStart !== false,
+                        restartOnCrash: payload.data.restartOnCrash !== false,
+                        maxRestartAttempts: payload.data.maxRestartAttempts || 3,
+                        healthCheckInterval: payload.data.healthCheckInterval || 30000,
+                        startupTimeout: payload.data.startupTimeout || 10000,
+                        environmentVariables: payload.data.environmentVariables || {},
+                        keepAliveMinutes: payload.data.keepAliveMinutes
+                    },
+                    // Registration context for deferred success emission after tool discovery
+                    {
                         agentId: payload.agentId,
                         channelId,
                         originalServerId: payload.data.id,
                         serverName: payload.data.name
                     }
-                });
-
-                // Register the server (this starts the process and tool discovery)
-                // Success event will be emitted after tool discovery completes
-                await this.registerServer(serverConfig);
-                
-                logger.info(`[CHANNEL_SERVER_REGISTER] Server ${serverId} registered, waiting for tool discovery before emitting success`);
+                );
 
             } catch (error) {
 
-                logger.error(`Error registering channel server:`, error);
+                logger.error(`Error registering channel server: ${error instanceof Error ? error.message : String(error)}`);
 
                 // Emit error response
                 EventBus.server.emit(McpEvents.CHANNEL_SERVER_REGISTRATION_FAILED,
@@ -380,11 +415,8 @@ export class ExternalMcpServerManager extends EventEmitter {
             try {
 
                 const channelId = payload.data.channelId || payload.channelId;
-                const serverId = `${channelId}:${payload.data.serverId}`;
 
-                await this.stopServer(serverId);
-                this.servers.delete(serverId);
-                this.serverScopes.delete(serverId);
+                await this.unregisterChannelServer(channelId, payload.data.serverId);
 
                 // Emit success response
                 EventBus.server.emit(McpEvents.CHANNEL_SERVER_UNREGISTERED,
@@ -404,7 +436,7 @@ export class ExternalMcpServerManager extends EventEmitter {
 
             } catch (error) {
 
-                logger.error(`Error unregistering channel server:`, error);
+                logger.error(`Error unregistering channel server: ${error instanceof Error ? error.message : String(error)}`);
 
                 // Emit error response
                 EventBus.server.emit(McpEvents.CHANNEL_SERVER_UNREGISTERED,
@@ -470,11 +502,200 @@ export class ExternalMcpServerManager extends EventEmitter {
     }
 
     /**
-     * Start an external server process
+     * Register a channel-scoped server: track its scope, then register and
+     * (per config) start it. Resolves after the MCP handshake and tool
+     * discovery when autoStart is set, so a resolved promise means the tools
+     * are in the registry.
+     *
+     * A re-registration over an existing scope preserves the connected-agent
+     * set and clears any pending keepAlive timer — previously the timer
+     * reference was silently overwritten while the timer kept running, so a
+     * stale keepAlive could stop a freshly re-registered server later.
+     */
+    public async registerChannelServer(
+        channelId: string,
+        config: Omit<ExternalServerConfig, 'id'> & { id: string; keepAliveMinutes?: number },
+        registrationContext?: {
+            agentId: string;
+            channelId: string;
+            originalServerId: string;
+            serverName: string;
+        }
+    ): Promise<void> {
+        validator.assertIsNonEmptyString(channelId, 'channelId must be a non-empty string');
+        const serverId = `${channelId}:${config.id}`;
+        const keepAliveMinutes = config.keepAliveMinutes || 5;
+
+        const existingScope = this.serverScopes.get(serverId);
+        if (existingScope?.keepAliveTimer) {
+            clearTimeout(existingScope.keepAliveTimer);
+        }
+
+        this.serverScopes.set(serverId, {
+            scope: 'channel',
+            scopeId: channelId,
+            // Only actual channel agents are counted, not the admin who registers.
+            // On re-registration, keep whoever is already connected.
+            connectedAgents: existingScope?.connectedAgents ?? new Set(),
+            keepAliveMinutes,
+            registrationContext
+        });
+
+        logger.info(
+            `[CHANNEL_SERVER_REGISTER] Registering channel server ${serverId} ` +
+            `(keepAlive ${keepAliveMinutes}min, autoStart ${config.autoStart}, restartOnCrash ${config.restartOnCrash})`
+        );
+
+        const { keepAliveMinutes: _ignored, ...serverConfig } = config;
+        try {
+            await this.registerServer({ ...serverConfig, id: serverId });
+        } catch (error) {
+            // Registration failed before the server record existed — do not leave
+            // a scope entry behind for agents to "join" (unless one existed before).
+            if (!existingScope && !this.servers.has(serverId)) {
+                this.serverScopes.delete(serverId);
+            }
+            throw error;
+        }
+    }
+
+    /**
+     * Unregister a channel-scoped server: stop the process and remove both the
+     * server record and the scope tracking, including any keepAlive timer.
+     *
+     * Idempotent: unregistering a server that is partially or fully gone cleans
+     * up whatever remains and resolves. Production showed the half-removed
+     * state — record deleted, scope alive — and an unregister that throws
+     * "not found" against it leaves the zombie in place forever.
+     */
+    public async unregisterChannelServer(channelId: string, serverId: string): Promise<void> {
+        validator.assertIsNonEmptyString(channelId, 'channelId must be a non-empty string');
+        validator.assertIsNonEmptyString(serverId, 'serverId must be a non-empty string');
+        await this.removeServer(`${channelId}:${serverId}`, 'channel server unregistration');
+    }
+
+    /**
+     * Unregister a server by its full id (global servers, and the SDK-facing
+     * EXTERNAL_SERVER_UNREGISTER path). Also removes scope tracking — this
+     * path used to delete only the server record, which was exactly the
+     * zombie state observed in production: agents kept "joining" a scope
+     * whose server no longer existed.
+     */
+    public async unregisterServer(serverId: string): Promise<void> {
+        validator.assertIsNonEmptyString(serverId, 'serverId must be a non-empty string');
+        await this.removeServer(serverId, 'server unregistration');
+    }
+
+    /**
+     * Stop a server (if running) and remove every trace of it: server record,
+     * scope entry, keepAlive timer. Never throws for a missing record — it
+     * removes what exists and says what it did.
+     */
+    private async removeServer(serverId: string, reason: string): Promise<void> {
+        const serverData = this.servers.get(serverId);
+        const scopeData = this.serverScopes.get(serverId);
+
+        if (!serverData && !scopeData) {
+            logger.warn(`Nothing to unregister for ${serverId} (${reason}) — no record, no scope`);
+            return;
+        }
+
+        if (scopeData?.keepAliveTimer) {
+            clearTimeout(scopeData.keepAliveTimer);
+            scopeData.keepAliveTimer = undefined;
+        }
+
+        if (serverData) {
+            try {
+                await this.stopServer(serverId, undefined, undefined, reason);
+            } catch (error) {
+                logger.error(
+                    `Error stopping ${serverId} during ${reason}: ` +
+                    `${error instanceof Error ? error.message : String(error)} — removing its record anyway`
+                );
+            }
+        } else {
+            logger.warn(
+                `Unregistering ${serverId} (${reason}): server record was already gone, ` +
+                `removing the orphaned scope entry`
+            );
+        }
+
+        this.servers.delete(serverId);
+        this.serverScopes.delete(serverId);
+        logger.info(`Unregistered server ${serverId} (${reason})`);
+    }
+
+    /**
+     * Remove a server that cannot be kept alive (restart budget exhausted,
+     * unrecoverable spawn failure). Loud by design: this is the path that
+     * prevents zombies, so it reports at error level.
+     */
+    private removeServerAfterFailure(serverId: string, reason: string): void {
+        const serverData = this.servers.get(serverId);
+        if (serverData) {
+            if (serverData.healthCheckTimer) {
+                clearInterval(serverData.healthCheckTimer);
+                serverData.healthCheckTimer = undefined;
+            }
+            if (serverData.startupTimer) {
+                clearTimeout(serverData.startupTimer);
+                serverData.startupTimer = undefined;
+            }
+            this.rejectPendingRequests(serverId, reason);
+            this.settleReadyWaiters(serverId, new Error(reason));
+            if (serverData.process && !serverData.process.killed) {
+                serverData.process.kill('SIGKILL');
+            }
+        }
+
+        const scopeData = this.serverScopes.get(serverId);
+        if (scopeData?.keepAliveTimer) {
+            clearTimeout(scopeData.keepAliveTimer);
+        }
+
+        this.servers.delete(serverId);
+        this.serverScopes.delete(serverId);
+
+        logger.error(
+            `Server ${serverId} unregistered: ${reason}. ` +
+            `Its tools are removed from the registry; re-register the server to restore them.`
+        );
+
+        this.emitServerEvent(McpEvents.EXTERNAL_SERVER_STOPPED, serverId);
+    }
+
+    /**
+     * Settle every caller waiting for a server to become ready.
+     */
+    private settleReadyWaiters(serverId: string, error?: Error): void {
+        const serverData = this.servers.get(serverId);
+        if (!serverData?.readyWaiters?.length) {
+            return;
+        }
+        const waiters = serverData.readyWaiters;
+        serverData.readyWaiters = [];
+        for (const waiter of waiters) {
+            if (error) {
+                waiter.reject(error);
+            } else {
+                waiter.resolve();
+            }
+        }
+    }
+
+    /**
+     * Start an external server process.
+     *
+     * Resolves once the MCP handshake AND tool discovery have completed — a
+     * resolved startServer() means the server's tools are in the registry.
+     * It used to resolve right after spawn, which let callers (agent join,
+     * restart) proceed against a server that had not finished — or would
+     * never finish — its handshake.
      */
     public async startServer(serverId: string, agentId?: AgentId, channelId?: ChannelId): Promise<void> {
         logger.info(`[START_SERVER] Starting server ${serverId}`);
-        
+
         const serverData = this.servers.get(serverId);
         if (!serverData) {
             // Server was unregistered (e.g., during cleanup) - log warning and return gracefully
@@ -489,9 +710,20 @@ export class ExternalMcpServerManager extends EventEmitter {
             return;
         }
 
+        if (status.status === 'starting') {
+            // Another caller is already starting this server — wait for that
+            // startup instead of spawning a second process.
+            logger.info(`[START_SERVER] Server ${serverId} already starting, awaiting readiness`);
+            await new Promise<void>((resolve, reject) => {
+                serverData.readyWaiters = serverData.readyWaiters ?? [];
+                serverData.readyWaiters.push({ resolve, reject });
+            });
+            return;
+        }
 
         // Update status
         status.status = 'starting';
+        serverData.expectedExit = false;
         this.emitServerEvent(McpEvents.EXTERNAL_SERVER_SPAWN, serverId, agentId, channelId);
 
         try {
@@ -543,41 +775,99 @@ export class ExternalMcpServerManager extends EventEmitter {
             // Start health check monitoring
             this.startHealthChecking(serverId);
 
-
         } catch (error) {
             const errorMessage = error instanceof Error ? error.message : String(error);
             logger.error(`❌ Failed to start server ${config.name}: ${errorMessage}`);
             this.handleServerError(serverId, errorMessage, agentId, channelId);
+            throw error instanceof Error ? error : new Error(errorMessage);
         }
+
+        // Wait for the handshake and tool discovery. Settled by
+        // initializeMcpConnection() on success, and by handleServerError()
+        // or the exit handler on failure — those already report the cause,
+        // so a rejection here propagates without being re-handled.
+        await new Promise<void>((resolve, reject) => {
+            serverData.readyWaiters = serverData.readyWaiters ?? [];
+            serverData.readyWaiters.push({ resolve, reject });
+        });
     }
 
     /**
-     * Handle agent joining a channel - start channel servers and track connection
+     * Handle agent joining a channel — verify each channel server is actually
+     * alive before counting the agent as connected.
+     *
+     * This used to be a blind reference-count bump: a missing server record was
+     * silently skipped and a dead process was never probed, so agents "joined"
+     * servers that could not serve a single tool call, and the only downstream
+     * signal was a NOT FOUND warning when their allowlist resolved.
      */
     public async onAgentJoinChannel(agentId: string, channelId: string): Promise<void> {
         logger.info(`Agent ${agentId} joining channel ${channelId} - checking for channel servers`);
 
         // Find all channel-scoped servers for this channel
         for (const [serverId, scopeData] of this.serverScopes.entries()) {
-            if (scopeData.scope === 'channel' && scopeData.scopeId === channelId) {
-                // Add agent to connected agents
-                scopeData.connectedAgents.add(agentId);
+            if (scopeData.scope !== 'channel' || scopeData.scopeId !== channelId) {
+                continue;
+            }
 
-                // Clear any pending keepAlive timer
+            const serverData = this.servers.get(serverId);
+            if (!serverData) {
+                // The production zombie state: a scope entry whose server record is
+                // gone. There is no config left to restart from, so remove the
+                // orphan loudly instead of pretending the agent connected.
+                logger.error(
+                    `Agent ${agentId} tried to join channel server ${serverId}, but its server record is gone ` +
+                    `(scope entry was orphaned). Removing the orphaned scope — the server must be re-registered.`
+                );
                 if (scopeData.keepAliveTimer) {
                     clearTimeout(scopeData.keepAliveTimer);
-                    scopeData.keepAliveTimer = undefined;
                 }
-
-                // Start server if not already running
-                const serverData = this.servers.get(serverId);
-                if (serverData && serverData.status.status !== 'running') {
-                    logger.info(`Starting channel server ${serverId} for agent ${agentId}`);
-                    await this.startServer(serverId);
-                }
-
-                logger.info(`Agent ${agentId} connected to channel server ${serverId} (${scopeData.connectedAgents.size} agents)`);
+                this.serverScopes.delete(serverId);
+                continue;
             }
+
+            try {
+                if (serverData.status.status !== 'running') {
+                    logger.info(`Starting channel server ${serverId} for agent ${agentId} (status: ${serverData.status.status})`);
+                    await this.startServer(serverId);
+                } else {
+                    // Status says running — prove it. A live entry with a dead child
+                    // (or a wedged MCP connection) must trigger recovery at join
+                    // time, not a silent ref-count bump.
+                    const alive = serverData.process && !serverData.process.killed && serverData.process.exitCode === null;
+                    if (!alive) {
+                        logger.warn(`Channel server ${serverId} has no live process at agent join — restarting`);
+                        await this.restartServer(serverId);
+                    } else {
+                        try {
+                            await this.sendRequest(serverId, 'tools/list');
+                        } catch (probeError) {
+                            logger.warn(
+                                `Channel server ${serverId} did not answer the liveness probe at agent join ` +
+                                `(${probeError instanceof Error ? probeError.message : String(probeError)}) — restarting`
+                            );
+                            await this.restartServer(serverId);
+                        }
+                    }
+                }
+            } catch (error) {
+                logger.error(
+                    `Channel server ${serverId} could not be made available for agent ${agentId}: ` +
+                    `${error instanceof Error ? error.message : String(error)}`
+                );
+                continue;
+            }
+
+            // Only a server that is verifiably up counts the agent as connected
+            scopeData.connectedAgents.add(agentId);
+
+            // Clear any pending keepAlive timer
+            if (scopeData.keepAliveTimer) {
+                clearTimeout(scopeData.keepAliveTimer);
+                scopeData.keepAliveTimer = undefined;
+            }
+
+            logger.info(`Agent ${agentId} connected to channel server ${serverId} (${scopeData.connectedAgents.size} agents)`);
         }
     }
 
@@ -602,11 +892,17 @@ export class ExternalMcpServerManager extends EventEmitter {
                     logger.info(`Last agent left channel server ${serverId}, starting ${scopeData.keepAliveMinutes}min keepAlive timer`);
 
                     scopeData.keepAliveTimer = setTimeout(async () => {
+                        scopeData.keepAliveTimer = undefined;
+                        if (!this.servers.has(serverId)) {
+                            logger.warn(`KeepAlive expired for ${serverId}, but its server record is already gone — removing the orphaned scope`);
+                            this.serverScopes.delete(serverId);
+                            return;
+                        }
                         logger.info(`KeepAlive expired for server ${serverId}, stopping server`);
                         try {
-                            await this.stopServer(serverId);
+                            await this.stopServer(serverId, undefined, undefined, 'keepAlive expired');
                         } catch (error) {
-                            logger.error(`Error stopping server ${serverId} after keepAlive:`, error);
+                            logger.error(`Error stopping server ${serverId} after keepAlive: ${error instanceof Error ? error.message : String(error)}`);
                         }
                     }, keepAliveMs);
                 }
@@ -638,9 +934,12 @@ export class ExternalMcpServerManager extends EventEmitter {
     }
 
     /**
-     * Stop an external server process
+     * Stop an external server process.
+     *
+     * An intentional stop: the exit handler will see `expectedExit` and will
+     * neither log the exit as a crash nor restart the process.
      */
-    public async stopServer(serverId: string, agentId?: AgentId, channelId?: ChannelId): Promise<void> {
+    public async stopServer(serverId: string, agentId?: AgentId, channelId?: ChannelId, reason?: string): Promise<void> {
         const serverData = this.servers.get(serverId);
         if (!serverData) {
             throw new Error(`Server ${serverId} not found`);
@@ -652,6 +951,11 @@ export class ExternalMcpServerManager extends EventEmitter {
             return;
         }
 
+        const droppedTools = status.tools.length;
+        logger.info(
+            `Stopping server ${serverId} (${reason ?? 'no reason given'})` +
+            (droppedTools > 0 ? ` — removing its ${droppedTools} tool(s) from the registry` : '')
+        );
 
         // Emit stop event
         this.emitServerEvent(McpEvents.EXTERNAL_SERVER_STOP, serverId, agentId, channelId);
@@ -669,16 +973,21 @@ export class ExternalMcpServerManager extends EventEmitter {
         // Fail anything still in flight before we kill the process, so callers get
         // a clear error rather than waiting out their own timeouts.
         this.rejectPendingRequests(serverId, 'server is stopping');
+        this.settleReadyWaiters(serverId, new Error(`Server ${serverId} was stopped (${reason ?? 'no reason given'})`));
 
         // Terminate process
         if (serverData.process) {
-            serverData.process.kill('SIGTERM');
+            serverData.expectedExit = true;
+            const stoppingProcess = serverData.process;
+            stoppingProcess.kill('SIGTERM');
 
-            // Force kill after timeout
-            setTimeout(() => {
-                if (serverData.process && !serverData.process.killed) {
+            // Force kill after timeout; the exit handler clears this when the
+            // process goes down on its own.
+            serverData.forceKillTimer = setTimeout(() => {
+                serverData.forceKillTimer = undefined;
+                if (!stoppingProcess.killed && stoppingProcess.exitCode === null) {
                     logger.warn(`Force killing server ${config.name}`);
-                    serverData.process.kill('SIGKILL');
+                    stoppingProcess.kill('SIGKILL');
                 }
             }, 5000);
         }
@@ -745,6 +1054,25 @@ export class ExternalMcpServerManager extends EventEmitter {
 
         // Handle process exit
         process.on('exit', (code, signal) => {
+            // This process is down — its SIGKILL escalation timer is moot.
+            if (serverData.forceKillTimer) {
+                clearTimeout(serverData.forceKillTimer);
+                serverData.forceKillTimer = undefined;
+            }
+
+            const currentData = this.servers.get(serverId);
+            if (!currentData || currentData.process !== process) {
+                // Exit of a process instance that has already been replaced (restart)
+                // or whose server record is gone (unregistered). Not this record's
+                // state to change.
+                logger.debug(`Ignoring exit of a superseded process for ${serverId} (code ${code ?? 'null'}, signal ${signal ?? 'none'})`);
+                return;
+            }
+
+            const wasExpected = currentData.expectedExit === true;
+            currentData.expectedExit = false;
+
+            const droppedTools = status.tools.length;
 
             status.status = 'stopped';
             status.pid = undefined;
@@ -752,11 +1080,16 @@ export class ExternalMcpServerManager extends EventEmitter {
             // perform it again before it can be marked running.
             status.initialized = false;
             status.initializing = false;
+            status.tools = [];
 
             // Anything still waiting on this process will never get a reply.
             this.rejectPendingRequests(
                 serverId,
                 `server exited (code ${code ?? 'null'}, signal ${signal ?? 'none'})`
+            );
+            this.settleReadyWaiters(
+                serverId,
+                new Error(`Server ${serverId} exited during startup (code ${code ?? 'null'}, signal ${signal ?? 'none'})`)
             );
 
             // Clear timers
@@ -764,18 +1097,60 @@ export class ExternalMcpServerManager extends EventEmitter {
                 clearInterval(serverData.healthCheckTimer);
                 serverData.healthCheckTimer = undefined;
             }
+            if (serverData.startupTimer) {
+                clearTimeout(serverData.startupTimer);
+                serverData.startupTimer = undefined;
+            }
 
-            // Handle restart if configured
-            if (config.restartOnCrash && code !== 0 && status.restartCount < config.maxRestartAttempts) {
-                status.restartCount++;
-                
-                setTimeout(() => {
-                    // Check if server still exists before attempting restart
-                    // (it may have been unregistered during the delay)
-                    if (this.servers.has(serverId)) {
-                        this.startServer(serverId);
-                    }
-                }, 2000); // Wait 2 seconds before restart
+            if (wasExpected) {
+                logger.info(`Server ${serverId} exited after stop (code ${code ?? 'null'}, signal ${signal ?? 'none'})`);
+                return;
+            }
+
+            // Unexpected death. This used to happen in complete silence — no log
+            // line at any level — which is how production servers vanished from
+            // the tool registry with nothing to grep for.
+            logger.error(
+                `Server ${serverId} exited unexpectedly (code ${code ?? 'null'}, signal ${signal ?? 'none'})` +
+                (droppedTools > 0 ? ` — its ${droppedTools} tool(s) are removed from the registry` : '')
+            );
+
+            // Restart on ANY unexpected exit when configured — including a clean
+            // exit code. `code !== 0` used to gate this, leaving a child that
+            // exited 0 dead forever with no restart and no log.
+            if (config.restartOnCrash) {
+                if (status.restartCount < config.maxRestartAttempts) {
+                    status.restartCount++;
+                    logger.warn(
+                        `Restarting server ${serverId} in ${this.restartDelayMs}ms ` +
+                        `(attempt ${status.restartCount}/${config.maxRestartAttempts})`
+                    );
+                    setTimeout(() => {
+                        // Check if server still exists before attempting restart
+                        // (it may have been unregistered during the delay)
+                        if (this.servers.has(serverId)) {
+                            this.startServer(serverId).catch(error => {
+                                logger.error(
+                                    `Restart of server ${serverId} failed: ` +
+                                    `${error instanceof Error ? error.message : String(error)}`
+                                );
+                            });
+                        }
+                    }, this.restartDelayMs);
+                } else {
+                    // Out of restart budget: remove the server entirely rather than
+                    // leaving a zombie record + scope that agents can "join".
+                    this.removeServerAfterFailure(
+                        serverId,
+                        `crashed and exhausted its ${config.maxRestartAttempts} restart attempt(s)`
+                    );
+                    return;
+                }
+            } else {
+                logger.error(
+                    `Server ${serverId} will not be restarted (restartOnCrash is off). ` +
+                    `An agent joining its channel will start it again on demand.`
+                );
             }
 
             this.emitServerEvent(McpEvents.EXTERNAL_SERVER_STOPPED, serverId);
@@ -903,7 +1278,7 @@ export class ExternalMcpServerManager extends EventEmitter {
 
         const stdin = serverData.process.stdin;
         const requestId = uuidv4();
-        const timeoutMs = REQUEST_TIMEOUTS_MS[method];
+        const timeoutMs = this.requestTimeouts[method];
 
         return new Promise((resolve, reject) => {
             const timer = setTimeout(() => {
@@ -1021,11 +1396,33 @@ export class ExternalMcpServerManager extends EventEmitter {
 
         try {
             await this.sendRequest(serverId, 'tools/list');
+            serverData.consecutiveHealthFailures = 0;
             this.emitServerHealthStatus(serverId, 'healthy');
         } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
-            logger.warn(`Health check failed for ${serverId}: ${message}`);
+            serverData.consecutiveHealthFailures = (serverData.consecutiveHealthFailures ?? 0) + 1;
+            logger.warn(
+                `Health check failed for ${serverId} ` +
+                `(${serverData.consecutiveHealthFailures} consecutive): ${message}`
+            );
             this.emitServerHealthStatus(serverId, 'unhealthy');
+
+            // A process that is alive but no longer answering MCP is as dead as a
+            // crashed one — the exit handler will never fire for it. Recover here.
+            if (
+                serverData.consecutiveHealthFailures >= HEALTH_FAILURES_BEFORE_RESTART &&
+                serverData.config.restartOnCrash &&
+                status.status === 'running'
+            ) {
+                serverData.consecutiveHealthFailures = 0;
+                logger.error(`Server ${serverId} failed ${HEALTH_FAILURES_BEFORE_RESTART} consecutive health checks — restarting it`);
+                this.restartServer(serverId).catch(restartError => {
+                    logger.error(
+                        `Health-check restart of ${serverId} failed: ` +
+                        `${restartError instanceof Error ? restartError.message : String(restartError)}`
+                    );
+                });
+            }
         }
     }
 
@@ -1173,6 +1570,16 @@ export class ExternalMcpServerManager extends EventEmitter {
 
         // Now that the connection is live, find out what the server offers.
         await this.discoverServerTools(serverId);
+
+        // A server that came up healthy earns back its full restart budget.
+        // restartCount used to only ever grow, so a server that crashed a few
+        // times over its lifetime — days apart, each recovered — permanently
+        // exhausted its budget and the next crash left it down for good.
+        serverData.status.restartCount = 0;
+        serverData.consecutiveHealthFailures = 0;
+
+        // Whoever awaited startServer() can proceed: the tools are discovered.
+        this.settleReadyWaiters(serverId);
     }
 
     /**
@@ -1216,6 +1623,9 @@ export class ExternalMcpServerManager extends EventEmitter {
         status.lastError = error;
 
         logger.error(`❌ Server ${serverId} error: ${error}`);
+
+        // Anyone awaiting this server's startup gets the failure now.
+        this.settleReadyWaiters(serverId, new Error(`Server ${serverId} failed: ${error}`));
 
         // Emit error event
         this.emitServerErrorEvent(serverId, error, agentId, channelId);
@@ -1348,7 +1758,15 @@ export class ExternalMcpServerManager extends EventEmitter {
 
         await Promise.allSettled(shutdownPromises);
 
+        // Clear pending keepAlive timers so nothing fires against cleared maps
+        for (const scopeData of this.serverScopes.values()) {
+            if (scopeData.keepAliveTimer) {
+                clearTimeout(scopeData.keepAliveTimer);
+            }
+        }
+
         this.servers.clear();
+        this.serverScopes.clear();
         this.removeAllListeners();
 
     }
@@ -1411,26 +1829,24 @@ export class ExternalMcpServerManager extends EventEmitter {
     }
 
     /**
-     * Restart a server by ID
+     * Restart a server by ID. Resolves after the restarted server has finished
+     * its handshake and tool discovery (see startServer). Throws when the
+     * restart fails, so callers can react instead of proceeding against a dead
+     * server.
      */
     public async restartServer(serverId: string): Promise<boolean> {
-        try {
+        logger.info(`Restarting server ${serverId}`);
 
-            // Stop the server first
-            await this.stopServer(serverId);
+        // Stop the server first
+        await this.stopServer(serverId, undefined, undefined, 'restart');
 
-            // Wait a bit before restarting
-            await new Promise(resolve => setTimeout(resolve, 1000));
+        // Give the old process a moment to release stdio
+        await new Promise(resolve => setTimeout(resolve, this.restartDelayMs));
 
-            // Start the server again
-            await this.startServer(serverId);
+        // Start the server again — resolves after handshake + tool discovery
+        await this.startServer(serverId);
 
-            return true;
-
-        } catch (error) {
-            logger.error(`Failed to restart server ${serverId}: ${error instanceof Error ? error.message : String(error)}`);
-            return false;
-        }
+        return true;
     }
 
     /**

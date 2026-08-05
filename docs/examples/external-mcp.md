@@ -135,6 +135,8 @@ const result = await agent.executeTool('reverse_string', { text: 'Hello MXF!' })
 console.log('Result:', result); // '!FXM olleH'
 ```
 
+Agents see and call external tools by the raw name the server reports — the names returned in `toolsDiscovered`. Use those names in `allowedTools` too. The registry additionally keeps a canonical namespaced name, `<serverId>__<toolName>` (`simple-custom-server__reverse_string` here), which allowlists accept as an alternative. A raw name that collides with an internal MXF tool is not exposed to agents: the internal tool wins and the registry logs an error.
+
 ### 4. Cleanup
 
 ```typescript
@@ -163,13 +165,15 @@ interface ExternalServerConfig {
 
     // Lifecycle
     autoStart?: boolean;          // Start immediately (default: true)
-    restartOnCrash?: boolean;     // Auto-restart on failure (default: true)
-    maxRestartAttempts?: number;  // Max restart attempts (default: 3)
+    restartOnCrash?: boolean;     // Restart after an unexpected exit (default: true)
+    maxRestartAttempts?: number;  // Restart budget (default: 3)
 
     // Environment
     environmentVariables?: Record<string, string>;
 }
 ```
+
+Registration resolves after the MCP handshake and tool discovery, so a resolved call means the discovered tools are in the registry. An unexpected exit — including a clean `exit 0` — is logged at error level and removes the server's tools from the registry; with `restartOnCrash` the server restarts and re-discovers its tools, and a completed startup resets the restart count. Exhausting `maxRestartAttempts` unregisters the server, so re-register it to get its tools back. See [External MCP Server Registration](../sdk/external-mcp-servers.md#server-lifecycle-errors) for the full lifecycle rules.
 
 ## Using npm Packages
 

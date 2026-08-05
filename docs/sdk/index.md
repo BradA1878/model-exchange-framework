@@ -719,6 +719,8 @@ The `allowedTools` property is an optional array of tool names that restricts wh
 2. **Meta-tools Level**: `tools_recommend` and `tools_discover` only suggest allowed tools
 3. **System Prompt Level**: Tool documentation only shows allowed tools
 
+Internal tools are named by their tool name (`messaging_send`, `task_complete`). Tools from external and channel MCP servers are named by the raw name the origin server reports — the names returned in `toolsDiscovered` at registration. The registry's canonical form, `<serverId>__<toolName>`, is accepted in `allowedTools` as well, but the raw name is the one to use: a channel server's registry id contains `:`, which LLM providers reject in function names. See [External MCP Servers](external-mcp-servers.md#tool-names).
+
 ### Configuration Options
 
 #### **Unrestricted Access (Development/Admin)**

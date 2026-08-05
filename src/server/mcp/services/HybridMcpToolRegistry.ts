@@ -93,6 +93,14 @@ export interface HybridMcpTool extends ExtendedMcpToolDefinition {
     availableToChannels?: string[];
     /** For external tools: the name the origin server knows this tool by */
     externalToolName?: string;
+    /**
+     * For agent-facing views of an external tool: the namespaced name the
+     * registry knows it by. Agent-facing entries carry the raw name in `name`
+     * (LLM providers reject ':' — present in every channel server id — in
+     * function names), and this field routes execution back to the canonical
+     * registry entry.
+     */
+    canonicalName?: string;
 }
 
 /**
@@ -106,6 +114,9 @@ export class HybridMcpToolRegistry {
     private internalToolsSubject = new BehaviorSubject<ExtendedMcpToolDefinition[]>([]);
     private externalToolsSubject = new BehaviorSubject<ExternalMcpTool[]>([]);
     private hybridToolsSubject = new BehaviorSubject<HybridMcpTool[]>([]);
+
+    /** EventBus subscriptions, kept so shutdown() can detach this instance. */
+    private eventSubscriptions: Array<{ unsubscribe: () => void }> = [];
 
     constructor(internalRegistry: McpToolRegistry, externalServerManager: ExternalMcpServerManager) {
         this.internalRegistry = internalRegistry;
@@ -135,17 +146,17 @@ export class HybridMcpToolRegistry {
      */
     private setupExternalToolsMonitoring(): void {
         // Monitor external server events for tool updates via EventBus
-        EventBus.server.on(McpEvents.EXTERNAL_SERVER_STARTED, () => {
-            this.refreshExternalTools();
-        });
-
-        EventBus.server.on(McpEvents.EXTERNAL_SERVER_STOPPED, () => {
-            this.refreshExternalTools();
-        });
-
-        EventBus.server.on(McpEvents.EXTERNAL_SERVER_TOOLS_DISCOVERED, () => {
-            this.refreshExternalTools();
-        });
+        this.eventSubscriptions.push(
+            EventBus.server.on(McpEvents.EXTERNAL_SERVER_STARTED, () => {
+                this.refreshExternalTools();
+            }),
+            EventBus.server.on(McpEvents.EXTERNAL_SERVER_STOPPED, () => {
+                this.refreshExternalTools();
+            }),
+            EventBus.server.on(McpEvents.EXTERNAL_SERVER_TOOLS_DISCOVERED, () => {
+                this.refreshExternalTools();
+            })
+        );
 
         // Initial refresh
         this.refreshExternalTools();
@@ -167,16 +178,64 @@ export class HybridMcpToolRegistry {
     }
 
     /**
-     * Refresh external tools from all running servers
+     * Refresh external tools from all running servers.
+     *
+     * Every change is logged per server. Tools leaving the registry for a
+     * server that is still registered is never a healthy state, and this used
+     * to happen in complete silence — the registry simply mirrored whatever
+     * the manager returned, so an evicted server's tools vanished with
+     * nothing to grep for.
      */
     private refreshExternalTools(): void {
+        const previous = this.externalToolsSubject.value;
         try {
             const externalTools = this.externalServerManager.getAllExternalTools();
 
+            this.logExternalToolDiff(previous, externalTools);
             this.externalToolsSubject.next(externalTools);
         } catch (error) {
             logger.error(`❌ Error refreshing external tools: ${error instanceof Error ? error.message : String(error)}`);
+            this.logExternalToolDiff(previous, []);
             this.externalToolsSubject.next([]);
+        }
+    }
+
+    /**
+     * Report which servers gained or lost tools between two registry snapshots.
+     * Removals log at warn — they mean a server stopped serving its tools.
+     */
+    private logExternalToolDiff(previous: ExternalMcpTool[], next: ExternalMcpTool[]): void {
+        const namesByServer = (tools: ExternalMcpTool[]): Map<string, string[]> => {
+            const map = new Map<string, string[]>();
+            for (const tool of tools) {
+                const names = map.get(tool.serverId) ?? [];
+                names.push(tool.name);
+                map.set(tool.serverId, names);
+            }
+            return map;
+        };
+
+        const before = namesByServer(previous);
+        const after = namesByServer(next);
+        const serverIds = new Set([...before.keys(), ...after.keys()]);
+
+        for (const serverId of serverIds) {
+            const beforeNames = before.get(serverId) ?? [];
+            const afterNames = new Set(after.get(serverId) ?? []);
+            const beforeSet = new Set(beforeNames);
+
+            const removed = beforeNames.filter(name => !afterNames.has(name));
+            const added = [...afterNames].filter(name => !beforeSet.has(name));
+
+            if (removed.length > 0) {
+                logger.warn(
+                    `External server ${serverId}: ${removed.length} tool(s) removed from the registry` +
+                    `${afterNames.size === 0 ? ' (all of them)' : ''}: ${removed.join(', ')}`
+                );
+            }
+            if (added.length > 0) {
+                logger.info(`External server ${serverId}: ${added.length} tool(s) added to the registry: ${added.join(', ')}`);
+            }
         }
     }
 
@@ -250,6 +309,7 @@ export class HybridMcpToolRegistry {
 
             hybridTools.push({
                 name: namespacedName,
+                canonicalName: namespacedName,
                 externalToolName: tool.name,
                 description: tool.description,
                 inputSchema: tool.inputSchema,
@@ -391,6 +451,94 @@ export class HybridMcpToolRegistry {
 
             return false;
         });
+    }
+
+    /**
+     * Get the tools of a channel in their agent-facing shape.
+     *
+     * Internal tools are returned as-is. External tools are returned under
+     * their raw name (`externalToolName`): the raw name is the only name
+     * clients ever see — registration returns raw names in toolsDiscovered —
+     * and the namespaced name is not even legal as an LLM function name for
+     * channel servers, whose server id always contains ':'. `canonicalName`
+     * carries the namespaced registry name for execution routing.
+     *
+     * Collisions are resolved deterministically and loudly:
+     *   - an external raw name that matches an internal tool is skipped
+     *     (internal tools always win — the namespacing exists so external
+     *     servers cannot shadow internal tools)
+     *   - two external tools with the same raw name: the lexicographically
+     *     first server id wins, the rest are skipped
+     */
+    public getAgentFacingToolsForChannel(channelId: string): HybridMcpTool[] {
+        const scoped = this.getToolsForChannel(channelId);
+
+        const internalNames = new Set(scoped.filter(t => !t.isExternal).map(t => t.name));
+        const result: HybridMcpTool[] = scoped.filter(t => !t.isExternal);
+
+        // Deterministic winner for duplicate raw names: sort by server id
+        const externals = scoped
+            .filter(t => t.isExternal)
+            .sort((a, b) => a.source.localeCompare(b.source));
+
+        const claimed = new Map<string, HybridMcpTool>();
+        for (const tool of externals) {
+            const rawName = tool.externalToolName ?? tool.name;
+
+            if (internalNames.has(rawName)) {
+                logger.error(
+                    `External tool "${rawName}" from server ${tool.source} collides with an internal tool ` +
+                    `and is not exposed to agents. Rename it on the external server.`
+                );
+                continue;
+            }
+
+            const winner = claimed.get(rawName);
+            if (winner) {
+                logger.error(
+                    `External tool "${rawName}" is offered by both ${winner.source} and ${tool.source} ` +
+                    `in channel ${channelId}; keeping ${winner.source}, skipping ${tool.source}.`
+                );
+                continue;
+            }
+
+            const agentFacing: HybridMcpTool = {
+                ...tool,
+                name: rawName,
+                canonicalName: tool.name
+            };
+            claimed.set(rawName, agentFacing);
+            result.push(agentFacing);
+        }
+
+        return result;
+    }
+
+    /**
+     * Resolve a tool name as an agent in a channel would use it.
+     *
+     * Accepts either the canonical registry name (internal name or namespaced
+     * external name) or an external tool's raw name, scoped to the channel.
+     * Returns the canonical registry entry, so `handler`, `inputSchema`, and
+     * `name` are the ones execution needs. Internal tools always win a raw
+     * name collision; external raw-name ties resolve to the lexicographically
+     * first server id, matching getAgentFacingToolsForChannel().
+     */
+    public resolveToolForChannel(name: string, channelId: string): HybridMcpTool | undefined {
+        const scoped = this.getToolsForChannel(channelId);
+
+        // Exact canonical match first: internal names and namespaced external names
+        const exact = scoped.find(tool => tool.name === name);
+        if (exact) {
+            return exact;
+        }
+
+        // Raw external name, deterministic across servers
+        const candidates = scoped
+            .filter(tool => tool.isExternal && tool.externalToolName === name)
+            .sort((a, b) => a.source.localeCompare(b.source));
+
+        return candidates[0];
     }
 
     /**
@@ -554,7 +702,13 @@ export class HybridMcpToolRegistry {
      * Cleanup and shutdown
      */
     public async shutdown(): Promise<void> {
-        
+
+        // Detach from the EventBus so a shut-down registry stops refreshing
+        for (const subscription of this.eventSubscriptions) {
+            subscription.unsubscribe();
+        }
+        this.eventSubscriptions = [];
+
         this.internalToolsSubject.complete();
         this.externalToolsSubject.complete();
         this.hybridToolsSubject.complete();

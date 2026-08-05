@@ -33,6 +33,7 @@ import { SystemLlmServiceManager } from '../../socket/services/SystemLlmServiceM
 import { TOOL_RECOMMENDATION_SCHEMA } from '@mxf-dev/core/schemas/JsonResponseSchemas';
 import { McpToolRegistry } from '../../api/services/McpToolRegistry';
 import { getHybridMcpToolRegistry } from '../services/HybridMcpRegistryAccess';
+import type { HybridMcpToolRegistry, HybridMcpTool } from '../services/HybridMcpToolRegistry';
 import { META_TOOLS } from '@mxf-dev/core/constants/ToolNames';
 import { TaskService } from '../../socket/services/TaskService';
 import { TaskEvents } from '@mxf-dev/core/events/event-definitions/TaskEvents';
@@ -78,6 +79,22 @@ const getToolCategory = (toolName: string): string => {
     if (toolName.startsWith('channel_') || toolName.startsWith('agent_context') || toolName.startsWith('agent_memory')) return TOOL_CATEGORIES.CONTEXT_MEMORY;
     if (toolName.startsWith('tools_')) return TOOL_CATEGORIES.META;
     return 'unknown';
+};
+
+/**
+ * List tools from the hybrid registry as the calling agent sees them.
+ *
+ * When the execution context names a channel, this returns the agent-facing
+ * view: external tools appear under their raw names — the names agents put in
+ * allowedTools and call tools by — scoped to that channel. The canonical
+ * namespaced snapshot is only used when no channel is known, so meta tools
+ * never recommend or validate a name the calling agent cannot actually use.
+ */
+const agentVisibleToolsFrom = (hybridRegistry: HybridMcpToolRegistry, context: unknown): HybridMcpTool[] => {
+    const channelId = (context as { channelId?: unknown } | undefined)?.channelId;
+    return typeof channelId === 'string' && channelId.length > 0
+        ? hybridRegistry.getAgentFacingToolsForChannel(channelId)
+        : hybridRegistry.getAllToolsSnapshot();
 };
 
 /**
@@ -287,7 +304,7 @@ export const tools_recommend = {
                 // Check if we have a hybrid registry available (will be injected later)
                 const hybridRegistry = getHybridMcpToolRegistry();
                 if (hybridRegistry) {
-                    allToolsFromRegistry = hybridRegistry.getAllToolsSnapshot();
+                    allToolsFromRegistry = agentVisibleToolsFrom(hybridRegistry, context);
                     isHybridRegistry = true;
                 } else {
                     // Fallback to internal registry only
@@ -765,7 +782,7 @@ export const tools_validate = {
             try {
                 const hybridRegistry = getHybridMcpToolRegistry();
                 if (hybridRegistry) {
-                    allTools = hybridRegistry.getAllToolsSnapshot();
+                    allTools = agentVisibleToolsFrom(hybridRegistry, context);
                 } else {
                     allTools = await firstValueFrom(McpToolRegistry.getInstance().listTools());
                 }
@@ -870,7 +887,7 @@ export const tools_discover = {
             try {
                 const hybridRegistry = getHybridMcpToolRegistry();
                 if (hybridRegistry) {
-                    allTools = hybridRegistry.getAllToolsSnapshot();
+                    allTools = agentVisibleToolsFrom(hybridRegistry, context);
                 } else {
                     allTools = await firstValueFrom(McpToolRegistry.getInstance().listTools());
                 }
@@ -1023,7 +1040,7 @@ export const tools_compare = {
             try {
                 const hybridRegistry = getHybridMcpToolRegistry();
                 if (hybridRegistry) {
-                    allTools = hybridRegistry.getAllToolsSnapshot();
+                    allTools = agentVisibleToolsFrom(hybridRegistry, context);
                 } else {
                     allTools = await firstValueFrom(McpToolRegistry.getInstance().listTools());
                 }
@@ -1243,7 +1260,7 @@ export const agent_introspect = {
                 try {
                     const hybridRegistry = getHybridMcpToolRegistry();
                     if (hybridRegistry) {
-                        allTools = hybridRegistry.getAllToolsSnapshot();
+                        allTools = agentVisibleToolsFrom(hybridRegistry, context);
                     } else {
                         allTools = await firstValueFrom(McpToolRegistry.getInstance().listTools());
                     }
@@ -1341,7 +1358,7 @@ export const workflow_plan = {
             try {
                 const hybridRegistry = getHybridMcpToolRegistry();
                 if (hybridRegistry) {
-                    allTools = hybridRegistry.getAllToolsSnapshot();
+                    allTools = agentVisibleToolsFrom(hybridRegistry, context);
                 } else {
                     allTools = await firstValueFrom(McpToolRegistry.getInstance().listTools());
                 }
@@ -1524,7 +1541,7 @@ export const tools_recommend_on_error = {
             try {
                 const hybridRegistry = getHybridMcpToolRegistry();
                 if (hybridRegistry) {
-                    allTools = hybridRegistry.getAllToolsSnapshot();
+                    allTools = agentVisibleToolsFrom(hybridRegistry, context);
                 } else {
                     allTools = await firstValueFrom(McpToolRegistry.getInstance().listTools());
                 }
@@ -1739,7 +1756,7 @@ export const error_diagnose = {
             try {
                 const hybridRegistry = getHybridMcpToolRegistry();
                 if (hybridRegistry) {
-                    allTools = hybridRegistry.getAllToolsSnapshot();
+                    allTools = agentVisibleToolsFrom(hybridRegistry, context);
                 } else {
                     allTools = await firstValueFrom(McpToolRegistry.getInstance().listTools());
                 }
