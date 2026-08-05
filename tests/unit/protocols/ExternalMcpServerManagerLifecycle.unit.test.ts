@@ -183,10 +183,14 @@ describe('ExternalMcpServerManager channel-server lifecycle', () => {
 
             process.kill(firstPid!, 'SIGKILL');
 
+            // The restart marks the server 'running' at handshake completion and
+            // discovers tools right after — poll for the tools, not just the
+            // status, so a slow runner cannot observe the in-between state.
             await waitFor(() => {
                 const status = manager.getServerStatusById(serverId);
-                return status?.status === 'running' && status.pid !== undefined && status.pid !== firstPid;
-            }, 4000, 'restart with a new pid');
+                return status?.status === 'running' && status.pid !== undefined && status.pid !== firstPid
+                    && manager.getAllExternalTools().some(t => t.name === 'alpha_tool');
+            }, 4000, 'restart with a new pid and rediscovered tools');
 
             // Tools must be re-discovered into the registry, not just the process restarted
             expect(manager.getAllExternalTools().map(t => t.name)).toContain('alpha_tool');
@@ -214,8 +218,9 @@ describe('ExternalMcpServerManager channel-server lifecycle', () => {
 
             await waitFor(() => {
                 const status = manager.getServerStatusById(serverId);
-                return status?.status === 'running' && status.pid !== firstPid;
-            }, 4000, 'restart after clean exit');
+                return status?.status === 'running' && status.pid !== firstPid
+                    && manager.getAllExternalTools().some(t => t.name === 'alpha_tool');
+            }, 4000, 'restart after clean exit with rediscovered tools');
 
             expect(manager.getAllExternalTools().map(t => t.name)).toContain('alpha_tool');
         });
