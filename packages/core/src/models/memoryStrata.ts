@@ -30,8 +30,9 @@ import {
   MemoryStratum,
   MemoryImportance,
   MemoryEntry as IMemoryEntry,
+  MemoryContext,
+  MemorySource,
   SurpriseDetection,
-  MemoryPattern
 } from '../types/MemoryStrataTypes.js';
 
 /**
@@ -48,21 +49,8 @@ export interface IMemoryEntryDocument extends Document {
   embedding?: number[];
   importance: MemoryImportance;
   tags: string[];
-  source: {
-    type: string;
-    agentId?: string;
-    channelId?: string;
-    eventId?: string;
-    data?: Record<string, unknown>;
-  };
-  context: {
-    agentId: string;
-    channelId?: string;
-    taskId?: string;
-    orparPhase?: string;
-    timestamp: Date;
-    data?: Record<string, unknown>;
-  };
+  source: MemorySource;
+  context: MemoryContext;
   accessCount: number;
   lastAccessed: Date;
   createdAt: Date;
@@ -200,8 +188,7 @@ const MemoryEntrySchema: Schema = new Schema(
       index: true
     },
     expiresAt: {
-      type: Date,
-      index: true
+      type: Date
     },
     relatedMemories: {
       type: [String],
@@ -237,8 +224,7 @@ const SurpriseHistorySchema: Schema = new Schema(
     },
     timestamp: {
       type: Date,
-      default: Date.now,
-      index: true
+      default: Date.now
     },
     momentarySurprise: {
       type: Number,
@@ -397,7 +383,7 @@ export function memoryEntryToDocument(
     importance: entry.importance,
     tags: entry.tags,
     source: entry.source,
-    context: entry.context as any,
+    context: entry.context,
     accessCount: entry.accessCount,
     lastAccessed: entry.lastAccessed,
     createdAt: entry.createdAt,
@@ -420,8 +406,8 @@ export function documentToMemoryEntry(doc: IMemoryEntryDocument): IMemoryEntry {
     embedding: doc.embedding,
     importance: doc.importance,
     tags: doc.tags,
-    source: doc.source as any,
-    context: doc.context as any,
+    source: doc.source,
+    context: doc.context,
     accessCount: doc.accessCount,
     lastAccessed: doc.lastAccessed,
     createdAt: doc.createdAt,

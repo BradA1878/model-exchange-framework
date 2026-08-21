@@ -210,6 +210,28 @@ export class ControlLoop implements IControlLoop {
                 resolve(true);
             } catch (error) {
                 logger.error(`Error initializing control loop: ${error}`);
+                const message = error instanceof Error ? error.message : String(error);
+
+                // Lifecycle outcomes have one owner: the ControlLoop
+                // implementation. ControlLoopService sequences commands but
+                // never emits a second success or error for the same operation.
+                if (this.config?.channelId) {
+                    const errorData: ControlLoopSpecificData = {
+                        loopId: this.loopId,
+                        status: 'error',
+                        error: message,
+                        context: { operation: 'initialize' }
+                    };
+                    const errorPayload = createControlLoopEventPayload(
+                        ControlLoopEvents.ERROR,
+                        this.agentId,
+                        this.config.channelId,
+                        errorData,
+                        { source: 'controlLoop' }
+                    );
+                    EventBus.server.emit(ControlLoopEvents.ERROR, errorPayload);
+                }
+
                 reject(error);
             }
         });
@@ -414,21 +436,8 @@ export class ControlLoop implements IControlLoop {
             this.lastError = error instanceof Error ? error : new Error(errMsg);
             this.updateState(ControlLoopStateEnum.ERROR); // Ensure state reflects error after reset attempt fails
 
-            const errorData: ControlLoopSpecificData = {
-                loopId: this.loopId,
-                status: 'error',
-                error: errMsg,
-                context: { operation: 'reset', newConfigProvided: !!newConfig }
-            };
-            const errorPayload = createControlLoopEventPayload(
-                ControlLoopEvents.ERROR,
-                this.agentId,
-                this.getChannelId(),
-                errorData,
-                { source: 'controlLoop' }
-            );
-            EventBus.server.emit(ControlLoopEvents.ERROR, errorPayload);
-            
+            // stop() and initialize() own their failure events. Emitting here
+            // as well turns one failed reset into two indistinguishable ERRORs.
             return false; // Indicate reset failure
         }
     }

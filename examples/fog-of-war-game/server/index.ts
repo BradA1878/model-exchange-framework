@@ -145,7 +145,8 @@ async function runDemo() {
   console.log('╚═══════════════════════════════════════════════════════════╝\n');
 
   // Note: This starts only the game server without AI agents
-  // For full demo with AI agents, use: npm run demo:fog-of-war (from root)
+  // For the full game with AI agents and dashboard, run `bun run demo:fog-of-war`
+  // from the repository root.
 
   // Create game server
   const gameServerPort = parseInt(process.env.GAME_SERVER_PORT || '3002');

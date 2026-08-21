@@ -309,6 +309,13 @@ socket.emit('task:complete', {
 
 ### Memory Events
 
+Memory requests are bound to the authenticated connection. An agent-scoped
+request must name the requesting agent, a channel-scoped request must name the
+connection's channel (or one of its `channel:...` keyed sub-resources), and a
+relationship-scoped request must come from one of the two agents in the
+relationship. Anything else is answered with a correlated error and touches no
+storage.
+
 #### memory:get
 Retrieve memory entries.
 

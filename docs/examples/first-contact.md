@@ -43,6 +43,8 @@ bun run demo:first-contact
 ### 1. Multi-Agent Creation
 
 ```typescript
+import { Events, LlmProviderType, MxfSDK } from '@mxf-dev/sdk';
+
 const sdk = new MxfSDK({
     serverUrl: 'http://localhost:3001',
     domainKey: process.env.MXF_DOMAIN_KEY!,
@@ -56,10 +58,15 @@ await sdk.connect();
 const captain = await sdk.createAgent({
     agentId: 'captain-chen',
     name: 'Captain Chen',
-    personality: 'Calm, decisive leader...',
-    provider: 'openrouter',
-    model: 'anthropic/claude-opus-4.5'
+    channelId: 'bridge',
+    keyId: process.env.CAPTAIN_KEY_ID!,
+    secretKey: process.env.CAPTAIN_SECRET_KEY!,
+    llmProvider: LlmProviderType.OPENROUTER,
+    defaultModel: '~anthropic/claude-opus-latest',
+    agentConfigPrompt: 'You are a calm, decisive starship captain.'
 });
+
+await captain.connect();
 ```
 
 ### 2. Task Coordination
@@ -67,10 +74,10 @@ const captain = await sdk.createAgent({
 The demo uses intelligent task assignment where the SystemLLM analyzes agent capabilities and assigns tasks automatically:
 
 ```typescript
-await sdk.createTask({
+const taskId = await captain.mxfService.createTask({
     title: 'Establish First Contact',
     description: 'Coordinate crew to safely communicate with alien vessel',
-    channelId: 'bridge'
+    assignedAgentIds: ['captain-chen']
 });
 ```
 
@@ -79,11 +86,14 @@ await sdk.createTask({
 Agents communicate through the MXF messaging system with event-driven updates:
 
 ```typescript
-captain.on('message', (msg) => {
-    console.log(`[${msg.agentId}]: ${msg.content}`);
+captain.on(Events.Message.AGENT_MESSAGE, (payload) => {
+    const { content } = payload.data;
+    if (content.format === 'text' && typeof content.data === 'string') {
+        console.log(`[${payload.data.senderId}]: ${content.data}`);
+    }
 });
 
-await captain.sendMessage('All stations, report status.');
+await captain.mxfService.sendMessage('All stations, report status.');
 ```
 
 ## Agents in the Demo

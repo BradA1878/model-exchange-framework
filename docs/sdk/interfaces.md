@@ -25,7 +25,7 @@ export interface AgentCreationConfig {
     keyId: string;                           // Authentication key ID
     secretKey: string;                       // Authentication secret
     llmProvider: LlmProviderType;           // e.g., 'openrouter', 'anthropic', 'openai'
-    defaultModel: string;                    // e.g., 'anthropic/claude-3.5-sonnet'
+    defaultModel: string;                    // e.g., '~anthropic/claude-sonnet-latest'
 
     // Optional: Agent identity
     agentConfigPrompt?: string;              // Agent's identity/role prompt
@@ -285,53 +285,42 @@ export interface TaskAssignment {
 ## Memory Interfaces
 
 ```typescript
-// Memory entry configuration
-export interface MemoryConfig {
-    key: string;
-    value: any;
-    type?: MemoryType;
-    scope?: MemoryScope;
-    metadata?: Record<string, any>;
-    ttl?: number;  // Time to live in seconds
-}
+import {
+    MemoryPersistenceLevel,
+    MemoryScope
+} from '@mxf-dev/sdk';
+import type {
+    ChannelMemoryUpdate,
+    IAgentMemory,
+    IChannelMemory,
+    IRelationshipMemory,
+    MemoryData
+} from '@mxf-dev/sdk';
 
-// Memory types
-export type MemoryType = 
-    | 'fact' 
-    | 'experience' 
-    | 'preference' 
-    | 'relationship' 
-    | 'context';
+const scopes = [
+    MemoryScope.AGENT,
+    MemoryScope.CHANNEL,
+    MemoryScope.RELATIONSHIP
+];
 
-// Memory scope
-export type MemoryScope = 'agent' | 'channel' | 'global';
+const update: ChannelMemoryUpdate = {
+    sharedState: { status: 'ready' }
+};
 
-// Memory entry
-export interface MemoryEntry {
-    _id: string;
-    key: string;
-    value: any;
-    type: MemoryType;
-    scope: MemoryScope;
-    agentId?: string;
-    channelId?: string;
-    metadata?: Record<string, any>;
-    expiresAt?: Date;
-    createdAt: Date;
-    updatedAt: Date;
-}
+declare const memory: MemoryData;
+const createdAt: Date = memory.createdAt;
+const persistence: MemoryPersistenceLevel = memory.persistenceLevel;
 
-// Memory query options
-export interface MemoryQueryOptions {
-    scope?: MemoryScope;
-    type?: MemoryType;
-    agentId?: string;
-    channelId?: string;
-    pattern?: string;
-    limit?: number;
-    includeExpired?: boolean;
-}
+// Scope-specific documents expose their owning identities and data fields.
+declare const agentMemory: IAgentMemory;
+declare const channelMemory: IChannelMemory;
+declare const relationshipMemory: IRelationshipMemory;
+void [scopes, update, createdAt, persistence, agentMemory, channelMemory, relationshipMemory];
 ```
+
+These are document contracts, not a generic `MemoryEntry` key/value API. Use
+`agent.mxfService` for canonical channel documents and the authorized memory tools
+for agent/channel key/value operations.
 
 ## Tool Interfaces
 
@@ -595,9 +584,13 @@ export interface MxfSDKConfig {
     // Optional settings
     secure?: boolean;                        // Force HTTPS
     reconnection?: boolean;                  // Enable reconnection (default: true)
-    reconnectionAttempts?: number;          // Max reconnection attempts (default: 5)
+    reconnectionAttempts?: number;          // Max transport retries (default: unlimited)
 }
 ```
+
+`connect()` remains pending through transient retries and resolves only after
+`auth:success`. Set a finite `reconnectionAttempts` when the application requires
+bounded retry; authentication rejection or configured exhaustion rejects.
 
 ### Channel Creation Config
 
@@ -624,10 +617,10 @@ interface ChannelMcpServerConfig {
     name: string;
     command?: string;
     args?: string[];
-    transport?: 'stdio' | 'http';
-    url?: string;
+    transport?: 'stdio';
     autoStart?: boolean;
     environmentVariables?: Record<string, string>;
+    restartOnCrash?: boolean;
     keepAliveMinutes?: number;
 }
 ```
@@ -655,7 +648,7 @@ const agent = await sdk.createAgent({
     keyId: process.env.AGENT_KEY_ID!,
     secretKey: process.env.AGENT_SECRET_KEY!,
     llmProvider: 'openrouter',
-    defaultModel: 'anthropic/claude-3.5-sonnet',
+    defaultModel: '~anthropic/claude-sonnet-latest',
 
     // Optional: LLM settings
     apiKey: process.env.OPENROUTER_API_KEY!,
@@ -679,11 +672,11 @@ const agent = await sdk.createAgent({
 await agent.connect();
 
 // Send message via channel service
-await agent.channelService.sendMessage('Hello, I am ready to help!');
+await agent.mxfService.sendMessage('Hello, I am ready to help!');
 
 // Listen for messages
 agent.on(Events.Message.AGENT_MESSAGE, (payload) => {
-    console.log('Received:', payload.data.content);
+    console.log('Received:', payload.data.content.data);
 });
 ```
 

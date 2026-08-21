@@ -191,19 +191,27 @@ describe('McpSecurityGuard', () => {
     // ---- Subshell command bypass prevention ----
 
     describe('subshell security', () => {
-        it('requires confirmation for commands with $() subshells', () => {
+        // Commands inside $() or backticks are executed by the shell but never
+        // reach the parser, the allowlist, or the block rules. They are denied,
+        // not deferred to a confirmation prompt.
+        it('blocks commands with $() subshells', () => {
             const result = guard.validateCommand('echo $(rm -rf /)', ctx);
-            expect(result.allowed).toBe(true);
-            expect(result.requiresConfirmation).toBe(true);
+            expect(result.allowed).toBe(false);
+            expect(result.requiresConfirmation).toBeUndefined();
             expect(result.riskLevel).toBe('high');
             expect(result.reason).toMatch(/subshell/i);
         });
 
-        it('requires confirmation for commands with backtick subshells', () => {
+        it('blocks commands with backtick subshells', () => {
             const result = guard.validateCommand('echo `whoami`', ctx);
-            expect(result.allowed).toBe(true);
-            expect(result.requiresConfirmation).toBe(true);
+            expect(result.allowed).toBe(false);
             expect(result.riskLevel).toBe('high');
+        });
+
+        it('blocks an allowlisted outer command that smuggles another binary in a subshell', () => {
+            const result = guard.validateCommand("git status $(bash -c 'id > /tmp/pwned')", ctx);
+            expect(result.allowed).toBe(false);
+            expect(result.reason).toMatch(/subshell/i);
         });
 
         it('does not flag $() inside single quotes (literal string)', () => {
@@ -214,7 +222,7 @@ describe('McpSecurityGuard', () => {
 
         it('includes destructive warnings for subshell commands that match patterns', () => {
             const result = guard.validateCommand('echo $(git reset --hard)', ctx);
-            expect(result.requiresConfirmation).toBe(true);
+            expect(result.allowed).toBe(false);
             expect(result.warnings).toBeDefined();
             expect(result.warnings!.length).toBeGreaterThan(0);
         });

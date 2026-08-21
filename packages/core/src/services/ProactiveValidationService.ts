@@ -25,7 +25,7 @@
  * Provides proactive validation to prevent errors before tool execution.
  */
 
-import { Observable, Subject } from 'rxjs';
+import { Observable, Subject, Subscription } from 'rxjs';
 import { Logger } from '../utils/Logger.js';
 import { EventBus } from '../events/EventBus.js';
 import { Events } from '../events/EventNames.js';
@@ -206,8 +206,12 @@ export class ProactiveValidationService {
         warningsGenerated: 0,
         suggestionsProvided: 0
     };
-    
-    private static instance: ProactiveValidationService;
+    private readonly eventSubscriptions: Subscription[] = [];
+    private metricsInterval?: ReturnType<typeof setInterval>;
+    private riskProfileInterval?: ReturnType<typeof setInterval>;
+    private cacheCleanupInterval?: ReturnType<typeof setInterval>;
+
+    private static instance: ProactiveValidationService | undefined;
 
     private constructor() {
         this.logger = new Logger('info', 'ProactiveValidationService', 'server');
@@ -882,30 +886,23 @@ export class ProactiveValidationService {
     }
 
     private async performBackgroundValidation(context: ValidationContext): Promise<void> {
-        // Perform validation without blocking
-        setTimeout(async () => {
-            try {
-                const result = await this.performBlockingValidation(context);
-                
-                // Store results for future reference
-                if (!result.valid) {
-                    this.logger.warn(`Background validation found issues for ${context.toolName}:`, result.errors);
-                    
-                    // Could emit events or store for analytics
-                    this.emitValidationEvent({
-                        timestamp: Date.now(),
-                        agentId: context.agentId,
-                        channelId: context.channelId,
-                        toolName: context.toolName,
-                        eventType: 'VALIDATION_COMPLETE',
-                        validationId: `bg_${context.requestId}`,
-                        details: { backgroundValidation: true, result }
-                    });
-                }
-            } catch (error) {
-                this.logger.warn(`Background validation failed for ${context.toolName}:`, error);
-            }
-        }, 0);
+        const result = await this.performBlockingValidation(context);
+
+        // Store results for future reference
+        if (!result.valid) {
+            this.logger.warn(`Background validation found issues for ${context.toolName}:`, result.errors);
+
+            // Could emit events or store for analytics
+            this.emitValidationEvent({
+                timestamp: Date.now(),
+                agentId: context.agentId,
+                channelId: context.channelId,
+                toolName: context.toolName,
+                eventType: 'VALIDATION_COMPLETE',
+                validationId: `bg_${context.requestId}`,
+                details: { backgroundValidation: true, result }
+            });
+        }
     }
 
     private async previewValidationErrors(
@@ -1193,39 +1190,41 @@ export class ProactiveValidationService {
     }
 
     private setupEventListeners(): void {
-        // Listen to tool execution events for learning
-        EventBus.server.on(Events.Mcp.TOOL_ERROR, (payload) => {
-            // Learn from validation failures
+        // Listen to tool execution events for learning. Each handler returns its
+        // promise so the EventBus shutdown drain waits for in-flight learning.
+        this.eventSubscriptions.push(EventBus.server.on(Events.Mcp.TOOL_ERROR, (payload): Promise<void> =>
             this.learnFromValidationFailure(payload).catch(error => {
                 this.logger.warn('Failed to learn from validation failure:', error);
-            });
-        });
+            })
+        ));
 
-        EventBus.server.on(Events.Mcp.TOOL_RESULT, (payload) => {
-            // Learn from successful validations
+        this.eventSubscriptions.push(EventBus.server.on(Events.Mcp.TOOL_RESULT, (payload): Promise<void> =>
             this.learnFromValidationSuccess(payload).catch(error => {
                 this.logger.warn('Failed to learn from validation success:', error);
-            });
-        });
+            })
+        ));
     }
 
     private startPeriodicTasks(): void {
         // Performance metrics reporting
-        setInterval(() => {
+        this.metricsInterval = setInterval(() => {
             this.reportPerformanceMetrics();
         }, 60 * 1000); // Every minute
+        this.metricsInterval.unref?.();
 
         // Risk profile updates
-        setInterval(() => {
+        this.riskProfileInterval = setInterval(() => {
             this.updateRiskProfiles().catch(error => {
                 this.logger.warn('Failed to update risk profiles:', error);
             });
         }, 10 * 60 * 1000); // Every 10 minutes
+        this.riskProfileInterval.unref?.();
 
         // Cache cleanup
-        setInterval(() => {
+        this.cacheCleanupInterval = setInterval(() => {
             this.cleanupExpiredCaches();
         }, 5 * 60 * 1000); // Every 5 minutes
+        this.cacheCleanupInterval.unref?.();
     }
 
     private async learnFromValidationFailure(payload: any): Promise<void> {
@@ -1381,5 +1380,32 @@ export class ProactiveValidationService {
     public clearCaches(): void {
         this.toolRiskProfiles.clear();
         this.toolRiskCacheExpiry.clear();
+    }
+
+    /** Release every timer and subscription owned by this singleton. */
+    public shutdown(): void {
+        if (this.metricsInterval) {
+            clearInterval(this.metricsInterval);
+            this.metricsInterval = undefined;
+        }
+        if (this.riskProfileInterval) {
+            clearInterval(this.riskProfileInterval);
+            this.riskProfileInterval = undefined;
+        }
+        if (this.cacheCleanupInterval) {
+            clearInterval(this.cacheCleanupInterval);
+            this.cacheCleanupInterval = undefined;
+        }
+        for (const subscription of this.eventSubscriptions) {
+            subscription.unsubscribe();
+        }
+        this.eventSubscriptions.length = 0;
+        this.activeValidations.clear();
+        this.clearCaches();
+        this.validationEvents$.complete();
+
+        if (ProactiveValidationService.instance === this) {
+            ProactiveValidationService.instance = undefined;
+        }
     }
 }

@@ -29,6 +29,8 @@ import express from 'express';
 import channelKeyService from '../../socket/services/ChannelKeyService';
 import { createStrictValidator } from '@mxf-dev/core/utils/validation';
 import { Logger } from '@mxf-dev/core/utils/Logger';
+import { requireResourceOwner, requireUserPrincipal } from '../middleware/resourceOwnership';
+import { AgentIdentityOwnershipError } from '../../security/AgentIdentityOwnershipService';
 
 // Create validator and logger
 const validator = createStrictValidator('ChannelKeyRoutes');
@@ -40,9 +42,9 @@ const router = express.Router();
  * Create a new channel key
  * POST /api/channel-keys
  */
-router.post('/', async (req, res) => {
+router.post('/', requireResourceOwner('channel', req => req.body.channelId), async (req, res) => {
     try {
-        const { channelId, agentId, name, expiresAt } = req.body;
+        const { channelId, agentId, name, expiresAt, allowedTools } = req.body;
 
         // Validate required fields. agentId is the identity this key authenticates
         // as — socket auth reads it off the key rather than trusting the client.
@@ -76,7 +78,8 @@ router.post('/', async (req, res) => {
             createdBy,
             agentId,
             name,
-            expirationDate
+            expirationDate,
+            allowedTools
         );
 
 
@@ -89,6 +92,7 @@ router.post('/', async (req, res) => {
                 secretKey: createdKey.secretKey, // Only returned on creation
                 channelId: createdKey.channelId,
                 agentId: createdKey.agentId,
+                allowedTools: createdKey.allowedTools,
                 name: createdKey.name,
                 isActive: createdKey.isActive,
                 expiresAt: createdKey.expiresAt,
@@ -98,6 +102,13 @@ router.post('/', async (req, res) => {
 
     } catch (error) {
         logger.error(`Error creating channel key: ${error}`);
+        if (error instanceof AgentIdentityOwnershipError) {
+            res.status(error.statusCode).json({
+                success: false,
+                error: error.message
+            });
+            return;
+        }
         res.status(500).json({
             success: false,
             error: 'Failed to create channel key'
@@ -109,7 +120,7 @@ router.post('/', async (req, res) => {
  * List channel keys for a specific channel
  * GET /api/channel-keys/:channelId
  */
-router.get('/:channelId', async (req, res) => {
+router.get('/:channelId', requireResourceOwner('channel', req => req.params.channelId), async (req, res) => {
     try {
         const { channelId } = req.params;
         const { activeOnly = 'true' } = req.query;
@@ -127,6 +138,7 @@ router.get('/:channelId', async (req, res) => {
             data: keys.map((key: any): object => ({
                 keyId: key.keyId,
                 channelId: key.channelId,
+                allowedTools: key.allowedTools,
                 name: key.name,
                 isActive: key.isActive,
                 expiresAt: key.expiresAt,
@@ -149,7 +161,7 @@ router.get('/:channelId', async (req, res) => {
  * Deactivate a channel key
  * DELETE /api/channel-keys/:keyId
  */
-router.delete('/:keyId', async (req, res) => {
+router.delete('/:keyId', requireResourceOwner('key', req => req.params.keyId), async (req, res) => {
     try {
         const { keyId } = req.params;
         
@@ -182,7 +194,7 @@ router.delete('/:keyId', async (req, res) => {
  * Validate a channel key (for testing purposes)
  * POST /api/channel-keys/validate
  */
-router.post('/validate', async (req, res) => {
+router.post('/validate', requireResourceOwner('key', req => req.body.keyId), async (req, res) => {
     try {
         const { keyId, secretKey } = req.body;
         
@@ -218,7 +230,7 @@ router.post('/validate', async (req, res) => {
  * Get key usage analytics for a channel
  * GET /api/channel-keys/:channelId/analytics
  */
-router.get('/:channelId/analytics', async (req, res) => {
+router.get('/:channelId/analytics', requireResourceOwner('channel', req => req.params.channelId), async (req, res) => {
     try {
         const { channelId } = req.params;
         
@@ -267,7 +279,7 @@ router.get('/:channelId/analytics', async (req, res) => {
  * Bulk rotate all keys for a channel
  * POST /api/channel-keys/:channelId/rotate-all
  */
-router.post('/:channelId/rotate-all', async (req, res) => {
+router.post('/:channelId/rotate-all', requireResourceOwner('channel', req => req.params.channelId), async (req, res) => {
     try {
         const { channelId } = req.params;
         const { expiresAt } = req.body;
@@ -327,17 +339,24 @@ router.post('/:channelId/rotate-all', async (req, res) => {
                     continue;
                 }
 
-                // Deactivate old key
-                await channelKeyService.deactivateChannelKey(oldKey.keyId);
-
-                // Create new key
+                // Create the replacement before revoking the current key so a
+                // generation failure cannot lock every agent out of a channel.
                 const newKey = await channelKeyService.createChannelKey(
                     channelId,
                     createdBy,
                     boundAgentId,
                     `Rotated: ${oldKey.name || 'Unnamed key'}`,
-                    expirationDate
+                    expirationDate,
+                    existing.allowedTools
                 );
+
+                const oldKeyDeactivated = await channelKeyService.deactivateChannelKey(oldKey.keyId);
+                if (!oldKeyDeactivated) {
+                    // Preserve the original credential set if the switchover
+                    // cannot be completed cleanly.
+                    await channelKeyService.deactivateChannelKey(newKey.keyId);
+                    throw new Error(`Failed to deactivate old key ${oldKey.keyId}`);
+                }
 
                 rotationResults.push({
                     oldKeyId: oldKey.keyId,
@@ -381,7 +400,7 @@ router.post('/:channelId/rotate-all', async (req, res) => {
  * Bulk deactivate all keys for a channel
  * DELETE /api/channel-keys/:channelId/all
  */
-router.delete('/:channelId/all', async (req, res) => {
+router.delete('/:channelId/all', requireResourceOwner('channel', req => req.params.channelId), async (req, res) => {
     try {
         const { channelId } = req.params;
         
@@ -446,9 +465,9 @@ router.delete('/:channelId/all', async (req, res) => {
  * Generate channel key for dialog preview (before channel creation)
  * POST /api/channel-keys/generate
  */
-router.post('/generate', async (req, res) => {
+router.post('/generate', requireUserPrincipal, async (req, res) => {
     try {
-        const { channelName, agentId } = req.body;
+        const { channelName, agentId, allowedTools } = req.body;
 
         // Validate required fields
         validator.assertIsNonEmptyString(channelName, 'channelName is required');
@@ -472,7 +491,8 @@ router.post('/generate', async (req, res) => {
             userId.toString(),
             agentId,
             `Key for channel: ${channelName}`,
-            undefined // No expiration for channel keys
+            undefined, // No expiration for channel keys
+            allowedTools
         );
 
 
@@ -490,6 +510,13 @@ router.post('/generate', async (req, res) => {
 
     } catch (error) {
         logger.error(`Error generating channel key: ${error}`);
+        if (error instanceof AgentIdentityOwnershipError) {
+            res.status(error.statusCode).json({
+                success: false,
+                error: error.message
+            });
+            return;
+        }
         res.status(500).json({
             success: false,
             error: 'Failed to generate channel key'
@@ -501,7 +528,7 @@ router.post('/generate', async (req, res) => {
  * Cleanup unused channel key (when dialog is cancelled)
  * DELETE /api/channel-keys/cleanup/:keyId
  */
-router.delete('/cleanup/:keyId', async (req, res) => {
+router.delete('/cleanup/:keyId', requireResourceOwner('key', req => req.params.keyId), async (req, res) => {
     try {
         const { keyId } = req.params;
         
@@ -535,7 +562,11 @@ router.delete('/cleanup/:keyId', async (req, res) => {
  * Update channel key association (when channel is actually created)
  * PUT /api/channel-keys/:keyId/associate
  */
-router.put('/:keyId/associate', async (req, res) => {
+router.put(
+    '/:keyId/associate',
+    requireResourceOwner('key', req => req.params.keyId),
+    requireResourceOwner('channel', req => req.body.channelId),
+    async (req, res) => {
     try {
         const { keyId } = req.params;
         const { channelId } = req.body;
@@ -569,6 +600,7 @@ router.put('/:keyId/associate', async (req, res) => {
             error: 'Failed to associate channel key'
         });
     }
-});
+    }
+);
 
 export default router;

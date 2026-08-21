@@ -25,7 +25,6 @@
  * to the MXF.
  */
 
-import { McpEvents } from '@mxf-dev/core/events/event-definitions/McpEvents';
 import { v4 as uuidv4 } from 'uuid';
 import { Subscription } from 'rxjs';
 import { ConnectionStatus } from '@mxf-dev/core/types/types';
@@ -40,12 +39,10 @@ import { AgentContext, ApiService } from './services/MxfApiService.js';
 import { createStrictValidator } from '@mxf-dev/core/utils/validation';
 import {
     AgentEventPayload,
-    BaseEventPayload,
-    BaseMemoryOperationData,
     createAgentEventPayload,
     createBaseEventPayload,
 } from '@mxf-dev/core/schemas/EventPayloadSchema';
-import { SimpleTaskResponse, TaskRequestHandler } from '@mxf-dev/core/interfaces/TaskInterfaces';
+import { SimpleTaskResponse, TaskRequestHandler, TaskEndedHandler } from '@mxf-dev/core/interfaces/TaskInterfaces';
 import { AgentConfig, InternalAgentConfig } from '@mxf-dev/core/interfaces/AgentInterfaces';
 import { MxfService } from './services/MxfService.js';
 import { McpToolHandlers } from './handlers/McpToolHandlers.js';
@@ -59,11 +56,7 @@ import { UserInputHandlers, UserInputHandler } from './handlers/UserInputHandler
 import { MxfToolService, IToolService, ClientTool } from './services/MxfToolService.js';
 import { ClientToolExecutor } from './services/ClientToolExecutor.js';
 import { ClientExternalMcpManager } from './services/ClientExternalMcpManager.js';
-import { awaitEventResponse, EventRequestError } from './services/internal/EventRequest.js';
 import { SDK_VERSION } from './version.js';
-
-/** How long to wait for an MCP server registration/unregistration to come back. */
-const MCP_REGISTRATION_TIMEOUT_MS = 30_000;
 
 /** How long to wait for the server to acknowledge agent registration. */
 const AGENT_REGISTRATION_TIMEOUT_MS = 10_000;
@@ -77,6 +70,23 @@ const AGENT_REGISTRATION_TIMEOUT_MS = 10_000;
 export interface McpServerRegistrationResult {
     /** Names of the tools the newly registered server exposes. */
     toolsDiscovered: string[];
+}
+
+/**
+ * Agent channel keys authorize tool use, not host process management.
+ * Use the user-authenticated MxfSDK administrative methods for MCP servers.
+ */
+export class AgentMcpProcessManagementError extends Error {
+    public readonly code = 'MXF_ADMIN_MCP_REQUIRED';
+
+    constructor(operation: string) {
+        super(
+            `${operation} is an administrative MCP process-management operation and cannot be ` +
+            'performed with an agent/channel key. Use the corresponding MxfSDK method on an ' +
+            'authenticated administrator connection.'
+        );
+        this.name = 'AgentMcpProcessManagementError';
+    }
 }
 
 /**
@@ -291,9 +301,7 @@ export class MxfClient {
         // Initialize memory handlers
         this.memoryHandlers = new MemoryHandlers(
             this.channelId,
-            this.agentId, 
-            this.mxfService, 
-            this.config.requestTimeoutMs, 
+            this.agentId
         );
         
         // Initialize MCP handlers
@@ -563,6 +571,17 @@ export class MxfClient {
     }
 
     /**
+     * Set the handler called once when the task this agent was assigned ends
+     * (completed, failed, or cancelled by the server).
+     *
+     * @param handler Receives the task id and its outcome
+     * @protected
+     */
+    protected setTaskEndedHandler(handler: TaskEndedHandler): void {
+        this.taskHandlers?.setTaskEndedHandler(handler);
+    }
+
+    /**
      * Register a handler for user input requests.
      * When an agent calls the user_input tool, this handler is invoked
      * to render the prompt and collect the user's response.
@@ -770,11 +789,20 @@ export class MxfClient {
             })
         );
 
-        // Disconnected
+        // Disconnected. MxfService emits Agent.DISCONNECT locally when this agent's
+        // socket drops; Agent.DISCONNECTED is the server's announcement to the other
+        // sockets and never reaches the agent that disconnected, so listening for it
+        // here left the status stale after a transport drop and a later connect()
+        // saw a client that still looked connected.
         this.lifecycleSubscriptions.push(
-            EventBus.client.on(Events.Agent.DISCONNECTED, (data: any) => {
+            EventBus.client.on(Events.Agent.DISCONNECT, (data: unknown) => {
                 if (isForThisAgent(data)) {
                     this.status = ConnectionStatus.DISCONNECTED;
+                    // The full connection (registration, channel subscription, tool
+                    // load) is gone with the socket; a later connect() rebuilds it
+                    // instead of returning early on a stale flag.
+                    this.isFullyConnected = false;
+                    this.connectionPromise = null;
                     this.emitStatusChange(this.status);
                 }
             })
@@ -802,7 +830,9 @@ export class MxfClient {
 
         this.controlLoopHandlers?.initialize();
         this.taskHandlers?.initialize();
-        // userInputHandlers initialized lazily in onUserInput()
+        // The handler is created lazily by onUserInput(), but an existing handler
+        // must be re-subscribed after disconnect() cleaned its EventBus listener.
+        this.userInputHandlers?.initialize();
     }
 
     /**
@@ -834,6 +864,16 @@ export class MxfClient {
             this.logger.error(`Error checking socket connection: ${error instanceof Error ? error.message : String(error)}`);
             return false;
         }
+    }
+
+    private getMemoryHandlersForOperation(operation: string): MemoryHandlers {
+        if (!this.memoryHandlers) {
+            throw new Error(`Cannot ${operation}: memory handlers are not initialized`);
+        }
+        if (!this.getSocketConnected()) {
+            throw new Error(`Cannot ${operation}: agent socket is not connected`);
+        }
+        return this.memoryHandlers;
     }
 
     /**
@@ -921,87 +961,71 @@ export class MxfClient {
 
     /**
      * Get or create agent memory from the server using socket connection
-     * @returns Promise resolving to agent memory or null if socket is not available
+     * @returns Promise resolving to authoritative agent memory
      * @protected
      */
-    protected async getMemory(): Promise<IAgentMemory | null> {
+    protected async getMemory(): Promise<IAgentMemory> {
         await this.ensureConnected();
-        this.validator.assert(!!this.memoryHandlers, 'Memory Handlers not initialized.');
-        if (!this.memoryHandlers) return null; // Type guard
-
-        if (!this.getSocketConnected()) {
-            this.logger.warn('Socket not connected. Cannot get agent memory.');
-            return null;
-        }
-        return this.memoryHandlers.getAgentMemory();
+        return this.getMemoryHandlersForOperation('get agent memory').getAgentMemory();
     }
 
     /**
      * Update agent memory on the server using socket connection
      * @param update Memory update data
-     * @returns Promise resolving to updated agent memory or null if socket is not available
+     * @returns Promise resolving to authoritative updated agent memory
      * @protected
      */
-    protected async updateMemory(update: Partial<IAgentMemory>): Promise<IAgentMemory | null> {
+    protected async updateMemory(update: Partial<IAgentMemory>): Promise<IAgentMemory> {
         await this.ensureConnected();
-        this.validator.assert(!!this.memoryHandlers, 'Memory Handlers not initialized.');
-        if (!this.memoryHandlers) return null; // Type guard
-
-        if (!this.getSocketConnected()) {
-            this.logger.warn('Socket not connected. Cannot update agent memory.');
-            return null;
-        }
-        return this.memoryHandlers.updateAgentMemory(update);
+        return this.getMemoryHandlersForOperation('update agent memory')
+            .updateAgentMemory(update);
     }
 
     /**
      * Add a note to agent memory
      * @param key Note key
      * @param value Note value
-     * @returns Promise resolving to updated agent memory or null if API service is not available
+     * @returns Promise resolving to authoritative updated agent memory
      * @protected
      */
-    protected async addNote(key: string, value: any): Promise<IAgentMemory | null> {
+    protected async addNote(key: string, value: unknown): Promise<IAgentMemory> {
         await this.ensureConnected();
-        this.validator.assert(!!this.memoryHandlers, 'MemoryHandlers should be initialized');
-        if (!this.memoryHandlers) return null; // Type guard
-
-        return await this.memoryHandlers.addNote(key, value);
+        return this.getMemoryHandlersForOperation('add an agent-memory note')
+            .addNote(key, value);
     }
 
     /**
      * Add conversation entry to agent memory
      * @param entry Conversation entry to add
-     * @returns Promise resolving to updated agent memory or null if API service is not available
+     * @returns Promise resolving to authoritative updated agent memory
      * @protected
      */
-    protected async addToConversationHistory(entry: any): Promise<IAgentMemory | null> {
+    protected async addToConversationHistory(entry: unknown): Promise<IAgentMemory> {
         await this.ensureConnected();
-        this.validator.assert(!!this.memoryHandlers, 'MemoryHandlers should be initialized');
-        if (!this.memoryHandlers) return null; // Type guard
-
-        return await this.memoryHandlers.addToConversationHistory(entry);
+        return this.getMemoryHandlersForOperation('append agent conversation history')
+            .addToConversationHistory(entry);
     }
 
     /**
      * Get or create relationship memory between this agent and another agent
      * @param otherAgentId The other agent ID for the relationship
      * @param channelId Optional channel ID to scope the relationship to
-     * @returns Promise resolving to relationship memory or null if API service is not available
+     * @returns Promise resolving to authoritative relationship memory
      * @protected
      */
-    protected async getRelationshipMemory(otherAgentId: string, channelId?: string): Promise<IRelationshipMemory | null> {
+    protected async getRelationshipMemory(
+        otherAgentId: string,
+        channelId?: string
+    ): Promise<IRelationshipMemory> {
         await this.ensureConnected();
-        this.validator.assert(!!this.memoryHandlers, 'Memory Handlers not initialized.');
-        if (!this.memoryHandlers) return null;
-
-        if (!this.getSocketConnected()) {
-            this.logger.warn('Socket not connected. Cannot get relationship memory.');
-            return null;
+        if (channelId !== undefined) {
+            this.validator.assertIsNonEmptyString(
+                channelId,
+                'Channel ID cannot be empty for relationship memory.'
+            );
         }
-        // Ensure channelId is a string if provided, otherwise undefined for the handler
-        const effectiveChannelId = typeof channelId === 'string' && channelId.trim() !== '' ? channelId : undefined;
-        return this.memoryHandlers.getRelationshipMemory(otherAgentId, effectiveChannelId);
+        return this.getMemoryHandlersForOperation('get relationship memory')
+            .getRelationshipMemory(otherAgentId, channelId);
     }
 
     /**
@@ -1009,107 +1033,121 @@ export class MxfClient {
      * @param otherAgentId The other agent ID for the relationship
      * @param update Memory fields to update
      * @param channelId Optional channel ID to scope the relationship to
-     * @returns Promise resolving to updated relationship memory or null if API service is not available
+     * @returns Promise resolving to authoritative updated relationship memory
      * @protected
      */
     protected async updateRelationshipMemory(
         otherAgentId: string, 
         update: Partial<IRelationshipMemory>, 
         channelId?: string
-    ): Promise<IRelationshipMemory | null> {
+    ): Promise<IRelationshipMemory> {
         await this.ensureConnected();
-        this.validator.assert(!!this.memoryHandlers, 'Memory Handlers not initialized.');
-        if (!this.memoryHandlers) return null;
-
-        if (!this.getSocketConnected()) {
-            this.logger.warn('Socket not connected. Cannot update relationship memory.');
-            return null;
+        if (channelId !== undefined) {
+            this.validator.assertIsNonEmptyString(
+                channelId,
+                'Channel ID cannot be empty for relationship memory.'
+            );
         }
-        const effectiveChannelId = typeof channelId === 'string' && channelId.trim() !== '' ? channelId : undefined;
-        return this.memoryHandlers.updateRelationshipMemory(otherAgentId, update, effectiveChannelId);
+        return this.getMemoryHandlersForOperation('update relationship memory')
+            .updateRelationshipMemory(otherAgentId, update, channelId);
     }
 
     /**
      * Get or create channel memory for a specific channel
      * @param channelId The channel ID to get memory for
-     * @returns Promise resolving to channel memory or null if API service is not available
+     * @returns Promise resolving to authoritative channel memory
      * @protected
      */
-    protected async getChannelMemory(channelId: string): Promise<IChannelMemory | null> {
+    protected async getChannelMemory(channelId: string): Promise<IChannelMemory> {
         await this.ensureConnected();
         this.validator.assertIsNonEmptyString(channelId, 'Channel ID cannot be empty for getChannelMemory.');
-        this.validator.assert(!!this.memoryHandlers, 'Memory Handlers not initialized.');
-        if (!this.memoryHandlers) return null;
-
-        if (!this.getSocketConnected()) {
-            this.logger.warn('Socket not connected. Cannot get channel memory.');
-            return null;
-        }
-        return this.memoryHandlers.getChannelMemory(channelId);
+        return this.getMemoryHandlersForOperation('get channel memory')
+            .getChannelMemory(channelId);
     }
 
     /**
      * Update channel memory with new data
      * @param channelId The channel ID to update memory for
      * @param update Memory fields to update
-     * @returns Promise resolving to updated channel memory or null if API service is not available
+     * @returns Promise resolving to authoritative updated channel memory
      * @protected
      */
-    protected async updateChannelMemory(channelId: string, update: Partial<IChannelMemory>): Promise<IChannelMemory | null> {
+    protected async updateChannelMemory(
+        channelId: string,
+        update: Partial<IChannelMemory>
+    ): Promise<IChannelMemory> {
         await this.ensureConnected();
         this.validator.assertIsNonEmptyString(channelId, 'Channel ID cannot be empty for updateChannelMemory.');
-        this.validator.assert(!!this.memoryHandlers, 'Memory Handlers not initialized.');
-        if (!this.memoryHandlers) return null;
-
-        if (!this.getSocketConnected()) {
-            this.logger.warn('Socket not connected. Cannot update channel memory.');
-            return null;
-        }
-        return this.memoryHandlers.updateChannelMemory(channelId, update);
+        return this.getMemoryHandlersForOperation('update channel memory')
+            .updateChannelMemory(channelId, update);
     }
 
     /**
-     * Delete a memory entry based on its scope and ID.
+     * Delete a memory entry based on its scope.
+     *
+     * Agent memory is always exact-self: an agent credential cannot select a
+     * different target. Channel and relationship scopes still require their
+     * scope-specific identifier.
+     *
      * @param scope The scope of the memory (AGENT, CHANNEL, RELATIONSHIP).
-     * @param id The primary identifier for the memory entry.
-     *           For AGENT scope, this is typically the agent's own ID (though not directly used by the handler method).
-     *           For CHANNEL scope, this is the channelId.
-     *           For RELATIONSHIP scope, this is the otherAgentId.
+     * @param id The channelId or otherAgentId. Omit for AGENT scope.
      * @param secondaryId Optional secondary identifier, used as channelId for RELATIONSHIP scope.
-     * @returns Promise resolving to true if deletion was successful, false otherwise.
+     * @returns Promise resolving to true when deletion is authoritatively confirmed.
      * @protected
      */
+    protected deleteMemoryEntry(scope: MemoryScope.AGENT): Promise<boolean>;
+    protected deleteMemoryEntry(scope: MemoryScope.CHANNEL, id: string): Promise<boolean>;
+    protected deleteMemoryEntry(
+        scope: MemoryScope.RELATIONSHIP,
+        otherAgentId: string,
+        channelId?: string
+    ): Promise<boolean>;
     protected async deleteMemoryEntry(
         scope: MemoryScope,
-        id: string, // For AGENT, this is agentId; for CHANNEL, channelId; for RELATIONSHIP, otherAgentId
-        secondaryId?: string // For RELATIONSHIP, this is channelId
+        id?: string,
+        secondaryId?: string
     ): Promise<boolean> {
-        await this.ensureConnected();
-        this.validator.assert(!!this.memoryHandlers, 'Memory Handlers not initialized.');
-        if (!this.memoryHandlers) return false;
-
-        if (!this.getSocketConnected()) {
-            this.logger.warn('Socket not connected. Cannot delete memory entry.');
-            return false;
-        }
-
-        this.validator.assertIsNonEmptyString(id, 'Primary ID cannot be empty for deleteMemoryEntry.');
-
         switch (scope) {
             case MemoryScope.AGENT:
-                // The 'id' parameter (agentId) is not strictly needed by deleteAgentMemory handler,
-                // as it operates on the current agent's memory by default.
-                return this.memoryHandlers.deleteAgentMemory();
+                if (id !== undefined || secondaryId !== undefined) {
+                    throw new Error('AGENT memory deletion is self-scoped and accepts no target ID.');
+                }
+                break;
             case MemoryScope.CHANNEL:
-                this.validator.assertIsNonEmptyString(id, 'Channel ID cannot be empty for CHANNEL scope deletion.');
-                return this.memoryHandlers.deleteChannelMemory(id); // id is channelId
+                if (secondaryId !== undefined) {
+                    throw new Error('CHANNEL memory deletion accepts only a channel ID.');
+                }
+                if (typeof id !== 'string' || id.trim() === '') {
+                    throw new Error('Channel ID cannot be empty for CHANNEL scope deletion.');
+                }
+                break;
             case MemoryScope.RELATIONSHIP:
-                this.validator.assertIsNonEmptyString(id, 'Other Agent ID cannot be empty for RELATIONSHIP scope deletion.');
-                // secondaryId is the optional channelId for the relationship
-                return this.memoryHandlers.deleteRelationshipMemory(id, secondaryId); // id is otherAgentId
+                if (typeof id !== 'string' || id.trim() === '') {
+                    throw new Error('Other Agent ID cannot be empty for RELATIONSHIP scope deletion.');
+                }
+                if (secondaryId !== undefined && secondaryId.trim() === '') {
+                    throw new Error('Channel ID cannot be empty for RELATIONSHIP scope deletion.');
+                }
+                break;
             default:
-                this.logger.error(`Unknown memory scope for deletion: ${scope}`);
-                return false;
+                throw new Error(`Unknown memory scope for deletion: ${String(scope)}`);
+        }
+
+        await this.ensureConnected();
+        const handlers = this.getMemoryHandlersForOperation('delete memory');
+        switch (scope) {
+            case MemoryScope.AGENT:
+                return handlers.deleteAgentMemory();
+            case MemoryScope.CHANNEL:
+                if (id === undefined) {
+                    throw new Error('Channel ID is required for CHANNEL scope deletion.');
+                }
+                return handlers.deleteChannelMemory(id);
+            case MemoryScope.RELATIONSHIP:
+                if (id === undefined) {
+                    throw new Error('Other Agent ID is required for RELATIONSHIP scope deletion.');
+                }
+                return handlers.deleteRelationshipMemory(id, secondaryId);
         }
     }
 
@@ -1538,196 +1576,69 @@ export class MxfClient {
     }
 
     /**
-     * Register an external MCP server
-     *
-     * Adds a developer-supplied MCP server to MXF. The server is started and its
-     * tools become available to agents. Resolves only once the server's tools have
-     * actually been discovered — a resolved promise means the tools are usable.
-     *
-     * Responses are correlated by `serverId`. Two concurrent registrations can no
-     * longer complete each other: this used to resolve on the first
-     * TOOLS_DISCOVERED event it saw, regardless of which server it came from.
+     * Agent-key clients cannot register external MCP servers.
      *
      * @param serverConfig External server configuration
-     * @returns Promise resolving to the discovered tool names
-     * @throws EventRequestError if the server rejects the registration
-     * @throws EventRequestTimeoutError if no response arrives in 30s
+     * @returns A rejected promise; agent credentials never authorize this operation
+     * @throws AgentMcpProcessManagementError immediately; use MxfSDK.registerExternalMcpServer()
+     * @deprecated MCP process management is administrative and is unavailable to MxfClient/MxfAgent.
      * @public
-     *
-     * @example
-     * ```typescript
-     * const { toolsDiscovered } = await agent.registerExternalMcpServer({
-     *   id: 'my-custom-server',
-     *   name: 'My Custom Server',
-     *   command: 'npx',
-     *   args: ['-y', 'my-mcp-package'],
-     *   autoStart: true
-     * });
-     * console.log('Tools:', toolsDiscovered.join(', '));
-     * ```
      */
     public async registerExternalMcpServer(serverConfig: {
         id: string;
         name: string;
         command?: string;
         args?: string[];
-        transport?: 'stdio' | 'http';
-        url?: string;
+        transport?: 'stdio';
         autoStart?: boolean;
         environmentVariables?: Record<string, string>;
         restartOnCrash?: boolean;
         maxRestartAttempts?: number;
     }): Promise<McpServerRegistrationResult> {
-        await this.ensureConnected();
-
-        return awaitEventResponse<McpServerRegistrationResult>({
-            emitEvent: Events.Mcp.EXTERNAL_SERVER_REGISTER,
-            payload: createBaseEventPayload(
-                Events.Mcp.EXTERNAL_SERVER_REGISTER,
-                this.agentId,
-                this.channelId || 'system',
-                serverConfig
-            ),
-            route: { via: 'agent', agentId: this.agentId },
-            // Tools discovered — not "registered" — is the point at which the server
-            // is actually usable, so that is what we wait for.
-            successEvent: Events.Mcp.EXTERNAL_SERVER_TOOLS_DISCOVERED,
-            failureEvent: Events.Mcp.EXTERNAL_SERVER_REGISTRATION_FAILED,
-            correlate: (payload: any) => payload?.data?.serverId === serverConfig.id,
-            mapResult: async (payload: any) => {
-                const toolsDiscovered: string[] = (payload?.data?.tools ?? []).map((t: any) => t.name);
-                // Refresh the tool cache before resolving so the caller can use the new
-                // tools on the very next line.
-                await this.toolService?.loadTools(undefined, true);
-                return { toolsDiscovered };
-            },
-            timeoutMs: MCP_REGISTRATION_TIMEOUT_MS,
-            description: `External MCP server registration for '${serverConfig.id}'`,
-            logger: this.logger,
-        });
+        throw new AgentMcpProcessManagementError(
+            `Registering external MCP server '${serverConfig.id}'`
+        );
     }
 
     /**
-     * Unregister an external MCP server
-     *
-     * Stops and removes an external MCP server from MXF.
+     * Agent-key clients cannot unregister external MCP servers.
      *
      * @param serverId ID of the server to unregister
-     * @returns Promise that resolves once the server has been removed
-     * @throws EventRequestError if the server reports the removal failed
-     * @throws EventRequestTimeoutError if no response arrives in 30s
+     * @returns A rejected promise; agent credentials never authorize this operation
+     * @throws AgentMcpProcessManagementError immediately; use MxfSDK.unregisterExternalMcpServer()
+     * @deprecated MCP process management is administrative and is unavailable to MxfClient/MxfAgent.
      * @public
      */
     public async unregisterExternalMcpServer(serverId: string): Promise<void> {
-        await this.ensureConnected();
-
-        await awaitEventResponse<void>({
-            emitEvent: Events.Mcp.EXTERNAL_SERVER_UNREGISTER,
-            payload: createBaseEventPayload(
-                Events.Mcp.EXTERNAL_SERVER_UNREGISTER,
-                this.agentId,
-                this.channelId || 'system',
-                { serverId }
-            ),
-            route: { via: 'agent', agentId: this.agentId },
-            successEvent: Events.Mcp.EXTERNAL_SERVER_UNREGISTERED,
-            correlate: (payload: any) => payload?.data?.serverId === serverId,
-            mapResult: (payload: any) => {
-                // The server answers on the success event even when it failed, so the
-                // success flag has to be checked here and turned into a rejection.
-                if (payload?.data?.success === false) {
-                    throw new EventRequestError(
-                        payload?.data?.error || `Failed to unregister external MCP server '${serverId}'`,
-                        Events.Mcp.EXTERNAL_SERVER_UNREGISTERED,
-                        payload
-                    );
-                }
-            },
-            timeoutMs: MCP_REGISTRATION_TIMEOUT_MS,
-            description: `External MCP server unregistration for '${serverId}'`,
-            logger: this.logger,
-        });
+        throw new AgentMcpProcessManagementError(
+            `Unregistering external MCP server '${serverId}'`
+        );
     }
 
     /**
-     * Register a channel-scoped MCP server
-     *
-     * Every agent in the channel shares the one server instance. It starts when the
-     * first agent joins and stops after a keepAlive period once the last agent leaves.
+     * Agent-key clients cannot register channel-scoped MCP servers.
      *
      * @param serverConfig Channel server configuration
-     * @returns Promise resolving to the discovered tool names
-     * @throws EventRequestError if the server rejects the registration
-     * @throws EventRequestTimeoutError if no response arrives in 30s
+     * @returns A rejected promise; agent credentials never authorize this operation
+     * @throws AgentMcpProcessManagementError immediately; use MxfSDK.registerChannelMcpServer()
+     * @deprecated MCP process management is administrative and is unavailable to MxfClient/MxfAgent.
      * @public
-     *
-     * @example
-     * ```typescript
-     * const { toolsDiscovered } = await client.registerChannelMcpServer({
-     *   id: 'chess-game',
-     *   name: 'Chess Game Server',
-     *   command: 'npx',
-     *   args: ['-y', '@mcp/chess'],
-     *   keepAliveMinutes: 10
-     * });
-     * ```
      */
     public async registerChannelMcpServer(serverConfig: {
         id: string;
         name: string;
         command?: string;
         args?: string[];
-        transport?: 'stdio' | 'http';
-        url?: string;
+        transport?: 'stdio';
         autoStart?: boolean;
         environmentVariables?: Record<string, string>;
         restartOnCrash?: boolean;
         maxRestartAttempts?: number;
         keepAliveMinutes?: number;
     }): Promise<McpServerRegistrationResult> {
-        await this.ensureConnected();
-
-        if (!this.channelId) {
-            throw new Error('Cannot register channel MCP server: agent not in a channel');
-        }
-
-        const channelId = this.channelId;
-
-        return awaitEventResponse<McpServerRegistrationResult>({
-            emitEvent: McpEvents.CHANNEL_SERVER_REGISTER,
-            payload: createBaseEventPayload(
-                McpEvents.CHANNEL_SERVER_REGISTER,
-                this.agentId,
-                channelId,
-                { ...serverConfig, channelId }
-            ),
-            route: { via: 'agent', agentId: this.agentId },
-            successEvent: McpEvents.CHANNEL_SERVER_REGISTERED,
-            failureEvent: McpEvents.CHANNEL_SERVER_REGISTRATION_FAILED,
-            // Correlate on BOTH serverId and scopeId. This used to resolve off
-            // Events.Mcp.EXTERNAL_SERVER_TOOLS_DISCOVERED with no correlation at all,
-            // so any unrelated tool discovery anywhere completed this registration.
-            correlate: (payload: any) =>
-                payload?.data?.serverId === serverConfig.id &&
-                payload?.data?.scopeId === channelId,
-            mapResult: async (payload: any) => {
-                if (payload?.data?.success === false) {
-                    throw new EventRequestError(
-                        payload?.data?.error || `Failed to register channel MCP server '${serverConfig.id}'`,
-                        McpEvents.CHANNEL_SERVER_REGISTERED,
-                        payload
-                    );
-                }
-                const toolsDiscovered: string[] = (payload?.data?.tools ?? []).map((t: any) => t.name);
-                // Refresh the tool cache before resolving so the caller can use the new
-                // tools on the very next line.
-                await this.toolService?.loadTools(undefined, true);
-                return { toolsDiscovered };
-            },
-            timeoutMs: MCP_REGISTRATION_TIMEOUT_MS,
-            description: `Channel MCP server registration for '${serverConfig.id}'`,
-            logger: this.logger,
-        });
+        throw new AgentMcpProcessManagementError(
+            `Registering channel MCP server '${serverConfig.id}'`
+        );
     }
 
     /**
@@ -1757,51 +1668,20 @@ export class MxfClient {
     }
 
     /**
-     * Unregister a channel-scoped MCP server
-     *
-     * Stops and removes a channel-scoped MCP server from MXF.
+     * Agent-key clients cannot unregister channel-scoped MCP servers.
      *
      * @param serverId ID of the server to unregister
      * @param channelId Optional channel ID (defaults to current channel)
-     * @returns Promise that resolves once the server has been removed
-     * @throws EventRequestError if the server reports the removal failed
-     * @throws EventRequestTimeoutError if no response arrives in 30s
+     * @returns A rejected promise; agent credentials never authorize this operation
+     * @throws AgentMcpProcessManagementError immediately; use MxfSDK.unregisterChannelMcpServer()
+     * @deprecated MCP process management is administrative and is unavailable to MxfClient/MxfAgent.
      * @public
      */
     public async unregisterChannelMcpServer(serverId: string, channelId?: string): Promise<void> {
-        await this.ensureConnected();
-
-        const targetChannelId = channelId || this.channelId;
-        if (!targetChannelId) {
-            throw new Error('Cannot unregister channel MCP server: no channel specified');
-        }
-
-        await awaitEventResponse<void>({
-            emitEvent: McpEvents.CHANNEL_SERVER_UNREGISTER,
-            payload: createBaseEventPayload(
-                McpEvents.CHANNEL_SERVER_UNREGISTER,
-                this.agentId,
-                targetChannelId,
-                { serverId, channelId: targetChannelId }
-            ),
-            route: { via: 'agent', agentId: this.agentId },
-            successEvent: McpEvents.CHANNEL_SERVER_UNREGISTERED,
-            correlate: (payload: any) =>
-                payload?.data?.serverId === serverId &&
-                payload?.data?.scopeId === targetChannelId,
-            mapResult: (payload: any) => {
-                if (payload?.data?.success === false) {
-                    throw new EventRequestError(
-                        payload?.data?.error || `Failed to unregister channel MCP server '${serverId}'`,
-                        McpEvents.CHANNEL_SERVER_UNREGISTERED,
-                        payload
-                    );
-                }
-            },
-            timeoutMs: MCP_REGISTRATION_TIMEOUT_MS,
-            description: `Channel MCP server unregistration for '${serverId}'`,
-            logger: this.logger,
-        });
+        const scope = channelId || this.channelId || 'unspecified channel';
+        throw new AgentMcpProcessManagementError(
+            `Unregistering channel MCP server '${serverId}' from '${scope}'`
+        );
     }
 
     /**

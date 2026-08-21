@@ -28,7 +28,7 @@ const agent1 = await sdk.createAgent({
     keyId: credentials.keys.agent1.keyId,
     secretKey: credentials.keys.agent1.secretKey,
     llmProvider: 'openrouter',
-    defaultModel: 'anthropic/claude-3.5-sonnet',
+    defaultModel: '~anthropic/claude-sonnet-latest',
     apiKey: process.env.OPENROUTER_API_KEY
 });
 
@@ -39,7 +39,7 @@ const agent2 = await sdk.createAgent({
     keyId: credentials.keys.agent2.keyId,
     secretKey: credentials.keys.agent2.secretKey,
     llmProvider: 'openrouter',
-    defaultModel: 'anthropic/claude-3.5-sonnet',
+    defaultModel: '~anthropic/claude-sonnet-latest',
     apiKey: process.env.OPENROUTER_API_KEY
 });
 
@@ -48,20 +48,20 @@ await Promise.all([agent1.connect(), agent2.connect()]);
 // Agent 1 listens for messages
 agent1.on(Events.Message.AGENT_MESSAGE, (payload) => {
     if (payload.data.senderId === 'agent2') {
-        console.log('Agent 1 received from Agent 2:', payload.data.content);
+        console.log('Agent 1 received from Agent 2:', payload.data.content.data);
     }
 });
 
 // Agent 2 listens for messages
 agent2.on(Events.Message.AGENT_MESSAGE, (payload) => {
     if (payload.data.senderId === 'agent1') {
-        console.log('Agent 2 received from Agent 1:', payload.data.content);
+        console.log('Agent 2 received from Agent 1:', payload.data.content.data);
     }
 });
 
 // Agents communicate
-await agent1.channelService.sendMessage('Hello Agent 2!');
-await agent2.channelService.sendMessage('Hello Agent 1!');
+await agent1.mxfService.sendMessage('Hello Agent 2!');
+await agent2.mxfService.sendMessage('Hello Agent 1!');
 ```
 
 ## Example 2: Coordinator-Worker Pattern
@@ -85,7 +85,7 @@ const coordinator = await sdk.createAgent({
     keyId: credentials.keys.coordinator.keyId,
     secretKey: credentials.keys.coordinator.secretKey,
     llmProvider: 'openrouter',
-    defaultModel: 'anthropic/claude-3.5-sonnet',
+    defaultModel: '~anthropic/claude-sonnet-latest',
     apiKey: process.env.OPENROUTER_API_KEY,
     agentConfigPrompt: `You are a task coordinator. 
     Assign tasks to workers and monitor their progress.`
@@ -100,7 +100,7 @@ const workers = await Promise.all([
         keyId: credentials.keys.worker1.keyId,
         secretKey: credentials.keys.worker1.secretKey,
         llmProvider: 'openrouter',
-        defaultModel: 'anthropic/claude-3.5-sonnet',
+        defaultModel: '~anthropic/claude-sonnet-latest',
         apiKey: process.env.OPENROUTER_API_KEY
     }),
     sdk.createAgent({
@@ -110,7 +110,7 @@ const workers = await Promise.all([
         keyId: credentials.keys.worker2.keyId,
         secretKey: credentials.keys.worker2.secretKey,
         llmProvider: 'openrouter',
-        defaultModel: 'anthropic/claude-3.5-sonnet',
+        defaultModel: '~anthropic/claude-sonnet-latest',
         apiKey: process.env.OPENROUTER_API_KEY
     })
 ]);
@@ -131,13 +131,13 @@ workers.forEach(worker => {
 });
 
 // Coordinator creates and assigns tasks
-const task = await coordinator.channelService.createTask({
+const taskId = await coordinator.mxfService.createTask({
     title: 'Process Data',
     description: 'Analyze customer feedback data',
-    assignedTo: 'worker1'
+    assignedAgentIds: ['worker1']
 });
 
-console.log('Task assigned:', task.taskId);
+console.log('Task assigned:', taskId);
 ```
 
 ## Example 3: Specialized Agent Team
@@ -151,7 +151,7 @@ const researchAgent = await sdk.createAgent({
     keyId: credentials.keys.researcher.keyId,
     secretKey: credentials.keys.researcher.secretKey,
     llmProvider: 'openrouter',
-    defaultModel: 'anthropic/claude-3.5-sonnet',
+    defaultModel: '~anthropic/claude-sonnet-latest',
     apiKey: process.env.OPENROUTER_API_KEY,
     agentConfigPrompt: 'You gather and synthesize information from various sources.',
     allowedTools: ['filesystem_read', 'memory_retrieve', 'tools_recommend']
@@ -164,7 +164,7 @@ const analysisAgent = await sdk.createAgent({
     keyId: credentials.keys.analyst.keyId,
     secretKey: credentials.keys.analyst.secretKey,
     llmProvider: 'openrouter',
-    defaultModel: 'anthropic/claude-3.5-sonnet',
+    defaultModel: '~anthropic/claude-sonnet-latest',
     apiKey: process.env.OPENROUTER_API_KEY,
     agentConfigPrompt: 'You analyze data and identify patterns and insights.',
     allowedTools: ['memory_retrieve', 'memory_store', 'task_complete']
@@ -177,7 +177,7 @@ const reportAgent = await sdk.createAgent({
     keyId: credentials.keys.reporter.keyId,
     secretKey: credentials.keys.reporter.secretKey,
     llmProvider: 'openrouter',
-    defaultModel: 'anthropic/claude-3.5-sonnet',
+    defaultModel: '~anthropic/claude-sonnet-latest',
     apiKey: process.env.OPENROUTER_API_KEY,
     agentConfigPrompt: 'You create clear, structured reports from analysis.',
     allowedTools: ['memory_retrieve', 'messaging_send', 'task_complete']
@@ -192,19 +192,19 @@ await Promise.all([
 // Workflow: Research → Analysis → Report
 researchAgent.on(Events.Task.COMPLETED, async (payload) => {
     console.log('Research complete, assigning to analyst...');
-    await analysisAgent.channelService.createTask({
+    await analysisAgent.mxfService.createTask({
         title: 'Analyze Research',
         description: 'Analyze the research findings',
-        assignedTo: 'analyst'
+        assignedAgentIds: ['analyst']
     });
 });
 
 analysisAgent.on(Events.Task.COMPLETED, async (payload) => {
     console.log('Analysis complete, assigning to reporter...');
-    await reportAgent.channelService.createTask({
+    await reportAgent.mxfService.createTask({
         title: 'Generate Report',
         description: 'Create final report from analysis',
-        assignedTo: 'reporter'
+        assignedAgentIds: ['reporter']
     });
 });
 

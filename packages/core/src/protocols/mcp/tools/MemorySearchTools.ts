@@ -22,7 +22,7 @@
  * Memory Search Tools - Semantic search across agent memory using Meilisearch
  */
 
-import { McpToolDefinition, McpToolHandlerContext, McpToolHandlerResult, McpToolResultContent } from '../McpServerTypes.js';
+import { McpToolHandlerContext, McpToolHandlerResult, McpToolResultContent } from '../McpServerTypes.js';
 import { Logger } from '../../../utils/Logger.js';
 import { MxfMeilisearchService, SearchParams } from '../../../services/MxfMeilisearchService.js';
 import { MemoryService } from '../../../services/MemoryService.js';
@@ -31,9 +31,75 @@ import { UtilityScorerService } from '../../../services/UtilityScorerService.js'
 import { RewardSignalProcessor } from '../../../services/RewardSignalProcessor.js';
 import { MemoryCandidate } from '../../../types/MemoryUtilityTypes.js';
 import { getCurrentMemoryPhase } from './OrparTools.js';
-import { paginationInputSchema, checkResultSize, PaginationMetadata } from '../../../utils/ToolPaginationUtils.js';
+import { checkResultSize, PaginationMetadata } from '../../../utils/ToolPaginationUtils.js';
 
 const logger = new Logger('info', 'MemorySearchTools', 'server');
+
+const escapeMeilisearchFilterLiteral = (value: string): string => (
+    value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+);
+
+const requireBoundedString = (value: unknown, name: string, maximum: number): string => {
+    if (typeof value !== 'string' || value.trim().length === 0 || value.length > maximum) {
+        throw new Error(`${name} must be a non-empty string of at most ${maximum} characters`);
+    }
+    return value.trim();
+};
+
+const requireInputRecord = (value: unknown): Record<string, unknown> => {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+        throw new Error('input must be an object');
+    }
+    return value as Record<string, unknown>;
+};
+
+const requireSearchContext = (context: McpToolHandlerContext): {
+    agentId: string;
+    channelId: string;
+} => ({
+    agentId: requireBoundedString(context.agentId, 'context.agentId', 256),
+    channelId: requireBoundedString(context.channelId, 'context.channelId', 256)
+});
+
+const boundedInteger = (
+    value: unknown,
+    fallback: number,
+    minimum: number,
+    maximum: number,
+    name: string
+): number => {
+    const resolved = value === undefined ? fallback : value;
+    if (typeof resolved !== 'number' || !Number.isSafeInteger(resolved) ||
+        resolved < minimum || resolved > maximum) {
+        throw new Error(`${name} must be an integer between ${minimum} and ${maximum}`);
+    }
+    return resolved;
+};
+
+const boundedNumber = (
+    value: unknown,
+    fallback: number,
+    minimum: number,
+    maximum: number,
+    name: string
+): number => {
+    const resolved = value === undefined ? fallback : value;
+    if (typeof resolved !== 'number' || !Number.isFinite(resolved) ||
+        resolved < minimum || resolved > maximum) {
+        throw new Error(`${name} must be a number between ${minimum} and ${maximum}`);
+    }
+    return resolved;
+};
+
+const optionalBoolean = (value: unknown, name: string): boolean | undefined => {
+    if (value === undefined) {
+        return undefined;
+    }
+    if (typeof value !== 'boolean') {
+        throw new Error(`${name} must be a boolean when provided`);
+    }
+    return value;
+};
 
 /**
  * Search conversation history semantically
@@ -107,7 +173,7 @@ async function applyUtilityRanking<T extends { id: string; _rankingScore: number
 
 export const memory_search_conversations = {
     name: 'memory_search_conversations',
-    description: 'Search your entire conversation history using semantic search. Find relevant past discussions even if they happened hundreds of messages ago. Use this when you need to recall "that time we talked about X".',
+    description: 'Search your conversation history in the authenticated channel using semantic search. Find relevant past discussions even if they happened hundreds of messages ago.',
     category: 'context-memory',
     tags: ['memory', 'search', 'semantic', 'conversations', 'history'],
     version: '2.0',
@@ -120,7 +186,7 @@ export const memory_search_conversations = {
             },
             channelId: {
                 type: 'string',
-                description: 'Optional: Limit search to specific channel. If omitted, searches all channels you have access to.'
+                description: 'Optional channel assertion. When provided, it must match the authenticated channel.'
             },
             limit: {
                 type: 'number',
@@ -198,42 +264,70 @@ export const memory_search_conversations = {
             description: 'Search specific channel with semantic emphasis'
         }
     ],
-    handler: async (input: any, context: McpToolHandlerContext): Promise<McpToolHandlerResult> => {
+    handler: async (input: unknown, context: McpToolHandlerContext): Promise<McpToolHandlerResult> => {
         try {
+            const request = requireInputRecord(input);
             const meilisearch = MxfMeilisearchService.getInstance();
-
-            // Build filter
-            let filter = '';
-            if (context.agentId) {
-                filter = `agentId = "${context.agentId}"`;
-            }
-            if (input.channelId) {
-                filter = filter ? `${filter} AND channelId = "${input.channelId}"` : `channelId = "${input.channelId}"`;
-            }
-            if (input.timeRange) {
-                if (input.timeRange.after) {
-                    filter = filter ? `${filter} AND timestamp >= ${input.timeRange.after}` : `timestamp >= ${input.timeRange.after}`;
-                }
-                if (input.timeRange.before) {
-                    filter = filter ? `${filter} AND timestamp <= ${input.timeRange.before}` : `timestamp <= ${input.timeRange.before}`;
-                }
+            const identity = requireSearchContext(context);
+            const query = requireBoundedString(request.query, 'query', 4096);
+            if (request.channelId !== undefined && request.channelId !== identity.channelId) {
+                throw new Error('channelId must match the authenticated tool context');
             }
 
-            const limit = input.limit || 10;
-            const offset = input.offset || 0;
+            // Both dimensions are mandatory. An agent id can legitimately be
+            // reused in another channel, so filtering by agent alone leaks it.
+            let filter = `agentId = "${escapeMeilisearchFilterLiteral(identity.agentId)}"` +
+                ` AND channelId = "${escapeMeilisearchFilterLiteral(identity.channelId)}"`;
+            if (request.timeRange !== undefined && (
+                typeof request.timeRange !== 'object' || request.timeRange === null ||
+                Array.isArray(request.timeRange)
+            )) {
+                throw new Error('timeRange must be an object when provided');
+            }
+            const timeRange = request.timeRange as Record<string, unknown> | undefined;
+            const after = timeRange?.after === undefined
+                ? undefined
+                : boundedInteger(
+                    timeRange.after,
+                    0,
+                    0,
+                    Number.MAX_SAFE_INTEGER,
+                    'timeRange.after'
+                );
+            const before = timeRange?.before === undefined
+                ? undefined
+                : boundedInteger(
+                    timeRange.before,
+                    0,
+                    0,
+                    Number.MAX_SAFE_INTEGER,
+                    'timeRange.before'
+                );
+            if (after !== undefined && before !== undefined && after > before) {
+                throw new Error('timeRange.after must not be later than timeRange.before');
+            }
+            if (after !== undefined) {
+                filter += ` AND timestamp >= ${after}`;
+            }
+            if (before !== undefined) {
+                filter += ` AND timestamp <= ${before}`;
+            }
+
+            const limit = boundedInteger(request.limit, 10, 1, 50, 'limit');
+            const offset = boundedInteger(request.offset, 0, 0, 10_000, 'offset');
 
             const searchParams: SearchParams = {
-                query: input.query,
+                query,
                 filter: filter || undefined,
                 limit: limit,
                 offset: offset,
-                hybridRatio: input.hybridRatio || 0.7 // Enable hybrid search when embeddings available
+                hybridRatio: boundedNumber(request.hybridRatio, 0.7, 0, 1, 'hybridRatio')
             };
 
             const result = await meilisearch.searchConversations(searchParams);
 
             // Re-rank by learned utility and record the retrieval for reward attribution.
-            const rankedHits = await applyUtilityRanking(input.query, result.hits, context);
+            const rankedHits = await applyUtilityRanking(query, result.hits, context);
 
             const formattedResults = rankedHits.map(hit => ({
                 content: hit.content,
@@ -261,7 +355,7 @@ export const memory_search_conversations = {
                 results: formattedResults,
                 pagination,
                 processingTimeMs: result.processingTimeMs,
-                message: `Found ${formattedResults.length} relevant conversations${input.channelId ? ` in ${input.channelId}` : ''}${hasMore ? ` (${totalCount - offset - formattedResults.length} more available)` : ''}`
+                message: `Found ${formattedResults.length} relevant conversations in ${identity.channelId}${hasMore ? ` (${totalCount - offset - formattedResults.length} more available)` : ''}`
             };
 
             // Check result size and add pagination hint if needed
@@ -354,27 +448,33 @@ export const memory_search_actions = {
             description: 'Find when you last messaged an agent'
         }
     ],
-    handler: async (input: any, context: McpToolHandlerContext): Promise<McpToolHandlerResult> => {
+    handler: async (input: unknown, context: McpToolHandlerContext): Promise<McpToolHandlerResult> => {
         try {
+            const request = requireInputRecord(input);
             const meilisearch = MxfMeilisearchService.getInstance();
+            const identity = requireSearchContext(context);
+            const query = requireBoundedString(request.query, 'query', 4096);
 
-            let filter = `agentId = "${context.agentId}"`;
-            if (input.toolName) {
-                filter += ` AND toolName = "${input.toolName}"`;
+            let filter = `agentId = "${escapeMeilisearchFilterLiteral(identity.agentId)}"` +
+                ` AND channelId = "${escapeMeilisearchFilterLiteral(identity.channelId)}"`;
+            if (request.toolName !== undefined) {
+                const toolName = requireBoundedString(request.toolName, 'toolName', 256);
+                filter += ` AND toolName = "${escapeMeilisearchFilterLiteral(toolName)}"`;
             }
-            if (input.successOnly) {
+            const successOnly = optionalBoolean(request.successOnly, 'successOnly') ?? false;
+            if (successOnly) {
                 filter += ' AND success = true';
             }
 
-            const limit = input.limit || 10;
-            const offset = input.offset || 0;
+            const limit = boundedInteger(request.limit, 10, 1, 100, 'limit');
+            const offset = boundedInteger(request.offset, 0, 0, 10_000, 'offset');
 
             const result = await meilisearch.searchActions({
-                query: input.query,
+                query,
                 filter,
                 limit: limit,
                 offset: offset,
-                hybridRatio: input.hybridRatio || 0.7 // Enable hybrid search when embeddings available
+                hybridRatio: boundedNumber(request.hybridRatio, 0.7, 0, 1, 'hybridRatio')
             });
 
             const formattedResults = result.hits.map(hit => ({
@@ -433,7 +533,7 @@ export const memory_search_actions = {
  */
 export const memory_search_patterns = {
     name: 'memory_search_patterns',
-    description: 'Discover successful workflow patterns from across the entire system. Find proven approaches that worked well in similar situations, even from other channels. Use this to learn from collective experience.',
+    description: 'Discover successful workflow patterns in the authenticated channel.',
     category: 'context-memory',
     tags: ['memory', 'search', 'patterns', 'workflows', 'learning'],
     version: '2.0',
@@ -453,7 +553,7 @@ export const memory_search_patterns = {
             },
             crossChannel: {
                 type: 'boolean',
-                description: 'Search all channels (true) or only current channel (false)',
+                description: 'Must be false; channel-key searches are always scoped to the authenticated channel',
                 default: false
             },
             limit: {
@@ -477,7 +577,7 @@ export const memory_search_patterns = {
             input: {
                 intent: 'coordinate multi-agent data processing',
                 minEffectiveness: 0.8,
-                crossChannel: true
+                crossChannel: false
             },
             output: {
                 success: true,
@@ -494,20 +594,32 @@ export const memory_search_patterns = {
             description: 'Find proven multi-agent coordination patterns'
         }
     ],
-    handler: async (input: any, context: McpToolHandlerContext): Promise<McpToolHandlerResult> => {
+    handler: async (input: unknown, context: McpToolHandlerContext): Promise<McpToolHandlerResult> => {
         try {
+            const request = requireInputRecord(input);
             const meilisearch = MxfMeilisearchService.getInstance();
-
-            let filter = `effectiveness >= ${input.minEffectiveness || 0.7}`;
-            if (!input.crossChannel && context.channelId) {
-                filter += ` AND channelId = "${context.channelId}"`;
+            const identity = requireSearchContext(context);
+            const intent = requireBoundedString(request.intent, 'intent', 4096);
+            const crossChannel = optionalBoolean(request.crossChannel, 'crossChannel') ?? false;
+            if (crossChannel) {
+                throw new Error('Cross-channel pattern search is not available to channel-key agents');
             }
 
-            const limit = input.limit || 5;
-            const offset = input.offset || 0;
+            const minEffectiveness = boundedNumber(
+                request.minEffectiveness,
+                0.7,
+                0,
+                1,
+                'minEffectiveness'
+            );
+            let filter = `effectiveness >= ${minEffectiveness}`;
+            filter += ` AND channelId = "${escapeMeilisearchFilterLiteral(identity.channelId)}"`;
+
+            const limit = boundedInteger(request.limit, 5, 1, 20, 'limit');
+            const offset = boundedInteger(request.offset, 0, 0, 10_000, 'offset');
 
             const result = await meilisearch.searchPatterns({
-                query: input.intent,
+                query: intent,
                 filter,
                 limit: limit,
                 offset: offset,
@@ -540,7 +652,7 @@ export const memory_search_patterns = {
                 patterns: formattedPatterns,
                 pagination,
                 processingTimeMs: result.processingTimeMs,
-                message: `Found ${formattedPatterns.length} proven patterns${input.crossChannel ? ' across all channels' : ''}${hasMore ? ` (${totalCount - offset - formattedPatterns.length} more available)` : ''}`
+                message: `Found ${formattedPatterns.length} proven patterns in ${identity.channelId}${hasMore ? ` (${totalCount - offset - formattedPatterns.length} more available)` : ''}`
             };
 
             // Check result size and add pagination hint if needed

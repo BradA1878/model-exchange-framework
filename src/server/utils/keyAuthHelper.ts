@@ -27,7 +27,7 @@
 
 import * as crypto from 'crypto';
 import { Logger } from '@mxf-dev/core/utils/Logger';
-import channelKeyService from '../socket/services/ChannelKeyService';
+import channelKeyService, { ChannelKeyValidation } from '../socket/services/ChannelKeyService';
 
 // Create a logger instance with appropriate context and tags
 const logger = new Logger('debug', 'KeyAuthHelper', 'server');
@@ -66,7 +66,7 @@ class KeyAuthHelper {
     public async validateKey(
         keyId: string,
         secretKey: string
-    ): Promise<{ valid: boolean; channelId?: string; agentId?: string }> {
+    ): Promise<ChannelKeyValidation> {
         try {
             //;
             
@@ -90,7 +90,10 @@ class KeyAuthHelper {
                 return {
                     valid: true,
                     channelId: testKey.channelId,
-                    agentId: testKey.agentId
+                    agentId: testKey.agentId,
+                    expiresAt: testKey.expires === undefined
+                        ? undefined
+                        : new Date(testKey.expires)
                 };
             }
             

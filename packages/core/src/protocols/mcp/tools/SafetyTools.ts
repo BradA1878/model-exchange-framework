@@ -25,6 +25,7 @@ import { ToolError } from '../ToolError.js';
 import { executeShellCommand, ShellCommandResult } from './InfrastructureTools.js';
 import * as fs from 'fs/promises';
 import * as path from 'path';
+import { resolveWorkspacePath } from '../security/McpToolPolicy.js';
 
 const logger = new Logger('info', 'SafetyTools', 'server');
 
@@ -153,7 +154,11 @@ async function reviewFile(filePath: string, focusAreas: string[], strictness: st
     const recommendations: any[] = [];
     
     try {
-        const content = await fs.readFile(path.join(workingDir, filePath), 'utf-8');
+        const resolvedFilePath = resolveWorkspacePath(
+            path.resolve(workingDir, filePath),
+            'code_review_agent file'
+        );
+        const content = await fs.readFile(resolvedFilePath, 'utf-8');
         
         // Security checks
         if (focusAreas.includes('security')) {
@@ -382,7 +387,7 @@ async function runGit(
 
 const workingDirectoryProperty = {
     type: 'string',
-    description: 'Working directory (defaults to the server working directory)'
+    description: 'Working directory under MXF_WORKSPACE_ROOT (defaults to MXF_WORKSPACE_ROOT)'
 };
 
 export const createFeatureBranchTool = defineTool<
@@ -410,7 +415,10 @@ export const createFeatureBranchTool = defineTool<
         required: ['branchName']
     },
     run: async (input, context) => {
-        const workingDir = input.workingDirectory || process.cwd();
+        const workingDir = resolveWorkspacePath(
+            input.workingDirectory,
+            'create_feature_branch workingDirectory'
+        );
         const baseBranch = input.baseBranch ?? 'main';
 
         await runGit(['checkout', baseBranch], workingDir, context);
@@ -479,7 +487,10 @@ export const runFullTestSuiteTool = defineTool<
         }
     },
     run: async (input, context) => {
-        const workingDir = input.workingDirectory || process.cwd();
+        const workingDir = resolveWorkspacePath(
+            input.workingDirectory,
+            'run_full_test_suite workingDirectory'
+        );
 
         // Work out what to run. An explicit command wins; otherwise read
         // package.json. A project with no test script and no known runner is a
@@ -489,7 +500,10 @@ export const runFullTestSuiteTool = defineTool<
         if (input.testCommand) {
             testCmd = input.testCommand.split(/\s+/).filter(Boolean);
         } else {
-            const packageJsonPath = path.join(workingDir, 'package.json');
+            const packageJsonPath = resolveWorkspacePath(
+                path.join(workingDir, 'package.json'),
+                'run_full_test_suite package.json'
+            );
             let pkg: { scripts?: Record<string, string>; dependencies?: Record<string, string>; devDependencies?: Record<string, string> };
 
             try {
@@ -591,14 +605,20 @@ export const performanceBenchmarkTool = defineTool<
         }
     },
     run: async (input, context) => {
-        const workingDir = input.workingDirectory || process.cwd();
+        const workingDir = resolveWorkspacePath(
+            input.workingDirectory,
+            'run_performance_benchmark workingDirectory'
+        );
 
         let benchmarkCmd: string[];
 
         if (input.benchmarkCommand) {
             benchmarkCmd = input.benchmarkCommand.split(/\s+/).filter(Boolean);
         } else {
-            const packageJsonPath = path.join(workingDir, 'package.json');
+            const packageJsonPath = resolveWorkspacePath(
+                path.join(workingDir, 'package.json'),
+                'run_performance_benchmark package.json'
+            );
             let pkg: { scripts?: Record<string, string> };
 
             try {
@@ -641,11 +661,15 @@ export const performanceBenchmarkTool = defineTool<
         let baselineComparison = null;
         if (input.baselineFile) {
             let baseline: unknown;
+            const baselinePath = resolveWorkspacePath(
+                path.resolve(workingDir, input.baselineFile),
+                'run_performance_benchmark baselineFile'
+            );
             try {
-                baseline = JSON.parse(await fs.readFile(input.baselineFile, 'utf-8'));
+                baseline = JSON.parse(await fs.readFile(baselinePath, 'utf-8'));
             } catch (error) {
                 throw ToolError.notFound(
-                    `Could not read the baseline file ${input.baselineFile}: ` +
+                    `Could not read the baseline file ${baselinePath}: ` +
                     `${error instanceof Error ? error.message : String(error)}`
                 );
             }
@@ -709,7 +733,10 @@ export const rollbackChangesTool = defineTool<
         }
     },
     run: async (input, context) => {
-        const workingDir = input.workingDirectory || process.cwd();
+        const workingDir = resolveWorkspacePath(
+            input.workingDirectory,
+            'rollback_changes workingDirectory'
+        );
         const rollbackType = input.rollbackType ?? 'commit';
         const preserveChanges = input.preserveChanges ?? false;
 
@@ -796,7 +823,10 @@ export const createBackupTool = defineTool<
         }
     },
     run: async (input, context) => {
-        const workingDir = input.workingDirectory || process.cwd();
+        const workingDir = resolveWorkspacePath(
+            input.workingDirectory,
+            'create_backup workingDirectory'
+        );
         const backupType = input.backupType ?? 'commit';
         const includeUntracked = input.includeUntracked ?? true;
         const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
@@ -834,7 +864,10 @@ export const createBackupTool = defineTool<
             }
 
             case 'archive': {
-                const archivePath = path.join(workingDir, `${backupName}.tar.gz`);
+                const archivePath = resolveWorkspacePath(
+                    path.resolve(workingDir, `${backupName}.tar.gz`),
+                    'create_backup archive path'
+                );
                 await runGit(
                     ['archive', '--format=tar.gz', '--output', archivePath, 'HEAD'],
                     workingDir,
@@ -922,7 +955,10 @@ export const codeReviewAgentTool = defineTool<
         }
     },
     run: async (input, context) => {
-        const workingDir = input.workingDirectory || process.cwd();
+        const workingDir = resolveWorkspacePath(
+            input.workingDirectory,
+            'code_review_agent workingDirectory'
+        );
         const reviewType = input.reviewType ?? 'diff';
         const strictness = input.strictness ?? 'medium';
         const focusAreas = input.focusAreas ?? ['quality', 'security', 'performance', 'maintainability'];

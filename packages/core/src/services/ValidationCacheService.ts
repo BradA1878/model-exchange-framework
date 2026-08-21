@@ -197,9 +197,11 @@ export class ValidationCacheService {
     private mongoCollection: any = null;
     
     // Background tasks
-    private cleanupInterval: NodeJS.Timeout | null = null;
-    
-    private static instance: ValidationCacheService;
+    private cleanupInterval?: ReturnType<typeof setInterval>;
+    private mongoCleanupInterval?: ReturnType<typeof setInterval>;
+    private statisticsInterval?: ReturnType<typeof setInterval>;
+
+    private static instance: ValidationCacheService | undefined;
 
     private constructor() {
         this.logger = new Logger('info', 'ValidationCacheService', 'server');
@@ -962,21 +964,24 @@ export class ValidationCacheService {
             this.cleanupInterval = setInterval(() => {
                 this.cleanupExpiredMemoryEntries();
             }, this.config.memoryCache.cleanupInterval);
+            this.cleanupInterval.unref?.();
         }
 
         // MongoDB background cleanup
         if (this.config.mongoCache.backgroundCleanup) {
-            setInterval(() => {
+            this.mongoCleanupInterval = setInterval(() => {
                 this.cleanupMongoCache().catch(error => {
                     this.logger.warn('MongoDB cache cleanup failed:', error);
                 });
             }, 60 * 60 * 1000); // Every hour
+            this.mongoCleanupInterval.unref?.();
         }
 
         // Statistics reporting
-        setInterval(() => {
+        this.statisticsInterval = setInterval(() => {
             this.reportCacheStatistics();
         }, 5 * 60 * 1000); // Every 5 minutes
+        this.statisticsInterval.unref?.();
     }
 
     private cleanupExpiredMemoryEntries(): void {
@@ -1166,11 +1171,29 @@ export class ValidationCacheService {
     public shutdown(): void {
         if (this.cleanupInterval) {
             clearInterval(this.cleanupInterval);
-            this.cleanupInterval = null;
+            this.cleanupInterval = undefined;
+        }
+        if (this.mongoCleanupInterval) {
+            clearInterval(this.mongoCleanupInterval);
+            this.mongoCleanupInterval = undefined;
+        }
+        if (this.statisticsInterval) {
+            clearInterval(this.statisticsInterval);
+            this.statisticsInterval = undefined;
         }
 
         if (this.redisClient) {
             // this.redisClient.disconnect();
+        }
+
+        this.memoryCache.clear();
+        this.accessOrder.clear();
+        this.accessFrequency.clear();
+        this.memoryCacheSize = 0;
+        this.cacheEvents$.complete();
+
+        if (ValidationCacheService.instance === this) {
+            ValidationCacheService.instance = undefined;
         }
 
     }

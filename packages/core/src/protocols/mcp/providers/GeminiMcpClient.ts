@@ -545,6 +545,8 @@ export class GeminiMcpClient extends BaseMcpClient {
         context: AgentContext,
         options?: Record<string, any>
     ): Promise<McpApiResponse> {
+        this.assertExternalLlmCallAllowed();
+
         if (!this.genAiClient) {
             throw new Error('Google Gen AI client not initialized');
         }

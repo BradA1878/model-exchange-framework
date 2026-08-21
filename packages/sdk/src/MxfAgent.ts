@@ -43,7 +43,11 @@ import { AgentConfig } from '@mxf-dev/core/interfaces/AgentInterfaces';
 // Import the extracted services
 import { MxfEventHandlerService, EventHandlerCallbacks } from './services/MxfEventHandlerService.js';
 import { MxfSystemPromptManager, PromptManagerCallbacks } from './managers/MxfSystemPromptManager.js';
-import { MxfMemoryManager, MemoryManagerConfig } from './managers/MxfMemoryManager.js';
+import {
+    MxfMemoryManager,
+    MemoryManagerConfig,
+    ConversationMessageInput
+} from './managers/MxfMemoryManager.js';
 import { MxfTaskExecutionManager, TaskExecutionCallbacks } from './managers/MxfTaskExecutionManager.js';
 import { MxfMcpClientManager } from './managers/MxfMcpClientManager.js';
 import { MxfContextBuilder } from './services/MxfContextBuilder.js';
@@ -56,6 +60,7 @@ import {
     ToolHelpers, 
     ToolExecutionHelpers, 
     ConversationHelpers, 
+    TaskHelpers,
     AgentContext as LegacyAgentContext  // Renamed to avoid conflict with new AgentContext
 } from './MxfAgentHelpers.js';
 
@@ -265,7 +270,23 @@ export class MxfAgent extends MxfClient {
         if (this.modelConfig.useMessageAggregate === true) {
             this.messageAggregator = new MxfMessageAggregator(
                 this.agentId,
-                (fromAgents: string[], aggregatedContent: string) => this.handleAggregatedMessage(fromAgents, aggregatedContent),
+                (fromAgents: string[], aggregatedContent: string): void => {
+                    void this.handleAggregatedMessage(fromAgents, aggregatedContent)
+                        .catch((error: unknown) => {
+                            const message = error instanceof Error ? error.message : String(error);
+                            this.modelLogger.error(`Aggregated message persistence failed: ${message}`);
+                            EventBus.client.emitOn(
+                                this.agentId,
+                                AgentEvents.ERROR,
+                                createBaseEventPayload(
+                                    AgentEvents.ERROR,
+                                    this.agentId,
+                                    this.config.channelId,
+                                    { message, phase: 'aggregated_message_persistence' }
+                                )
+                            );
+                        });
+                },
                 this.modelLogger
             );
         }
@@ -326,7 +347,7 @@ export class MxfAgent extends MxfClient {
         
         // Set up system prompt with minimal content initially
         const minimalPrompt = this.systemPromptManager.generateMinimalPrompt();
-        this.memoryManager.addConversationMessage({
+        await this.memoryManager.addConversationMessage({
             role: 'system',
             content: minimalPrompt
         });
@@ -368,24 +389,36 @@ export class MxfAgent extends MxfClient {
                                            data.taskRequest?.content ||
                                            data.task?.description || '';
                     if (taskDescription && this.memoryManager) {
-                        this.memoryManager.addConversationMessage({
+                        await this.memoryManager.addConversationMessage({
                             role: 'user',
                             content: `## Current Task\n${taskDescription}`,
                             metadata: { contextLayer: 'task' }
                         });
                     }
 
-                    // Update system prompt with task context
-                    try {
-                        await this.systemPromptManager.updatePromptForTask(data.task);
-                    } catch (error) {
-                        this.modelLogger.warn(`Failed to update system prompt for task: ${error}`);
-                    }
+                    // Update system prompt with task context. Persistence failure must
+                    // reject this event handler rather than leaving task state and the
+                    // authoritative system message out of sync.
+                    await this.systemPromptManager.updatePromptForTask(data.task);
                 })
             );
         }
 
         // Set up task request handler with ORPAR integration
+        // The server broadcasts a task's outcome to the channel. Once the task
+        // this agent was assigned is over, the agent is idle until the next
+        // assignment — the same state task_complete leaves it in. Before this,
+        // a finished task stayed active and every later message re-entered
+        // its loop.
+        this.setTaskEndedHandler((taskId, outcome) => {
+            const currentTaskId = this.currentTask?.taskId ?? this.currentTask?.id;
+            if (currentTaskId !== taskId) {
+                return;
+            }
+            this.taskCompleted = true;
+            this.taskExecutionManager.clearCurrentTask(outcome);
+        });
+
         this.setTaskRequestHandler(async (taskRequest: any) => {
             // Check if channel has systemLlmEnabled for ORPAR orchestration
             const channelConfig = this.mxfService.getChannelConfig();
@@ -442,13 +475,10 @@ export class MxfAgent extends MxfClient {
             this.toolService.setupPersistentToolListener();
 
             // Register callback to regenerate system prompt when tools are updated
-            this.toolService.onToolsUpdated(async (updatedTools) => {
-                // Regenerate system prompt with new tools
-                try {
-                    await this.systemPromptManager.loadCompleteSystemPrompt();
-                } catch (error) {
-                    this.modelLogger.error(`Failed to regenerate system prompt: ${error}`);
-                }
+            this.toolService.onToolsUpdated(async (_updatedTools): Promise<void> => {
+                // Regenerate and persist the system prompt before the tool-update
+                // notification is considered handled.
+                await this.systemPromptManager.loadCompleteSystemPrompt();
             });
         } else {
             this.modelLogger.error('CRITICAL: toolService not available during initialization');
@@ -547,7 +577,7 @@ export class MxfAgent extends MxfClient {
         
         // Initialize conversation with user message if provided (but NOT task prompts)
         if (userMessage && userMessage.trim() && !taskPrompt) {
-            this.memoryManager.addConversationMessage({
+            await this.memoryManager.addConversationMessage({
                 role: 'user',
                 content: userMessage
             });
@@ -587,7 +617,7 @@ export class MxfAgent extends MxfClient {
             // Also: getCachedTools() only has internal MXF tools - external MCP server tools require a refresh
             let availableTools: any[];
 
-            if (this.modelConfig.allowedTools && this.modelConfig.allowedTools.length > 0) {
+            if (this.modelConfig.allowedTools !== undefined) {
                 // Phase-gated mode: Force refresh tools from server to include external MCP server tools
                 // This is critical because external tools (game_setSecret) aren't in the initial cache
                 try {
@@ -910,7 +940,7 @@ export class MxfAgent extends MxfClient {
                         // Skip system error messages
                         if (parsedCall.name === '__SYSTEM_ERROR__') {
                             // Add error message to conversation for context
-                            this.memoryManager.addConversationMessage({
+                            await this.memoryManager.addConversationMessage({
                                 role: 'user',
                                 content: `⚠️ Tool call format error: ${parsedCall.input.message}`
                             });
@@ -955,7 +985,7 @@ export class MxfAgent extends MxfClient {
                     }
                 }));
             }
-            this.memoryManager.addConversationMessage(assistantMessage);
+            await this.memoryManager.addConversationMessage(assistantMessage);
 
             if (toolCalls.length > 0) {
                 const toolExecutionResult = await this.handleToolExecutionWithHelpers(toolCalls, availableTools, iteration);
@@ -1038,7 +1068,7 @@ export class MxfAgent extends MxfClient {
                         }
 
                         // Add to conversation history with proper sequencing
-                        this.memoryManager.addConversationMessage(toolResultMessage);
+                        await this.memoryManager.addConversationMessage(toolResultMessage);
                     }
 
                     // Continue to next iteration with tool results - don't break the loop
@@ -1068,7 +1098,7 @@ export class MxfAgent extends MxfClient {
                             }
                         };
                         
-                        this.memoryManager.addConversationMessage(syntheticToolResult);
+                        await this.memoryManager.addConversationMessage(syntheticToolResult);
                     }
 
                     // Continue to next iteration with synthetic results
@@ -1100,11 +1130,37 @@ export class MxfAgent extends MxfClient {
 
             this.modelLogger.error(reason);
 
-            if (taskId) {
+            // Failing is terminal and gated like completing: a contributor to a
+            // multi-agent task leaves the task open for the agent designated to
+            // finish it, and only surfaces its own exhaustion below.
+            const holdsCompletionAuthority = TaskHelpers.isCurrentTaskCompletionAgent(
+                { agentId: this.agentId, currentTask: this.currentTask },
+                this.modelLogger
+            );
+            if (taskId && holdsCompletionAuthority) {
                 // Emit a real task failure so the server moves the task out of
                 // in_progress and onTaskFailed() fires for the consumer. Previously the
                 // task was either fabricated-complete or left hanging in_progress forever.
-                await TaskHelper.failTask(taskId, this.agentId, this.config.channelId, reason);
+                try {
+                    await TaskHelper.failTask(taskId, this.agentId, this.config.channelId, reason);
+                } catch (failError) {
+                    // The server refused the report (the task already ended, or the
+                    // agent lost authority to it). The limit itself is still reported
+                    // below; a refusal must not surface as a generation failure.
+                    this.modelLogger.warn(
+                        `Could not report task ${taskId} as failed: ` +
+                        `${failError instanceof Error ? failError.message : String(failError)}`
+                    );
+                }
+                // Either way the task is over for this agent: reported failed, or
+                // already ended. Go idle so the next message does not re-enter
+                // the loop and report the same failure again.
+                this.taskCompleted = true;
+                this.taskExecutionManager.clearCurrentTask('failed at the iteration limit');
+            } else if (taskId) {
+                this.modelLogger.warn(
+                    `Not reporting task ${taskId} as failed: another agent is designated to report its outcome`
+                );
             }
 
             // Surface it on the agent's error channel too, so agent.on(Events.Agent.ERROR)
@@ -1164,7 +1220,7 @@ export class MxfAgent extends MxfClient {
         // CRITICAL: Collect feedback messages to add AFTER all tool results
         // Adding user messages between tool_calls and tool results breaks conversation structure
         // Required order: assistant(tool_calls) → tool → tool → ... → user (feedback)
-        const deferredFeedbackMessages: Array<{role: string; content: string; metadata?: Record<string, any>}> = [];
+        const deferredFeedbackMessages: ConversationMessageInput[] = [];
 
         for (const toolCall of toolCalls) {
             // Skip remaining tools if task was canceled mid-execution
@@ -1383,7 +1439,7 @@ This iteration has been skipped. Choose a different action or complete the task.
                     this.taskCompleted = true;
                     
                     // Clear task context to prevent further tool gatekeeping issues
-                    this.taskExecutionManager.cancelCurrentTask('Task completed via task_complete');
+                    this.taskExecutionManager.clearCurrentTask('completed via task_complete');
                     
                     anyTaskComplete = true;
                     allToolResults.push(toolResultContent);
@@ -1434,7 +1490,7 @@ This iteration has been skipped. Choose a different action or complete the task.
         // NOW add all deferred feedback messages AFTER tool results are complete
         // This maintains proper conversation structure: assistant(tool_calls) → tool → ... → user
         for (const feedbackMsg of deferredFeedbackMessages) {
-            this.memoryManager.addConversationMessage(feedbackMsg);
+            await this.memoryManager.addConversationMessage(feedbackMsg);
         }
         
         // Return all collected results
@@ -1541,7 +1597,7 @@ This iteration has been skipped. Choose a different action or complete the task.
             return await this.generateResponse(promptText, contextualTools, undefined);
         } catch (error) {
             this.modelLogger.error(`❌ Error providing immediate tool feedback: ${error}`);
-            return `Error processing tool feedback: ${error}`;
+            throw error;
         }
     }
 
@@ -1616,7 +1672,7 @@ This iteration has been skipped. Choose a different action or complete the task.
                     };
                     
                     // Add the clean dialogue message to conversation history
-                    this.memoryManager.addConversationMessage(dialogueMessage);
+                    await this.memoryManager.addConversationMessage(dialogueMessage);
                 } else if (toolName === 'task_complete') {
                     description = input.message || input.result || 'Task completed';
                 } else if (toolName === 'tools_recommend') {
@@ -1713,13 +1769,13 @@ This iteration has been skipped. Choose a different action or complete the task.
             };
             
             const payload = createControlLoopEventPayload(
-                Events.ControlLoop.REFLECTION,
+                Events.ControlLoop.REFLECTION_SUBMIT,
                 this.agentId,
                 this.config.channelId,
                 controlLoopReflectionData
             );
 
-            EventBus.client.emitOn(this.agentId,Events.ControlLoop.REFLECTION, payload);
+            EventBus.client.emitOn(this.agentId, Events.ControlLoop.REFLECTION_SUBMIT, payload);
         } catch (error) {
             this.modelLogger.error(`Error generating reflection: ${error}`);
         }
@@ -2089,8 +2145,8 @@ This iteration has been skipped. Choose a different action or complete the task.
     /**
      * Set a new system prompt, replacing any existing one
      */
-    public setAgentConfigPrompt(agentConfigPrompt: string): void {
-        this.systemPromptManager.setAgentConfigPrompt(agentConfigPrompt);
+    public async setAgentConfigPrompt(agentConfigPrompt: string): Promise<void> {
+        await this.systemPromptManager.setAgentConfigPrompt(agentConfigPrompt);
     }
 
     /**
@@ -2361,7 +2417,7 @@ This iteration has been skipped. Choose a different action or complete the task.
         }
         
         // Add the aggregated message to conversation
-        this.memoryManager.addConversationMessage({
+        await this.memoryManager.addConversationMessage({
             role: 'user',
             content: aggregatedContent,
             metadata: {
@@ -2388,6 +2444,7 @@ This iteration has been skipped. Choose a different action or complete the task.
             await this.generateResponse(undefined, contextualTools, taskPrompt);
         } catch (error) {
             this.modelLogger.error(`Failed to process aggregated messages: ${error}`);
+            throw error;
         }
     }
 
@@ -2437,6 +2494,13 @@ This iteration has been skipped. Choose a different action or complete the task.
         this.eventHandlerService?.cleanup();
         this.taskExecutionManager?.cleanup();
         await this.mcpClientManager?.cleanup();
+
+        // Let queued search-index requests finish while the socket is still up,
+        // then stop indexing so nothing is queued against a closing connection.
+        if (this.memoryManager) {
+            await this.memoryManager.flushIndexQueue();
+            this.memoryManager.stopIndexing('agent disconnecting');
+        }
 
         // Call parent disconnect
         await super.disconnect();

@@ -1,24 +1,33 @@
-# External MCP Server Registration via SDK
+# External MCP Server Registration
 
-## Overview
+MXF can start caller-supplied MCP servers and expose their discovered tools globally
+or to one channel. This is host process management, so it is intentionally separate
+from agent tool credentials.
 
-The MXF SDK now supports **dynamic external MCP server registration**, allowing developers to add their own MCP servers to extend agent capabilities without modifying server code or configuration files.
+## Security boundary
 
-## Key Features
+All runtime registration and unregistration methods require:
 
-✅ **EventBus-Based**: Uses EventBus events (no HTTP API dependency)
-✅ **stdio Support**: Register npm packages or local executables
-✅ **HTTP Support**: Connect to remote MCP servers
-✅ **Dynamic Registration**: Add/remove servers at runtime
-✅ **Auto-Discovery**: Tools from registered servers become available immediately
-✅ **Lifecycle Management**: Automatic startup, health checks, and crash recovery
-✅ **Channel-Scoped Servers**: Share MCP server instances per channel (NEW!)
+1. A user-authenticated `MxfSDK` connection whose server-side role is
+   `administrator`.
+2. Explicit server-operator opt-in with
+   `MXF_UNSAFE_STDIO_MCP_ENABLED=true`.
 
----
+The feature is disabled by default because a `stdio` registration executes a command
+on the MXF host. A channel key authorizes an agent to discover and execute granted
+tools; it does not authorize that agent to create or kill host processes.
 
-## Quick Start
+The deprecated `MxfAgent` / `MxfClient` registration methods throw
+`AgentMcpProcessManagementError` immediately. They do not emit an event and do not
+wait for a timeout.
 
-### Basic Registration (stdio)
+MXF's external manager currently implements line-delimited MCP over child-process
+`stdio` only. HTTP transport registration is not implemented and is rejected.
+Commands run with the MXF server process working directory. The public registration
+API does not expose a `workingDirectory` override, so relative script arguments must
+be relative to the MXF root (or be replaced with an absolute path).
+
+## Administrator connection
 
 ```typescript
 import { MxfSDK } from '@mxf-dev/sdk';
@@ -26,763 +35,246 @@ import { MxfSDK } from '@mxf-dev/sdk';
 const sdk = new MxfSDK({
     serverUrl: 'http://localhost:3001',
     domainKey: process.env.MXF_DOMAIN_KEY!,
-    username: 'your-username',
-    password: 'your-password'
+    accessToken: process.env.MXF_ADMIN_ACCESS_TOKEN!
 });
 
 await sdk.connect();
-
-// Register an external MCP server
-await sdk.registerExternalMcpServer({
-    id: 'my-custom-server',
-    name: 'My Custom Server',
-    command: 'npx',
-    args: ['-y', '@my-org/my-mcp-package'],
-    autoStart: true
-});
 ```
 
-### HTTP-Based Server
+`sdk.connect()` resolving proves the user session authenticated; it does not by
+itself claim an administrator role. The server enforces the role on every MCP process
+request and rejects a non-administrator.
+
+## Register a global server
 
 ```typescript
-await sdk.registerExternalMcpServer({
-    id: 'remote-server',
-    name: 'Remote MCP Server',
-    transport: 'http',
-    url: 'https://my-mcp-server.example.com/mcp',
-    autoStart: true
+const { toolsDiscovered } = await sdk.registerExternalMcpServer({
+    id: 'company-tools',
+    name: 'Company Tools',
+    transport: 'stdio',
+    command: 'bun',
+    args: ['run', './mcp/company-tools.ts'],
+    autoStart: true,
+    restartOnCrash: true,
+    maxRestartAttempts: 3,
+    environmentVariables: {
+        COMPANY_API_KEY: process.env.COMPANY_API_KEY!
+    }
 });
+
+console.log('Usable tools:', toolsDiscovered);
 ```
 
----
-
-## Configuration Options
-
-### ServerConfig Interface
+The promise resolves only after process startup, the MCP initialize handshake, and
+tool discovery complete. Its resolved type is:
 
 ```typescript
-{
-    // Required fields
-    id: string;                      // Unique identifier
-    name: string;                    // Display name
-
-    // stdio transport (for npm packages, local executables)
-    command?: string;                // Executable command (e.g., 'npx', 'node')
-    args?: string[];                 // Command arguments
-
-    // HTTP transport (for remote servers)
-    transport?: 'stdio' | 'http';   // Connection type (default: 'stdio')
-    url?: string;                    // HTTP endpoint URL
-
-    // Lifecycle options
-    autoStart?: boolean;             // Start immediately (default: true)
-    restartOnCrash?: boolean;        // Auto-restart on failure (default: true)
-    maxRestartAttempts?: number;     // Max restart attempts (default: 3)
-
-    // Advanced options
-    environmentVariables?: Record<string, string>;  // Env vars for the process
-    healthCheckInterval?: number;    // Health check interval ms (default: 30000)
-    startupTimeout?: number;          // Startup timeout ms (default: 10000)
+interface McpServerRegistrationResult {
+    toolsDiscovered: string[];
 }
 ```
 
----
+There is no `success` flag. Failure rejects; a resolved value means every reported
+tool is already in the registry.
 
-## Server Scopes: Global vs Channel
+Global tools can be discovered by agents in any channel, subject to the channel key,
+agent, and channel allowlists.
 
-MXF supports two scopes for external MCP servers:
-
-### Global Scope (Default)
-
-Servers registered with `registerExternalMcpServer()` are **globally available** to all agents:
+## Register a channel server
 
 ```typescript
-// Global server - available to ALL agents
-await sdk.registerExternalMcpServer({
-    id: 'global-calculator',
-    name: 'Global Calculator',
-    command: 'npx',
-    args: ['-y', '@mcp/calculator']
-});
-
-// Any agent in any channel can use these tools
+const { toolsDiscovered } = await sdk.registerChannelMcpServer(
+    'chess-room',
+    {
+        id: 'chess-game',
+        name: 'Chess Game',
+        transport: 'stdio',
+        command: 'bun',
+        args: ['run', './mcp/chess-server.ts'],
+        autoStart: true,
+        restartOnCrash: true,
+        keepAliveMinutes: 30
+    }
+);
 ```
 
-**Use Cases**:
-- System-wide utilities (calculators, converters, etc.)
-- Shared services (weather, time, etc.)
-- Company-wide integrations (Slack, email, etc.)
+The channel ID is an explicit first argument on the administrator SDK. Tools from
+that process are visible only to authorized agents in the named channel. Agents in
+the channel share one server instance.
 
-### Channel Scope (NEW!)
-
-Servers registered with `registerChannelMcpServer()` are **channel-specific**:
+Channel registration does not require creating an agent first. If a channel is being
+created at the same time, it may include the same configuration:
 
 ```typescript
-// Channel server - only for agents in THIS channel
-await agent.registerChannelMcpServer({
-    id: 'chess-game',
-    name: 'Chess Game Server',
-    command: 'npx',
-    args: ['-y', '@mcp/chess'],
-    keepAliveMinutes: 10  // Keep alive 10min after last agent leaves
+await sdk.createChannel('chess-room', {
+    name: 'Chess Room',
+    mcpServers: [{
+        id: 'chess-game',
+        name: 'Chess Game',
+        transport: 'stdio',
+        command: 'bun',
+        args: ['run', './mcp/chess-server.ts'],
+        keepAliveMinutes: 30
+    }]
 });
-
-// Only agents in this channel can use chess tools
 ```
 
-**Use Cases**:
-- Game servers (chess, tic-tac-toe, etc.)
-- Project-specific databases
-- Collaborative design tools (Figma, Miro)
-- Team-specific integrations
+Channel creation rejects if any requested MCP server fails to register; it does not
+return a monitor for a partially configured channel while swallowing the failure.
 
-**Key Benefits**:
-- **Shared Instance**: All channel agents use the same server process
-- **Auto-Start**: Server starts when first agent joins channel
-- **Auto-Stop**: Server stops after keepAlive when last agent leaves
-- **Resource Efficient**: One server per channel (not per agent)
-- **Tool Isolation**: Tools only visible to channel members
+## Tool names and allowlists
 
----
-
-## Tool Names
-
-Agents see and call external tools by the **raw name the origin server reports** — the same names that come back in `toolsDiscovered`. Use those names in `allowedTools` (agent-level and channel-level) and in `executeTool()`:
+Use the raw names returned in `toolsDiscovered` in the channel key grant, the agent's
+`allowedTools`, and `executeTool()`:
 
 ```typescript
-const result = await agent.registerChannelMcpServer({
+const registration = await sdk.registerChannelMcpServer('chess-room', {
     id: 'chess-game',
-    name: 'Chess Server',
-    command: 'npx',
-    args: ['-y', '@mcp/chess']
+    name: 'Chess Game',
+    command: 'bun',
+    args: ['run', './mcp/chess-server.ts']
 });
-// result.toolsDiscovered -> ['chess_move', 'chess_board']
+
+const key = await sdk.generateKey(
+    'chess-room',
+    'player-1',
+    'Player 1',
+    undefined,
+    registration.toolsDiscovered
+);
 
 const player = await sdk.createAgent({
     agentId: 'player-1',
+    name: 'Player 1',
     channelId: 'chess-room',
-    // Raw tool names, exactly as reported by the server
-    allowedTools: ['chess_move', 'chess_board', 'messaging_send'],
-    // ... config ...
+    keyId: key.keyId,
+    secretKey: key.secretKey,
+    llmProvider: 'openrouter',
+    defaultModel: '~anthropic/claude-sonnet-latest',
+    allowedTools: registration.toolsDiscovered
 });
 
+await player.connect();
 await player.executeTool('chess_move', { from: 'e2', to: 'e4' });
 ```
 
-Internally the registry stores each external tool under a canonical namespaced name, `<serverId>__<toolName>`. For a channel server the registry's server id is `<channelId>:<serverId>`, so `chess_move` on the `chess-game` server in channel `chess-room` is stored as `chess-room:chess-game__chess_move`.
+Internally the registry also maintains a canonical
+`<serverId>__<toolName>` identifier. Prefer the raw name for models and application
+code. If a raw external name collides with an internal tool, the internal tool wins.
+If two reachable external servers expose the same raw name, give the tools distinct
+names rather than depending on registry ordering.
 
-Allowlists accept either form, and execution resolves both, scoped to the agent's channel. Prefer the raw name: LLM providers reject `:` in function names, so the canonical name of a channel server tool cannot be sent to a model.
+An agent cannot add a newly discovered tool to its own authority. The administrator
+must grant it on the channel key; the agent configuration can only request an equal
+or narrower subset.
 
-### Name Collisions
-
-- An external tool whose raw name matches an internal MXF tool is **not** exposed to agents. The internal tool wins and the registry logs an error naming the server. Rename the tool on the external server.
-- If two external servers reachable from the same channel offer the same raw name, the lexicographically first server id wins, the other is skipped, and the registry logs an error. Give the tools distinct names rather than depending on that ordering.
-
----
-
-## Complete Examples
-
-### Example 1: Register npm Package
+## Unregister
 
 ```typescript
-// Register the official MCP weather server
+await sdk.unregisterExternalMcpServer('company-tools');
+await sdk.unregisterChannelMcpServer('chess-room', 'chess-game');
+```
+
+Both methods resolve to `void` after the correlated server acknowledgement. They
+reject on authorization or lifecycle failure.
+
+Unregistration is idempotent at the manager boundary: it removes the process, tool
+registry entries, channel scope, and pending lifecycle work that still exist. This
+makes cleanup safe after a partial failure without returning a fabricated boolean.
+
+## Lifecycle behavior
+
+- An unexpected process exit removes its tools before restart is attempted.
+- `restartOnCrash` is bounded by the configured restart budget.
+- Exhausting that budget unregisters the server and its channel scope.
+- A channel join verifies that scoped servers are alive and complete a tool handshake
+  before the agent is counted as connected.
+- Disconnect and server shutdown clear owned processes, probes, restart work, and
+  keep-alive work.
+- Registration responses are correlated to the requesting administrator and server
+  ID; concurrent registrations cannot complete one another.
+
+## Environment variables
+
+Only declare values the child process needs:
+
+```typescript
 await sdk.registerExternalMcpServer({
-    id: 'weather-server',
-    name: 'Weather MCP Server',
-    command: 'npx',
-    args: ['-y', '@modelcontextprotocol/server-weather'],
-    autoStart: true,
+    id: 'weather',
+    name: 'Weather',
+    command: 'bun',
+    args: ['run', './mcp/weather.ts'],
     environmentVariables: {
         WEATHER_API_KEY: process.env.WEATHER_API_KEY!
     }
 });
-
-// Tools from the weather server are now available
-const agent = await sdk.createAgent({
-    agentId: 'weather-agent',
-    // ... config ...
-});
-
-await agent.connect();
-
-// Use weather tools
-const forecast = await agent.executeTool('get_forecast', {
-    location: 'San Francisco',
-    days: 7
-});
 ```
 
-### Example 2: Register Local Development Server
+MXF builds a least-privilege child environment and rejects protected runtime variable
+overrides. Do not pass the MXF domain key, user token, agent keys, database URI, or
+unrelated provider secrets to a child server.
 
-```typescript
-// Register your custom MCP server during development
-await sdk.registerExternalMcpServer({
-    id: 'my-dev-server',
-    name: 'My Development Server',
-    command: 'node',
-    args: ['./my-mcp-servers/dev-server.js'],
-    autoStart: true,
-    restartOnCrash: false,  // Don't auto-restart during development
-    environmentVariables: {
-        DEBUG: 'true',
-        NODE_ENV: 'development'
-    }
-});
-```
-
-### Example 3: Register Production HTTP Server
-
-```typescript
-// Connect to a production HTTP MCP server
-await sdk.registerExternalMcpServer({
-    id: 'prod-analytics',
-    name: 'Production Analytics Server',
-    transport: 'http',
-    url: 'https://mcp.mycompany.com/analytics',
-    autoStart: true,
-    healthCheckInterval: 60000,  // Check every minute
-    maxRestartAttempts: 5        // Retry 5 times on connection loss
-});
-```
-
-### Example 4: Conditional Registration
-
-```typescript
-// Register different servers based on environment
-const environment = process.env.NODE_ENV || 'development';
-
-if (environment === 'production') {
-    // Use production HTTP server
-    await sdk.registerExternalMcpServer({
-        id: 'data-server',
-        name: 'Production Data Server',
-        transport: 'http',
-        url: process.env.PROD_MCP_URL!
-    });
-} else {
-    // Use local development server
-    await sdk.registerExternalMcpServer({
-        id: 'data-server',
-        name: 'Development Data Server',
-        command: 'npm',
-        args: ['run', 'dev:mcp-server']
-    });
-}
-```
-
-### Example 5: Unregister Server
-
-```typescript
-// Stop and remove an external server
-await sdk.unregisterExternalMcpServer('my-custom-server');
-
-console.log('Server stopped and removed');
-// Tools from this server are no longer available
-```
-
-Unregistration is idempotent. It stops the process if it is running and removes the server record, any channel scope entry, and any pending keepAlive timer. Unregistering a server that is already gone (or half-gone, e.g. the record was removed but the scope entry survived) cleans up whatever remains, logs what it cleaned up, and succeeds instead of failing with "not found".
-
-### Example 6: Channel-Scoped Game Server
-
-```typescript
-// Create a game channel
-const channel = await sdk.createChannel('chess-room', {
-    name: 'Chess Championship',
-    description: 'Chess game with AI opponents'
-});
-
-// Create player agents
-const player1 = await sdk.createAgent({
-    agentId: 'player-1',
-    channelId: 'chess-room',
-    // ... config ...
-});
-
-await player1.connect();
-
-// Register channel-scoped chess server
-await player1.registerChannelMcpServer({
-    id: 'chess-game',
-    name: 'Chess Server',
-    command: 'npx',
-    args: ['-y', '@mcp/chess'],
-    keepAliveMinutes: 30,  // Keep game state for 30 minutes
-    environmentVariables: {
-        GAME_MODE: 'tournament'
-    }
-});
-
-// Player 2 joins and can use the same chess server
-const player2 = await sdk.createAgent({
-    agentId: 'player-2',
-    channelId: 'chess-room',
-    // ... config ...
-});
-
-await player2.connect();
-
-// Both players use the same chess server instance
-await player1.executeTool('chess_move', { from: 'e2', to: 'e4' });
-await player2.executeTool('chess_move', { from: 'e7', to: 'e5' });
-
-// List channel servers
-const servers = await player1.listChannelMcpServers();
-console.log(`Channel has ${servers.length} MCP server(s)`);
-
-// When both players leave, server stops after 30 min keepAlive
-```
-
-### Example 7: Multi-Channel Isolation
-
-```typescript
-// Channel 1: Chess game
-const chessAgent = await sdk.createAgent({
-    agentId: 'chess-player',
-    channelId: 'chess-room',
-    // ... config ...
-});
-
-await chessAgent.connect();
-await chessAgent.registerChannelMcpServer({
-    id: 'chess-server',
-    name: 'Chess',
-    command: 'npx',
-    args: ['-y', '@mcp/chess']
-});
-
-// Channel 2: Tic-tac-toe game
-const tttAgent = await sdk.createAgent({
-    agentId: 'ttt-player',
-    channelId: 'tictactoe-room',
-    // ... config ...
-});
-
-await tttAgent.connect();
-await tttAgent.registerChannelMcpServer({
-    id: 'tictactoe-server',
-    name: 'Tic-Tac-Toe',
-    command: 'npx',
-    args: ['-y', '@mcp/tictactoe']
-});
-
-// chessAgent sees: chess_move, chess_board, etc.
-// tttAgent sees: ttt_move, ttt_check_winner, etc.
-// No overlap! Complete isolation.
-```
-
----
-
-## Tool Discovery After Registration
-
-Registration resolves only after the MCP handshake **and** tool discovery finish. When `registerExternalMcpServer()` / `registerChannelMcpServer()` resolves, the tools named in `toolsDiscovered` are in the registry; if it rejects, none of them are. There is no window to wait out.
-
-After registering an external MCP server, its tools become available to all agents:
-
-```typescript
-// Register server
-await sdk.registerExternalMcpServer({
-    id: 'calculator-pro',
-    name: 'Advanced Calculator',
-    command: 'npx',
-    args: ['-y', '@myorg/calculator-pro-mcp']
-});
-
-// Create agent
-const agent = await sdk.createAgent({
-    agentId: 'math-agent',
-    // ... config ...
-});
-
-await agent.connect();
-
-// List all tools (includes tools from calculator-pro)
-const tools = await agent.listTools();
-
-// Filter to see calculator tools
-const calcTools = tools.filter(t => t.metadata?.source === 'calculator-pro');
-console.log('Calculator tools:', calcTools.map(t => t.name));
-
-// Use a tool from the custom server
-const result = await agent.executeTool('advanced_integration', {
-    function: 'sin(x)',
-    lowerBound: 0,
-    upperBound: Math.PI
-});
-```
-
----
-
-## Error Handling
-
-### Registration Errors
+## Failure handling
 
 ```typescript
 try {
     await sdk.registerExternalMcpServer({
-        id: 'my-server',
-        name: 'My Server',
-        command: 'invalid-command',
-        args: []
+        id: 'analytics',
+        name: 'Analytics',
+        command: 'bun',
+        args: ['run', './mcp/analytics.ts']
     });
 } catch (error) {
-    if (error.message.includes('timeout')) {
-        console.error('Registration timeout - server took too long to start');
-    } else if (error.message.includes('already registered')) {
-        console.error('Server ID already in use');
-    } else {
-        console.error('Registration failed:', error.message);
-    }
+    console.error('MCP server is not registered:', error);
 }
 ```
 
-### Server Lifecycle Errors
+Common causes are:
 
-Once a server is registered, the manager handles its process:
+- the authenticated user is not an administrator;
+- `MXF_UNSAFE_STDIO_MCP_ENABLED` is not exactly `true`;
+- the command or arguments are invalid;
+- the process exits before completing the MCP handshake;
+- tool discovery fails or the server ID is already registered.
 
-- **Unexpected exit**: logged at error level with exit code and signal, and the server's tools are removed from the registry. A clean `exit 0` counts too — any exit that was not requested is treated as a crash.
-- **Restart**: with `restartOnCrash: true` (the default) the server is restarted after a short delay and its tools are re-discovered, up to `maxRestartAttempts`.
-- **Restart budget**: a server that completes a startup gets its restart count reset, so crashes spread over days do not accumulate into a permanent outage.
-- **Budget exhausted**: the server is unregistered — process killed, server record and channel scope removed — and the removal is logged at error level. Re-register the server to get its tools back; nothing is left behind for agents to attach to.
-- **Health checks**: each running server is probed with `tools/list` every `healthCheckInterval` ms. Two consecutive failed probes restart a `restartOnCrash` server. This covers the process that is alive but no longer answering MCP, where the exit handler never fires.
-- **Agent join**: joining a channel verifies each of the channel's servers before the agent is counted as connected. A stopped server is started, a server that claims to be running is probed and restarted if it does not answer, and a scope entry whose server record is gone is removed with an error log.
-- **Registry changes**: tools entering or leaving the registry are logged per server — additions at info, removals at warn.
-- **Tool discovery failures**: reported to the caller through the failed registration; MXF itself keeps running.
+Do not continue as though the tools exist after rejection. Re-register only after
+correcting the cause.
 
----
+## Registering again after a server restart
 
-## Best Practices
-
-### 1. Use Unique Server IDs
-
-```typescript
-// ✅ Good: Descriptive unique ID
-id: 'acme-weather-v2'
-
-// ❌ Bad: Generic ID (might conflict)
-id: 'server1'
-```
-
-### 2. Set Appropriate Restart Policies
+A channel MCP server is a child process of the MXF server. When the server
+restarts, those processes are gone, and the SDK's socket reconnects to a server
+that has no record of them. `sdk.onReconnected()` fires after the socket manager
+has re-established and re-authenticated the user connection on its own — it does
+not fire for the authentication that settles `connect()` — so it is the place to
+register the server again:
 
 ```typescript
-// Development: Don't auto-restart (debug crashes)
-restartOnCrash: false
-
-// Production: Auto-restart for reliability
-restartOnCrash: true,
-maxRestartAttempts: 5
-```
-
-With `restartOnCrash: false` a crashed server stays down and its tools stay out of the registry; for a channel server, the next agent to join the channel starts it again. With `restartOnCrash: true`, exceeding `maxRestartAttempts` unregisters the server, so pick a budget that covers real restarts rather than one that hides a server that cannot stay up.
-
-### 3. Provide Environment Variables
-
-```typescript
-environmentVariables: {
-    API_KEY: process.env.MY_API_KEY!,
-    LOG_LEVEL: 'info',
-    TIMEOUT: '30000'
-}
-```
-
-### 4. Handle Registration Errors
-
-```typescript
-const registered = await sdk.registerExternalMcpServer(config);
-
-if (!registered) {
-    console.error('Registration failed - check server logs');
-    // Fallback behavior
-}
-```
-
----
-
-## Architecture
-
-### EventBus Communication
-
-Registration uses EventBus (not HTTP API):
-
-```
-SDK                           Server
- │                             │
- ├─ EXTERNAL_SERVER_REGISTER →│
- │                             ├─ ExternalMcpServerManager.registerServer()
- │                             ├─ Start server process
- │                             ├─ Discover tools
- │                             │
- │← EXTERNAL_SERVER_REGISTERED─┤
- │  (success/failure)          │
-```
-
-**Benefits**:
-- No HTTP dependency
-- Works over WebSocket
-- Real-time notifications
-- Consistent with MXF architecture
-
-### Tool Discovery Flow
-
-```
-1. SDK registers server via EventBus
-2. ExternalMcpServerManager starts server process
-3. MCP initialize handshake
-4. Tools discovered via tools/list
-5. HybridMcpToolRegistry updated
-6. Registration resolves and the success event carries the discovered tool names
-7. Agents see those tools under their raw names
-```
-
-Steps 3–5 happen before step 6, on registration and on every restart.
-
----
-
-## Comparison with Pre-Configured Servers
-
-### Before (Hardcoded Configuration)
-
-```typescript
-// Server code modification required
-// File: packages/core/src/protocols/mcp/services/ExternalServerConfigs.ts
-
-export const MY_SERVER_CONFIG: ExternalServerConfig = {
-    id: 'my-server',
-    name: 'My Server',
-    command: 'npx',
-    args: ['-y', 'my-mcp-package']
-};
-
-// Rebuild and restart server
-```
-
-### After (SDK Registration)
-
-```typescript
-// No server code modification needed
-// Runtime registration via SDK
-
-await sdk.registerExternalMcpServer({
-    id: 'my-server',
-    name: 'My Server',
-    command: 'npx',
-    args: ['-y', 'my-mcp-package']
+const stopListening = sdk.onReconnected(({ userId, attempt }) => {
+    console.log(`reconnected as ${userId} after ${attempt ?? '?'} attempt(s)`);
+    toolServerRegistered = false; // re-register on the next cycle
 });
 
-// Ready immediately
+// later
+stopListening();
 ```
 
----
+The same signal is available on the event bus as `Events.Sdk.RECONNECTED` for
+code that already subscribes through `agent.on(...)`. It is delivered locally
+and never sent to the server. Before 3.0 there was no public signal; reading the
+SDK's private `socket` field was the only way to see a reconnect.
 
-## API Reference
-
-### Global Server Methods
+## API reference
 
 ```typescript
-// Register global MCP server (available to all agents)
-await sdk.registerExternalMcpServer(config: ExternalServerConfig): Promise<{ success: boolean; toolsDiscovered?: string[] }>
+sdk.registerExternalMcpServer(config): Promise<McpServerRegistrationResult>
+sdk.unregisterExternalMcpServer(serverId): Promise<void>
 
-// Unregister global MCP server
-await sdk.unregisterExternalMcpServer(serverId: string): Promise<boolean>
+sdk.registerChannelMcpServer(channelId, config): Promise<McpServerRegistrationResult>
+sdk.unregisterChannelMcpServer(channelId, serverId): Promise<void>
+
+sdk.onReconnected(listener: (info: SdkReconnectedEventData) => void): () => void
 ```
 
-### Channel Server Methods
-
-```typescript
-// Register channel-scoped MCP server (agent must be in a channel)
-await agent.registerChannelMcpServer(config: ChannelServerConfig): Promise<{ success: boolean; toolsDiscovered?: string[] }>
-
-// List channel MCP servers
-await agent.listChannelMcpServers(channelId?: string): Promise<ChannelMcpServer[]>
-
-// Unregister channel MCP server
-await agent.unregisterChannelMcpServer(serverId: string, channelId?: string): Promise<boolean>
-```
-
-### Configuration Interfaces
-
-```typescript
-interface ExternalServerConfig {
-    id: string;
-    name: string;
-    command?: string;
-    args?: string[];
-    transport?: 'stdio' | 'http';
-    url?: string;
-    autoStart?: boolean;
-    environmentVariables?: Record<string, string>;
-    restartOnCrash?: boolean;
-    maxRestartAttempts?: number;
-}
-
-interface ChannelServerConfig extends ExternalServerConfig {
-    keepAliveMinutes?: number;  // Keep server alive after last agent leaves (default: 5)
-}
-```
-
----
-
-## Limitations & Future Enhancements
-
-### Current Limitations
-
-1. **No Agent-Private Servers**: Can't create servers exclusive to a single agent (use channel with one member as workaround)
-2. **No Handler Upload**: Can't upload JavaScript handler code, must use external process
-3. **No Cross-Channel Sharing**: Channel servers can't be shared across multiple channels (register separately if needed)
-
-### Recently Added
-
-✅ **Channel-Scoped Servers**: Share MCP server instances per channel (v1.1.0)
-✅ **Reference Counting**: Automatic lifecycle based on connected agents
-✅ **KeepAlive Cleanup**: Graceful shutdown with configurable delay
-
-### Planned Enhancements
-
-- Agent-private server registration (agent scope)
-- Server health monitoring API
-- Tool usage analytics per server
-- Cross-channel server sharing (multi-channel scope)
-
----
-
-## Troubleshooting
-
-### Global Servers
-
-#### Server Won't Start
-
-```
-Error: External server registration timeout after 30 seconds
-```
-
-**Solutions**:
-- Check command/args are correct
-- Verify package is installed (`npx -y package-name`)
-- Check environment variables are set
-- Review server logs in MXF output
-
-#### Tools Not Appearing
-
-```
-Tools from my-server not showing up
-```
-
-**Solutions**:
-- Check the registration actually resolved — it resolves only after tool discovery, so a rejection means no tools were registered
-- Look for `External server <id>: N tool(s) added to the registry` in the MXF logs; a matching `removed from the registry` line at warn level means the server stopped serving them
-- Verify server implements MCP protocol correctly
-- List tools with `agent.listTools()` to debug
-
-#### Requested Tools Not Found
-
-```
-Requested tools NOT FOUND in registry: my_tool
-```
-
-The agent's `allowedTools` names a tool the registry cannot resolve for its channel.
-
-**Solutions**:
-- Use the raw tool name from `toolsDiscovered`, not a name you invented for the server (see [Tool Names](#tool-names)); the canonical `<serverId>__<toolName>` form is accepted too
-- Confirm the server is still up — a crashed server's tools are removed from the registry, and the removal is logged at warn/error level
-- Check for a collision log: a raw name that matches an internal MXF tool is never exposed to agents
-
-#### Registration Fails
-
-```
-Error: Server with ID my-server is already registered
-```
-
-**Solutions**:
-- Use unique server ID
-- Unregister old server first: `await sdk.unregisterExternalMcpServer(id)`
-- Check server isn't pre-configured in `ExternalServerConfigs.ts`
-
-### Channel Servers
-
-#### Agent Not in Channel
-
-```
-Error: Cannot register channel MCP server: agent not in a channel
-```
-
-**Solutions**:
-- Ensure agent has joined a channel first
-- Check `agent.channelId` is set
-- Call `await agent.connect()` after creating agent with channelId
-
-#### Tools Only Visible to Channel Members
-
-```
-Why can't agents in other channels see my tools?
-```
-
-**This is by design!** Channel-scoped servers are intentionally isolated:
-- Tools only visible to agents in the same channel
-- Use `registerExternalMcpServer()` for global tools
-- Use separate channel servers for each channel
-
-#### Server Not Auto-Starting
-
-```
-Channel server registered but not starting when agent joins
-```
-
-Agent join starts a stopped channel server and awaits its handshake and tool discovery, so a server that stays down failed to start rather than being skipped.
-
-**Solutions**:
-- Check `autoStart: true` in config (default)
-- Verify agent successfully joined channel (listen for AGENT_JOINED event)
-- Look for `Channel server <id> could not be made available for agent <agentId>` in the MXF logs — it carries the startup error
-- Ensure command/args are valid
-
-#### Orphaned Channel Server
-
-```
-Agent <id> tried to join channel server <serverId>, but its server record is gone
-```
-
-The channel still has a scope entry for a server that no longer exists — usually because the server exhausted its restart budget and was unregistered. The orphaned scope entry is removed when the error is logged.
-
-**Solutions**:
-- Re-register the channel server: `await agent.registerChannelMcpServer(config)`
-- Fix whatever made it crash repeatedly before re-registering; the earlier crash and eviction are both in the logs at error level
-- Re-registration also refreshes the channel's stored server record (config, `registeredBy`, `registeredAt`, `keepAliveMinutes`)
-
----
-
-## Additional Resources
-
-- [MCP Server Specification](https://spec.modelcontextprotocol.io/)
-- [Building MCP Servers](https://modelcontextprotocol.io/docs/building)
-- [MCP SDK Repository](https://github.com/modelcontextprotocol/typescript-sdk)
-- [Example MCP Servers](https://github.com/modelcontextprotocol/servers)
-
-### Working Examples
-
-- **Global Servers**: `examples/external-mcp-registration/`
-  - Run: `bun run demo:external-mcp`
-  - Shows global server registration and tool usage
-
-- **Channel Servers**: `examples/channel-mcp-registration/`
-  - Run: `bun run demo:channel-mcp`
-  - Shows channel-scoped servers, multi-agent sharing, lifecycle management
-
----
-
-## Decision Matrix: When to Use Each Scope
-
-| Scenario | Use Global Server | Use Channel Server |
-|----------|------------------|-------------------|
-| System utilities (calculator, time, etc.) | ✅ | ❌ |
-| Company-wide integrations (Slack, email) | ✅ | ❌ |
-| Game servers (chess, poker, etc.) | ❌ | ✅ |
-| Project-specific databases | ❌ | ✅ |
-| Collaborative tools (Figma, Miro) | ❌ | ✅ |
-| Shared state across agents | ❌ | ✅ |
-| One-off tool for single agent | ❌ | ✅ (or global) |
-
----
-
-**Status**: ✅ **Feature Complete** - Global and channel-scoped MCP server registration fully implemented (v1.1.0)
-
-For questions or issues, see the main SDK documentation or open an issue on GitHub.
+See the runnable examples in `examples/external-mcp-registration/` and
+`examples/channel-mcp-registration/`.

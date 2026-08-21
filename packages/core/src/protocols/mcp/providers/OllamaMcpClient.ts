@@ -113,6 +113,8 @@ const logger = new Logger('debug', 'OllamaMcpClient', 'server');
  * Ollama MCP Client implementation
  */
 export class OllamaMcpClient extends BaseMcpClient {
+    protected isExternalLlmProvider = false;
+
     private baseUrl: string;
     private timeout: number;
 

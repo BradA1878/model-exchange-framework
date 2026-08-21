@@ -64,7 +64,7 @@ A system (P1) that automatically selects optimal LLM models and parameters based
 The central event distribution system in MXF. All communication flows through the EventBus using RxJS observables. Events are typed and include payloads defined in `EventNames.ts`.
 
 ### External MCP Server
-An MCP tool server running as a separate process, connected to MXF via stdio or HTTP. Extends MXF's capabilities with external tools.
+An MCP tool server running as a separate process, connected to MXF through stdio. Runtime HTTP MCP registration is not implemented.
 
 ---
 

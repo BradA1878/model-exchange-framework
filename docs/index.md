@@ -25,6 +25,7 @@ Welcome to the comprehensive technical documentation for the Model Exchange Fram
 - **[Knowledge Graph API Tools](./api/knowledge-graph-tools.md)** - KG tool reference
 - **[Memory Utility Learning (MULS)](./mxf/memory-utility-learning.md)** - Q-value weighted memory retrieval
 - **[ORPAR-Memory Integration](./mxf/orpar-memory-integration.md)** - Phase-aware memory coupling
+- **[User Memory](./mxf/user-memory.md)** - Cross-session memory about the user, exposed as four MCP tools
 
 ### 🖥️ **Interactive CLI**
 - **[Interactive CLI Guide](./mxf/interactive-cli.md)** - TUI interface, slash commands, agent system, one-shot mode
@@ -335,7 +336,7 @@ bun run start
 ### Your First Agent
 
 ```typescript
-// Install with: npm install @mxf-dev/sdk
+// Install with: bun add @mxf-dev/sdk
 import { MxfSDK, LlmProviderType } from '@mxf-dev/sdk';
 
 // Initialize SDK with Personal Access Token (recommended)
@@ -348,16 +349,16 @@ const sdk = new MxfSDK({
 await sdk.connect();
 
 // Create channel and generate keys first
-await sdk.createChannel({
-    channelId: 'getting-started',
+await sdk.createChannel('getting-started', {
     name: 'Getting Started',
     description: 'First agent channel'
 });
 
-const keys = await sdk.generateKey({
-    channelId: 'getting-started',
-    name: 'first-agent-key'
-});
+const keys = await sdk.generateKey(
+    'getting-started',
+    'my-first-agent',
+    'first-agent-key'
+);
 
 // Create agent
 const agent = await sdk.createAgent({
@@ -373,7 +374,7 @@ const agent = await sdk.createAgent({
     // Required: LLM configuration
     llmProvider: LlmProviderType.OPENROUTER,
     apiKey: process.env.OPENROUTER_API_KEY!,
-    defaultModel: 'anthropic/claude-3.5-sonnet',
+    defaultModel: '~anthropic/claude-sonnet-latest',
 
     // Required: Agent personality/behavior
     agentConfigPrompt: `You are a helpful AI assistant. Be concise and friendly.`,

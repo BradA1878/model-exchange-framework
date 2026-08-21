@@ -33,9 +33,14 @@ import { ControlLoopEvents } from '@mxf-dev/core/events/event-definitions/Contro
 import { OrparEvents } from '@mxf-dev/core/events/event-definitions/OrparEvents';
 import { PublicEventName, isPublicEvent, getEventCategory } from '@mxf-dev/core/events/PublicEvents';
 import { PayloadOf } from '@mxf-dev/core/events/EventBusBase';
-import { Subscription } from 'rxjs';
+import { firstValueFrom, Subscription } from 'rxjs';
 import { v4 as uuidv4 } from 'uuid';
-import { createChannelMessage, ChannelMessage } from '@mxf-dev/core/schemas/MessageSchemas';
+import {
+    createChannelMessage,
+    ChannelMessage,
+    ContentFormat,
+    MessageMetadata,
+} from '@mxf-dev/core/schemas/MessageSchemas';
 import { 
     createChannelEventPayload, 
     createSubscriptionEventPayload, 
@@ -47,9 +52,14 @@ import {
     createChannelMessageEventPayload,
     ChannelMessageEventPayload 
 } from '@mxf-dev/core/schemas/EventPayloadSchema';
-import { MemoryEvents, MemoryScope, MemoryUpdateEvent } from '@mxf-dev/core/events/event-definitions/MemoryEvents';
 import { createStrictValidator } from '@mxf-dev/core/utils/validation';
-import { ApiService, ChannelContext, ChannelMemory } from './MxfApiService.js';
+import {
+    ApiService,
+    ChannelContext,
+    ChannelMemory,
+    ChannelMemoryUpdate
+} from './MxfApiService.js';
+import { MxfMemoryService } from './MxfMemoryService.js';
 // Removed SocketProvider - internal implementation detail
 import { ChannelConfig } from '@mxf-dev/core/interfaces/ChannelConfig';
 import { ChannelInfo } from '@mxf-dev/core/interfaces/ChannelInfo';
@@ -57,17 +67,82 @@ import { ChannelConnectionConfig } from '@mxf-dev/core/interfaces/ChannelConnect
 
 // Internal helpers (not exported from SDK)
 import { TaskHelper, TaskConfig } from './internal/TaskHelper.js';
-import { 
-    AdminHelper, 
-    ChannelCreateConfig, 
-    ChannelCreateResult, 
-    KeyGenerateConfig, 
-    KeyGenerateResult, 
-    KeyInfo 
-} from './internal/AdminHelper.js';
 
 // Re-export types for public API use
-export type { TaskConfig, ChannelCreateConfig, ChannelCreateResult, KeyGenerateConfig, KeyGenerateResult, KeyInfo };
+export type { TaskConfig };
+
+/**
+ * Channel creation configuration (administrative; see MxfSDK.createChannel)
+ */
+export interface ChannelCreateConfig {
+    channelId: string;
+    name: string;
+    metadata?: Record<string, unknown>;
+}
+
+/**
+ * Channel creation result
+ */
+export interface ChannelCreateResult {
+    channelId: string;
+    name: string;
+}
+
+/**
+ * Key generation configuration (administrative; see MxfSDK.generateKey)
+ */
+export interface KeyGenerateConfig {
+    channelId: string;
+    /** Globally keyed identity this credential authenticates as. */
+    agentId: string;
+    name?: string;
+    expiresAt?: Date;
+    allowedTools?: string[];
+}
+
+/**
+ * Key generation result
+ */
+export interface KeyGenerateResult {
+    keyId: string;
+    secretKey: string;
+    channelId: string;
+    agentId: string;
+    expiresAt?: string;
+    allowedTools?: string[];
+}
+
+/**
+ * Key information
+ */
+export interface KeyInfo {
+    keyId: string;
+    name?: string;
+    isActive: boolean;
+    expiresAt?: string;
+    createdAt: string;
+    lastUsed?: string;
+}
+
+/**
+ * Agent channel keys authorize tool use and messaging, not channel or key
+ * administration. The server installs the channel-create and key-generate
+ * handlers only for user sessions, so these calls can never succeed from an
+ * agent connection. Use MxfSDK.createChannel()/generateKey() on an
+ * authenticated user connection, or the REST key routes.
+ */
+export class AgentChannelAdministrationError extends Error {
+    public readonly code = 'MXF_ADMIN_CHANNEL_REQUIRED';
+
+    constructor(operation: string) {
+        super(
+            `${operation} is a channel administration operation and cannot be performed ` +
+            'with an agent/channel key. Use the corresponding MxfSDK method on an ' +
+            'authenticated user connection.'
+        );
+        this.name = 'AgentChannelAdministrationError';
+    }
+}
 
 /**
  * Task event callback types for SDK users
@@ -79,6 +154,18 @@ export interface TaskEventCallbacks {
     onTaskAssigned?: (taskData: any) => void;
     onTaskStarted?: (taskData: any) => void;
     onTaskProgressUpdated?: (taskData: any) => void;
+}
+
+/** Options for an identity-bound channel message. */
+export interface MxfMessageOptions {
+    /** Caller-supplied message identity. A UUID is generated when omitted. */
+    messageId?: string;
+    /** Optional exact recipient; omit to address the channel. */
+    receiverId?: string;
+    format?: ContentFormat;
+    encrypted?: boolean;
+    metadata?: Partial<MessageMetadata>;
+    context?: Record<string, unknown>;
 }
 
 /**
@@ -181,7 +268,9 @@ export class MxfService implements IInternalChannelService {
             maxAgents: config.maxAgents ?? 100,
             allowAnonymous: config.allowAnonymous ?? false,
             metadata: config.metadata || {},
-            allowedTools: config.allowedTools || [],
+            // Channel [] means no additional channel-level restriction. Agent
+            // policy is carried separately in connectionConfig.allowedTools.
+            allowedTools: config.allowedTools ?? [],
             systemLlmEnabled: config.systemLlmEnabled ?? true,
             mcpServers: config.mcpServers || []
         };
@@ -415,6 +504,19 @@ export class MxfService implements IInternalChannelService {
         this.addSocketHandler(CoreSocketEvents.DISCONNECT, (reason: string) => {
             this.connected = false;
 
+            if (this.agentId) {
+                MxfMemoryService.getInstance().cancelPendingOperations(
+                    this.agentId,
+                    this.channelId,
+                    `agent socket disconnected: ${reason}`
+                );
+                TaskHelper.cancelPendingOperations(
+                    this.channelId,
+                    this.agentId,
+                    `Task request cancelled because the channel disconnected: ${reason}`
+                );
+            }
+
             try {
                 const agentId = this.validateAgentId();
 
@@ -525,16 +627,14 @@ export class MxfService implements IInternalChannelService {
     /**
      * Send a message to the channel
      * @param messageContent - Content of the message to send
-     * @param fromAgentId - ID of the agent sending the message
      * @param options - Optional message options
      * @returns The generated message ID
      */
     public async sendMessage(
         messageContent: string | Record<string, any>,
-        fromAgentId: string,
-        options: Record<string, any> = {}
+        options: MxfMessageOptions = {}
     ): Promise<string> {
-        this.validator.assertIsNonEmptyString(fromAgentId);
+        const fromAgentId = this.validateAgentId();
         
         // Generate a unique message ID if not provided
         const messageId = options.messageId || this.generateMessageId();
@@ -547,12 +647,16 @@ export class MxfService implements IInternalChannelService {
                 fromAgentId,
                 messageContent,
                 {
+                    ...options,
                     metadata: {
+                        ...options.metadata,
                         messageId,
-                        timestamp: Date.now(),
-                        ...options.metadata
+                        timestamp: Date.now()
                     },
-                    ...options
+                    context: {
+                        ...options.context,
+                        channelId: this.channelId
+                    }
                 }
             );
             
@@ -706,8 +810,10 @@ export class MxfService implements IInternalChannelService {
                     return;
                 }
 
-                // Forward the event to EventBus.client so SDK components can receive it
-                EventBus.client.emitOn(this.agentId!, eventName, payload);
+                // The socket already delivered this event. Publish it only to
+                // local SDK subscribers; emitOn() would send it back to the
+                // server and create an echo loop for control-loop event names.
+                EventBus.client.emitLocal(eventName, payload);
             });
         }
 
@@ -742,17 +848,13 @@ export class MxfService implements IInternalChannelService {
             // Enhanced agent-level event filtering
             // For task assignment events, only process if we're assigned
             if (eventType === 'assigned') {
-                const assignedAgents = payload.assignedAgents || (payload.agentId && payload.agentId !== 'system' ? [payload.agentId] : []);
-                const isAssignedToUs = assignedAgents.includes(agentId);
-                const isSystemAssignment = payload.agentId === 'system';
-                
-                // Only process if assigned to us or it's a system assignment in our channel
-                if (!isAssignedToUs && !isSystemAssignment) {
-                    //;
+                // The envelope agentId is the creator/emitter. Assignment authority
+                // names its exact recipient in data.toAgentId, which also prevents a
+                // second MxfClient sharing this process-local EventBus from consuming
+                // a sibling's assignment.
+                if (payload.data?.toAgentId !== agentId) {
                     return;
                 }
-                
-                //;
             }
             
             // For task completion events, log who completed the task but allow all agents to receive for coordination
@@ -848,6 +950,14 @@ export class MxfService implements IInternalChannelService {
      */
     public async disconnect(): Promise<void> {
         try {
+            if (this.agentId) {
+                MxfMemoryService.getInstance().cancelPendingOperations(
+                    this.agentId,
+                    this.channelId,
+                    'channel service disconnected explicitly'
+                );
+            }
+
             // Drop listeners registered through on()
             for (const [, subscriptions] of this.channelEventListeners.entries()) {
                 subscriptions.forEach(sub => sub.unsubscribe());
@@ -873,6 +983,11 @@ export class MxfService implements IInternalChannelService {
 
             // Unregister this agent's socket from the EventBus registry
             if (this.agentId) {
+                TaskHelper.cancelPendingOperations(
+                    this.channelId,
+                    this.agentId,
+                    'Task request cancelled because the channel was disconnected'
+                );
                 EventBus.client.unregisterSocket(this.agentId);
             }
 
@@ -970,145 +1085,77 @@ export class MxfService implements IInternalChannelService {
 
     /**
      * Get or create shared channel memory
-     * @returns Promise resolving to channel memory or null if API service is not available
+     * @returns Promise resolving to authoritative channel memory
      */
-    public async getSharedMemory(): Promise<ChannelMemory | null> {
-        try {
-            if (!this.apiService) {
-                this.logger.warn(`[Channel:${this.channelId}] API service not initialized. Cannot access channel memory.`);
-                return null;
-            }
-
-            // Get or create shared memory
-            this.channelMemory = await this.apiService.getOrCreateChannelMemory(this.channelId);
-            return this.channelMemory;
-        } catch (error) {
-            const errorMessage = error instanceof Error ? error.message : String(error);
-            this.logger.error(`[Channel:${this.channelId}] Error accessing shared memory: ${errorMessage}`);
-            return null;
+    public async getSharedMemory(): Promise<ChannelMemory> {
+        if (!this.apiService) {
+            throw new Error(
+                `[Channel:${this.channelId}] API service is required to access shared memory`
+            );
         }
+
+        this.channelMemory = await this.apiService.getOrCreateChannelMemory(this.channelId);
+        return this.channelMemory;
     }
 
     /**
      * Update shared channel memory
      * @param update Memory update data
-     * @returns Promise resolving to updated channel memory or null if API service is not available
+     * @returns Promise resolving to the authoritative updated channel memory
      */
-    public async updateSharedMemory(update: Partial<ChannelMemory>): Promise<ChannelMemory | null> {
-        try {
-            if (!this.apiService) {
-                this.logger.warn(`[Channel:${this.channelId}] API service not initialized. Cannot update shared memory.`);
-                return null;
-            }
-
-            // Update memory via API
-            const updatedMemory = await this.apiService.updateChannelMemory(this.channelId, update);
-            
-            if (updatedMemory) {
-                this.channelMemory = updatedMemory;
-
-                // Emit memory update event
-                try {
-                    const agentId = this.validateAgentId(); // Agent performing the action or context for the event
-                    const operationId = uuidv4();
-                    const timestamp = Date.now();
-
-                    const memoryUpdatePayload: MemoryUpdateEvent = {
-                        id: this.channelId,       // ID of the memory resource being updated (channel memory)
-                        data: update,             // The partial update data that was applied
-                        scope: MemoryScope.CHANNEL,
-                        operationId,
-                        timestamp,
-                        // metadata can be omitted if not needed
-                    };
-
-                    EventBus.client.emitOn(this.agentId!, MemoryEvents.UPDATE, memoryUpdatePayload);
-                } catch (eventError) {
-                    const eventErrorMessage = eventError instanceof Error ? eventError.message : String(eventError);
-                    this.logger.error(`[Channel:${this.channelId}] Error emitting ${MemoryEvents.UPDATE} event: ${eventErrorMessage}`);
-                    // Decide if this error should affect the outcome of updateSharedMemory
-                }
-                return this.channelMemory;
-            }
-            return null; // If apiService didn't return updated memory
-        } catch (error) {
-            const errorMessage = error instanceof Error ? error.message : String(error);
-            this.logger.error(`[Channel:${this.channelId}] Error updating shared memory: ${errorMessage}`);
-            // Optionally emit a MemoryEvents.UPDATE_ERROR here if defined and appropriate
-            return null;
+    public async updateSharedMemory(update: ChannelMemoryUpdate): Promise<ChannelMemory> {
+        if (!this.apiService) {
+            throw new Error(
+                `[Channel:${this.channelId}] API service is required to update shared memory`
+            );
         }
+
+        const updatedMemory = await this.apiService.updateChannelMemory(this.channelId, update);
+        this.channelMemory = updatedMemory;
+        return updatedMemory;
     }
 
     /**
      * Add a note to shared channel memory
      * @param key Note key
      * @param value Note value
-     * @returns Promise resolving to updated channel memory or null if API service is not available
+     * @returns Promise resolving to updated channel memory
      */
-    public async addSharedNote(key: string, value: any): Promise<ChannelMemory | null> {
-        try {
-            if (!this.apiService) {
-                this.logger.warn(`[Channel:${this.channelId}] API service not initialized. Cannot add shared note.`);
-                return null;
+    public async addSharedNote(key: string, value: unknown): Promise<ChannelMemory> {
+        return this.updateSharedMemory({
+            notes: {
+                [key]: value
             }
-
-            return await this.updateSharedMemory({
-                notes: {
-                    [key]: value
-                }
-            });
-        } catch (error) {
-            const errorMessage = error instanceof Error ? error.message : String(error);
-            this.logger.error(`[Channel:${this.channelId}] Error adding shared note: ${errorMessage}`);
-            return null;
-        }
+        });
     }
 
     /**
      * Update shared state in channel memory
      * @param key State key
      * @param value State value
-     * @returns Promise resolving to updated channel memory or null if API service is not available
+     * @returns Promise resolving to updated channel memory
      */
-    public async updateSharedState(key: string, value: any): Promise<ChannelMemory | null> {
-        try {
-            if (!this.apiService) {
-                this.logger.warn(`[Channel:${this.channelId}] API service not initialized. Cannot update shared state.`);
-                return null;
+    public async updateSharedState(key: string, value: unknown): Promise<ChannelMemory> {
+        return this.updateSharedMemory({
+            sharedState: {
+                [key]: value
             }
-
-            return await this.updateSharedMemory({
-                sharedState: {
-                    [key]: value
-                }
-            });
-        } catch (error) {
-            const errorMessage = error instanceof Error ? error.message : String(error);
-            this.logger.error(`[Channel:${this.channelId}] Error updating shared state: ${errorMessage}`);
-            return null;
-        }
+        });
     }
 
     /**
      * Add conversation entry to channel memory
      * @param entry Conversation entry to add
-     * @returns Promise resolving to channel memory or null if API service is not available
+     * @returns Promise resolving to the authoritative full post-append history
      */
-    public async addToSharedConversationHistory(entry: any): Promise<ChannelMemory | null> {
-        try {
-            if (!this.apiService) {
-                this.logger.warn(`[Channel:${this.channelId}] API service not initialized. Cannot update conversation history.`);
-                return null;
-            }
-
-            return await this.updateSharedMemory({
-                conversationHistory: [entry]
-            });
-        } catch (error) {
-            const errorMessage = error instanceof Error ? error.message : String(error);
-            this.logger.error(`[Channel:${this.channelId}] Error adding to conversation history: ${errorMessage}`);
-            return null;
-        }
+    public async addToSharedConversationHistory(entry: unknown): Promise<unknown[]> {
+        return firstValueFrom(
+            MxfMemoryService.getInstance().appendChannelMessages(
+                this.validateAgentId(),
+                this.channelId,
+                [entry]
+            )
+        );
     }
 
     /**
@@ -1513,7 +1560,7 @@ export class MxfService implements IInternalChannelService {
      * 
      * @example
      * ```typescript
-     * const taskId = await agent.channelService.createTask({
+     * const taskId = await agent.mxfService.createTask({
      *     title: 'Schedule Interview',
      *     description: 'Find time for technical interview',
      *     assignedAgentIds: ['recruiter', 'candidate', 'scheduler'],
@@ -1538,7 +1585,7 @@ export class MxfService implements IInternalChannelService {
      * 
      * @example
      * ```typescript
-     * await agent.channelService.completeTask('task-123', {
+     * await agent.mxfService.completeTask('task-123', {
      *     scheduledTime: '2pm Tuesday',
      *     attendees: ['recruiter', 'candidate']
      * });
@@ -1552,6 +1599,20 @@ export class MxfService implements IInternalChannelService {
     }
 
     /**
+     * Fail an assigned task and wait for the server's authoritative failure event.
+     *
+     * @param taskId - Task ID to fail
+     * @param error - Human-readable failure reason
+     */
+    public async failTask(taskId: string, error: string): Promise<void> {
+        const agentId = this.validateAgentId();
+        this.validator.assertIsNonEmptyString(taskId, 'taskId');
+        this.validator.assertIsNonEmptyString(error, 'error');
+
+        await TaskHelper.failTask(taskId, agentId, this.channelId, error);
+    }
+
+    /**
      * Cancel a task
      * Simplified API for task cancellation
      * 
@@ -1560,7 +1621,7 @@ export class MxfService implements IInternalChannelService {
      * 
      * @example
      * ```typescript
-     * await agent.channelService.cancelTask('task-123', 'Client unavailable');
+     * await agent.mxfService.cancelTask('task-123', 'Client unavailable');
      * ```
      */
     public async cancelTask(taskId: string, reason?: string): Promise<void> {
@@ -1573,106 +1634,47 @@ export class MxfService implements IInternalChannelService {
     // ============================================================
     // ADMIN OPERATIONS
     // ============================================================
+    //
+    // Channel and key administration is a user-session capability. These
+    // methods stay on the agent service so a caller gets a typed, immediate
+    // error instead of a request the server silently drops.
 
     /**
-     * Create a new channel (admin operation)
-     * 
-     * Creates a channel using event-driven architecture instead of HTTP API.
-     * Requires admin/creator privileges.
-     * 
-     * @param config - Channel creation configuration
-     * @returns Promise resolving to channel creation result
-     * 
-     * @example
-     * ```typescript
-     * const result = await agent.mxfService.createChannel({
-     *     channelId: 'my-channel',
-     *     name: 'My Channel',
-     *     metadata: { purpose: 'Demo' }
-     * });
-     * console.log('Channel created:', result.channelId);
-     * ```
+     * Channel creation is not available on an agent connection.
+     *
+     * @throws AgentChannelAdministrationError immediately; use MxfSDK.createChannel()
      */
-    public async createChannel(config: ChannelCreateConfig): Promise<ChannelCreateResult> {
-        const agentId = this.validateAgentId();
-        
-        // Use internal helper (hides EventBus from developer)
-        return await AdminHelper.createChannel(config, agentId);
+    public async createChannel(_config: ChannelCreateConfig): Promise<ChannelCreateResult> {
+        throw new AgentChannelAdministrationError('createChannel');
     }
 
     /**
-     * Generate a channel key (admin operation)
-     * 
-     * Generates authentication keys for agents to join channels.
-     * Uses event-driven architecture instead of HTTP API.
-     * 
-     * @param config - Key generation configuration
-     * @returns Promise resolving to generated key credentials
-     * 
-     * @example
-     * ```typescript
-     * const key = await agent.mxfService.generateKey({
-     *     channelId: 'my-channel',
-     *     agentId: 'new-agent',
-     *     name: 'Agent Access Key',
-     *     expiresAt: new Date(Date.now() + 86400000) // 24 hours
-     * });
-     * console.log('Key ID:', key.keyId);
-     * console.log('Secret:', key.secretKey);
-     * ```
+     * Key generation is not available on an agent connection.
+     *
+     * @throws AgentChannelAdministrationError immediately; use MxfSDK.generateKey()
      */
-    public async generateKey(config: KeyGenerateConfig): Promise<KeyGenerateResult> {
-        const agentId = this.validateAgentId();
-        
-        // Use internal helper (hides EventBus from developer)
-        return await AdminHelper.generateKey(config, agentId);
+    public async generateKey(_config: KeyGenerateConfig): Promise<KeyGenerateResult> {
+        throw new AgentChannelAdministrationError('generateKey');
     }
 
     /**
-     * Deactivate a channel key (admin operation)
-     * 
-     * Deactivates an authentication key, preventing further use.
-     * Uses event-driven architecture instead of HTTP API.
-     * 
-     * @param keyId - Key ID to deactivate
-     * @returns Promise resolving when key is deactivated
-     * 
-     * @example
-     * ```typescript
-     * await agent.mxfService.deactivateKey('key_123');
-     * console.log('Key deactivated');
-     * ```
+     * Key deactivation is not available on an agent connection.
+     *
+     * @throws AgentChannelAdministrationError immediately; use the REST key routes
+     *         on an authenticated user session
      */
-    public async deactivateKey(keyId: string): Promise<void> {
-        const agentId = this.validateAgentId();
-        
-        // Use internal helper (hides EventBus from developer)
-        await AdminHelper.deactivateKey(keyId, this.channelId, agentId);
+    public async deactivateKey(_keyId: string): Promise<void> {
+        throw new AgentChannelAdministrationError('deactivateKey');
     }
 
     /**
-     * List channel keys (admin operation)
-     * 
-     * Lists authentication keys for the current channel.
-     * Uses event-driven architecture instead of HTTP API.
-     * 
-     * @param activeOnly - Whether to list only active keys (default: true)
-     * @returns Promise resolving to array of key information
-     * 
-     * @example
-     * ```typescript
-     * const keys = await agent.mxfService.listKeys(true);
-     * console.log(`Found ${keys.length} active keys`);
-     * keys.forEach(key => {
-     *     console.log(`- ${key.keyId}: ${key.name || 'Unnamed'}`);
-     * });
-     * ```
+     * Key listing is not available on an agent connection.
+     *
+     * @throws AgentChannelAdministrationError immediately; use the REST key routes
+     *         on an authenticated user session
      */
-    public async listKeys(activeOnly: boolean = true): Promise<KeyInfo[]> {
-        const agentId = this.validateAgentId();
-        
-        // Use internal helper (hides EventBus from developer)
-        return await AdminHelper.listKeys(this.channelId, agentId, activeOnly);
+    public async listKeys(_activeOnly: boolean = true): Promise<KeyInfo[]> {
+        throw new AgentChannelAdministrationError('listKeys');
     }
 
     // ==================== PUBLIC EVENT API ====================
@@ -1692,14 +1694,14 @@ export class MxfService implements IInternalChannelService {
      * @example
      * ```typescript
      * // Listen for all messages in the channel
-     * agent.channelService.on(Events.Message.AGENT_MESSAGE, (payload) => {
+     * agent.mxfService.on(Events.Message.AGENT_MESSAGE, (payload) => {
      *     if (payload.channelId === 'my-channel') {
      *         console.log('Channel message:', payload);
      *     }
      * });
      * 
      * // Listen for task events in the channel
-     * agent.channelService.on(Events.Task.COMPLETED, (payload) => {
+     * agent.mxfService.on(Events.Task.COMPLETED, (payload) => {
      *     console.log('Task completed in channel:', payload);
      * });
      * ```
@@ -1745,7 +1747,7 @@ export class MxfService implements IInternalChannelService {
      * @example
      * ```typescript
      * // Remove all handlers for an event
-     * agent.channelService.off(Events.Message.CHANNEL_MESSAGE);
+     * agent.mxfService.off(Events.Message.CHANNEL_MESSAGE);
      * ```
      */
     public off(eventName: PublicEventName): this {

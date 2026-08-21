@@ -80,7 +80,7 @@ async function channelMcpDemo() {
         secretKey: agent1Key.secretKey,
         llmProvider: LlmProviderType.OPENROUTER,
         apiKey: process.env.OPENROUTER_API_KEY!,
-        defaultModel: 'google/gemini-2.0-flash-thinking-exp-01-21',
+        defaultModel: 'google/gemini-2.5-flash',
         description: 'First player in the game room',
         allowedTools: [
             'task_complete',
@@ -103,7 +103,7 @@ async function channelMcpDemo() {
         secretKey: agent2Key.secretKey,
         llmProvider: LlmProviderType.OPENROUTER,
         apiKey: process.env.OPENROUTER_API_KEY!,
-        defaultModel: 'google/gemini-2.0-flash-thinking-exp-01-21',
+        defaultModel: 'google/gemini-2.5-flash',
         description: 'Second player in the game room',
         allowedTools: [
             'task_complete',
@@ -117,16 +117,16 @@ async function channelMcpDemo() {
     console.log('✅ Agent 2 (Player 2) connected to channel\n');
 
     // =========================================================================
-    // STEP 2: Register Channel-Scoped MCP Server (Agent 1)
+    // STEP 2: Register Channel-Scoped MCP Server (Administrator SDK)
     // =========================================================================
 
-    console.log('📦 Step 2: Agent 1 registers channel-scoped MCP server...\n');
+    console.log('📦 Step 2: Administrator SDK registers channel-scoped MCP server...\n');
 
     const serverPath = join(__dirname, 'simple-custom-mcp-server.ts');
     console.log(`   Server path: ${serverPath}\n`);
 
     try {
-        const result = await agent1.registerChannelMcpServer({
+        const result = await sdk.registerChannelMcpServer(channelId, {
             id: 'game-tools',
             name: 'Game Tools MCP Server',
             command: 'ts-node',
@@ -234,7 +234,7 @@ async function channelMcpDemo() {
     await agent1.connect();
 
     try {
-        await agent1.unregisterChannelMcpServer('game-tools');
+        await sdk.unregisterChannelMcpServer(channelId, 'game-tools');
         console.log('✅ Channel MCP server unregistered successfully!\n');
     } catch (error) {
         console.error('❌ Unregistration error:', error);

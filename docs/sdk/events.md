@@ -39,18 +39,19 @@ agent.on(Events.Message.AGENT_MESSAGE, (payload) => {
 Listen only within the agent's specific channel:
 
 ```typescript
-agent.channelService.on(Events.Message.AGENT_MESSAGE, (payload) => {
+agent.mxfService.on(Events.Message.AGENT_MESSAGE, (payload) => {
     // payload.channelId is always this agent's channel
-    console.log('Message in my channel:', payload.data.content);
+    console.log('Message in my channel:', payload.data.content.data);
 });
 
 // Remove listener
-agent.channelService.off(Events.Message.AGENT_MESSAGE);
+agent.mxfService.off(Events.Message.AGENT_MESSAGE);
 ```
 
 ### Channel Monitoring (Observer Pattern)
 
-Monitor ALL events from ALL agents in a channel without creating an agent:
+`createChannel()` returns a monitor for public events received by connected SDK/agent
+sockets in this process:
 
 ```typescript
 import { MxfSDK, Events } from '@mxf-dev/sdk';
@@ -64,8 +65,7 @@ const sdk = new MxfSDK({
 
 await sdk.connect();
 
-// Create a channel monitor (no agent needed)
-const monitor = sdk.createChannelMonitor('my-channel');
+const monitor = await sdk.createChannel('my-channel', { name: 'My Channel' });
 
 // Listen to all messages in the channel
 monitor.on(Events.Message.AGENT_MESSAGE, (payload) => {
@@ -127,13 +127,6 @@ agent.on(Events.Agent.JOIN_CHANNEL, (payload) => {
 agent.on(Events.Agent.LEAVE_CHANNEL, (payload) => {
     console.log('Left channel:', payload.data.channelId);
 });
-
-// Tool configuration updates (for dynamic tool gating)
-agent.on(Events.Agent.ALLOWED_TOOLS_UPDATED, (payload) => {
-    console.log('Tools updated for agent:', payload.agentId);
-    console.log('New allowed tools:', payload.allowedTools);
-    console.log('Success:', payload.success);
-});
 ```
 
 ### Message Events
@@ -146,13 +139,13 @@ import { Events } from '@mxf-dev/sdk';
 // Agent-to-agent messages
 agent.on(Events.Message.AGENT_MESSAGE, (payload) => {
     console.log('From:', payload.data.senderId);
-    console.log('Content:', payload.data.content);
+    console.log('Content:', payload.data.content.data);
     console.log('Channel:', payload.channelId);
 });
 
 // Channel-wide messages
 agent.on(Events.Message.CHANNEL_MESSAGE, (payload) => {
-    console.log('Channel message:', payload.data.content);
+    console.log('Channel message:', payload.data.content.data);
 });
 
 // Message delivery confirmation
@@ -371,8 +364,6 @@ All available events organized by category:
 - `Events.Agent.ERROR`
 - `Events.Agent.JOIN_CHANNEL`
 - `Events.Agent.LEAVE_CHANNEL`
-- `Events.Agent.ALLOWED_TOOLS_UPDATE` - Request to update allowed tools
-- `Events.Agent.ALLOWED_TOOLS_UPDATED` - Confirmation of tool update
 
 ### Channel Events
 - `Events.Channel.AGENT_JOINED`
@@ -380,96 +371,12 @@ All available events organized by category:
 - `Events.Channel.CREATED`
 - `Events.Channel.UPDATED`
 
-### Compaction Events
+### Internal Event Categories
 
-Events for the multi-layer compaction pipeline:
-
-```typescript
-import { Events } from '@mxf-dev/sdk';
-
-// Microcompaction applied (tool result trimming, no LLM call)
-agent.on(Events.Compaction.MICROCOMPACTION_APPLIED, (payload) => {
-    console.log('Trimmed tool results for:', payload.data.agentId);
-    console.log('Tool results stripped:', payload.data.toolResultsStripped);
-    console.log('Tokens removed:', payload.data.tokensRemoved);
-});
-
-// Reactive compaction triggered (413 recovery or threshold exceeded)
-agent.on(Events.Compaction.REACTIVE_COMPACTION_TRIGGERED, (payload) => {
-    console.log('Strategy:', payload.data.strategy);
-    console.log('Status code:', payload.data.statusCode);
-    console.log('Retry attempt:', payload.data.retryAttempt);
-    console.log('Tokens before:', payload.data.tokensBefore);
-    console.log('Tokens after:', payload.data.tokensAfter);
-});
-
-// Post-compaction artifacts restored
-agent.on(Events.Compaction.POST_COMPACTION_RESTORED, (payload) => {
-    console.log('Artifacts restored:', payload.data.artifactsRestored);
-    console.log('Artifact names:', payload.data.artifactNames);
-    console.log('Tokens added:', payload.data.tokensAdded);
-});
-
-// Compaction summary generated
-agent.on(Events.Compaction.COMPACTION_SUMMARY_GENERATED, (payload) => {
-    console.log('Method:', payload.data.method);
-    console.log('Messages summarized:', payload.data.messagesSummarized);
-    console.log('Summary tokens:', payload.data.summaryTokens);
-});
-```
-
-See [Compaction Pipeline](../mxf/compaction-pipeline.md) for full documentation.
-
-### Shell Execution Events
-
-Events for shell command execution lifecycle:
-
-```typescript
-import { Events } from '@mxf-dev/sdk';
-
-// Shell command started
-agent.on(Events.Shell.SHELL_EXECUTION_STARTED, (payload) => {
-    console.log('Command:', payload.data.command);
-    console.log('Classification:', payload.data.classification);
-});
-
-// Shell command completed
-agent.on(Events.Shell.SHELL_EXECUTION_COMPLETED, (payload) => {
-    console.log('Exit code:', payload.data.exitCode);
-    console.log('Meaning:', payload.data.exitCodeMeaning);
-});
-
-// Shell command failed
-agent.on(Events.Shell.SHELL_EXECUTION_FAILED, (payload) => {
-    console.error('Command failed:', payload.data.command);
-    console.error('Error:', payload.data.error);
-});
-
-// Destructive command warning
-agent.on(Events.Shell.SHELL_DESTRUCTIVE_WARNING, (payload) => {
-    console.warn('Destructive command:', payload.data.command);
-    for (const w of payload.data.warnings) {
-        console.warn(`  [${w.severity}] ${w.warning}`);
-    }
-});
-
-// Background task events
-agent.on(Events.Shell.SHELL_BACKGROUND_STARTED, (payload) => {
-    console.log('Background task:', payload.data.taskId);
-});
-
-agent.on(Events.Shell.SHELL_BACKGROUND_COMPLETED, (payload) => {
-    console.log('Task done:', payload.data.taskId, 'exit:', payload.data.exitCode);
-});
-
-// Large output persisted to MongoDB
-agent.on(Events.Shell.SHELL_OUTPUT_PERSISTED, (payload) => {
-    console.log('Output persisted:', payload.data.outputId);
-    console.log('Total bytes:', payload.data.totalBytes);
-});
-```
-
-See [Shell Execution](../mxf/shell-execution.md) for full documentation.
+Compaction and shell lifecycle events are server-internal. `agent.on()`,
+`agent.mxfService.on()`, and `MxfChannelMonitor.on()` reject them because they are
+not in the SDK public-event whitelist. Applications observe the public tool result,
+task, message, ORPAR, and control-loop events listed above.
 
 ## See Also
 

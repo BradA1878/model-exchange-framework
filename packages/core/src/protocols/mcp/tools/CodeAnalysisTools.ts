@@ -23,6 +23,7 @@ import { executeShellCommand } from './InfrastructureTools.js';
 import { paginationInputSchema, paginateArray, paginateMultipleArrays, checkResultSize } from '../../../utils/ToolPaginationUtils.js';
 import * as fs from 'fs/promises';
 import * as path from 'path';
+import { resolveWorkspacePath } from '../security/McpToolPolicy.js';
 
 const logger = new Logger('info', 'CodeAnalysisTools', 'server');
 
@@ -234,7 +235,10 @@ export const analyzeCodebaseTool = {
     handler: async (args: any, context: any) => {
         
         try {
-            const workingDir = args.workingDirectory || process.cwd();
+            const workingDir = resolveWorkspacePath(
+                args.workingDirectory,
+                'analyze_codebase workingDirectory'
+            );
             const analysis: {
                 structure: any;
                 dependencies: any;
@@ -284,7 +288,11 @@ export const analyzeCodebaseTool = {
 
                 // Analyze dependencies using package.json
                 try {
-                    const packageJson = await fs.readFile(path.join(workingDir, 'package.json'), 'utf-8');
+                    const packageJsonPath = resolveWorkspacePath(
+                        path.join(workingDir, 'package.json'),
+                        'analyze_codebase package.json'
+                    );
+                    const packageJson = await fs.readFile(packageJsonPath, 'utf-8');
                     const pkg = JSON.parse(packageJson);
                     analysis.dependencies = {
                         production: Object.keys(pkg.dependencies || {}),
@@ -297,7 +305,10 @@ export const analyzeCodebaseTool = {
 
                 // Analyze TypeScript configuration
                 try {
-                    const tsconfigPath = path.join(workingDir, 'tsconfig.json');
+                    const tsconfigPath = resolveWorkspacePath(
+                        path.join(workingDir, 'tsconfig.json'),
+                        'analyze_codebase tsconfig.json'
+                    );
                     const tsconfig = await fs.readFile(tsconfigPath, 'utf-8');
                     const config = JSON.parse(tsconfig);
                     analysis.patterns = {
@@ -363,7 +374,10 @@ export const findFunctionsTool = {
     handler: async (args: any, context: any) => {
 
         try {
-            const workingDir = args.workingDirectory || process.cwd();
+            const workingDir = resolveWorkspacePath(
+                args.workingDirectory,
+                'find_functions workingDirectory'
+            );
             const limit = args.limit ?? 50;
             const offset = args.offset ?? 0;
             const allFunctions: any[] = [];
@@ -457,7 +471,10 @@ export const traceDependenciesTool = {
     handler: async (args: any, context: any) => {
 
         try {
-            const workingDir = args.workingDirectory || process.cwd();
+            const workingDir = resolveWorkspacePath(
+                args.workingDirectory,
+                'trace_dependencies workingDirectory'
+            );
             const limit = args.limit ?? 50;
             const offset = args.offset ?? 0;
             const allImports: any[] = [];
@@ -465,7 +482,10 @@ export const traceDependenciesTool = {
             const allDependents: any[] = [];
 
             // Read the target file
-            const fullPath = path.resolve(workingDir, args.filePath);
+            const fullPath = resolveWorkspacePath(
+                path.resolve(workingDir, args.filePath),
+                'trace_dependencies filePath'
+            );
             const content = await fs.readFile(fullPath, 'utf-8');
 
             // Extract imports
@@ -494,7 +514,7 @@ export const traceDependenciesTool = {
             }
 
             // Find files that import this file
-            const relativePath = path.relative(workingDir, args.filePath);
+            const relativePath = path.relative(workingDir, fullPath);
             const importPattern = relativePath.replace(/\\/g, '/').replace(/\.(ts|tsx|js|jsx)$/, '');
 
             const dependentsResult = await executeShellCommand('rg', [
@@ -580,13 +600,19 @@ export const suggestRefactoringTool = {
     handler: async (args: any, context: any) => {
 
         try {
-            const workingDir = args.workingDirectory || process.cwd();
+            const workingDir = resolveWorkspacePath(
+                args.workingDirectory,
+                'suggest_refactoring workingDirectory'
+            );
             const limit = args.limit ?? 50;
             const offset = args.offset ?? 0;
             const allSuggestions: any[] = [];
 
             // Read the file
-            const fullPath = path.resolve(workingDir, args.filePath);
+            const fullPath = resolveWorkspacePath(
+                path.resolve(workingDir, args.filePath),
+                'suggest_refactoring filePath'
+            );
             const content = await fs.readFile(fullPath, 'utf-8');
             const lines = content.split('\n');
 
@@ -673,23 +699,27 @@ export const validateArchitectureTool = {
             const allViolations: any[] = [];
 
             for (const filePath of args.filePaths) {
-                const content = await fs.readFile(filePath, 'utf-8');
+                const resolvedFilePath = resolveWorkspacePath(
+                    filePath,
+                    'validate_architecture filePath'
+                );
+                const content = await fs.readFile(resolvedFilePath, 'utf-8');
 
                 // Validate layering
                 if (args.rules.includes('layering')) {
-                    const layerViolations = validateLayering(filePath, content);
+                    const layerViolations = validateLayering(resolvedFilePath, content);
                     allViolations.push(...layerViolations);
                 }
 
                 // Validate dependencies
                 if (args.rules.includes('dependencies')) {
-                    const depViolations = validateDependencies(filePath, content);
+                    const depViolations = validateDependencies(resolvedFilePath, content);
                     allViolations.push(...depViolations);
                 }
 
                 // Validate naming
                 if (args.rules.includes('naming')) {
-                    const namingViolations = validateNaming(filePath, content);
+                    const namingViolations = validateNaming(resolvedFilePath, content);
                     allViolations.push(...namingViolations);
                 }
             }

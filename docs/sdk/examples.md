@@ -71,10 +71,9 @@ import { MxfSDK } from '@mxf-dev/sdk';
 
 // Initialize SDK with domain key
 const sdk = new MxfSDK({
-    domainKey: 'your-domain-key',
-    host: 'localhost',
-    port: 3001,
-    secure: false
+    serverUrl: 'http://localhost:3001',
+    domainKey: process.env.MXF_DOMAIN_KEY!,
+    accessToken: process.env.MXF_ACCESS_TOKEN!
 });
 
 // Create an agent
@@ -85,7 +84,7 @@ const agent = await sdk.createAgent({
     keyId: 'agent-key-id',
     secretKey: 'agent-secret',
     llmProvider: 'openrouter',
-    defaultModel: 'anthropic/claude-3.5-sonnet',
+    defaultModel: '~anthropic/claude-sonnet-latest',
     agentConfigPrompt: 'You are a helpful assistant.',
     enableTooling: true
 });
@@ -100,13 +99,18 @@ await agent.connect();
 import { Events } from '@mxf-dev/sdk';
 
 // Listen for messages
-agent.on(Events.MESSAGE_RECEIVED, (message) => {
-    console.log(`Message from ${message.senderId}: ${message.content}`);
+agent.on(Events.Message.AGENT_MESSAGE, (message) => {
+    if (
+        message.data.content.format === 'text' &&
+        typeof message.data.content.data === 'string'
+    ) {
+        console.log(`Message from ${message.data.senderId}: ${message.data.content.data}`);
+    }
 });
 
 // Listen for task assignments
-agent.on(Events.TASK_ASSIGNED, (task) => {
-    console.log(`Assigned task: ${task.taskId}`);
+agent.on(Events.Task.ASSIGNED, (task) => {
+    console.log(`Assigned task: ${task.data.taskId}`);
 });
 ```
 

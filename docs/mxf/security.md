@@ -14,11 +14,63 @@ This section details the security model and best practices in MXF.
   - Use the `apiKey` header or `X-API-Key` for requests.
   - Rotate or revoke keys via `/api/agents/keys` endpoints.
 
+### Realtime user-session invalidation
+
+Authenticated Socket.IO user sessions retain their verified user, role, and
+credential identity for the lifetime of the connection. MXF therefore hard
+disconnects an exact PAT's sockets on revocation, disconnects JWT and PAT
+sockets at their verified expiry, and disconnects every JWT/password/PAT socket
+for a user after account deletion, deactivation, or a role change. A lifecycle
+mutation is not reported as successful if local socket eviction cannot be
+completed.
+
+This invalidation registry is process-local. If MXF is deployed with multiple
+server processes or hosts, the operator must publish PAT and user invalidation
+messages to every instance (for example through Redis pub/sub) and wait for all
+instances to apply them. Without that cluster invalidation layer, immediate
+revocation is guaranteed only for sockets connected to the process handling the
+mutation.
+
 ## Authorization
 
 - All protected endpoints enforce JWT or agent key checks.
 - Dashboard-only actions require validated JWT with user scope.
 - SDK actions use agent key permissions.
+
+### Global agent identity ownership
+
+An `agentId` is a global security identity, not a tenant-local display name.
+MXF permanently reserves it to the authenticated owner at the first channel-key
+or Agent creation. Key authentication verifies that reservation again before an
+agent principal can access memory or tools. Deleting an Agent, expiring a key,
+or revoking every key never releases the reservation for another tenant.
+
+During an upgrade, existing `Agent.createdBy` and all ChannelKey owners,
+including inactive keys, are treated as ownership evidence. Conflicting owners
+fail closed. Ownerless agent memory also blocks a first claim; an administrator
+must explicitly migrate, assign, or remove that state before reusing the ID.
+
+Key generation therefore always requires the target identity:
+
+```typescript
+const key = await sdk.generateKey('channel-id', 'agent-id', 'Agent key');
+```
+
+### Task-effectiveness tenant index upgrade
+
+Task-effectiveness records are identified by the exact `agentId`, `channelId`,
+and `taskId` tuple. Before deploying this composite identity over an existing
+database, run:
+
+```bash
+bun run migrate:task-effectiveness-tenant-index
+```
+
+The migration creates and verifies the composite unique index before replacing
+the legacy globally unique `taskId` index. It is idempotent and deliberately
+fails closed when a legacy row has no authoritative agent/channel identity;
+repair or remove ambiguous rows, then rerun it. The migration never guesses an
+owner from collaboration metadata.
 
 ## Data Validation & Fail-Fast
 
@@ -41,10 +93,22 @@ supplied by the same model the limit is meant to constrain.
 
 Policy lives in `packages/core/src/protocols/mcp/security/McpToolPolicy.ts`.
 
+All tools that can read or mutate the server host are hidden and denied by
+default. Enable them only for a trusted workspace: test runners, compilers, Git
+hooks, package scripts, and plugins execute as host processes and may contain
+code that reaches beyond the workspace. The workspace control below constrains
+MXF's explicit path inputs and working directories; it is not an OS sandbox.
+
+```bash
+MXF_UNSAFE_HOST_TOOLS_ENABLED=false
+```
+
 ### The workspace
 
-`MXF_WORKSPACE_ROOT` names the single directory agents may work in. It has **no
-default**, and features that hand out filesystem reach fail to start without it.
+`MXF_WORKSPACE_ROOT` bounds explicit tool path inputs and child working
+directories. It has **no default**, and host tools fail without it. It does not
+confine code executed by a compiler, test runner, Git hook, package script, or
+plugin; keep `MXF_UNSAFE_HOST_TOOLS_ENABLED=false` for untrusted repositories.
 
 The filesystem MCP server (`ExternalServerConfigs.ts`) is scoped to this
 directory. It previously defaulted to `os.homedir()`, which put `~/.ssh`,
@@ -69,9 +133,19 @@ which:
   nothing else. The server's own environment holds `JWT_SECRET`, `MONGODB_URI`
   and `OPENROUTER_API_KEY`, and is never passed to a command an agent chose.
 
+Those internal tools launch fixed binaries with argv arrays, not interpolated
+shell strings. `shell_execute` is different because its command is arbitrary:
+it has no host execution path and fails unless the Docker sandbox is enabled
+and available. Background shell execution is rejected because it cannot yet
+preserve that sandbox boundary.
+
 ```bash
 # Optional allowlist of base commands. Empty means no allowlist; the guard's
-# block rules and confirmation prompts still apply.
+# block rules and confirmation prompts still apply. When set, it binds every
+# agent-driven command: shell_execute and the host tools that run commands on
+# the server (run_full_test_suite, performance_benchmark, the TypeScript,
+# test, and code-analysis tools), with wrappers and env prefixes resolved to
+# the command they run.
 MXF_SHELL_ALLOWED_COMMANDS=git,npm,node,tsc
 
 # Extra environment variables to forward to shell children, on top of the
@@ -94,14 +168,30 @@ endpoint at `169.254.169.254` that hands out IAM credentials. A tool that fetche
 an arbitrary URL on a model's behalf turns the server into a proxy across that
 boundary.
 
-`api_fetch` therefore checks its target through `HttpTargetGuard` before opening
-a socket. It resolves the hostname and refuses loopback, RFC1918, link-local,
-and carrier-grade-NAT addresses — so a public name that resolves to `127.0.0.1`
-is caught as well as a literal IP. Redirects are not followed, because a redirect
+All browser and HTTP MCP tools are separately disabled unless the operator opts
+in. `api_fetch` checks its target through `HttpTargetGuard` before opening a
+socket. It resolves the hostname and refuses loopback, RFC1918, link-local, and
+carrier-grade-NAT addresses — so a public name that resolves to `127.0.0.1` is
+caught as well as a literal IP. Redirects are not followed, because a redirect
 can land on a blocked host after the check.
 
+Browser tools install the same policy before navigation and on every Puppeteer
+request, covering redirects, frames, scripts, images, and fetch/XHR subresources.
+Chromium is launched with its process sandbox enabled; MXF never supplies
+`--no-sandbox` or `--disable-setuid-sandbox`. A deployment that cannot launch
+Chromium safely must fix its user/kernel/container configuration rather than
+weakening the browser boundary.
+The DNS lookup and Chromium's connection are not one atomic operation, so this
+is not a complete defense against a hostile DNS server that changes its answer
+between those moments. Keep browser/network tools disabled unless agents truly
+need server-originated internet access, and enforce egress policy at the host or
+container network boundary in high-trust deployments.
+
 ```bash
-# Allow api_fetch to reach loopback and private addresses. Local development only.
+# Permit browser and HTTP MCP tools at discovery and execution.
+MXF_UNSAFE_NETWORK_TOOLS_ENABLED=false
+
+# Allow enabled network tools to reach private addresses. Local development only.
 MXF_HTTP_ALLOW_PRIVATE_HOSTS=false
 ```
 

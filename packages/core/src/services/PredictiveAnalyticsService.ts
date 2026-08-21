@@ -32,6 +32,7 @@
 import { createBaseEventPayload } from '../schemas/EventPayloadSchema.js';
 import * as os from 'os';
 import { EventEmitter } from 'events';
+import type { Subscription } from 'rxjs';
 import { Logger } from '../utils/Logger.js';
 import { EventBus } from '../events/EventBus.js';
 import { Events } from '../events/EventNames.js';
@@ -291,9 +292,10 @@ export class PredictiveAnalyticsService extends EventEmitter {
         predictionAccuracy: 0
     };
     
-    private retrainInterval?: NodeJS.Timeout;
-    
-    private static instance: PredictiveAnalyticsService;
+    private retrainInterval?: ReturnType<typeof setInterval>;
+    private readonly eventSubscriptions: Subscription[] = [];
+
+    private static instance: PredictiveAnalyticsService | undefined;
     
     private constructor() {
         super();
@@ -307,9 +309,8 @@ export class PredictiveAnalyticsService extends EventEmitter {
         this.startRetrainSchedule();
 
         // TF.js model initialization is deferred to initializeTensorFlowModels().
-        // This service is instantiated at module load time (via validationAnalyticsController),
-        // which runs BEFORE MxfMLService.initialize() in server Step 2.8.
-        // The server calls initializeTensorFlowModels() after MxfMLService is ready.
+        // The server owns this service explicitly and calls initializeTensorFlowModels()
+        // only after MxfMLService is ready.
     }
     
     /**
@@ -2239,7 +2240,7 @@ export class PredictiveAnalyticsService extends EventEmitter {
      */
     private setupEventListeners(): void {
         // Collect training data from events
-        EventBus.server.on(Events.Mcp.TOOL_RESULT, async (event) => {
+        this.eventSubscriptions.push(EventBus.server.on(Events.Mcp.TOOL_RESULT, async (event) => {
             try {
                 const features = await this.extractFeatures(
                     event.agentId,
@@ -2265,7 +2266,7 @@ export class PredictiveAnalyticsService extends EventEmitter {
             } catch (error) {
                 this.logger.warn('Failed to collect training data:', error);
             }
-        });
+        }));
     }
     
     /**
@@ -2289,8 +2290,9 @@ export class PredictiveAnalyticsService extends EventEmitter {
             return;
         }
         this.retrainInterval = setInterval(() => {
-            this.trainModels();
+            void this.trainModels();
         }, this.config.retrainInterval);
+        this.retrainInterval.unref?.();
     }
     
     // =============================================================================
@@ -2342,6 +2344,17 @@ export class PredictiveAnalyticsService extends EventEmitter {
     public cleanup(): void {
         if (this.retrainInterval) {
             clearInterval(this.retrainInterval);
+            this.retrainInterval = undefined;
+        }
+        for (const subscription of this.eventSubscriptions) {
+            subscription?.unsubscribe();
+        }
+        this.eventSubscriptions.length = 0;
+        this.clearTrainingData();
+        this.modelMetadata.clear();
+        this.removeAllListeners();
+        if (PredictiveAnalyticsService.instance === this) {
+            PredictiveAnalyticsService.instance = undefined;
         }
         this.tfErrorPredictionReady = false;
         this.tfAnomalyAutoencoderReady = false;

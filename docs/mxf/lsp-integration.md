@@ -334,15 +334,12 @@ if (FeatureFlags.LSP_ENABLED) {
 Agents automatically have access to LSP tools if enabled:
 
 ```typescript
-// Agents can discover LSP tools
-const tools = await agent.discoverTools();
-// Returns: [..., 'lsp_goto_definition', 'lsp_find_references', ...]
+// Agents can list the LSP tools available to their channel
+const tools = await agent.listTools();
+const lspTools = tools.filter((tool) => tool.name.startsWith('lsp_'));
 
 // Execute LSP tool
-const result = await agent.executeTool({
-  tool: 'lsp_goto_definition',
-  parameters: { /* ... */ }
-});
+const result = await agent.executeTool('lsp_goto_definition', { /* ... */ });
 ```
 
 ### ORPAR Integration

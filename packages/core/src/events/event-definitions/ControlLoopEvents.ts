@@ -23,6 +23,12 @@
  */
 export const ControlLoopEvents = {
     INITIALIZE: 'controlLoop:initialize', // Request to initialize a control loop
+    START_REQUEST: 'controlLoop:start:request', // Request to start a control loop
+    STOP_REQUEST: 'controlLoop:stop:request', // Request to stop a control loop
+    OBSERVATION_SUBMIT: 'controlLoop:observation:submit', // Submit an observation
+    EXECUTION_REQUEST: 'controlLoop:execution:request', // Request action execution
+    PLAN_SUBMIT: 'controlLoop:plan:submit', // Submit an agent-generated plan
+    REFLECTION_SUBMIT: 'controlLoop:reflection:submit', // Submit an agent reflection
     INITIALIZED: 'controlLoop:initialized', // Control loop has been initialized
     STARTED: 'controlLoop:started', // Control loop has been started
     OBSERVATION: 'controlLoop:observation', // Observation submitted to control loop
@@ -45,6 +51,12 @@ export const ControlLoopEvents = {
  */
 export interface ControlLoopPayloads {
     'controlLoop:initialize': { loopId: string, timestamp: number };
+    'controlLoop:start:request': { loopId: string, timestamp: number };
+    'controlLoop:stop:request': { loopId: string, timestamp: number, reason?: string };
+    'controlLoop:observation:submit': { loopId: string, timestamp: number, observation: unknown };
+    'controlLoop:execution:request': { loopId: string, timestamp: number, action: unknown };
+    'controlLoop:plan:submit': { loopId: string, timestamp: number, plan: unknown };
+    'controlLoop:reflection:submit': { loopId: string, timestamp: number, reflection: unknown };
     'controlLoop:initialized': { loopId: string, timestamp: number };
     'controlLoop:started': { loopId: string, timestamp: number };
     'controlLoop:observation': { loopId: string, timestamp: number, observation: any };

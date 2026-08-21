@@ -29,6 +29,7 @@
 import { Observable, from, of, throwError } from 'rxjs';
 import { map, catchError } from 'rxjs/operators';
 import { createStrictValidator } from '../../../utils/validation.js';
+import { assertExternalLlmCallAllowed } from '../LlmTestEnvironmentGuard.js';
 import { 
     IMcpClient, 
     McpClientConfig, 
@@ -50,6 +51,9 @@ import {
  * Abstract base class for MCP client implementations
  */
 export abstract class BaseMcpClient implements IMcpClient {
+    /** Override only for providers guaranteed to stay on the local machine. */
+    protected isExternalLlmProvider = true;
+
     // Configuration for this client - initialize with empty defaults to satisfy TypeScript
     protected config: McpClientConfig = {
         apiKey: '',
@@ -121,6 +125,13 @@ export abstract class BaseMcpClient implements IMcpClient {
         tools?: McpTool[],
         options?: Record<string, any>
     ): Promise<McpApiResponse>;
+
+    /** Enforce the test-process paid/external LLM safety boundary. */
+    protected assertExternalLlmCallAllowed(): void {
+        if (this.isExternalLlmProvider) {
+            assertExternalLlmCallAllowed(this.constructor.name);
+        }
+    }
     
     /**
      * Send a message to the LLM
@@ -140,6 +151,8 @@ export abstract class BaseMcpClient implements IMcpClient {
         }
         
         try {
+            this.assertExternalLlmCallAllowed();
+
             // Validate messages array
             this.validator.assertIsArray(messages);
             if (messages.length === 0) {

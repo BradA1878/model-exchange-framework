@@ -48,7 +48,7 @@ client/
 
 ```bash
 # Install dependencies
-npm install
+bun install
 
 # Start dev server (requires game server running on :3002)
 bun run dev

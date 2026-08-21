@@ -46,17 +46,6 @@ export const connectToDatabase = async (): Promise<typeof mongoose> => {
         mongoose.connection.on('disconnected', () => {
         });
         
-        // Graceful shutdown
-        process.on('SIGINT', async () => {
-            try {
-                await mongoose.connection.close(true);
-                process.exit(0);
-            } catch (error) {
-                logger.error('Error closing MongoDB connection:', error);
-                process.exit(1);
-            }
-        });
-        
         // Connect with retry logic
         const options = {
             serverSelectionTimeoutMS: 5000,
@@ -76,3 +65,6 @@ export const connectToDatabase = async (): Promise<typeof mongoose> => {
 export const closeDatabase = async (): Promise<void> => {
     await mongoose.connection.close();
 };
+
+/** Whether MongoDB can currently serve application reads and writes. */
+export const isDatabaseConnected = (): boolean => mongoose.connection.readyState === 1;

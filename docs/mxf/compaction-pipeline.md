@@ -286,7 +286,7 @@ Maps model IDs to their context window sizes in tokens. Used by percentage-based
 
 1. **Exact match** — `MODEL_CONTEXT_LIMITS[modelId]`
 2. **Prefix match** — Longest matching prefix wins. For example, `claude-3.5-sonnet-20241022` matches the `claude-3.5-sonnet` entry (200,000 tokens).
-3. **OpenRouter format** — If the model ID contains `/`, the part after the last `/` is extracted and looked up again (e.g., `anthropic/claude-sonnet-4` tries `claude-sonnet-4`).
+3. **OpenRouter format** — If the model ID contains `/`, the part after the last `/` is extracted and looked up again (e.g., `anthropic/claude-sonnet-4` tries `claude-sonnet-4`). OpenRouter's latest-resolution aliases work the same way: `~anthropic/claude-sonnet-latest` tries `claude-sonnet-latest`, which has its own entry.
 4. **Fallback** — 128,000 tokens with a logged warning.
 
 ### Supported model families

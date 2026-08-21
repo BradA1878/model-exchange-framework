@@ -13,8 +13,37 @@
  */
 
 import { Observable } from 'rxjs';
-import { IAgentMemory, IChannelMemory } from '../types/MemoryTypes.js';
+import {
+    IAgentMemory,
+    IChannelMemory,
+    IRelationshipMemory,
+    MemoryScope
+} from '../types/MemoryTypes.js';
 import { MemoryUtilitySubdocument } from '../types/MemoryUtilityTypes.js';
+
+/**
+ * A mutation against one reserved field in a channel-memory document.
+ *
+ * Append mutations are deliberately expressed as database operations instead of
+ * read/modify/write replacements. That lets the persistence adapter retain every
+ * concurrently submitted batch with one atomic document update.
+ */
+export type ChannelMemoryAtomicMutation =
+    | { kind: 'append_messages'; messages: unknown[] }
+    | { kind: 'replace_context'; context: unknown; expectedUpdatedAt?: number }
+    | { kind: 'append_context_history'; entries: unknown[]; retainLast: number }
+    | { kind: 'delete_messages' }
+    | { kind: 'delete_context' }
+    | { kind: 'delete_context_history' };
+
+export interface ChannelMemoryAtomicMutationResult {
+    /** Whether the targeted channel/key existed for this operation. */
+    found: boolean;
+    /** The authoritative document after the mutation, or null for a missing delete target. */
+    memory: IChannelMemory | null;
+    /** The authoritative value of the reserved field after the mutation. */
+    value: unknown;
+}
 
 export interface IMemoryPersistence {
     /** Load an agent's memory document. */
@@ -25,6 +54,31 @@ export interface IMemoryPersistence {
 
     /** Persist a channel's memory document. */
     saveChannelMemory(memory: IChannelMemory): Observable<IChannelMemory>;
+
+    /** Load a channel's memory document. */
+    getChannelMemory(channelId: string): Observable<IChannelMemory>;
+
+    /**
+     * Atomically mutate one reserved channel-memory field and return the
+     * authoritative post-update document/value.
+     */
+    mutateChannelMemory(
+        channelId: string,
+        mutation: ChannelMemoryAtomicMutation
+    ): Observable<ChannelMemoryAtomicMutationResult>;
+
+    /** Load relationship memory using its full tenant identity. */
+    getRelationshipMemory?(
+        agentId1: string,
+        agentId2: string,
+        channelId: string
+    ): Observable<IRelationshipMemory>;
+
+    /** Persist relationship memory using its full tenant identity. */
+    saveRelationshipMemory?(memory: IRelationshipMemory): Observable<IRelationshipMemory>;
+
+    /** Delete one exact memory scope identity from persistent storage. */
+    deleteMemory?(scope: MemoryScope, id: string | string[]): Observable<boolean>;
 
     /**
      * Persist the MULS utility subdocument for a single memory.

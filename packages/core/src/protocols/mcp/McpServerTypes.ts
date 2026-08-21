@@ -53,6 +53,15 @@ export interface McpToolHandlerContext {
     agentId?: string;
     /** Channel ID where the request originated */
     channelId?: string;
+    /**
+     * Server-derived credential capability for this exact request. Transport
+     * boundaries populate it from the validated channel key; callers must not
+     * construct it from agent-provided identity or allowlist fields.
+     */
+    authorization?: {
+        keyId: string;
+        allowedTools?: string[];
+    };
     /** Additional context data */
     data?: Record<string, any>;
 }

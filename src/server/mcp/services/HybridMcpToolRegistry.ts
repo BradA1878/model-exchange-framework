@@ -96,9 +96,8 @@ export interface HybridMcpTool extends ExtendedMcpToolDefinition {
     /**
      * For agent-facing views of an external tool: the namespaced name the
      * registry knows it by. Agent-facing entries carry the raw name in `name`
-     * (LLM providers reject ':' — present in every channel server id — in
-     * function names), and this field routes execution back to the canonical
-     * registry entry.
+     * while this field routes execution back to the canonical registry entry,
+     * independent of the server-id format used for namespacing.
      */
     canonicalName?: string;
 }
@@ -118,13 +117,25 @@ export class HybridMcpToolRegistry {
     /** EventBus subscriptions, kept so shutdown() can detach this instance. */
     private eventSubscriptions: Array<{ unsubscribe: () => void }> = [];
 
+    /**
+     * Raw-name collision keys already reported by getAgentFacingToolsForChannel()
+     * in the current tool-population snapshot. Without this, every call to that
+     * method re-logged every collision it found — once per LLM iteration for a
+     * phase-gated agent, once per meta-tool call — turning one real collision
+     * into hundreds of identical log lines per run.
+     *
+     * Cleared in refreshExternalTools() and refreshInternalTools(), so a
+     * collision that survives a topology change is reported again exactly once.
+     */
+    private reportedCollisions = new Set<string>();
+
     constructor(internalRegistry: McpToolRegistry, externalServerManager: ExternalMcpServerManager) {
         this.internalRegistry = internalRegistry;
         this.externalServerManager = externalServerManager;
 
 
         // Set up internal tools subscription
-        this.internalRegistry.listTools().subscribe({
+        this.internalRegistry.listInternalTools().subscribe({
             next: (tools) => {
                 this.internalToolsSubject.next(tools);
             },
@@ -155,6 +166,15 @@ export class HybridMcpToolRegistry {
             }),
             EventBus.server.on(McpEvents.EXTERNAL_SERVER_TOOLS_DISCOVERED, () => {
                 this.refreshExternalTools();
+            }),
+            EventBus.server.on(McpEvents.EXTERNAL_SERVER_UNREGISTERED, () => {
+                this.refreshExternalTools();
+            }),
+            EventBus.server.on(McpEvents.CHANNEL_SERVER_UNREGISTERED, () => {
+                this.refreshExternalTools();
+            }),
+            EventBus.server.on(McpEvents.TOOL_REGISTRY_CHANGED, () => {
+                this.refreshInternalTools();
             })
         );
 
@@ -167,7 +187,8 @@ export class HybridMcpToolRegistry {
      * Call after registering new tools so the hybrid registry picks them up.
      */
     public refreshInternalTools(): void {
-        this.internalRegistry.listTools().subscribe({
+        this.reportedCollisions.clear();
+        this.internalRegistry.listInternalTools().subscribe({
             next: (tools) => {
                 this.internalToolsSubject.next(tools);
             },
@@ -187,9 +208,12 @@ export class HybridMcpToolRegistry {
      * nothing to grep for.
      */
     private refreshExternalTools(): void {
+        this.reportedCollisions.clear();
         const previous = this.externalToolsSubject.value;
         try {
-            const externalTools = this.externalServerManager.getAllExternalTools();
+            const externalTools = this.normalizeExternalTools(
+                this.externalServerManager.getAllExternalTools()
+            );
 
             this.logExternalToolDiff(previous, externalTools);
             this.externalToolsSubject.next(externalTools);
@@ -198,6 +222,50 @@ export class HybridMcpToolRegistry {
             this.logExternalToolDiff(previous, []);
             this.externalToolsSubject.next([]);
         }
+    }
+
+    /**
+     * Validate, de-duplicate, and order an external-manager snapshot.
+     *
+     * The manager is the source of truth for scope. Server-id punctuation is not
+     * a scope protocol: a global id may contain a colon, and a channel id need not.
+     * Malformed scoped tools are dropped instead of being promoted to global.
+     */
+    private normalizeExternalTools(tools: ExternalMcpTool[]): ExternalMcpTool[] {
+        const ordered = [...tools].sort((a, b) =>
+            a.serverId.localeCompare(b.serverId) ||
+            a.name.localeCompare(b.name) ||
+            a.description.localeCompare(b.description) ||
+            JSON.stringify(a.inputSchema).localeCompare(JSON.stringify(b.inputSchema))
+        );
+        const byCanonicalName = new Map<string, ExternalMcpTool>();
+
+        for (const tool of ordered) {
+            if (!['global', 'channel', 'agent'].includes(tool.scope)) {
+                logger.error(
+                    `External tool ${tool.serverId}/${tool.name} has no valid scope and was dropped.`
+                );
+                continue;
+            }
+            if (tool.scope !== 'global' && (!tool.scopeId || typeof tool.scopeId !== 'string')) {
+                logger.error(
+                    `External tool ${tool.serverId}/${tool.name} is ${tool.scope}-scoped without a scopeId and was dropped.`
+                );
+                continue;
+            }
+
+            const canonicalName = namespaceExternalTool(tool.serverId, tool.name);
+            if (byCanonicalName.has(canonicalName)) {
+                logger.warn(
+                    `Duplicate external tool ${canonicalName} appeared in one manager snapshot; ` +
+                    `keeping one deterministic definition.`
+                );
+                continue;
+            }
+            byCanonicalName.set(canonicalName, tool);
+        }
+
+        return Array.from(byCanonicalName.values());
     }
 
     /**
@@ -273,8 +341,15 @@ export class HybridMcpToolRegistry {
         const hybridTools: HybridMcpTool[] = [];
         const internalNames = new Set<string>();
 
-        // Add internal tools with 'internal' source (global scope)
-        for (const tool of internalTools) {
+        // Add registry-owned tools. Code-defined MXF tools use the special
+        // system/global channel and are globally visible; provider-registered
+        // tools retain the channel recorded at registration.
+        const orderedInternalTools = [...internalTools].sort((a, b) =>
+            a.name.localeCompare(b.name) ||
+            (a.providerId ?? '').localeCompare(b.providerId ?? '') ||
+            (a.channelId ?? '').localeCompare(b.channelId ?? '')
+        );
+        for (const tool of orderedInternalTools) {
             // The internal set is validated for uniqueness at the tool index and
             // again at registry reconciliation. If a duplicate still reaches here,
             // say so rather than letting the later copy win by array position.
@@ -287,24 +362,26 @@ export class HybridMcpToolRegistry {
             }
             internalNames.add(tool.name);
 
+            const registeredChannel = tool.channelId;
+            const isGlobal = !registeredChannel ||
+                registeredChannel.toLowerCase() === 'global' ||
+                registeredChannel.toLowerCase() === 'system';
+            const scope: 'global' | 'channel' = isGlobal ? 'global' : 'channel';
+            const scopeId = isGlobal ? undefined : registeredChannel;
+
             hybridTools.push({
                 ...tool,
                 source: 'internal',
                 category: this.getInternalToolCategory(tool.name),
                 isExternal: false,
-                scope: 'global' as 'global' | 'channel' | 'agent',
-                scopeId: undefined,
-                availableToChannels: undefined
+                scope,
+                scopeId,
+                availableToChannels: scopeId ? [scopeId] : undefined
             });
         }
 
         // Add external tools under a namespaced name
         for (const tool of externalTools) {
-            // Determine scope from server ID format (channelId:serverId for channel scope)
-            const isChannelScoped = tool.serverId.includes(':');
-            const scope: 'global' | 'channel' | 'agent' = isChannelScoped ? 'channel' : 'global';
-            const scopeId = isChannelScoped ? tool.serverId.split(':')[0] : undefined;
-
             const namespacedName = namespaceExternalTool(tool.serverId, tool.name);
 
             hybridTools.push({
@@ -317,9 +394,11 @@ export class HybridMcpToolRegistry {
                 category: getExternalServerCategory(tool.serverId),
                 isExternal: true,
                 enabled: true,
-                scope,
-                scopeId,
-                availableToChannels: scopeId ? [scopeId] : undefined,
+                scope: tool.scope,
+                scopeId: tool.scopeId,
+                availableToChannels: tool.scope === 'channel' && tool.scopeId
+                    ? [tool.scopeId]
+                    : undefined,
                 handler: async (input: any, context: any) => {
                     // Execute tool on external MCP server using the sendMcpToolCall method.
                     // The origin server knows the tool by its unqualified name.
@@ -434,10 +513,10 @@ export class HybridMcpToolRegistry {
     }
 
     /**
-     * Get tools available to a specific channel
-     * Returns global tools + channel-scoped tools for this channel
+     * Get tools available to a specific authenticated channel context.
+     * Agent-scoped tools require the exact authenticated agent id.
      */
-    public getToolsForChannel(channelId: string): HybridMcpTool[] {
+    public getToolsForChannel(channelId: string, agentId?: string): HybridMcpTool[] {
         return this.hybridToolsSubject.value.filter(tool => {
             // Include global tools
             if (tool.scope === 'global') {
@@ -449,8 +528,34 @@ export class HybridMcpToolRegistry {
                 return true;
             }
 
+            if (tool.scope === 'agent' && agentId !== undefined && tool.scopeId === agentId) {
+                return true;
+            }
+
             return false;
         });
+    }
+
+    /** Channel-specific external tools override global externals of the same raw name. */
+    private compareExternalCandidates(
+        a: HybridMcpTool,
+        b: HybridMcpTool,
+        channelId: string,
+        agentId?: string
+    ): number {
+        const scopePriority = (tool: HybridMcpTool): number => {
+            if (tool.scope === 'agent' && agentId !== undefined && tool.scopeId === agentId) {
+                return 0;
+            }
+            if (tool.scope === 'channel' && tool.scopeId === channelId) {
+                return 1;
+            }
+            return 2;
+        };
+
+        return scopePriority(a) - scopePriority(b) ||
+            a.source.localeCompare(b.source) ||
+            a.name.localeCompare(b.name);
     }
 
     /**
@@ -458,47 +563,69 @@ export class HybridMcpToolRegistry {
      *
      * Internal tools are returned as-is. External tools are returned under
      * their raw name (`externalToolName`): the raw name is the only name
-     * clients ever see — registration returns raw names in toolsDiscovered —
-     * and the namespaced name is not even legal as an LLM function name for
-     * channel servers, whose server id always contains ':'. `canonicalName`
-     * carries the namespaced registry name for execution routing.
+     * clients ever see — registration returns raw names in toolsDiscovered.
+     * `canonicalName` carries the namespaced registry name for unambiguous
+     * execution routing, independent of how a server id is formatted.
      *
-     * Collisions are resolved deterministically and loudly:
+     * Collisions are resolved deterministically and reported once per snapshot:
      *   - an external raw name that matches an internal tool is skipped
      *     (internal tools always win — the namespacing exists so external
-     *     servers cannot shadow internal tools)
-     *   - two external tools with the same raw name: the lexicographically
-     *     first server id wins, the rest are skipped
+     *     servers cannot shadow internal tools). Logged at error: the tool is
+     *     hidden from agents entirely, and only an operator renaming it on the
+     *     external server fixes that.
+     *   - two external tools with the same raw name: a channel-scoped tool wins
+     *     over a global tool in that channel, then server id breaks ties.
+     *     Logged at warn, naming the winner and the server that was skipped:
+     *     the name is already resolved by policy, so this is informational
+     *     rather than something an operator must act on.
+     *
+     * This method runs on every tool-list build — once per LLM iteration for a
+     * phase-gated agent, and once per meta-tool call — so logging unconditionally
+     * used to turn one real collision into dozens or hundreds of identical lines
+     * per run, drowning out other errors. Each distinct collision (keyed by
+     * channel, raw name, and the two parties involved) is logged only once per
+     * tool-population snapshot; `reportedCollisions` is cleared in
+     * refreshExternalTools() and refreshInternalTools(), so a collision that
+     * persists across a topology change is reported again exactly once.
      */
-    public getAgentFacingToolsForChannel(channelId: string): HybridMcpTool[] {
-        const scoped = this.getToolsForChannel(channelId);
+    public getAgentFacingToolsForChannel(channelId: string, agentId?: string): HybridMcpTool[] {
+        const scoped = this.getToolsForChannel(channelId, agentId);
 
         const internalNames = new Set(scoped.filter(t => !t.isExternal).map(t => t.name));
         const result: HybridMcpTool[] = scoped.filter(t => !t.isExternal);
 
-        // Deterministic winner for duplicate raw names: sort by server id
+        // Deterministic winner for duplicate raw names: channel-specific first,
+        // then server id.
         const externals = scoped
             .filter(t => t.isExternal)
-            .sort((a, b) => a.source.localeCompare(b.source));
+            .sort((a, b) => this.compareExternalCandidates(a, b, channelId, agentId));
 
         const claimed = new Map<string, HybridMcpTool>();
         for (const tool of externals) {
             const rawName = tool.externalToolName ?? tool.name;
 
             if (internalNames.has(rawName)) {
-                logger.error(
-                    `External tool "${rawName}" from server ${tool.source} collides with an internal tool ` +
-                    `and is not exposed to agents. Rename it on the external server.`
-                );
+                const collisionKey = JSON.stringify([channelId, rawName, 'internal', tool.source]);
+                if (!this.reportedCollisions.has(collisionKey)) {
+                    this.reportedCollisions.add(collisionKey);
+                    logger.error(
+                        `External tool "${rawName}" from server ${tool.source} collides with an internal tool ` +
+                        `and is not exposed to agents. Rename it on the external server.`
+                    );
+                }
                 continue;
             }
 
             const winner = claimed.get(rawName);
             if (winner) {
-                logger.error(
-                    `External tool "${rawName}" is offered by both ${winner.source} and ${tool.source} ` +
-                    `in channel ${channelId}; keeping ${winner.source}, skipping ${tool.source}.`
-                );
+                const collisionKey = JSON.stringify([channelId, rawName, winner.source, tool.source]);
+                if (!this.reportedCollisions.has(collisionKey)) {
+                    this.reportedCollisions.add(collisionKey);
+                    logger.warn(
+                        `External tool "${rawName}" is offered by both ${winner.source} and ${tool.source} ` +
+                        `in channel ${channelId}; keeping ${winner.source}, skipping ${tool.source}.`
+                    );
+                }
                 continue;
             }
 
@@ -511,7 +638,10 @@ export class HybridMcpToolRegistry {
             result.push(agentFacing);
         }
 
-        return result;
+        return result.sort((a, b) =>
+            a.name.localeCompare(b.name) ||
+            (a.canonicalName ?? a.name).localeCompare(b.canonicalName ?? b.name)
+        );
     }
 
     /**
@@ -522,10 +652,11 @@ export class HybridMcpToolRegistry {
      * Returns the canonical registry entry, so `handler`, `inputSchema`, and
      * `name` are the ones execution needs. Internal tools always win a raw
      * name collision; external raw-name ties resolve to the lexicographically
-     * first server id, matching getAgentFacingToolsForChannel().
+     * channel-specific scope and then server id, matching
+     * getAgentFacingToolsForChannel().
      */
-    public resolveToolForChannel(name: string, channelId: string): HybridMcpTool | undefined {
-        const scoped = this.getToolsForChannel(channelId);
+    public resolveToolForChannel(name: string, channelId: string, agentId?: string): HybridMcpTool | undefined {
+        const scoped = this.getToolsForChannel(channelId, agentId);
 
         // Exact canonical match first: internal names and namespaced external names
         const exact = scoped.find(tool => tool.name === name);
@@ -536,7 +667,7 @@ export class HybridMcpToolRegistry {
         // Raw external name, deterministic across servers
         const candidates = scoped
             .filter(tool => tool.isExternal && tool.externalToolName === name)
-            .sort((a, b) => a.source.localeCompare(b.source));
+            .sort((a, b) => this.compareExternalCandidates(a, b, channelId, agentId));
 
         return candidates[0];
     }
@@ -708,6 +839,7 @@ export class HybridMcpToolRegistry {
             subscription.unsubscribe();
         }
         this.eventSubscriptions = [];
+        this.reportedCollisions.clear();
 
         this.internalToolsSubject.complete();
         this.externalToolsSubject.complete();

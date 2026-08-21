@@ -1,7 +1,7 @@
 /**
  * Unit tests for McpService.getTools() external-tool allowlist resolution.
  *
- * The production symptom (HANDOFF-channel-server-tool-eviction.md):
+ * The production symptom (2026-08-04 Sentinel tool-eviction incident):
  * agents request their channel server's tools by raw name — the only name the
  * registration flow ever returns to clients — and McpService matched
  * allowlists against the namespaced registry names, so every external tool
@@ -50,15 +50,18 @@ const SERVER_ID = `${CHANNEL_ID}:sentinel-tools`;
 
 function buildRegistry(externalNames: string[]): HybridMcpToolRegistry {
     const internalRegistry = {
-        listTools: () => of([
+        listInternalTools: () => of([
             {
                 name: 'task_complete',
                 description: 'internal task_complete',
                 inputSchema: { type: 'object', properties: {} },
                 enabled: true,
+                providerId: 'mxf-server',
+                channelId: 'system',
                 handler: async () => ({ content: { type: 'text', data: 'ok' } })
             }
-        ])
+        ]),
+        listTools: () => of([])
     } as any;
 
     const manager = {
@@ -66,7 +69,9 @@ function buildRegistry(externalNames: string[]): HybridMcpToolRegistry {
             name,
             description: `external ${name}`,
             inputSchema: { type: 'object', properties: {} },
-            serverId: SERVER_ID
+            serverId: SERVER_ID,
+            scope: 'channel',
+            scopeId: CHANNEL_ID
         }))
     } as any;
 

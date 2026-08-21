@@ -77,7 +77,7 @@ For a working example that demonstrates this pattern, see the [Twenty Questions 
 - Agents submit observations via `ControlLoopHandlers.submitObservation()`
 - Server stores observations in queue via `ControlLoop.addObservation()`
 - Observations are enriched with metadata (source, timestamp, confidence)
-- Fast, efficient models process observations (e.g., `gemini-2.5-flash`)
+- Uses the model configured for the observation operation (`SYSTEMLLM_DEFAULT_MODEL` or `SYSTEMLLM_MODEL_OBSERVATION`)
 
 **Observation Structure**:
 ```typescript
@@ -104,7 +104,7 @@ interface Observation {
 **Implementation**:
 - `ControlLoop.processObservations()` triggers reasoning phase
 - `SystemLlmService.processObservationData()` performs AI analysis
-- Advanced reasoning models analyze patterns (e.g., `claude-opus-4.5`)
+- Uses the model configured for the reasoning operation (`SYSTEMLLM_DEFAULT_MODEL` or `SYSTEMLLM_MODEL_REASONING`)
 - Coordination-focused analysis identifies collaboration opportunities
 
 **Reasoning Structure**:
@@ -177,7 +177,7 @@ interface PlanAction {
 **Implementation**:
 - `ControlLoop.executePlan()` executes actions in order
 - Respects action dependencies and priorities
-- Reliable execution models ensure consistency (e.g., `claude-haiku-4.5`)
+- Uses the model configured for the action operation (`SYSTEMLLM_DEFAULT_MODEL` or `SYSTEMLLM_MODEL_ACTION`)
 - Action results become new observations
 
 **Execution Modes**:
@@ -197,7 +197,7 @@ type ActionStatus = 'pending' | 'executing' | 'completed' | 'failed' | 'aborted'
 **Implementation**:
 - `ControlLoop.reflect()` analyzes completed plans
 - `SystemLlmService.generateReflection()` performs meta-cognitive evaluation
-- Reflection models assess effectiveness (e.g., `claude-opus-4.5`)
+- Uses the model configured for the reflection operation (`SYSTEMLLM_DEFAULT_MODEL` or `SYSTEMLLM_MODEL_REFLECTION`)
 - Insights feed into pattern learning system
 
 **Reflection Structure**:
@@ -258,18 +258,16 @@ interface OrparContext {
 
 ## Model Selection Strategy
 
-Each ORPAR phase uses models optimized for specific cognitive requirements:
+Each ORPAR phase uses a model chosen by the operator — SystemLLM has no built-in model ids.
 
-### OpenRouter Default Configuration
-```typescript
-const ORPAR_MODEL_CONFIGS = {
-    observation: 'google/gemini-2.5-flash',              // Fast data processing
-    reasoning: 'anthropic/claude-opus-4.5',              // Advanced reasoning
-    action: 'anthropic/claude-haiku-4.5',                // Reliable execution
-    planning: 'google/gemini-2.5-pro-preview-06-05',    // Strategic planning
-    reflection: 'anthropic/claude-opus-4.5'              // Meta-cognitive analysis
-};
-```
+### Model Configuration
+
+`SYSTEMLLM_DEFAULT_MODEL` is the model for every ORPAR phase unless that phase
+has its own override (`SYSTEMLLM_MODEL_OBSERVATION`, `SYSTEMLLM_MODEL_REASONING`,
+`SYSTEMLLM_MODEL_ACTION`, `SYSTEMLLM_MODEL_PLANNING`, `SYSTEMLLM_MODEL_REFLECTION`).
+SystemLLM refuses to boot without a default model configured. See
+[SystemLLM Service](system-llm.md#environment-variable-configuration) for the
+full contract.
 
 ### Dynamic Complexity-Based Selection
 
@@ -289,19 +287,32 @@ Models automatically upgrade based on context complexity:
 - **Moderate**: 1.2 - 3.0 → Use upgraded models
 - **Complex**: > 3.0 → Use premium models
 
+Upgrades apply only with `SYSTEMLLM_DYNAMIC_MODEL_SELECTION=true` (off by
+default) and, on OpenRouter, only into the `~anthropic/claude-*-latest` aliases
+— see the upgrade table in [system-llm.md](system-llm.md).
+
+> **Note:** Model ids change often. The ids in these docs are a snapshot of what was
+> available when they were written; providers add, rename, and retire models all the
+> time. Check your provider's current list before relying on an id — for OpenRouter,
+> <https://openrouter.ai/models>. For Claude on OpenRouter, `~anthropic/claude-opus-latest`,
+> `~anthropic/claude-sonnet-latest`, and `~anthropic/claude-haiku-latest` resolve to the
+> newest release in each family, so they are the ids to use unless you need a specific
+> version. `~anthropic/claude-fable-latest` is the same kind of alias for the top-tier
+> family; it is priced well above the others and nothing in MXF selects it by default.
+
 **Example Upgrade Path**:
 ```
 observation (simple):  google/gemini-2.5-flash
-observation (moderate): anthropic/claude-haiku-4.5
-observation (complex):  anthropic/claude-sonnet-4.5
+observation (moderate): ~anthropic/claude-haiku-latest
+observation (complex):  ~anthropic/claude-sonnet-latest
 
-reasoning (simple):  anthropic/claude-opus-4.5
-reasoning (moderate): anthropic/claude-opus-4.5
-reasoning (complex):  anthropic/claude-opus-4.5
+reasoning (simple):  ~anthropic/claude-opus-latest
+reasoning (moderate): ~anthropic/claude-opus-latest
+reasoning (complex):  ~anthropic/claude-opus-latest
 
 planning (simple):  google/gemini-2.5-pro-preview-06-05
-planning (moderate): anthropic/claude-sonnet-4.5
-planning (complex):  anthropic/claude-opus-4.5
+planning (moderate): ~anthropic/claude-sonnet-latest
+planning (complex):  ~anthropic/claude-opus-latest
 ```
 
 ## Event Flow
@@ -378,7 +389,7 @@ The `orpar_status` tool automatically detects stale state by comparing available
 ```typescript
 // Example: Agent in 'plan' phase but orpar_observe is in allowedTools
 // This indicates a new task - state is automatically reset
-const result = await agent.callTool('orpar_status', {});
+const result = await agent.executeTool('orpar_status', {});
 // Returns: { currentPhase: 'none', nextTool: 'orpar_observe', note: 'Previous cycle state cleared' }
 ```
 
@@ -446,28 +457,28 @@ EventBus.client.emit(OrparEvents.CLEAR_STATE, createBaseEventPayload(
 
 ```typescript
 // Agent documents their observation
-await agent.callTool('orpar_observe', {
+await agent.executeTool('orpar_observe', {
     observations: 'The game shows 3 questions asked. Q1: "Is it alive?" → YES.',
     keyFacts: ['The secret is alive', 'It is a mammal']
 });
 
 // Agent documents their reasoning
-await agent.callTool('orpar_reason', {
+await agent.executeTool('orpar_reason', {
     analysis: 'Based on "alive" and "mammal", likely a pet or wild animal.',
     conclusions: ['Probably a common pet', 'Could be cat, dog, or hamster'],
     confidence: 0.7
 });
 
 // Agent documents their plan
-await agent.callTool('orpar_plan', {
+await agent.executeTool('orpar_plan', {
     plan: 'Ask about size to narrow down possibilities.',
     actions: [{ action: 'Ask size question', tool: 'game_askQuestion' }],
     rationale: 'Size will eliminate roughly half the remaining options.'
 });
 
 // Agent executes and documents action
-await agent.callTool('game_askQuestion', { question: 'Is it smaller than a cat?' });
-await agent.callTool('orpar_act', {
+await agent.executeTool('game_askQuestion', { question: 'Is it smaller than a cat?' });
+await agent.executeTool('orpar_act', {
     action: 'Asked size question',
     toolUsed: 'game_askQuestion',
     outcome: 'Answer was YES',
@@ -475,7 +486,7 @@ await agent.callTool('orpar_act', {
 });
 
 // Agent documents reflection
-await agent.callTool('orpar_reflect', {
+await agent.executeTool('orpar_reflect', {
     reflection: 'The YES answer confirms it is small. Combined with pet category, likely hamster or mouse.',
     learnings: ['Size question was highly effective'],
     expectationsMet: true
@@ -679,9 +690,9 @@ Use specialized models for specific tasks:
 
 ```typescript
 specializations: {
-    reasoning: 'anthropic/claude-sonnet-4.5',
+    reasoning: '~anthropic/claude-sonnet-latest',
     coding: 'deepseek/deepseek-r1',
-    analysis: 'anthropic/claude-opus-4.5',
+    analysis: '~anthropic/claude-opus-latest',
     creative: 'google/gemini-2.5-pro-preview-06-05',
     multilingual: 'qwen/qwen-3-32b',
     speed: 'google/gemini-2.5-flash'

@@ -76,13 +76,16 @@ import { McpEvents } from '@mxf-dev/core/events/event-definitions/McpEvents';
 import { MxfAgent } from './MxfAgent.js';
 import { MxfChannelMonitor } from './MxfChannelMonitor.js';
 import { Logger } from '@mxf-dev/core/utils/Logger';
-import { createBaseEventPayload } from '@mxf-dev/core/schemas/EventPayloadSchema';
+import { createBaseEventPayload, createSdkReconnectedEventPayload } from '@mxf-dev/core/schemas/EventPayloadSchema';
+import type { SdkReconnectedEventData } from '@mxf-dev/core/events/event-definitions/SdkEvents';
 import { LlmProviderType } from '@mxf-dev/core/protocols/mcp/LlmProviders';
 import { AgentConfig, LlmReasoningConfig } from '@mxf-dev/core/interfaces/AgentInterfaces';
 import { ChannelConfig } from '@mxf-dev/core/interfaces/ChannelConfig';
 import { awaitEventResponse, EventRequestError } from './services/internal/EventRequest.js';
 import type { McpServerRegistrationResult } from './MxfClient.js';
+import type { KeyGenerateResult } from './services/MxfService.js';
 import { default as socketIO } from 'socket.io-client';
+import type { ManagerOptions, SocketOptions } from 'socket.io-client';
 
 const moduleLogger = new Logger('debug', 'MxfSDK', 'client');
 
@@ -115,7 +118,24 @@ export interface MxfSDKConfig {
     // Optional settings
     secure?: boolean;
     reconnection?: boolean;
+    /**
+     * Maximum automatic reconnect attempts. Omit for unlimited retries so a
+     * server boot race or transient outage does not strand the SDK.
+     */
     reconnectionAttempts?: number;
+}
+
+type SdkSocket = ReturnType<typeof socketIO>;
+
+interface PendingSdkConnection {
+    socket: SdkSocket;
+    resolve: () => void;
+    reject: (error: Error) => void;
+}
+
+interface SocketLifecycleCleanup {
+    socket: SdkSocket;
+    run: () => void;
 }
 
 /**
@@ -167,7 +187,11 @@ export interface AgentCreationConfig {
  */
 export class MxfSDK {
     private config: MxfSDKConfig;
-    private socket: ReturnType<typeof socketIO> | null = null;
+    private socket: SdkSocket | null = null;
+    private connectionPromise: Promise<void> | null = null;
+    private disconnectPromise: Promise<void> | null = null;
+    private pendingConnection: PendingSdkConnection | null = null;
+    private socketLifecycleCleanup: SocketLifecycleCleanup | null = null;
     private authenticated: boolean = false;
     private userToken: string | null = null;
     private agents: Map<string, MxfAgent> = new Map();
@@ -178,6 +202,12 @@ export class MxfSDK {
      * which PAT auth (the recommended path) never sets at all.
      */
     private authenticatedUserId: string | null = null;
+    /**
+     * Reconnect attempt count reported by the socket manager for the current
+     * socket, consumed by the next authentication success. Null when the
+     * manager has not reported a transport reconnect since the last auth.
+     */
+    private pendingTransportReconnectAttempt: number | null = null;
     private channelMonitors: Map<string, MxfChannelMonitor> = new Map();  // Track channel monitors for cleanup
 
     constructor(config: MxfSDKConfig) {
@@ -203,6 +233,14 @@ export class MxfSDK {
             throw new Error('Invalid accessToken format. Expected: tokenId:secret (e.g., pat_xxx:secret)');
         }
 
+        if (
+            config.reconnectionAttempts !== undefined &&
+            config.reconnectionAttempts !== Number.POSITIVE_INFINITY &&
+            (!Number.isInteger(config.reconnectionAttempts) || config.reconnectionAttempts < 0)
+        ) {
+            throw new Error('reconnectionAttempts must be a non-negative integer or Infinity');
+        }
+
         this.config = config;
     }
 
@@ -211,6 +249,13 @@ export class MxfSDK {
      * Establishes socket connection for admin operations (channel/key creation)
      */
     async connect(): Promise<void> {
+        // A caller may reconnect while agent teardown is still in progress. Wait for
+        // the authoritative disconnect to release the old socket before inspecting
+        // connection state or creating a replacement.
+        if (this.disconnectPromise) {
+            await this.disconnectPromise;
+        }
+
         // Validate we have authentication credentials
         const hasPAT = this.config.accessToken && this.config.accessToken.includes(':');
         const hasJWT = this.config.userToken;
@@ -225,13 +270,33 @@ export class MxfSDK {
             throw new Error('Domain key is required for SDK connection');
         }
 
-        // Set userId for socket events (will be updated from server response)
+        if (this.isConnected()) {
+            return;
+        }
+
+        if (this.connectionPromise) {
+            return this.connectionPromise;
+        }
+
+        // Placeholder identity for the handshake only. auth:success replaces it
+        // with the server-confirmed id, which is why it is set after the guards
+        // above: a redundant connect() on a live SDK must not stamp later admin
+        // requests with the placeholder.
         this.userId = this.config.userId || this.config.username || 'sdk-user';
 
-        // Connect socket for admin operations
-        await this.connectSocket();
+        // Authentication success, rather than the first transport connection,
+        // is the authoritative boundary. Keep this promise pending while the
+        // Socket.IO manager retries a boot race or transient outage.
+        const connectionAttempt = this.connectSocket();
+        this.connectionPromise = connectionAttempt;
 
-        this.authenticated = true;
+        try {
+            await connectionAttempt;
+        } finally {
+            if (this.connectionPromise === connectionAttempt) {
+                this.connectionPromise = null;
+            }
+        }
     }
 
     /**
@@ -239,64 +304,267 @@ export class MxfSDK {
      */
     private async connectSocket(): Promise<void> {
         return new Promise((resolve, reject) => {
-            const socketOptions: any = {
-                reconnection: this.config.reconnection ?? true,
-                reconnectionAttempts: this.config.reconnectionAttempts ?? 5,
-                auth: {
-                    domainKey: this.config.domainKey
-                }
-            };
+            let socket = this.socket;
 
-            // Add user authentication (priority: PAT > JWT > username/password)
-            if (this.config.accessToken) {
-                // Personal Access Token authentication (RECOMMENDED)
-                socketOptions.auth.accessToken = this.config.accessToken;
-            } else if (this.config.userToken) {
-                // JWT authentication
-                socketOptions.auth.token = this.config.userToken;
-                socketOptions.auth.userId = this.userId;
-            } else if (this.config.username && this.config.password) {
-                // Username/password authentication (legacy)
-                socketOptions.auth.username = this.config.username;
-                socketOptions.auth.password = this.config.password;
+            if (socket && !socket.connected && !socket.active) {
+                this.releaseSocket(socket, false);
+                socket = null;
             }
 
-            this.socket = socketIO(this.config.serverUrl, socketOptions);
+            if (!socket) {
+                const socketOptions: Partial<ManagerOptions & SocketOptions> = {
+                    reconnection: this.config.reconnection ?? true,
+                    reconnectionAttempts: this.config.reconnectionAttempts ?? Number.POSITIVE_INFINITY,
+                    auth: {
+                        domainKey: this.config.domainKey
+                    }
+                };
 
-            // Socket lifecycle uses the CoreSocketEvents/AuthEvents constants rather than
-            // raw 'connect'/'auth:success'/'auth:error' string literals, matching MxfService.
-            this.socket.on(CoreSocketEvents.CONNECT_ERROR, (error: Error) => {
-                moduleLogger.error(`SDK socket connection error: ${error.message}`);
-                reject(new Error(`Socket connection failed: ${error.message}`));
-            });
-
-            this.socket.on(CoreSocketEvents.DISCONNECT, (reason: string) => {
-                moduleLogger.warn(`SDK socket disconnected: ${reason}`);
-            });
-
-            // Wait for authentication to complete before resolving
-            this.socket.on(AuthEvents.SUCCESS, (data: any) => {
-
-                // The server returns the real Mongo user id — not the username, and not
-                // whatever the caller put in config.userId (which PAT auth never sets).
-                // getUserId() reads this.
-                if (data.userId) {
-                    this.userId = data.userId;
-                    this.authenticatedUserId = data.userId;
+                // Add user authentication (priority: PAT > JWT > username/password)
+                if (this.config.accessToken) {
+                    // Personal Access Token authentication (RECOMMENDED)
+                    socketOptions.auth = {
+                        ...socketOptions.auth,
+                        accessToken: this.config.accessToken
+                    };
+                } else if (this.config.userToken) {
+                    // JWT authentication
+                    socketOptions.auth = {
+                        ...socketOptions.auth,
+                        token: this.config.userToken,
+                        userId: this.userId
+                    };
+                } else if (this.config.username && this.config.password) {
+                    // Username/password authentication (legacy)
+                    socketOptions.auth = {
+                        ...socketOptions.auth,
+                        username: this.config.username,
+                        password: this.config.password
+                    };
                 }
 
-                // Initialize EventBus.client with the authenticated socket
-                // This sets up socket.onAny() forwarding via a closure over this socket
-                EventBus.client.setClientSocket(this.socket!);
+                socket = socketIO(this.config.serverUrl, socketOptions);
+                this.socket = socket;
+                this.installSocketLifecycleHandlers(socket);
+            }
 
-                resolve();
-            });
+            this.pendingConnection = {
+                socket,
+                resolve,
+                reject
+            };
 
-            this.socket.on(AuthEvents.ERROR, (data: any) => {
-                moduleLogger.error(`Authentication failed: ${JSON.stringify(data)}`);
-                reject(new Error(`Authentication failed: ${data.error || 'Unknown error'}`));
-            });
+            if (this.authenticated && socket.connected) {
+                this.resolvePendingConnection(socket);
+            }
         });
+    }
+
+    /**
+     * Install lifecycle handlers once for a socket. They remain active after
+     * connect() resolves so a later manager reconnect can restore SDK state.
+     */
+    private installSocketLifecycleHandlers(socket: SdkSocket): void {
+        const handleConnectError = (error: Error): void => {
+            if (this.socket !== socket) {
+                return;
+            }
+
+            this.authenticated = false;
+            this.authenticatedUserId = null;
+            moduleLogger.error(`SDK socket connection error: ${error.message}`);
+
+            const reconnectionEnabled = this.config.reconnection ?? true;
+            if (!reconnectionEnabled || !socket.active) {
+                const connectionError = new Error(`Socket connection failed: ${error.message}`);
+                this.rejectPendingConnection(socket, connectionError);
+                this.releaseSocket(socket, true);
+            }
+        };
+
+        const handleDisconnect = (reason: string): void => {
+            if (this.socket !== socket) {
+                return;
+            }
+
+            this.authenticated = false;
+            this.authenticatedUserId = null;
+            moduleLogger.warn(`SDK socket disconnected: ${reason}`);
+
+            if (!socket.active) {
+                const disconnectError = new Error(
+                    `SDK socket disconnected without automatic recovery: ${reason}`
+                );
+                this.rejectPendingConnection(socket, disconnectError);
+                this.releaseSocket(socket, false);
+            }
+        };
+
+        const handleAuthSuccess = (data: unknown): void => {
+            if (this.socket !== socket) {
+                return;
+            }
+
+            if (!this.isRecord(data) ||
+                typeof data.userId !== 'string' ||
+                data.userId.trim().length === 0) {
+                const responseError = new Error(
+                    'Authentication succeeded without a valid server-confirmed userId'
+                );
+                this.authenticated = false;
+                this.authenticatedUserId = null;
+                this.rejectPendingConnection(socket, responseError);
+                this.releaseSocket(socket, true);
+                return;
+            }
+
+            // When no connect() call is waiting on this socket, the socket manager
+            // restored the session on its own after a dropped transport.
+            const restoredBySocketManager = this.pendingConnection?.socket !== socket;
+            const attempt = this.pendingTransportReconnectAttempt;
+            this.pendingTransportReconnectAttempt = null;
+
+            this.userId = data.userId;
+            this.authenticatedUserId = data.userId;
+            this.authenticated = true;
+            EventBus.client.setClientSocket(socket);
+            this.resolvePendingConnection(socket);
+
+            if (restoredBySocketManager) {
+                this.emitReconnected(data.userId, attempt);
+            }
+        };
+
+        const handleAuthError = (data: unknown): void => {
+            if (this.socket !== socket) {
+                return;
+            }
+
+            const authError = this.isRecord(data) && typeof data.error === 'string'
+                ? data.error
+                : 'Unknown error';
+            moduleLogger.error(`Authentication failed: ${authError}`);
+            this.authenticated = false;
+            this.authenticatedUserId = null;
+            this.rejectPendingConnection(socket, new Error(`Authentication failed: ${authError}`));
+            this.releaseSocket(socket, true);
+        };
+
+        const handleReconnect = (attempt: number): void => {
+            if (this.socket === socket) {
+                this.pendingTransportReconnectAttempt = attempt;
+                moduleLogger.info(`SDK socket transport reconnected after ${attempt} attempt(s); awaiting authentication`);
+            }
+        };
+
+        const handleReconnectFailed = (): void => {
+            if (this.socket !== socket) {
+                return;
+            }
+
+            const reconnectError = new Error('Socket reconnection attempts exhausted before authentication');
+            this.authenticated = false;
+            this.authenticatedUserId = null;
+            this.rejectPendingConnection(socket, reconnectError);
+            this.releaseSocket(socket, true);
+        };
+
+        socket.on(CoreSocketEvents.CONNECT_ERROR, handleConnectError);
+        socket.on(CoreSocketEvents.DISCONNECT, handleDisconnect);
+        socket.on(AuthEvents.SUCCESS, handleAuthSuccess);
+        socket.on(AuthEvents.ERROR, handleAuthError);
+        socket.io.on(CoreSocketEvents.RECONNECT as 'reconnect', handleReconnect);
+        socket.io.on(CoreSocketEvents.RECONNECT_FAILED as 'reconnect_failed', handleReconnectFailed);
+
+        this.socketLifecycleCleanup = {
+            socket,
+            run: (): void => {
+                socket.off(CoreSocketEvents.CONNECT_ERROR, handleConnectError);
+                socket.off(CoreSocketEvents.DISCONNECT, handleDisconnect);
+                socket.off(AuthEvents.SUCCESS, handleAuthSuccess);
+                socket.off(AuthEvents.ERROR, handleAuthError);
+                socket.io.off(CoreSocketEvents.RECONNECT as 'reconnect', handleReconnect);
+                socket.io.off(CoreSocketEvents.RECONNECT_FAILED as 'reconnect_failed', handleReconnectFailed);
+            }
+        };
+    }
+
+    /**
+     * Subscribe to the user connection being restored by the socket manager.
+     *
+     * Fires after the server has re-authenticated a connection that no
+     * connect() call was waiting for — a reconnect after a dropped transport.
+     * It does not fire for the authentication that settles connect() itself.
+     * A server restart kills the channel MCP server processes it was running,
+     * so this is the place to register them again.
+     *
+     * @param listener - Called with the server-confirmed user id and the
+     *                   transport reconnect attempt count when known
+     * @returns A function that removes the listener
+     */
+    public onReconnected(listener: (info: SdkReconnectedEventData) => void): () => void {
+        const subscription = EventBus.client.on(Events.Sdk.RECONNECTED, (payload) => {
+            if (payload.data.userId !== this.authenticatedUserId) {
+                return;
+            }
+            listener(payload.data);
+        });
+        return (): void => { subscription.unsubscribe(); };
+    }
+
+    /** Deliver Events.Sdk.RECONNECTED to local subscribers only. */
+    private emitReconnected(userId: string, attempt: number | null): void {
+        moduleLogger.info(
+            `SDK connection restored by the socket manager for user ${userId}` +
+            (attempt === null ? '' : ` after ${attempt} transport attempt(s)`)
+        );
+        EventBus.client.emitLocal(
+            Events.Sdk.RECONNECTED,
+            createSdkReconnectedEventPayload(Events.Sdk.RECONNECTED, userId, { userId, attempt }, { source: 'MxfSDK' })
+        );
+    }
+
+    private resolvePendingConnection(socket: SdkSocket): void {
+        if (this.pendingConnection?.socket !== socket) {
+            return;
+        }
+
+        const { resolve } = this.pendingConnection;
+        this.pendingConnection = null;
+        resolve();
+    }
+
+    private rejectPendingConnection(socket: SdkSocket, error: Error): void {
+        if (this.pendingConnection?.socket !== socket) {
+            return;
+        }
+
+        const { reject } = this.pendingConnection;
+        this.pendingConnection = null;
+        reject(error);
+    }
+
+    private releaseSocket(socket: SdkSocket, disconnect: boolean): void {
+        if (this.socket !== socket) {
+            return;
+        }
+
+        if (this.socketLifecycleCleanup?.socket === socket) {
+            this.socketLifecycleCleanup.run();
+            this.socketLifecycleCleanup = null;
+        }
+
+        EventBus.client.clearClientSocket(socket);
+        this.socket = null;
+        this.pendingTransportReconnectAttempt = null;
+
+        if (disconnect) {
+            socket.disconnect();
+        }
+    }
+
+    private isRecord(value: unknown): value is Record<string, unknown> {
+        return typeof value === 'object' && value !== null;
     }
 
     /**
@@ -396,7 +664,7 @@ export class MxfSDK {
      * 
      * // Listen to channel events
      * channel.on(Events.Message.AGENT_MESSAGE, (payload) => {
-     *     console.log('Message:', payload.data.content);
+     *     console.log('Message:', payload.data.content.data);
      * });
      * ```
      */
@@ -473,8 +741,7 @@ export class MxfSDK {
         name: string;
         command?: string;
         args?: string[];
-        transport?: 'stdio' | 'http';
-        url?: string;
+        transport?: 'stdio';
         autoStart?: boolean;
         environmentVariables?: Record<string, string>;
         restartOnCrash?: boolean;
@@ -556,15 +823,28 @@ export class MxfSDK {
      * Generate a channel key via socket event
      *
      * @param channelId Channel identifier
-     * @param agentId Agent identifier (optional)
+     * @param agentId Required globally keyed agent identity this credential authenticates as
      * @param name Key name (optional)
      * @param expiresAt Expiration date (optional)
      * @returns Promise resolving to key generation result
      */
-    async generateKey(channelId: string, agentId?: string, name?: string, expiresAt?: Date): Promise<{ keyId: string; secretKey: string; channelId: string }> {
+    async generateKey(
+        channelId: string,
+        agentId: string,
+        name?: string,
+        expiresAt?: Date,
+        allowedTools?: string[]
+    ): Promise<KeyGenerateResult> {
         this.assertSocketConnected();
 
-        return awaitEventResponse<{ keyId: string; secretKey: string; channelId: string }>({
+        if (typeof agentId !== 'string' || agentId.trim().length === 0) {
+            throw new Error('agentId is required when generating a key');
+        }
+        if (agentId !== agentId.trim()) {
+            throw new Error('agentId must not contain leading or trailing whitespace');
+        }
+
+        return awaitEventResponse<KeyGenerateResult>({
             emitEvent: Events.Key.GENERATE,
             payload: createBaseEventPayload(
                 Events.Key.GENERATE,
@@ -574,7 +854,8 @@ export class MxfSDK {
                     channelId,
                     agentId,
                     name,
-                    expiresAt: expiresAt?.toISOString()
+                    expiresAt: expiresAt?.toISOString(),
+                    allowedTools
                 }
             ),
             route: { via: 'primary' },
@@ -584,7 +865,9 @@ export class MxfSDK {
             mapResult: (payload: any) => ({
                 keyId: payload.data.keyId,
                 secretKey: payload.data.secretKey,
-                channelId: payload.data.channelId
+                channelId: payload.data.channelId,
+                agentId: payload.data.agentId,
+                allowedTools: payload.data.allowedTools
             }),
             timeoutMs: ADMIN_OPERATION_TIMEOUT_MS,
             description: `Key generation for channel '${channelId}'`,
@@ -636,8 +919,7 @@ export class MxfSDK {
         name: string;
         command?: string;
         args?: string[];
-        transport?: 'stdio' | 'http';
-        url?: string;
+        transport?: 'stdio';
         autoStart?: boolean;
         environmentVariables?: Record<string, string>;
         restartOnCrash?: boolean;
@@ -709,7 +991,23 @@ export class MxfSDK {
      * Disconnect SDK and all agents
      */
     async disconnect(): Promise<void> {
+        if (this.disconnectPromise) {
+            return this.disconnectPromise;
+        }
 
+        const disconnectAttempt = this.performDisconnect();
+        this.disconnectPromise = disconnectAttempt;
+
+        try {
+            await disconnectAttempt;
+        } finally {
+            if (this.disconnectPromise === disconnectAttempt) {
+                this.disconnectPromise = null;
+            }
+        }
+    }
+
+    private async performDisconnect(): Promise<void> {
         // Disconnect all agents
         for (const agent of this.agents.values()) {
             try {
@@ -731,14 +1029,17 @@ export class MxfSDK {
 
         // Disconnect SDK socket
         if (this.socket) {
-            this.socket.disconnect();
-            this.socket = null;
+            const socket = this.socket;
+            this.rejectPendingConnection(
+                socket,
+                new Error('SDK connection cancelled by disconnect()')
+            );
+            this.releaseSocket(socket, true);
         }
 
         this.authenticated = false;
         this.authenticatedUserId = null;
         this.agents.clear();
-
     }
 
     /**

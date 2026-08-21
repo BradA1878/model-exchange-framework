@@ -236,7 +236,11 @@ export class OrparGraphIntegration {
         // Get relationships between matching entities
         const relationships: Relationship[] = [];
         for (const entity of matchingEntities) {
-            const neighbors = await this.kgService.getNeighbors(entity.id, { limit: 5 });
+            const neighbors = await this.kgService.getNeighbors(
+                entity.id,
+                { limit: 5 },
+                channelId
+            );
             for (const rel of neighbors.relationships) {
                 if (!relationships.find((r) => r.id === rel.id)) {
                     relationships.push(rel);
@@ -300,7 +304,7 @@ export class OrparGraphIntegration {
         }
 
         for (const entityId of centralEntityIds) {
-            const subgraph = await this.kgService.getEntityContext(entityId, 2);
+            const subgraph = await this.kgService.getEntityContext(entityId, 2, channelId);
             for (const entity of subgraph.entities) {
                 if (!allEntities.find((e) => e.id === entity.id)) {
                     allEntities.push(entity);
@@ -320,7 +324,8 @@ export class OrparGraphIntegration {
                 const path = await this.kgService.findPath(
                     centralEntityIds[i],
                     centralEntityIds[i + 1],
-                    3
+                    3,
+                    channelId
                 );
                 if (path) {
                     const fromEntity = allEntities.find((e) => e.id === centralEntityIds[i]);
@@ -400,7 +405,7 @@ export class OrparGraphIntegration {
 
         // Get entities and their dependencies
         for (const entityId of taskEntityIds) {
-            const entity = await this.kgService.getEntity(entityId);
+            const entity = await this.kgService.getEntity(entityId, channelId);
             if (entity) {
                 entities.push(entity);
 
@@ -408,7 +413,7 @@ export class OrparGraphIntegration {
                 const neighbors = await this.kgService.getNeighbors(entityId, {
                     direction: 'both',
                     limit: 20,
-                });
+                }, channelId);
 
                 for (const rel of neighbors.relationships) {
                     if (!relationships.find((r) => r.id === rel.id)) {
@@ -544,6 +549,7 @@ export class OrparGraphIntegration {
         for (const qUpdate of update.qValueUpdates) {
             const result = await this.qValueManager.updateEntityQValue({
                 entityId: qUpdate.entityId,
+                channelId,
                 reward: qUpdate.reward,
                 reason: qUpdate.reason,
             });

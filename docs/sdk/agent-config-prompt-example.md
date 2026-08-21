@@ -1,6 +1,6 @@
 # Agent Configuration Prompt Examples
 
-Agent configuration prompts define how an agent should behave, what its role is, and how it should interact within the MXF framework. These prompts are typically set in the `agentConfig.systemPrompt` field.
+Agent configuration prompts define how an agent should behave, what its role is, and how it should interact within the MXF framework. Set them with the `agentConfigPrompt` field when creating an agent.
 
 ## Overview
 
@@ -165,11 +165,9 @@ const serviceAgent = await sdk.createAgent({
 
         Available tools: messaging_send
     `,
-    llmConfig: {
-        provider: 'openai',
-        model: 'gpt-4',
-        apiKey: process.env.OPENAI_API_KEY
-    },
+    llmProvider: 'openai',
+    defaultModel: 'gpt-4',
+    apiKey: process.env.OPENAI_API_KEY,
     allowedTools: [
         'messaging_send',
         'messaging_coordinate', 

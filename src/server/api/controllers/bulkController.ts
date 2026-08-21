@@ -51,6 +51,10 @@ const logger = new Logger('debug', 'BulkController', 'server');
 // Create validator instances
 const validator = createStrictValidator();
 
+interface AuthenticatedBulkRequest extends Request {
+    user?: { id?: string };
+}
+
 // Define bulk request types based on entity type
 interface BulkCreateRequest {
     entityType: 'agent' | 'channel' | 'task';
@@ -138,7 +142,7 @@ class BulkOperationsService {
 
 
         try {
-            await this.processBulkCreate(operationId, request);
+            await this.processBulkCreate(operationId, request, requestedBy);
             result.status = 'completed';
             result.completedAt = new Date();
             result.duration = result.completedAt.getTime() - result.startedAt.getTime();
@@ -331,7 +335,7 @@ class BulkOperationsService {
 
 
         try {
-            await this.processBulkDelete(operationId, request);
+            await this.processBulkDelete(operationId, request, requestedBy);
             result.status = 'completed';
             result.completedAt = new Date();
             result.duration = result.completedAt.getTime() - result.startedAt.getTime();
@@ -394,9 +398,14 @@ class BulkOperationsService {
     }
 
     /**
-     * Process bulk create operation
+     * Process bulk create operation. Items that name no creator are attributed
+     * to the authenticated requester, never to a placeholder identity.
      */
-    private async processBulkCreate(operationId: string, request: BulkCreateRequest): Promise<void> {
+    private async processBulkCreate(
+        operationId: string,
+        request: BulkCreateRequest,
+        requestedBy: string
+    ): Promise<void> {
         const result = this.activeOperations.get(operationId)!;
         const channelService = ChannelService.getInstance();
         const taskService = TaskService.getInstance();
@@ -412,18 +421,20 @@ class BulkOperationsService {
                         // AgentService doesn't support create operations
                         // Agents are created through socket connections, not CRUD operations
                         throw new Error('Agent creation not supported through bulk operations. Agents connect through socket authentication.');
-                    case 'channel':
+                    case 'channel': {
                         // Extract channel details from item
                         const channelId = item.id || `channel_${uuidv4()}`;
                         const channelName = item.name || 'Bulk Created Channel';
-                        const channelCreatedBy = item.createdBy || 'system';
+                        const channelCreatedBy = item.createdBy || requestedBy;
                         createdItem = await channelService.createChannel(channelId, channelName, channelCreatedBy, item.metadata);
                         break;
-                    case 'task':
+                    }
+                    case 'task': {
                         // TaskService.createTask requires createdBy parameter
-                        const taskCreatedBy = item.createdBy || 'system';
+                        const taskCreatedBy = item.createdBy || requestedBy;
                         createdItem = await taskService.createTask(item, taskCreatedBy);
                         break;
+                    }
                     default:
                         throw new Error(`Unsupported entity type: ${request.entityType}`);
                 }
@@ -537,7 +548,11 @@ class BulkOperationsService {
     /**
      * Process bulk delete operation
      */
-    private async processBulkDelete(operationId: string, request: BulkDeleteRequest): Promise<void> {
+    private async processBulkDelete(
+        operationId: string,
+        request: BulkDeleteRequest,
+        requestedBy: string
+    ): Promise<void> {
         const result = this.activeOperations.get(operationId)!;
         const channelService = ChannelService.getInstance();
 
@@ -550,11 +565,19 @@ class BulkOperationsService {
                         // AgentService doesn't support delete operations
                         // Agents disconnect through socket disconnection, not deletion
                         throw new Error('Agent deletion not supported through bulk operations. Agents disconnect through socket disconnection.');
-                    case 'channel':
-                        // ChannelService.deleteChannel requires agentId parameter
-                        const agentId = 'system'; // Use system as the agent performing bulk delete
-                        channelService.deleteChannel(id, agentId);
+                    case 'channel': {
+                        // /bulk is administrator-only. Verify that principal
+                        // again inside ChannelService, await the complete
+                        // lifecycle, and never count a false result as success.
+                        const deleted = await channelService.deleteChannelAsAdministrator(
+                            id,
+                            requestedBy
+                        );
+                        if (!deleted) {
+                            throw new Error(`Channel ${id} was not deleted`);
+                        }
                         break;
+                    }
                     case 'task':
                         // TaskService doesn't have cancelTask method
                         // Tasks are managed through completion/status updates
@@ -610,7 +633,12 @@ class BulkOperationsService {
 export const bulkCreate = async (req: Request, res: Response): Promise<void> => {
     try {
         const { entityType, items, options } = req.body;
-        const requestedBy = (req as any).user?.id || 'system';
+        const requesterId = (req as AuthenticatedBulkRequest).user?.id;
+        if (!requesterId) {
+            res.status(401).json({ success: false, error: 'Authentication required' });
+            return;
+        }
+        const requestedBy = requesterId.toString();
         
         // Validation
         validator.assertIsString(entityType, 'entityType');
@@ -655,7 +683,12 @@ export const bulkCreate = async (req: Request, res: Response): Promise<void> => 
 export const bulkUpdate = async (req: Request, res: Response): Promise<void> => {
     try {
         const { entityType, items, options } = req.body;
-        const requestedBy = (req as any).user?.id || 'system';
+        const requesterId = (req as AuthenticatedBulkRequest).user?.id;
+        if (!requesterId) {
+            res.status(401).json({ success: false, error: 'Authentication required' });
+            return;
+        }
+        const requestedBy = requesterId.toString();
         
         // Validation
         validator.assertIsString(entityType, 'entityType');
@@ -700,7 +733,12 @@ export const bulkUpdate = async (req: Request, res: Response): Promise<void> => 
 export const bulkDelete = async (req: Request, res: Response): Promise<void> => {
     try {
         const { entityType, ids, options } = req.body;
-        const requestedBy = (req as any).user?.id || 'system';
+        const requesterId = (req as AuthenticatedBulkRequest).user?.id;
+        if (!requesterId) {
+            res.status(401).json({ success: false, error: 'Authentication required' });
+            return;
+        }
+        const requestedBy = requesterId.toString();
         
         // Validation
         validator.assertIsString(entityType, 'entityType');

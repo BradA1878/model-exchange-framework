@@ -46,6 +46,7 @@ export interface SystemLLMEvalCompletion {
     objectives: string[];              // What needs to be achieved
     evaluationInterval: number;        // How often to check (ms)
     confidenceThreshold: number;       // 0-1, required confidence
+    maxEvaluations: number;             // Hard provider-call budget
 }
 
 export interface OutputBasedCompletion {
@@ -67,7 +68,7 @@ export interface TimeBasedCompletion {
 export interface EventBasedCompletion {
     type: 'event-based';
     eventName: string;                 // Event that triggers completion
-    eventData?: Record<string, any>;   // Optional data to match
+    eventData?: Record<string, unknown>;   // Optional data to match
 }
 
 export interface ConsensusCompletion {
@@ -79,7 +80,7 @@ export interface ConsensusCompletion {
 export interface CustomCompletion {
     type: 'custom';
     evaluatorFunction: string;         // Name of custom evaluator
-    parameters?: Record<string, any>;
+    parameters?: Record<string, unknown>;
 }
 
 export type TaskCompletionCriteria = 
@@ -98,12 +99,9 @@ export interface TaskCompletionConfig {
     // Primary completion strategy
     primary: TaskCompletionCriteria;
     
-    // Fallback strategies if primary doesn't complete
-    fallbacks?: TaskCompletionCriteria[];
-    
-    // Global timeout (applies to all strategies)
+    // Optional hard deadline. A deadline may fail a task; it can never manufacture completion.
     absoluteTimeout?: number;
-    timeoutBehavior?: 'complete' | 'fail' | 'alert';
+    timeoutBehavior?: 'fail';
     
     // Whether agents can still manually complete
     allowManualCompletion?: boolean;
@@ -111,6 +109,8 @@ export interface TaskCompletionConfig {
 
 export interface TaskMonitoringState {
     taskId: string;
+    channelId: string;
+    assignedAgentIds: string[];
     startTime: number;
     lastActivityTime: number;
     activityCount: number;
@@ -125,7 +125,7 @@ export interface TaskMonitoringState {
         toolCalls: Array<{
             agentId: string;
             toolName: string;
-            result: any;
+            result: unknown;
             timestamp: number;
         }>;
         planProgress?: {

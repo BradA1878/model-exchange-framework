@@ -44,6 +44,10 @@ const logger = new Logger('warn', 'ClientEventBus', 'client');
 
 // Create a strict validator for client-side operations
 const validator = createStrictValidator('ClientEventBus');
+type SocketCallback = (event: string, ...args: unknown[]) => void;
+
+/** Bound process-global socket replay protection without a cleanup timer. */
+const MAX_INBOUND_EVENT_KEYS = 4096;
 
 /**
  * Interface for client-specific event bus functionality
@@ -55,6 +59,12 @@ export interface IClientEventBus extends BaseEventBusImplementation {
      * @returns this (for chaining)
      */
     setClientSocket(socket: SocketLike): this;
+
+    /**
+     * Release the primary socket only when it is the expected socket. Named
+     * agent transports and listeners owned by other SDK services are retained.
+     */
+    clearClientSocket(socket?: SocketLike): this;
 
     /**
      * Set up socket event forwarding
@@ -90,6 +100,9 @@ export interface IClientEventBus extends BaseEventBusImplementation {
      */
     emitOn<K extends AnyEventName>(socketId: string, event: K, payload: PayloadOf<K>): void;
 
+    /** Whether the exact named socket used by emitOn() is connected. */
+    isRegisteredSocketConnected(socketId: string): boolean;
+
     /**
      * Disconnect the primary socket and unregister all sockets
      * @returns this (for chaining)
@@ -113,13 +126,21 @@ export class ClientEventBus extends BaseEventBusImplementation implements IClien
     // Primary socket (set by setClientSocket, used by admin/SDK emit())
     private socket: SocketLike | null = null;
     // Listeners tracked for the primary socket's onAny handler
-    private socketListeners: Map<string, (...args: any[]) => void> = new Map();
+    private socketListeners: Map<string, SocketCallback> = new Map();
 
     // Socket registry: maps socketId (typically agentId) → socket instance
     // Agent sockets register here so they don't overwrite the primary admin socket
     private socketRegistry: Map<string, SocketLike> = new Map();
     // Listeners tracked for each registered socket's onAny handler
-    private socketListenersRegistry: Map<string, Map<string, (...args: any[]) => void>> = new Map();
+    private socketListenersRegistry: Map<string, Map<string, SocketCallback>> = new Map();
+
+    /**
+     * Socket.IO broadcasts one envelope to every local agent socket. All of
+     * those sockets feed this process-global bus, so remember exact envelopes
+     * and publish each one only once. Set iteration order supplies bounded FIFO
+     * eviction; raw/custom socket payloads without an eventId remain distinct.
+     */
+    private readonly inboundEventKeys = new Set<string>();
 
 
     /**
@@ -143,6 +164,11 @@ export class ClientEventBus extends BaseEventBusImplementation implements IClien
             validator.assertHasFunction(socket, 'on');
             validator.assertHasFunction(socket, 'emit');
 
+            // Remove only the EventBus listeners from the previous primary
+            // socket. Other SDK lifecycle listeners and named agent sockets
+            // have independent owners and must survive a primary reconnect.
+            this.removePrimarySocketListeners();
+
             // Store the socket
             this.socket = socket;
 
@@ -154,6 +180,17 @@ export class ClientEventBus extends BaseEventBusImplementation implements IClien
             throw new Error(`Error setting socket: ${error instanceof Error ? error.message : 'Invalid socket'}`);
         }
 
+        return this;
+    }
+
+    /** Release only the primary transport and the exact callbacks this bus owns. */
+    public clearClientSocket(socket?: SocketLike): this {
+        if (socket && this.socket !== socket) {
+            return this;
+        }
+
+        this.removePrimarySocketListeners();
+        this.socket = null;
         return this;
     }
 
@@ -187,9 +224,6 @@ export class ClientEventBus extends BaseEventBusImplementation implements IClien
             validator.assertHasFunction(socket, 'on');
             validator.assertHasFunction(socket, 'onAny');
             
-            // Remove previous listeners if any
-            this.removeAllSocketListeners();
-            
             // Catch every event with onAny (Socket.IO specific)
             if (socket.onAny) {
                 // Build a set of events that are handled specifically by MxfService.setupControlLoopSocketListeners()
@@ -201,7 +235,7 @@ export class ClientEventBus extends BaseEventBusImplementation implements IClien
                     ...Object.values(OrparEvents)
                 ]);
 
-                const handleAnyEvent = (event: string, ...args: any[]) => {
+                const handleAnyEvent = (event: string, ...args: unknown[]): void => {
                     // Skip processing of some internal socket.io events
                     if (event.startsWith('$') || event === 'ping' || event === 'pong') {
                         return;
@@ -215,11 +249,7 @@ export class ClientEventBus extends BaseEventBusImplementation implements IClien
 
                     const payload = args.length > 0 ? args[0] : {};
 
-                    // Forward to event bus
-                    this.eventSubject.next({
-                        type: event,
-                        payload
-                    });
+                    this.publishInboundEvent(event, payload);
                 };
 
                 socket.onAny(handleAnyEvent);
@@ -266,7 +296,7 @@ export class ClientEventBus extends BaseEventBusImplementation implements IClien
                     ...Object.values(OrparEvents)
                 ]);
 
-                const handleAnyEvent = (event: string, ...args: any[]) => {
+                const handleAnyEvent = (event: string, ...args: unknown[]): void => {
                     // Skip internal socket.io events
                     if (event.startsWith('$') || event === 'ping' || event === 'pong') {
                         return;
@@ -276,7 +306,7 @@ export class ClientEventBus extends BaseEventBusImplementation implements IClien
                         return;
                     }
                     const payload = args.length > 0 ? args[0] : {};
-                    this.eventSubject.next({ type: event, payload });
+                    this.publishInboundEvent(event, payload);
                 };
 
                 socket.onAny(handleAnyEvent);
@@ -310,14 +340,13 @@ export class ClientEventBus extends BaseEventBusImplementation implements IClien
         }
 
         try {
-            // Remove onAny listener
-            if (socket.offAny) {
-                socket.offAny();
-            }
-
             // Remove individually tracked listeners
             const listeners = this.socketListenersRegistry.get(socketId);
             if (listeners) {
+                const anyListener = listeners.get('any');
+                if (socket.offAny && anyListener) {
+                    socket.offAny(anyListener);
+                }
                 for (const [event, listener] of listeners.entries()) {
                     if (event !== 'any') {
                         socket.off(event, listener);
@@ -384,6 +413,8 @@ export class ClientEventBus extends BaseEventBusImplementation implements IClien
      * @returns this (for chaining)
      */
     public disconnect(): this {
+        this.inboundEventKeys.clear();
+
         // Unregister all sockets in the registry
         for (const socketId of Array.from(this.socketRegistry.keys())) {
             this.unregisterSocket(socketId);
@@ -414,42 +445,17 @@ export class ClientEventBus extends BaseEventBusImplementation implements IClien
      * @returns this (for chaining)
      */
     public removeAllSocketListeners(): this {
-        // Clean up primary socket listeners
-        if (this.socket) {
-            try {
-                // Remove "any" listener if registered
-                if (this.socket.offAny && this.socketListeners.has('any')) {
-                    this.socket.offAny();
-                    this.socketListeners.delete('any');
-                }
-
-                // Remove individual event listeners
-                for (const [event, listener] of this.socketListeners.entries()) {
-                    if (event !== 'any') {
-                        this.socket.off(event, listener);
-                    }
-                }
-
-                // Clear listener map
-                this.socketListeners.clear();
-
-                // Use Socket.IO's removeAllListeners if available
-                if (this.socket.removeAllListeners) {
-                    this.socket.removeAllListeners();
-                }
-            } catch (error) {
-                logger.error('[ClientEventBus] Error removing primary socket listeners:', error instanceof Error ? error.message : String(error));
-            }
-        }
+        this.removePrimarySocketListeners();
 
         // Clean up registered sockets' listeners
         for (const [socketId, socket] of this.socketRegistry.entries()) {
             try {
-                if (socket.offAny) {
-                    socket.offAny();
-                }
                 const listeners = this.socketListenersRegistry.get(socketId);
                 if (listeners) {
+                    const anyListener = listeners.get('any');
+                    if (socket.offAny && anyListener) {
+                        socket.offAny(anyListener);
+                    }
                     for (const [event, listener] of listeners.entries()) {
                         if (event !== 'any') {
                             socket.off(event, listener);
@@ -464,6 +470,34 @@ export class ClientEventBus extends BaseEventBusImplementation implements IClien
         this.socketListenersRegistry.clear();
 
         return this;
+    }
+
+    /** Remove only listeners installed by this bus on the primary socket. */
+    private removePrimarySocketListeners(): void {
+        if (!this.socket) {
+            this.socketListeners.clear();
+            return;
+        }
+
+        try {
+            const anyListener = this.socketListeners.get('any');
+            if (this.socket.offAny && anyListener) {
+                this.socket.offAny(anyListener);
+            }
+
+            for (const [event, listener] of this.socketListeners.entries()) {
+                if (event !== 'any') {
+                    this.socket.off(event, listener);
+                }
+            }
+
+            this.socketListeners.clear();
+        } catch (error) {
+            logger.error(
+                '[ClientEventBus] Error removing primary socket listeners:',
+                error instanceof Error ? error.message : String(error)
+            );
+        }
     }
     
     /**
@@ -481,6 +515,41 @@ export class ClientEventBus extends BaseEventBusImplementation implements IClien
      */
     public isSocketConnected(): boolean {
         return !!this.socket && !!this.socket.connected;
+    }
+
+    /**
+     * Check the exact named agent socket used by emitOn().
+     *
+     * Request/response services must not rely on emitOn()'s primary-socket
+     * fallback: when no transport is available that fallback only logs, which
+     * would leave an acknowledged request pending forever.
+     */
+    public isRegisteredSocketConnected(socketId: string): boolean {
+        validator.assertIsNonEmptyString(socketId);
+        return this.socketRegistry.get(socketId)?.connected === true;
+    }
+
+    /** Publish one exact typed socket envelope into the shared local bus. */
+    private publishInboundEvent(event: string, payload: unknown): void {
+        if (payload && typeof payload === 'object') {
+            const eventId = (payload as { eventId?: unknown }).eventId;
+            if (typeof eventId === 'string' && eventId.trim().length > 0) {
+                const eventKey = `${event}:${eventId}`;
+                if (this.inboundEventKeys.has(eventKey)) {
+                    return;
+                }
+
+                this.inboundEventKeys.add(eventKey);
+                if (this.inboundEventKeys.size > MAX_INBOUND_EVENT_KEYS) {
+                    const oldestKey = this.inboundEventKeys.values().next().value;
+                    if (typeof oldestKey === 'string') {
+                        this.inboundEventKeys.delete(oldestKey);
+                    }
+                }
+            }
+        }
+
+        this.eventSubject.next({ type: event, payload });
     }
     
 }

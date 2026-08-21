@@ -32,6 +32,7 @@ import { TaskEffectivenessMetrics, TaskDefinition } from '../types/Effectiveness
  */
 export interface ITaskEffectiveness extends Document {
     taskId: string;
+    agentId: string;
     channelId: string;
     agentIds: string[];
     definition: TaskDefinition;
@@ -48,7 +49,11 @@ const TaskEffectivenessSchema = new Schema<ITaskEffectiveness>({
     taskId: {
         type: String,
         required: true,
-        unique: true,
+        index: true
+    },
+    agentId: {
+        type: String,
+        required: true,
         index: true
     },
     channelId: {
@@ -62,6 +67,7 @@ const TaskEffectivenessSchema = new Schema<ITaskEffectiveness>({
     }],
     definition: {
         taskId: String,
+        agentId: String,
         channelId: String,
         taskType: { type: String, index: true },
         description: String,
@@ -134,6 +140,7 @@ const TaskEffectivenessSchema = new Schema<ITaskEffectiveness>({
 });
 
 // Indexes for analytics queries
+TaskEffectivenessSchema.index({ agentId: 1, channelId: 1, taskId: 1 }, { unique: true });
 TaskEffectivenessSchema.index({ channelId: 1, 'metrics.metadata.type': 1 });
 TaskEffectivenessSchema.index({ 'metrics.metadata.startTime': 1, 'metrics.metadata.status': 1 });
 TaskEffectivenessSchema.index({ agentIds: 1, completedAt: 1 });

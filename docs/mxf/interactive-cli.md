@@ -165,7 +165,7 @@ bun run mxf run "Summarize this service" --context src/services/AuthService.ts
 bun run mxf run "Find potential bugs" --context ./src --format json
 
 # Use a specific model
-bun run mxf run "Quick question about TypeScript generics" --model anthropic/claude-haiku-4.5
+bun run mxf run "Quick question about TypeScript generics" --model ~anthropic/claude-haiku-latest
 
 # Set a longer timeout for complex tasks
 bun run mxf run "Refactor the entire test suite" --timeout 600
@@ -174,6 +174,15 @@ bun run mxf run "Refactor the entire test suite" --timeout 600
 bun run mxf run "List all exported functions in src/utils/" | head -20
 bun run mxf run "Write a haiku about distributed systems" > haiku.txt
 ```
+
+> **Note:** Model ids change often. The ids in these docs are a snapshot of what was
+> available when they were written; providers add, rename, and retire models all the
+> time. Check your provider's current list before relying on an id — for OpenRouter,
+> <https://openrouter.ai/models>. For Claude on OpenRouter, `~anthropic/claude-opus-latest`,
+> `~anthropic/claude-sonnet-latest`, and `~anthropic/claude-haiku-latest` resolve to the
+> newest release in each family, so they are the ids to use unless you need a specific
+> version. `~anthropic/claude-fable-latest` is the same kind of alias for the top-tier
+> family; it is priced well above the others and nothing in MXF selects it by default.
 
 ### Pre-Flight Checks
 
@@ -243,7 +252,7 @@ The TUI supports 27 slash commands. Type `/help` to see the full list inside a s
 | Command | Description | Usage |
 |---------|-------------|-------|
 | `/model` | Show current model and enter interactive model picker | `/model` |
-| `/model <id>` | Switch to a specific model immediately | `/model anthropic/claude-sonnet-4.5` |
+| `/model <id>` | Switch to a specific model immediately | `/model ~anthropic/claude-sonnet-latest` |
 | `/mode` | Show current interaction mode and options | `/mode` |
 | `/mode chat` | Conversational replies only -- no delegation or file changes | `/mode chat` |
 | `/mode plan` | Planning only -- no execution | `/mode plan` |

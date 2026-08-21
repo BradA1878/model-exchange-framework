@@ -224,6 +224,11 @@ import type { ProgressPayloads } from './event-definitions/ProgressEvents.js';
 export { ProgressEvents };
 export type { ProgressPayloads };
 
+import { SdkEvents } from './event-definitions/SdkEvents.js';
+import type { SdkPayloads } from './event-definitions/SdkEvents.js';
+export { SdkEvents };
+export type { SdkPayloads };
+
 /**
  * Socket Authentication Events
  * Used for socket authentication success/failure communication
@@ -236,41 +241,42 @@ export const AuthEvents = {
 /**
  * Unified export of all events for convenience
  */
-export namespace Events {
-    export const Core = CoreSocketEvents;
-    export const Agent = AgentEvents;
-    export const Message = MessageEvents;
-    export const Channel = ChannelEventsInternal;
-    export const Key = KeyEvents;
-    export const Task = TaskEvents;
-    export const LlmService = LlmServiceEvents;
-    export const ControlLoop = ControlLoopEvents;
-    export const Orpar = OrparEvents;
-    export const Heartbeat = HeartbeatEvents;
-    export const Mcp = McpEvents;
-    export const Memory = MemoryEventsInternal;
-    export const System = SystemEvents;
-    export const Analytics = AnalyticsEvents;
-    export const Config = ConfigEvents;
-    export const Bulk = BulkEvents;
-    export const Auth = AuthEvents;
-    export const Mxp = MxpEvents;
-    export const Meilisearch = MeilisearchEvents;
-    export const LlmBudget = LlmBudgetEvents;
-    export const CodeExecution = CodeExecutionEvents;
-    export const Shell = ShellExecutionEvents;
-    export const Workflow = WorkflowEvents;
-    export const InferenceParameter = InferenceParameterEvents;
-    export const Plan = PlanEvents;
-    export const MemoryUtility = MemoryUtilityEvents;
-    export const OrparMemory = OrparMemoryEvents;
-    export const Dag = DagEvents;
-    export const KnowledgeGraph = KnowledgeGraphEvents;
-    export const TensorFlow = TensorFlowEvents;
-    export const UserInput = UserInputEvents;
-    export const Compaction = CompactionEvents;
-    export const Progress = ProgressEvents;
-}
+export const Events = {
+    Core: CoreSocketEvents,
+    Agent: AgentEvents,
+    Message: MessageEvents,
+    Channel: ChannelEventsInternal,
+    Key: KeyEvents,
+    Task: TaskEvents,
+    LlmService: LlmServiceEvents,
+    ControlLoop: ControlLoopEvents,
+    Orpar: OrparEvents,
+    Heartbeat: HeartbeatEvents,
+    Mcp: McpEvents,
+    Memory: MemoryEventsInternal,
+    System: SystemEvents,
+    Analytics: AnalyticsEvents,
+    Config: ConfigEvents,
+    Bulk: BulkEvents,
+    Auth: AuthEvents,
+    Mxp: MxpEvents,
+    Meilisearch: MeilisearchEvents,
+    LlmBudget: LlmBudgetEvents,
+    CodeExecution: CodeExecutionEvents,
+    Shell: ShellExecutionEvents,
+    Workflow: WorkflowEvents,
+    InferenceParameter: InferenceParameterEvents,
+    Plan: PlanEvents,
+    MemoryUtility: MemoryUtilityEvents,
+    OrparMemory: OrparMemoryEvents,
+    Dag: DagEvents,
+    KnowledgeGraph: KnowledgeGraphEvents,
+    TensorFlow: TensorFlowEvents,
+    UserInput: UserInputEvents,
+    Compaction: CompactionEvents,
+    Progress: ProgressEvents,
+    Sdk: SdkEvents,
+} as const;
 
 /**
  * Complete event map combining all event payloads
@@ -306,7 +312,8 @@ export type EventMap =
     TensorFlowPayloads &
     UserInputPayloads &
     CompactionPayloads &
-    ProgressPayloads;
+    ProgressPayloads &
+    SdkPayloads;
 
 /**
  * Event name type - any valid event name

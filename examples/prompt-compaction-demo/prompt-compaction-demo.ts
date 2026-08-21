@@ -6,20 +6,16 @@
  * token usage through tiered compression and importance scoring.
  *
  * @prerequisites
- * - MXF server running (`npm run dev`)
+ * - MXF server running (`bun run dev`)
  * - Environment variables configured
  *
  * @example
  * ```bash
- * cd examples/prompt-compaction-demo
- * cp .env.example .env
- * npx ts-node prompt-compaction-demo.ts
+ * bun run demo:prompt-compaction
  * ```
- *
- * Run with: npm run demo:prompt-compaction
  */
 
-import { MxfSDK } from '@mxf-dev/sdk/MxfSDK';
+import { MxfSDK } from '@mxf-dev/sdk';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -425,7 +421,7 @@ async function demo() {
       allowedTools: ['code_execute'],
       llmProvider: 'openrouter' as any,
       apiKey: process.env.OPENROUTER_API_KEY || '',
-      defaultModel: 'anthropic/claude-3.5-haiku'
+      defaultModel: '~anthropic/claude-haiku-latest'
     });
 
     await agent.connect();

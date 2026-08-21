@@ -22,227 +22,139 @@
  * Handlers for Memory-related operations
  */
 
-import { v4 as uuidv4 } from 'uuid';
-import { MemoryEvents } from '@mxf-dev/core/events/event-definitions/MemoryEvents';
-import { EventBus } from '@mxf-dev/core/events/EventBus';
+import { Observable, Subscription } from 'rxjs';
 import { Handler } from './Handler.js';
-import { Subscription } from 'rxjs';
 import {
     IAgentMemory,
     IChannelMemory,
     IRelationshipMemory,
     MemoryScope
 } from '@mxf-dev/core/types/MemoryTypes';
-import {
-    BaseEventPayload,
-    MemoryGetEventData,
-    MemoryUpdateEventData,
-    MemoryDeleteEventData,
-    MemoryGetResultEventData,
-    MemoryUpdateResultEventData,
-    MemoryDeleteResultEventData,
-    BaseMemoryOperationData,
-    MemoryGetEventPayload,
-    MemoryUpdateEventPayload,
-    MemoryDeleteEventPayload
-} from '@mxf-dev/core/schemas/EventPayloadSchema';
-import { IInternalChannelService } from '../services/MxfService.js';
 import { createStrictValidator } from '@mxf-dev/core/utils/validation';
-import { Logger } from '@mxf-dev/core/utils/Logger';
-import { awaitEventResponse } from '../services/internal/EventRequest.js';
+import { MxfMemoryService } from '../services/MxfMemoryService.js';
 
 export class MemoryHandlers extends Handler {
     private agentId: string;
-    private mxfService: IInternalChannelService;
-    private agentMemory: IAgentMemory | null = null; 
-    private channelId: string; 
-    protected validator = createStrictValidator('MemoryHandlers'); 
-    private requestTimeoutMs: number;
+    private agentMemory: IAgentMemory | null = null;
+    private channelId: string;
+    private memoryService: MxfMemoryService;
+    private pendingRequestCancellations = new Map<symbol, () => void>();
+    protected validator = createStrictValidator('MemoryHandlers');
 
     constructor(
         channelId: string,
-        agentId: string, 
-        mxfService: IInternalChannelService, 
-        requestTimeoutMs: number = 30000, 
+        agentId: string
     ) {
-        super(`MemoryHandlers:${agentId}`); 
+        super(`MemoryHandlers:${agentId}`);
         this.validator.assertIsNonEmptyString(agentId, 'Agent ID must be a non-empty string.');
-        this.validator.assert(!!mxfService, 'MxfService instance is required.');
-        this.validator.assert(requestTimeoutMs > 0, 'Request timeout must be greater than 0.');
         this.validator.assertIsNonEmptyString(channelId, 'Channel ID must be a non-empty string for MemoryHandlers.');
 
         this.agentId = agentId;
-        this.mxfService = mxfService;
-        this.requestTimeoutMs = requestTimeoutMs;
-        this.channelId = channelId; 
+        this.channelId = channelId;
+        this.memoryService = MxfMemoryService.getInstance();
     }
 
     public cleanup(): void {
         this.agentMemory = null;
-        // Memory requests are self-contained: awaitEventResponse unsubscribes and
-        // clears its timer on every exit path, so nothing is left to clean up here.
+        [...this.pendingRequestCancellations.values()].forEach(cancel => cancel());
     }
 
-    /**
-     * Send a memory request and wait for its result.
-     *
-     * Correlated by operationId, with one failure contract: a server-side error or a
-     * timeout rejects. This used to reject inside the promise and then swallow that
-     * rejection in an outer catch that returned `null`, so a failed memory write was
-     * indistinguishable from a memory that simply had nothing in it.
-     *
-     * @throws Error if the agent is not connected
-     * @throws EventRequestError if the server reports the operation failed
-     * @throws EventRequestTimeoutError if the server does not answer
-     */
-    private async sendMemoryRequestCore<TResponse>(
-        eventType: string,
-        payload: BaseEventPayload<BaseMemoryOperationData>,
-        resultEventName: string,
-        errorEventName: string
-    ): Promise<TResponse> {
-        if (!this.mxfService.isConnected()) {
+    private assertAuthenticatedChannel(channelId: string): void {
+        if (channelId !== this.channelId) {
             throw new Error(
-                `[${this.agentId}] Cannot send memory request '${eventType}': agent is not connected`
+                `Memory channel '${channelId}' does not match authenticated channel '${this.channelId}'`
             );
         }
+    }
 
-        const operationId = payload.data.operationId;
+    private awaitOperation<T>(operation: Observable<T>, description: string): Promise<T> {
+        const requestId = Symbol(description);
+        const subscription = new Subscription();
 
-        return awaitEventResponse<TResponse>({
-            emitEvent: eventType,
-            payload,
-            route: { via: 'agent', agentId: this.agentId },
-            successEvent: resultEventName,
-            failureEvent: errorEventName,
-            correlate: (responsePayload: any) => responsePayload?.data?.operationId === operationId,
-            mapResult: (responsePayload: any) => responsePayload.data as TResponse,
-            timeoutMs: this.requestTimeoutMs,
-            description: `Memory operation '${eventType}' (${operationId})`,
-            logger: this.logger,
+        return new Promise<T>((resolve, reject) => {
+            let settled = false;
+            const finish = (): boolean => {
+                if (settled) {
+                    return false;
+                }
+                settled = true;
+                this.pendingRequestCancellations.delete(requestId);
+                subscription.unsubscribe();
+                return true;
+            };
+            const rejectRequest = (error: unknown): void => {
+                if (finish()) {
+                    reject(error instanceof Error ? error : new Error(String(error)));
+                }
+            };
+
+            this.pendingRequestCancellations.set(requestId, () => rejectRequest(
+                new Error(`${description} cancelled because the memory handler was cleaned up`)
+            ));
+            subscription.add(operation.subscribe({
+                next: result => {
+                    if (finish()) {
+                        resolve(result);
+                    }
+                },
+                error: rejectRequest,
+                complete: () => rejectRequest(new Error(`${description} completed without a result`))
+            }));
         });
     }
 
     /**
      * Get agent memory.
-     * @returns Promise resolving to IAgentMemory or null.
+     * @returns Promise resolving to the authoritative agent memory.
      */
-    public async getAgentMemory(): Promise<IAgentMemory | null> {
-        const eventData: MemoryGetEventData = { 
-            operationId: uuidv4(),
-            scope: MemoryScope.AGENT,
-            id: this.agentId, 
-        };
-        const payload: MemoryGetEventPayload = {
-            eventId: uuidv4(),
-            eventType: MemoryEvents.GET,
-            agentId: this.agentId,
-            timestamp: Date.now(),
-            channelId: this.channelId, 
-            data: eventData,
-        };
-
-        const retrievedMemory = await this.sendMemoryRequestCore<MemoryGetResultEventData>(
-            MemoryEvents.GET, 
-            payload, 
-            MemoryEvents.GET_RESULT, 
-            MemoryEvents.GET_ERROR
+    public async getAgentMemory(): Promise<IAgentMemory> {
+        const retrievedMemory = await this.awaitOperation(
+            this.memoryService.getAgentMemory(this.agentId, this.channelId),
+            'Get agent memory'
         );
-
-        if (retrievedMemory && !retrievedMemory.error && retrievedMemory.memory) {
-            this.agentMemory = retrievedMemory.memory as IAgentMemory; 
-            return this.agentMemory;
-        }
-        if (retrievedMemory && retrievedMemory.error) {
-            const errorMessage: string = retrievedMemory.error;
-            this.logger.error(`Error in getAgentMemory: ${errorMessage}`);
-        }
-        return null;
+        this.agentMemory = retrievedMemory;
+        return retrievedMemory;
     }
     
     /**
      * Update agent memory.
      * @param data Partial data to update agent memory.
-     * @returns Promise resolving to IAgentMemory or null.
+     * @returns Promise resolving to the authoritative updated agent memory.
      */
-    public async updateAgentMemory(data: Partial<IAgentMemory>): Promise<IAgentMemory | null> {
-        const eventData: MemoryUpdateEventData = { 
-            operationId: uuidv4(),
-            scope: MemoryScope.AGENT,
-            id: this.agentId, 
-            data: data, 
-        };
-        const payload: MemoryUpdateEventPayload = {
-            eventId: uuidv4(),
-            eventType: MemoryEvents.UPDATE,
-            agentId: this.agentId,
-            timestamp: Date.now(),
-            channelId: this.channelId, 
-            data: eventData,
-        };
-
-        const updatedMemory = await this.sendMemoryRequestCore<MemoryUpdateResultEventData>(
-            MemoryEvents.UPDATE, 
-            payload, 
-            MemoryEvents.UPDATE_RESULT, 
-            MemoryEvents.UPDATE_ERROR
+    public async updateAgentMemory(data: Partial<IAgentMemory>): Promise<IAgentMemory> {
+        const updatedMemory = await this.awaitOperation(
+            this.memoryService.updateAgentMemory(this.agentId, this.channelId, data),
+            'Update agent memory'
         );
-
-        if (updatedMemory && !updatedMemory.error && updatedMemory.memory) {
-            this.agentMemory = updatedMemory.memory as IAgentMemory; 
-            return this.agentMemory;
-        }
-        if (updatedMemory && updatedMemory.error) {
-            const errorMessage: string = updatedMemory.error;
-            this.logger.error(`Error in updateAgentMemory: ${errorMessage}`);
-        }
-        return null;
+        this.agentMemory = updatedMemory;
+        return updatedMemory;
     }
 
     /**
      * Delete agent memory.
-     * @returns Promise resolving to true if successful, false otherwise.
+     * @returns Promise resolving to true when deletion is confirmed.
      */
     public async deleteAgentMemory(): Promise<boolean> {
-        const eventData: MemoryDeleteEventData = { 
-            operationId: uuidv4(),
-            scope: MemoryScope.AGENT,
-            id: this.agentId, 
-        };
-        const payload: MemoryDeleteEventPayload = {
-            eventId: uuidv4(),
-            eventType: MemoryEvents.DELETE,
-            agentId: this.agentId,
-            timestamp: Date.now(),
-            channelId: this.channelId,
-            data: eventData,
-        };
-
-        const result = await this.sendMemoryRequestCore<MemoryDeleteResultEventData>(
-            MemoryEvents.DELETE, 
-            payload, 
-            MemoryEvents.DELETE_RESULT, 
-            MemoryEvents.DELETE_ERROR
+        await this.awaitOperation(
+            this.memoryService.deleteMemory(
+                this.agentId,
+                this.channelId,
+                MemoryScope.AGENT,
+                this.agentId
+            ),
+            'Delete agent memory'
         );
-
-        if (result && result.success) {
-            this.agentMemory = null; 
-            return true;
-        }
-        if (result && result.error) {
-            const errorMessage: string = result.error;
-            this.logger.error(`Error in deleteAgentMemory: ${errorMessage}`);
-        }
-        return false;
+        this.agentMemory = null;
+        return true;
     }
     
     /**
      * Add a note to agent memory. Assumes 'notes' is a Record<string, any> on IAgentMemory.
      * @param key Note key.
      * @param value Note value.
-     * @returns Promise resolving to IAgentMemory or null.
+     * @returns Promise resolving to the authoritative updated agent memory.
      */
-    public async addNote(key: string, value: any): Promise<IAgentMemory | null> {
+    public async addNote(key: string, value: unknown): Promise<IAgentMemory> {
         this.validator.assertIsNonEmptyString(key, 'Note key');
         
         // Fetch current notes, or initialize if not present, to merge safely.
@@ -259,9 +171,9 @@ export class MemoryHandlers extends Handler {
     /**
      * Add conversation entry to agent memory. Assumes 'conversationHistory' is an array on IAgentMemory.
      * @param entry Conversation entry to add.
-     * @returns Promise resolving to IAgentMemory or null.
+     * @returns Promise resolving to the authoritative updated agent memory.
      */
-    public async addToConversationHistory(entry: any): Promise<IAgentMemory | null> {
+    public async addToConversationHistory(entry: unknown): Promise<IAgentMemory> {
         
         // Ensure agentMemory is loaded if not already
         if (!this.agentMemory) {
@@ -278,114 +190,58 @@ export class MemoryHandlers extends Handler {
     /**
      * Get channel memory for a specific channel.
      * @param channelId The channel ID to get memory for.
-     * @returns Promise resolving to IChannelMemory or null.
+     * @returns Promise resolving to the authoritative channel memory.
      */
-    public async getChannelMemory(channelId: string): Promise<IChannelMemory | null> {
+    public async getChannelMemory(channelId: string): Promise<IChannelMemory> {
         this.validator.assertIsNonEmptyString(channelId, 'Channel ID must be provided for getChannelMemory.');
-        const eventData: MemoryGetEventData = {
-            operationId: uuidv4(),
-            scope: MemoryScope.CHANNEL,
-            id: channelId, 
-        };
-        const payload: MemoryGetEventPayload = {
-            eventId: uuidv4(),
-            eventType: MemoryEvents.GET,
-            agentId: this.agentId, 
-            timestamp: Date.now(),
-            channelId: channelId,  
-            data: eventData,
-        };
-        const resultEventData = await this.sendMemoryRequestCore<MemoryGetResultEventData>(
-            MemoryEvents.GET, 
-            payload, 
-            MemoryEvents.GET_RESULT,
-            MemoryEvents.GET_ERROR
+        this.assertAuthenticatedChannel(channelId);
+        return this.awaitOperation(
+            this.memoryService.getChannelMemory(this.agentId, this.channelId, channelId),
+            `Get channel memory '${channelId}'`
         );
-
-        if (resultEventData && !resultEventData.error && resultEventData.memory) {
-            return resultEventData.memory as IChannelMemory;
-        }
-        if (resultEventData && resultEventData.error) {
-            const errorMessage: string = resultEventData.error;
-            this.logger.error(`Error in getChannelMemory for ${channelId}: ${errorMessage}`);
-        }
-        return null;
     }
     
     /**
      * Update channel memory with new data.
      * @param channelId The channel ID to update memory for.
      * @param data Memory fields to update.
-     * @returns Promise resolving to IChannelMemory or null.
+     * @returns Promise resolving to the authoritative updated channel memory.
      */
-    public async updateChannelMemory(channelId: string, data: Partial<IChannelMemory>): Promise<IChannelMemory | null> {
+    public async updateChannelMemory(
+        channelId: string,
+        data: Partial<IChannelMemory>
+    ): Promise<IChannelMemory> {
         this.validator.assertIsNonEmptyString(channelId, 'Channel ID must be provided for updateChannelMemory.');
-        const eventData: MemoryUpdateEventData = {
-            operationId: uuidv4(),
-            scope: MemoryScope.CHANNEL,
-            id: channelId, 
-            data: data,
-        };
-        const payload: MemoryUpdateEventPayload = {
-            eventId: uuidv4(),
-            eventType: MemoryEvents.UPDATE,
-            agentId: this.agentId,
-            timestamp: Date.now(),
-            channelId: channelId,  
-            data: eventData,
-        };
-        const resultEventData = await this.sendMemoryRequestCore<MemoryUpdateResultEventData>(
-            MemoryEvents.UPDATE, 
-            payload, 
-            MemoryEvents.UPDATE_RESULT,
-            MemoryEvents.UPDATE_ERROR
+        this.assertAuthenticatedChannel(channelId);
+        return this.awaitOperation(
+            this.memoryService.updateChannelMemory(
+                this.agentId,
+                this.channelId,
+                channelId,
+                data
+            ),
+            `Update channel memory '${channelId}'`
         );
-
-        if (resultEventData && !resultEventData.error && resultEventData.memory) {
-            return resultEventData.memory as IChannelMemory;
-        }
-        if (resultEventData && resultEventData.error) {
-            const errorMessage: string = resultEventData.error;
-            this.logger.error(`Error in updateChannelMemory for ${channelId}: ${errorMessage}`);
-        }
-        return null;
     }
 
     /**
      * Delete channel memory for a specific channel.
      * @param channelId The ID of the channel whose memory is to be deleted.
-     * @returns Promise resolving to true if successful, false otherwise.
+     * @returns Promise resolving to true when deletion is confirmed.
      */
     public async deleteChannelMemory(channelId: string): Promise<boolean> {
         this.validator.assertIsNonEmptyString(channelId, 'Channel ID must be provided for deleteChannelMemory.');
-        const eventData: MemoryDeleteEventData = {
-            operationId: uuidv4(),
-            scope: MemoryScope.CHANNEL,
-            id: channelId, 
-        };
-        const payload: MemoryDeleteEventPayload = { 
-            eventId: uuidv4(),
-            eventType: MemoryEvents.DELETE,
-            agentId: this.agentId,
-            timestamp: Date.now(),
-            channelId: channelId,  
-            data: eventData,
-        };
-        const resultEventData = await this.sendMemoryRequestCore<MemoryDeleteResultEventData>(
-            MemoryEvents.DELETE, 
-            payload, 
-            MemoryEvents.DELETE_RESULT,
-            MemoryEvents.DELETE_ERROR
+        this.assertAuthenticatedChannel(channelId);
+        await this.awaitOperation(
+            this.memoryService.deleteMemory(
+                this.agentId,
+                this.channelId,
+                MemoryScope.CHANNEL,
+                channelId
+            ),
+            `Delete channel memory '${channelId}'`
         );
-
-        if (resultEventData && resultEventData.success) {
-            return true;
-        }
-        if (resultEventData && resultEventData.error) {
-            const errorMessage: string = resultEventData.error;
-            this.logger.error(`Error in deleteChannelMemory for ${channelId}: ${errorMessage}`);
-        }
-        return false;
+        return true;
     }
     
     /**
@@ -400,44 +256,28 @@ export class MemoryHandlers extends Handler {
      * Get relationship memory between this agent and another agent.
      * @param otherAgentId The other agent ID for the relationship.
      * @param channelId Optional channel ID to scope the relationship to.
-     * @returns Promise resolving to IRelationshipMemory or null.
+     * @returns Promise resolving to the authoritative relationship memory.
      */
-    public async getRelationshipMemory(otherAgentId: string, channelId?: string): Promise<IRelationshipMemory | null> {
+    public async getRelationshipMemory(
+        otherAgentId: string,
+        channelId?: string
+    ): Promise<IRelationshipMemory> {
         this.validator.assertIsNonEmptyString(otherAgentId, 'Other agent ID must be provided.');
-        const relationshipId = this.generateRelationshipId(otherAgentId);
-        if (channelId && typeof channelId !== 'string') {
-            throw new Error('channelId must be a string if provided');
+        if (channelId !== undefined) {
+            this.validator.assertIsNonEmptyString(channelId, 'Channel ID must not be empty.');
         }
-        const targetChannelId = channelId || this.channelId; 
-
-        const eventData: MemoryGetEventData = {
-            operationId: uuidv4(),
-            scope: MemoryScope.RELATIONSHIP,
-            id: relationshipId, 
-        };
-        const payload: MemoryGetEventPayload = {
-            eventId: uuidv4(),
-            eventType: MemoryEvents.GET,
-            agentId: this.agentId,
-            timestamp: Date.now(),
-            channelId: targetChannelId, 
-            data: eventData,
-        };
-        const resultEventData = await this.sendMemoryRequestCore<MemoryGetResultEventData>(
-            MemoryEvents.GET, 
-            payload, 
-            MemoryEvents.GET_RESULT,
-            MemoryEvents.GET_ERROR
+        const targetChannelId = channelId ?? this.channelId;
+        this.assertAuthenticatedChannel(targetChannelId);
+        return this.awaitOperation(
+            this.memoryService.getRelationshipMemory(
+                this.agentId,
+                this.channelId,
+                this.agentId,
+                otherAgentId,
+                targetChannelId
+            ),
+            `Get relationship memory with '${otherAgentId}'`
         );
-
-        if (resultEventData && !resultEventData.error && resultEventData.memory) {
-            return resultEventData.memory as IRelationshipMemory;
-        }
-        if (resultEventData && resultEventData.error) {
-            const errorMessage: string = resultEventData.error;
-            this.logger.error(`Error in getRelationshipMemory for ${relationshipId.join(':')}: ${errorMessage}`);
-        }
-        return null;
     }
     
     /**
@@ -445,92 +285,55 @@ export class MemoryHandlers extends Handler {
      * @param otherAgentId The other agent ID for the relationship.
      * @param data Memory fields to update.
      * @param channelId Optional channel ID to scope the relationship to.
-     * @returns Promise resolving to IRelationshipMemory or null.
+     * @returns Promise resolving to the authoritative updated relationship memory.
      */
     public async updateRelationshipMemory(
         otherAgentId: string, 
         data: Partial<IRelationshipMemory>,
         channelId?: string
-    ): Promise<IRelationshipMemory | null> {
+    ): Promise<IRelationshipMemory> {
         this.validator.assertIsNonEmptyString(otherAgentId, 'Other agent ID must be provided.');
-        const relationshipId = this.generateRelationshipId(otherAgentId);
-        if (channelId && typeof channelId !== 'string') {
-            throw new Error('channelId must be a string if provided');
+        if (channelId !== undefined) {
+            this.validator.assertIsNonEmptyString(channelId, 'Channel ID must not be empty.');
         }
-        const targetChannelId = channelId || this.channelId;
-
-        const eventData: MemoryUpdateEventData = {
-            operationId: uuidv4(),
-            scope: MemoryScope.RELATIONSHIP,
-            id: relationshipId, 
-            data: data,
-        };
-        const payload: MemoryUpdateEventPayload = {
-            eventId: uuidv4(),
-            eventType: MemoryEvents.UPDATE,
-            agentId: this.agentId,
-            timestamp: Date.now(),
-            channelId: targetChannelId, 
-            data: eventData,
-        };
-        const resultEventData = await this.sendMemoryRequestCore<MemoryUpdateResultEventData>(
-            MemoryEvents.UPDATE, 
-            payload, 
-            MemoryEvents.UPDATE_RESULT,
-            MemoryEvents.UPDATE_ERROR
+        const targetChannelId = channelId ?? this.channelId;
+        this.assertAuthenticatedChannel(targetChannelId);
+        return this.awaitOperation(
+            this.memoryService.updateRelationshipMemory(
+                this.agentId,
+                this.channelId,
+                this.agentId,
+                otherAgentId,
+                data,
+                targetChannelId
+            ),
+            `Update relationship memory with '${otherAgentId}'`
         );
-
-        if (resultEventData && !resultEventData.error && resultEventData.memory) {
-            return resultEventData.memory as IRelationshipMemory;
-        }
-        if (resultEventData && resultEventData.error) {
-            const errorMessage: string = resultEventData.error;
-            this.logger.error(`Error in updateRelationshipMemory for ${relationshipId.join(':')}: ${errorMessage}`);
-        }
-        return null;
     }
 
     /**
      * Deletes relationship memory between this agent and another agent.
      * @param otherAgentId The other agent ID for the relationship.
      * @param channelId Optional channel ID to scope the relationship to.
-     * @returns Promise resolving to true if successful, false otherwise.
+     * @returns Promise resolving to true when deletion is confirmed.
      */
     public async deleteRelationshipMemory(otherAgentId: string, channelId?: string): Promise<boolean> {
         this.validator.assertIsNonEmptyString(otherAgentId, 'Other agent ID must be provided.');
         const relationshipId = this.generateRelationshipId(otherAgentId);
-        if (channelId && typeof channelId !== 'string') {
-            throw new Error('channelId must be a string if provided');
+        if (channelId !== undefined) {
+            this.validator.assertIsNonEmptyString(channelId, 'Channel ID must not be empty.');
         }
-        const targetChannelId = channelId || this.channelId;
-
-        const eventData: MemoryDeleteEventData = { 
-            operationId: uuidv4(),
-            scope: MemoryScope.RELATIONSHIP,
-            id: relationshipId, 
-        };
-        const payload: MemoryDeleteEventPayload = { 
-            eventId: uuidv4(),
-            eventType: MemoryEvents.DELETE,
-            agentId: this.agentId,
-            timestamp: Date.now(),
-            channelId: targetChannelId, 
-            data: eventData,
-        };
-        const resultEventData = await this.sendMemoryRequestCore<MemoryDeleteResultEventData>(
-            MemoryEvents.DELETE, 
-            payload, 
-            MemoryEvents.DELETE_RESULT,
-            MemoryEvents.DELETE_ERROR
+        const targetChannelId = channelId ?? this.channelId;
+        this.assertAuthenticatedChannel(targetChannelId);
+        await this.awaitOperation(
+            this.memoryService.deleteMemory(
+                this.agentId,
+                this.channelId,
+                MemoryScope.RELATIONSHIP,
+                [...relationshipId, targetChannelId]
+            ),
+            `Delete relationship memory with '${otherAgentId}'`
         );
-
-        if (resultEventData && resultEventData.success) {
-            return true;
-        }
-        if (resultEventData && resultEventData.error) {
-            const errorMessage: string = resultEventData.error;
-            this.logger.error(`Error in deleteRelationshipMemory for ${relationshipId.join(':')}: ${errorMessage}`);
-        }
-        return false;
+        return true;
     }
 }

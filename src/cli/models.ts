@@ -16,9 +16,20 @@
  * @author Brad Anderson <BradA1878@pm.me>
  */
 
-/** Provider identifier → curated model IDs, best/most-capable first */
+/**
+ * Provider identifier → curated model IDs, most capable first — except the
+ * fable alias, which costs several times the rest: it is listed after the
+ * everyday aliases so `mxf init`, which highlights the first entry, never
+ * makes it the default.
+ */
 export const MODEL_CATALOG: Readonly<Record<string, readonly string[]>> = {
     openrouter: [
+        // OpenRouter latest-resolution aliases: each resolves to the newest
+        // release in its family, so a fresh install tracks new models.
+        '~anthropic/claude-opus-latest',
+        '~anthropic/claude-sonnet-latest',
+        '~anthropic/claude-haiku-latest',
+        '~anthropic/claude-fable-latest',
         'anthropic/claude-sonnet-4.6',
         'anthropic/claude-sonnet-4.5',
         'anthropic/claude-haiku-4.5',

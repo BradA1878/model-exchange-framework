@@ -12,17 +12,13 @@
  * - Explains its rationale for each decision
  *
  * @prerequisites
- * - MXF server running (`npm run dev`)
+ * - MXF server running (`bun run dev`)
  * - Environment variables configured
  *
  * @example
  * ```bash
- * cd examples/p2p-task-negotiation-demo
- * cp .env.example .env
- * npx ts-node p2p-task-negotiation-demo.ts
+ * bun run demo:p2p-task-negotiation
  * ```
- *
- * Run with: npm run demo:p2p-task-negotiation
  */
 
 import { MxfSDK, Events, LlmProviderType } from '@mxf-dev/sdk';
@@ -337,7 +333,7 @@ const createTaskAuctionAgent = async (
         // LLM configuration
         llmProvider: LlmProviderType.OPENROUTER,
         apiKey: process.env.OPENROUTER_API_KEY!,
-        defaultModel: 'anthropic/claude-3.5-sonnet',
+        defaultModel: '~anthropic/claude-sonnet-latest',
         temperature: 0.3,
         maxTokens: 8000,
 

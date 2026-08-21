@@ -22,8 +22,14 @@ jest.mock('@mxf-dev/core/events/EventBus', () => {
                 on: jest.fn((event: string, handler: (payload: any) => void) => {
                     if (!handlers.has(event)) handlers.set(event, []);
                     handlers.get(event)!.push(handler);
-                    return { unsubscribe: jest.fn() } as unknown as Subscription;
+                    return new Subscription(() => {
+                        const eventHandlers = handlers.get(event);
+                        if (!eventHandlers) return;
+                        const index = eventHandlers.indexOf(handler);
+                        if (index >= 0) eventHandlers.splice(index, 1);
+                    });
                 }),
+                isRegisteredSocketConnected: jest.fn((): boolean => true),
                 emitOn: jest.fn((socketId: string, event: string, payload: any) => {
                     emitted.push({ socketId, event, payload });
                 }),
@@ -33,6 +39,7 @@ jest.mock('@mxf-dev/core/events/EventBus', () => {
                     [...(handlers.get(event) ?? [])].forEach(h => h(payload));
                 },
                 _emitted: () => emitted,
+                _handlerCount: (event: string): number => handlers.get(event)?.length ?? 0,
                 _reset: () => {
                     handlers.clear();
                     emitted.length = 0;
@@ -44,6 +51,7 @@ jest.mock('@mxf-dev/core/events/EventBus', () => {
 
 import { EventBus } from '@mxf-dev/core/events/EventBus';
 import { TaskEvents } from '@mxf-dev/core/events/event-definitions/TaskEvents';
+import { AgentEvents } from '@mxf-dev/core/events/event-definitions/AgentEvents';
 import { TaskHandlers } from '@mxf-dev/sdk/handlers/TaskHandlers';
 import { TaskHelper } from '@mxf-dev/sdk/services/internal/TaskHelper';
 
@@ -53,7 +61,23 @@ const AGENT_ID = 'worker-agent';
 const CHANNEL_ID = 'work-channel';
 
 /** Build an ASSIGNED payload the way the server sends it. */
-const assignedPayload = (taskId: string) => ({
+interface AssignedTaskFixture {
+    id: string;
+    channelId: string;
+    title: string;
+    description: string;
+    assignedAgentIds: string[];
+    completionAgentId?: string;
+    metadata: Record<string, unknown>;
+}
+
+interface AssignedPayloadFixture {
+    agentId: string;
+    channelId: string;
+    data: { toAgentId: string; fromAgentId: string; task: AssignedTaskFixture };
+}
+
+const assignedPayload = (taskId: string, task: Partial<AssignedTaskFixture> = {}): AssignedPayloadFixture => ({
     agentId: 'system',
     channelId: CHANNEL_ID,
     data: {
@@ -66,9 +90,15 @@ const assignedPayload = (taskId: string) => ({
             description: 'Do the thing properly',
             assignedAgentIds: [AGENT_ID],
             metadata: {},
+            ...task,
         },
     },
 });
+
+interface EmittedEvent {
+    event: string;
+    payload: { data: Record<string, unknown> };
+}
 
 /** Wait for the handler's fire-and-forget promise chain to settle. */
 const flush = () => new Promise(resolve => setImmediate(resolve));
@@ -76,17 +106,90 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
 const failRequests = () =>
     bus._emitted().filter((e: any) => e.event === TaskEvents.FAIL_REQUEST);
 
+describe('TaskHandlers terminal task events', () => {
+    let handlers: TaskHandlers;
+    let ended: jest.Mock;
+
+    beforeEach(() => {
+        bus._reset();
+        jest.clearAllMocks();
+        bus.isRegisteredSocketConnected.mockReturnValue(true);
+        handlers = new TaskHandlers(CHANNEL_ID, AGENT_ID);
+        handlers.initialize();
+        handlers.setTaskRequestHandler(async () => ({ ok: true }) as never);
+        ended = jest.fn();
+        handlers.setTaskEndedHandler(ended);
+    });
+
+    afterEach(() => {
+        handlers.cleanup();
+    });
+
+    const terminal = (event: string, taskId: string): void => {
+        // Shape of the server's channel broadcast for a terminal outcome.
+        bus._deliver(event, {
+            agentId: 'lead-agent',
+            channelId: CHANNEL_ID,
+            data: { taskId, fromAgentId: 'lead-agent', toAgentId: 'lead-agent', task: { id: taskId, status: 'failed' } }
+        });
+    };
+
+    it('reports the assigned task as ended once when the server broadcasts its outcome', async () => {
+        bus._deliver(TaskEvents.ASSIGNED, assignedPayload('task-1'));
+        await flush();
+
+        terminal(TaskEvents.FAILED, 'task-1');
+        expect(ended).toHaveBeenCalledWith('task-1', 'failed');
+
+        // A second broadcast for the same task (another agent's refused report,
+        // a replay) must not fire again: the agent is already idle.
+        terminal(TaskEvents.FAILED, 'task-1');
+        expect(ended).toHaveBeenCalledTimes(1);
+    });
+
+    it('reports completion and cancellation with their outcome', async () => {
+        bus._deliver(TaskEvents.ASSIGNED, assignedPayload('task-2'));
+        await flush();
+        terminal(TaskEvents.COMPLETED, 'task-2');
+        expect(ended).toHaveBeenLastCalledWith('task-2', 'completed');
+
+        bus._deliver(TaskEvents.ASSIGNED, assignedPayload('task-3'));
+        await flush();
+        terminal(TaskEvents.CANCELLED, 'task-3');
+        expect(ended).toHaveBeenLastCalledWith('task-3', 'cancelled');
+    });
+
+    it('ignores outcomes of tasks this agent was not assigned', async () => {
+        bus._deliver(TaskEvents.ASSIGNED, assignedPayload('task-4'));
+        await flush();
+
+        terminal(TaskEvents.FAILED, 'someone-elses-task');
+        expect(ended).not.toHaveBeenCalled();
+    });
+
+    it('stops reporting after cleanup', async () => {
+        bus._deliver(TaskEvents.ASSIGNED, assignedPayload('task-5'));
+        await flush();
+        handlers.cleanup();
+
+        terminal(TaskEvents.FAILED, 'task-5');
+        expect(ended).not.toHaveBeenCalled();
+    });
+});
+
 describe('TaskHandlers task failure reporting', () => {
     let handlers: TaskHandlers;
 
     beforeEach(() => {
         bus._reset();
         jest.clearAllMocks();
+        bus.isRegisteredSocketConnected.mockReturnValue(true);
         handlers = new TaskHandlers(CHANNEL_ID, AGENT_ID);
         handlers.initialize();
     });
 
     afterEach(() => {
+        TaskHelper.cancelPendingOperations(CHANNEL_ID, AGENT_ID, 'test cleanup');
         handlers.cleanup();
     });
 
@@ -134,6 +237,60 @@ describe('TaskHandlers task failure reporting', () => {
         handlers.setTaskRequestHandler(async () => ({ ok: true }) as any);
 
         bus._deliver(TaskEvents.ASSIGNED, assignedPayload('task-4'));
+        await flush();
+
+        expect(failRequests()).toHaveLength(0);
+    });
+
+    it('does not report a failure for a task another agent is designated to finish', async () => {
+        handlers.setTaskRequestHandler(async () => {
+            throw new Error('contributor hit its iteration limit');
+        });
+        // Shape the server sends for a task created with assignedAgentIds and a
+        // completionAgentId: the designation is on the task, the metadata is the
+        // creator's own (here empty) — no role flags are computed on that path.
+        bus._deliver(TaskEvents.ASSIGNED, assignedPayload('task-6', {
+            assignedAgentIds: [AGENT_ID, 'lead-agent'],
+            completionAgentId: 'lead-agent',
+            metadata: {}
+        }));
+        await flush();
+
+        // The server would refuse the request anyway; the SDK does not send it,
+        // and surfaces the participant's error on the agent error channel instead.
+        expect(failRequests()).toHaveLength(0);
+        const errors = (bus._emitted() as EmittedEvent[]).filter(e => e.event === AgentEvents.ERROR);
+        expect(errors).toHaveLength(1);
+        expect(errors[0].payload.data).toMatchObject({
+            taskId: 'task-6',
+            phase: 'task_execution',
+            message: expect.stringContaining('contributor hit its iteration limit')
+        });
+    });
+
+    it('reports a failure when the assignment names this agent as the completion agent', async () => {
+        handlers.setTaskRequestHandler(async () => {
+            throw new Error('lead failed');
+        });
+        bus._deliver(TaskEvents.ASSIGNED, assignedPayload('task-7', {
+            assignedAgentIds: [AGENT_ID, 'helper-agent'],
+            completionAgentId: AGENT_ID,
+            metadata: {}
+        }));
+        await flush();
+
+        expect(failRequests()).toHaveLength(1);
+        expect(failRequests()[0].payload.data.taskId).toBe('task-7');
+    });
+
+    it('follows the server-computed role metadata when the task has no designation', async () => {
+        handlers.setTaskRequestHandler(async () => {
+            throw new Error('contributor failed');
+        });
+        bus._deliver(TaskEvents.ASSIGNED, assignedPayload('task-8', {
+            assignedAgentIds: [AGENT_ID, 'lead-agent'],
+            metadata: { multiAgentTask: true, isCompletionAgent: false, agentRole: 'contributor' }
+        }));
         await flush();
 
         expect(failRequests()).toHaveLength(0);
@@ -193,41 +350,188 @@ describe('TaskHelper lifecycle payloads', () => {
     beforeEach(() => {
         bus._reset();
         jest.clearAllMocks();
+        bus.isRegisteredSocketConnected.mockReturnValue(true);
     });
 
-    it('completeTask builds a payload the schema validator accepts', async () => {
-        await expect(
-            TaskHelper.completeTask('t-1', AGENT_ID, CHANNEL_ID, { answer: 42 })
-        ).resolves.toBeUndefined();
+    afterEach(() => {
+        TaskHelper.cancelPendingOperations(CHANNEL_ID, AGENT_ID, 'test cleanup');
+    });
 
+    it('returns only the persisted task id from the correlated CREATED event', async () => {
+        const creation = TaskHelper.createTask(CHANNEL_ID, {
+            title: 'Persist me',
+            description: 'Return the database identity',
+            assignedAgentIds: [AGENT_ID]
+        }, AGENT_ID);
+        const [request] = bus._emitted();
+
+        expect(request.event).toBe(TaskEvents.CREATE_REQUEST);
+        const requestId = request.payload.data.taskId;
+        expect(requestId).toEqual(expect.any(String));
+
+        bus._deliver(TaskEvents.CREATED, {
+            agentId: AGENT_ID,
+            channelId: CHANNEL_ID,
+            data: {
+                requestId,
+                taskId: 'persisted-task-id',
+                task: { id: 'persisted-task-id' }
+            }
+        });
+
+        await expect(creation).resolves.toBe('persisted-task-id');
+    });
+
+    it('rejects a correlated server creation error instead of returning a synthetic id', async () => {
+        const creation = TaskHelper.createTask(CHANNEL_ID, {
+            title: 'Cannot persist',
+            description: 'Surface the database failure',
+            assignedAgentIds: [AGENT_ID]
+        }, AGENT_ID);
+        const [request] = bus._emitted();
+        const requestId = request.payload.data.taskId;
+
+        bus._deliver(TaskEvents.ERROR, {
+            agentId: AGENT_ID,
+            channelId: CHANNEL_ID,
+            data: { requestId, taskId: requestId, error: 'database rejected task' }
+        });
+
+        await expect(creation).rejects.toThrow('database rejected task');
+    });
+
+    it('rejects and disposes a pending creation when its exact channel disconnects', async () => {
+        const creation = TaskHelper.createTask(CHANNEL_ID, {
+            title: 'Interrupted task',
+            description: 'The response cannot arrive after disconnect',
+            assignedAgentIds: [AGENT_ID]
+        }, AGENT_ID);
+
+        TaskHelper.cancelPendingOperations(CHANNEL_ID, AGENT_ID, 'channel disconnected');
+
+        await expect(creation).rejects.toThrow('channel disconnected');
+    });
+
+    it('completeTask waits for the exact authoritative completion acknowledgement', async () => {
+        let settled = false;
+        const completion = TaskHelper.completeTask(
+            't-1', AGENT_ID, CHANNEL_ID, { answer: 42 }
+        ).finally((): void => { settled = true; });
         const [sent] = bus._emitted();
         expect(sent.event).toBe(TaskEvents.COMPLETE_REQUEST);
-        // The server reads these off payload.data.
         expect(sent.payload.data.taskId).toBe('t-1');
+        expect(sent.payload.data.requestId).toEqual(expect.any(String));
         expect(sent.payload.data.completingAgentId).toBe(AGENT_ID);
         expect(sent.payload.data.result).toEqual({ answer: 42 });
+
+        await Promise.resolve();
+        expect(settled).toBe(false);
+
+        bus._deliver(TaskEvents.COMPLETED, {
+            agentId: 'sibling-agent',
+            channelId: CHANNEL_ID,
+            data: {
+                requestId: sent.payload.data.requestId,
+                taskId: 't-1',
+                task: { id: 't-1', status: 'completed' }
+            }
+        });
+        await Promise.resolve();
+        expect(settled).toBe(false);
+
+        bus._deliver(TaskEvents.COMPLETED, {
+            agentId: AGENT_ID,
+            channelId: CHANNEL_ID,
+            data: {
+                requestId: sent.payload.data.requestId,
+                taskId: 't-1',
+                task: { id: 't-1', status: 'completed' }
+            }
+        });
+        await expect(completion).resolves.toBeUndefined();
+        expect(bus._handlerCount(TaskEvents.COMPLETED)).toBe(0);
+        expect(bus._handlerCount(TaskEvents.ERROR)).toBe(0);
     });
 
-    it('cancelTask builds a payload the schema validator accepts', async () => {
-        await expect(
-            TaskHelper.cancelTask('t-2', AGENT_ID, CHANNEL_ID, 'client went away')
-        ).resolves.toBeUndefined();
-
+    it('rejects only the exact correlated lifecycle error and ignores a sibling forgery', async () => {
+        const cancellation = TaskHelper.cancelTask(
+            't-2', AGENT_ID, CHANNEL_ID, 'client went away'
+        );
         const [sent] = bus._emitted();
         expect(sent.event).toBe(TaskEvents.CANCEL_REQUEST);
         expect(sent.payload.data.taskId).toBe('t-2');
         expect(sent.payload.data.reason).toBe('client went away');
+
+        bus._deliver(TaskEvents.ERROR, {
+            agentId: 'sibling-agent',
+            channelId: CHANNEL_ID,
+            data: {
+                requestId: sent.payload.data.requestId,
+                taskId: 't-2',
+                error: 'forged rejection'
+            }
+        });
+        bus._deliver(TaskEvents.ERROR, {
+            agentId: AGENT_ID,
+            channelId: CHANNEL_ID,
+            data: {
+                requestId: sent.payload.data.requestId,
+                taskId: 't-2',
+                error: 'server rejected cancellation'
+            }
+        });
+
+        await expect(cancellation).rejects.toThrow('server rejected cancellation');
     });
 
-    it('failTask builds a payload the schema validator accepts', async () => {
-        await expect(
-            TaskHelper.failTask('t-3', AGENT_ID, CHANNEL_ID, 'provider 500')
-        ).resolves.toBeUndefined();
-
+    it('failTask resolves only after the server persists and acknowledges failure', async () => {
+        const failure = TaskHelper.failTask('t-3', AGENT_ID, CHANNEL_ID, 'provider 500');
         const [sent] = bus._emitted();
         expect(sent.event).toBe(TaskEvents.FAIL_REQUEST);
         expect(sent.payload.data.taskId).toBe('t-3');
         expect(sent.payload.data.failingAgentId).toBe(AGENT_ID);
         expect(sent.payload.data.error).toBe('provider 500');
+
+        bus._deliver(TaskEvents.FAILED, {
+            agentId: AGENT_ID,
+            channelId: CHANNEL_ID,
+            data: {
+                requestId: sent.payload.data.requestId,
+                taskId: 't-3',
+                task: { id: 't-3', status: 'failed' }
+            }
+        });
+        await expect(failure).resolves.toBeUndefined();
+    });
+
+    it('accepts the server-resolved task id for a correlated current-task request', async () => {
+        const completion = TaskHelper.completeTask(
+            'current', AGENT_ID, CHANNEL_ID, { answer: 42 }
+        );
+        const [sent] = bus._emitted();
+
+        bus._deliver(TaskEvents.COMPLETED, {
+            agentId: AGENT_ID,
+            channelId: CHANNEL_ID,
+            data: {
+                requestId: sent.payload.data.requestId,
+                taskId: 'persisted-current-task',
+                task: { id: 'persisted-current-task', status: 'completed' }
+            }
+        });
+
+        await expect(completion).resolves.toBeUndefined();
+    });
+
+    it('fails immediately without listeners or emission when no agent socket is connected', async () => {
+        bus.isRegisteredSocketConnected.mockReturnValue(false);
+
+        await expect(
+            TaskHelper.completeTask('t-4', AGENT_ID, CHANNEL_ID, { answer: 42 })
+        ).rejects.toThrow(/socket.*not connected/i);
+
+        expect(bus._emitted()).toHaveLength(0);
+        expect(bus._handlerCount(TaskEvents.COMPLETED)).toBe(0);
+        expect(bus._handlerCount(TaskEvents.ERROR)).toBe(0);
     });
 });

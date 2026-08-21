@@ -18,9 +18,14 @@
  * @documentation https://mxf-dev.github.io/mxf/
  */
 
-import axios from 'axios';
+import axios, { AxiosRequestConfig } from 'axios';
 import { createStrictValidator } from '@mxf-dev/core/utils/validation';
 import { Logger } from '@mxf-dev/core/utils/Logger';
+import type {
+    IAgentMemory,
+    IChannelMemory,
+    IRelationshipMemory
+} from '@mxf-dev/core/types/MemoryTypes';
 
 /**
  * Agent context interface - read-only part of agent data
@@ -38,13 +43,10 @@ export interface AgentContext {
 /**
  * Agent memory interface - read/write part of agent data
  */
-export interface AgentMemory {
-    keyId: string;
-    notes?: Record<string, any>;
-    conversationHistory?: any[];
-    customData?: Record<string, any>;
-    updatedAt?: Date;
-}
+export type AgentMemory = IAgentMemory;
+export type AgentMemoryUpdate = Partial<
+    Pick<AgentMemory, 'notes' | 'conversationHistory' | 'customData'>
+>;
 
 /**
  * Channel context interface - matches server-side ChannelContextType
@@ -58,7 +60,7 @@ export interface ChannelContext {
     createdBy: string; // AgentId
     lastActivity: number;
     participants: string[]; // AgentId[]
-    metadata: Record<string, any>;
+    metadata: Record<string, unknown>;
     status: 'active' | 'inactive' | 'archived';
     messageCount: number;
     conversationSummary?: string;
@@ -92,7 +94,7 @@ export interface ChannelContextHistoryEntry {
     type: 'create' | 'update' | 'join' | 'leave';
     timestamp: number;
     agentId: string;
-    data: any;
+    data: unknown;
 }
 
 /**
@@ -100,24 +102,45 @@ export interface ChannelContextHistoryEntry {
  */
 export interface ChannelMessage {
     messageId: string;
-    content: string | Record<string, any>;
+    content: string | Record<string, unknown>;
     senderId: string;
     timestamp: number;
     type: 'text' | 'command' | 'response' | 'system';
-    metadata?: Record<string, any>;
+    metadata?: Record<string, unknown>;
 }
 
 /**
  * Channel memory interface - read/write part of channel data
  */
-export interface ChannelMemory {
-    channelId: string;
-    notes?: Record<string, any>;
-    sharedState?: Record<string, any>;
-    conversationHistory?: any[];
-    customData?: Record<string, any>;
-    updatedAt?: Date;
+export type ChannelMemory = IChannelMemory;
+export type ChannelMemoryUpdate = Partial<
+    Pick<ChannelMemory, 'notes' | 'sharedState' | 'customData'>
+>;
+
+/** Relationship memory returned by the canonical REST memory surface. */
+export type RelationshipMemory = IRelationshipMemory;
+export type RelationshipMemoryUpdate = Partial<
+    Pick<RelationshipMemory, 'notes' | 'interactionHistory' | 'customData'>
+>;
+
+interface MemoryApiEnvelope<T> {
+    success: boolean;
+    data?: T;
+    message?: string;
 }
+
+interface SuccessApiResponse {
+    success?: boolean;
+}
+
+interface GenericApiResponse {
+    servers?: Array<Record<string, unknown>>;
+}
+
+type ApiHttpMethod = 'GET' | 'POST' | 'PATCH' | 'DELETE';
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+    typeof value === 'object' && value !== null && !Array.isArray(value);
 
 /**
  * API Service Configuration
@@ -171,25 +194,26 @@ export class ApiService {
      * @param data Optional request body
      * @returns API response
      */
-    private async request<T>(method: string, path: string, data?: any): Promise<T> {
+    private async request<T>(method: ApiHttpMethod, path: string, data?: unknown): Promise<T> {
         try {
             // Ensure path is properly formatted
             const url = `${this.baseUrl}/${path.startsWith('/') ? path.substring(1) : path}`;
             
             // Create request configuration
-            const config: any = {
+            const headers: Record<string, string> = {
+                'Content-Type': 'application/json'
+            };
+            const config: AxiosRequestConfig = {
                 method,
                 url,
                 timeout: this.timeout,
-                headers: {
-                    'Content-Type': 'application/json'
-                }
+                headers
             };
             
             // Add auth headers if credentials are available
             if (this.keyId && this.secretKey) {
-                config.headers['x-key-id'] = this.keyId;
-                config.headers['x-secret-key'] = this.secretKey;
+                headers['x-key-id'] = this.keyId;
+                headers['x-secret-key'] = this.secretKey;
             }
             
             // Add request data for non-GET requests
@@ -200,12 +224,25 @@ export class ApiService {
             // Make request
             const response = await axios(config);
             return response.data as T;
-        } catch (error: any) {
-            if (error.response) {
-                throw new Error(`API error (${error.response.status}): ${error.response.data?.message || error.message}`);
+        } catch (error: unknown) {
+            if (axios.isAxiosError(error) && error.response) {
+                const responseData = error.response.data;
+                const responseMessage = isRecord(responseData) && typeof responseData.message === 'string'
+                    ? responseData.message
+                    : error.message;
+                throw new Error(`API error (${error.response.status}): ${responseMessage}`);
             }
             throw error;
         }
+    }
+
+    /** Extract the memory document from the server's standard HTTP envelope. */
+    private async requestMemoryPayload<T>(method: 'GET' | 'PATCH', path: string, data?: unknown): Promise<T> {
+        const response = await this.request<MemoryApiEnvelope<T>>(method, path, data);
+        if (!response || response.success !== true || response.data === undefined) {
+            throw new Error(response?.message || 'Memory API returned no memory payload');
+        }
+        return response.data;
     }
     
     /**
@@ -227,7 +264,7 @@ export class ApiService {
      */
     public async getOrCreateAgentMemory(keyId: string): Promise<AgentMemory> {
         this.validator.assertIsNonEmptyString(keyId);
-        return this.request<AgentMemory>('GET', `agents/memory/${keyId}`);
+        return this.requestMemoryPayload<AgentMemory>('GET', `agents/memory/${keyId}`);
     }
     
     /**
@@ -237,10 +274,10 @@ export class ApiService {
      * @param update Memory updates to apply
      * @returns Promise resolving to updated agent memory
      */
-    public async updateAgentMemory(keyId: string, update: Partial<AgentMemory>): Promise<AgentMemory> {
+    public async updateAgentMemory(keyId: string, update: AgentMemoryUpdate): Promise<AgentMemory> {
         this.validator.assertIsNonEmptyString(keyId);
         this.validator.assertIsObject(update);
-        return this.request<AgentMemory>('PATCH', `agents/memory/${keyId}`, update);
+        return this.requestMemoryPayload<AgentMemory>('PATCH', `agents/memory/${keyId}`, update);
     }
     
     /**
@@ -262,7 +299,7 @@ export class ApiService {
      */
     public async getOrCreateChannelMemory(channelId: string): Promise<ChannelMemory> {
         this.validator.assertIsNonEmptyString(channelId);
-        return this.request<ChannelMemory>('GET', `channels/memory/${channelId}`);
+        return this.requestMemoryPayload<ChannelMemory>('GET', `channels/memory/${channelId}`);
     }
     
     /**
@@ -272,10 +309,10 @@ export class ApiService {
      * @param update Memory updates to apply
      * @returns Promise resolving to updated channel memory
      */
-    public async updateChannelMemory(channelId: string, update: Partial<ChannelMemory>): Promise<ChannelMemory> {
+    public async updateChannelMemory(channelId: string, update: ChannelMemoryUpdate): Promise<ChannelMemory> {
         this.validator.assertIsNonEmptyString(channelId);
         this.validator.assertIsObject(update);
-        return this.request<ChannelMemory>('PATCH', `channels/memory/${channelId}`, update);
+        return this.requestMemoryPayload<ChannelMemory>('PATCH', `channels/memory/${channelId}`, update);
     }
     
     /**
@@ -284,7 +321,7 @@ export class ApiService {
      * @param path API path
      * @returns Promise resolving to the response
      */
-    public async get<T = any>(path: string): Promise<T> {
+    public async get<T = GenericApiResponse>(path: string): Promise<T> {
         this.validator.assertIsNonEmptyString(path);
         return this.request<T>('GET', path);
     }
@@ -296,7 +333,7 @@ export class ApiService {
      * @param data Request body
      * @returns Promise resolving to the response
      */
-    public async post<T = any>(path: string, data: any): Promise<T> {
+    public async post<T = unknown>(path: string, data: unknown): Promise<T> {
         this.validator.assertIsNonEmptyString(path);
         return this.request<T>('POST', path, data);
     }
@@ -308,7 +345,7 @@ export class ApiService {
      * @param data Request body
      * @returns Promise resolving to the response
      */
-    public async patch<T = any>(path: string, data: any): Promise<T> {
+    public async patch<T = unknown>(path: string, data: unknown): Promise<T> {
         this.validator.assertIsNonEmptyString(path);
         return this.request<T>('PATCH', path, data);
     }
@@ -324,36 +361,12 @@ export class ApiService {
         agentId: string,
         otherAgentId: string,
         channelId: string
-    ): Promise<any> {
-        try {
-            // Construct the path to the relationship memory resource
-            const path = `api/memory/relationships/${channelId}/${agentId}/${otherAgentId}`;
-            
-            // Try to get existing memory first
-            const response = await this.get(path);
-            
-            // If relationship memory exists, return it
-            if (response && response.success !== false) {
-                return response;
-            }
-            
-            // If no memory exists, create a new one with default structure
-            const defaultMemory = {
-                agentId,
-                targetAgentId: otherAgentId,
-                channelId,
-                customData: {},
-                createdAt: Date.now(),
-                updatedAt: Date.now()
-            };
-            
-            // Create new relationship memory
-            const createResponse = await this.post(path, defaultMemory);
-            return createResponse;
-        } catch (error) {
-            this.logger.error(`Failed to get or create relationship memory: ${error instanceof Error ? error.message : String(error)}`);
-            throw error;
-        }
+    ): Promise<RelationshipMemory> {
+        this.validator.assertIsNonEmptyString(agentId);
+        this.validator.assertIsNonEmptyString(otherAgentId);
+        this.validator.assertIsNonEmptyString(channelId);
+        const path = `relationships/memory/${channelId}/${agentId}/${otherAgentId}`;
+        return this.requestMemoryPayload<RelationshipMemory>('GET', path);
     }
     
     /**
@@ -368,25 +381,14 @@ export class ApiService {
         agentId: string,
         otherAgentId: string,
         channelId: string,
-        update: any
-    ): Promise<any> {
-        try {
-            // Construct the path to the relationship memory resource
-            const path = `api/memory/relationships/${channelId}/${agentId}/${otherAgentId}`;
-            
-            // Add updatedAt timestamp to the update
-            const updatedData = {
-                ...update,
-                updatedAt: Date.now()
-            };
-            
-            // Update relationship memory
-            const response = await this.patch(path, updatedData);
-            return response;
-        } catch (error) {
-            this.logger.error(`Failed to update relationship memory: ${error instanceof Error ? error.message : String(error)}`);
-            throw error;
-        }
+        update: RelationshipMemoryUpdate
+    ): Promise<RelationshipMemory> {
+        this.validator.assertIsNonEmptyString(agentId);
+        this.validator.assertIsNonEmptyString(otherAgentId);
+        this.validator.assertIsNonEmptyString(channelId);
+        this.validator.assertIsObject(update);
+        const path = `relationships/memory/${channelId}/${agentId}/${otherAgentId}`;
+        return this.requestMemoryPayload<RelationshipMemory>('PATCH', path, update);
     }
     
     /**
@@ -410,7 +412,7 @@ export class ApiService {
             this.validator.assertIsNonEmptyString(creatorId, 'Creator agent ID is required');
             
             // Make API request to create context
-            const response = await this.post(`channels/${channelId}/context`, {
+            const response = await this.post<ChannelContext>(`channels/${channelId}/context`, {
                 name,
                 description,
                 creatorId
@@ -441,7 +443,10 @@ export class ApiService {
             this.validator.assertIsNonEmptyString(agentId, 'Agent ID is required');
             
             // Make API request to add agent
-            const response = await this.post(`channels/${channelId}/agents/${agentId}`, {});
+            const response = await this.post<SuccessApiResponse>(
+                `channels/${channelId}/agents/${agentId}`,
+                {}
+            );
             
             return response?.success === true;
         } catch (error) {
@@ -463,10 +468,13 @@ export class ApiService {
             this.validator.assertIsNonEmptyString(agentId, 'Agent ID is required');
             
             // Make API request to remove agent - use DELETE method based on the pattern in other methods
-            const response = await this.request('DELETE', `channels/${channelId}/agents/${agentId}`);
+            const response = await this.request<SuccessApiResponse>(
+                'DELETE',
+                `channels/${channelId}/agents/${agentId}`
+            );
             
             // Check if the response indicates success
-            return Boolean(response && typeof response === 'object' && (response as any).success === true);
+            return response.success === true;
         } catch (error) {
             this.logger.error(`Failed to remove agent ${agentId} from channel ${channelId}: ${error instanceof Error ? error.message : String(error)}`);
             throw error;
@@ -485,7 +493,7 @@ export class ApiService {
     public async setChannelMetadata(
         channelId: string,
         key: string,
-        value: any,
+        value: unknown,
         agentId: string
     ): Promise<boolean> {
         try {
@@ -494,7 +502,7 @@ export class ApiService {
             this.validator.assertIsNonEmptyString(agentId, 'Agent ID is required');
             
             // Make API request to set metadata
-            const response = await this.post(`channels/${channelId}/metadata/${key}`, {
+            const response = await this.post<SuccessApiResponse>(`channels/${channelId}/metadata/${key}`, {
                 value,
                 agentId
             });
@@ -513,7 +521,7 @@ export class ApiService {
      * @param key Optional metadata key (if not provided, returns all metadata)
      * @returns Promise resolving to metadata value or record of all metadata
      */
-    public async getChannelMetadata(channelId: string, key?: string): Promise<any> {
+    public async getChannelMetadata(channelId: string, key?: string): Promise<unknown> {
         try {
             this.validator.assertIsNonEmptyString(channelId, 'Channel ID is required');
             
@@ -522,7 +530,7 @@ export class ApiService {
                 `channels/${channelId}/metadata/${key}` : 
                 `channels/${channelId}/metadata`;
                 
-            const response = await this.get(path);
+            const response = await this.get<{ metadata?: unknown }>(path);
             
             return response?.metadata || (key ? null : {});
         } catch (error) {
@@ -546,7 +554,9 @@ export class ApiService {
             this.validator.assertIsNonEmptyString(channelId, 'Channel ID is required');
             
             // Make API request to get history
-            const response = await this.get(`channels/${channelId}/history${limit ? `?limit=${limit}` : ''}`);
+            const response = await this.get<{ history?: ChannelContextHistoryEntry[] }>(
+                `channels/${channelId}/history${limit ? `?limit=${limit}` : ''}`
+            );
             
             // Validate response
             if (!response || !Array.isArray(response.history)) {
@@ -573,7 +583,10 @@ export class ApiService {
             this.validator.assertIsObject(message, 'Message must be an object');
             
             // Make API request to add message
-            const response = await this.post(`channels/${channelId}/messages`, message);
+            const response = await this.post<SuccessApiResponse>(
+                `channels/${channelId}/messages`,
+                message
+            );
             
             return response?.success === true;
         } catch (error) {
@@ -597,7 +610,9 @@ export class ApiService {
             this.validator.assertIsNonEmptyString(channelId, 'Channel ID is required');
             
             // Make API request to get messages
-            const response = await this.get(`channels/${channelId}/messages${limit ? `?limit=${limit}` : ''}`);
+            const response = await this.get<{ messages?: ChannelMessage[] }>(
+                `channels/${channelId}/messages${limit ? `?limit=${limit}` : ''}`
+            );
             
             // Validate response
             if (!response || !Array.isArray(response.messages)) {
@@ -624,7 +639,10 @@ export class ApiService {
             this.validator.assertIsInRange(minRelevance, 0, 1, 'Relevance must be between 0 and 1');
             
             // Make API request to extract topics
-            const response = await this.post(`channels/${channelId}/topics`, { minRelevance });
+            const response = await this.post<{ topics?: ConversationTopic[] }>(
+                `channels/${channelId}/topics`,
+                { minRelevance }
+            );
             
             // Assert response contains topics array
             if (!response || !Array.isArray(response.topics)) {
@@ -649,7 +667,10 @@ export class ApiService {
             this.validator.assertIsNonEmptyString(channelId, 'Channel ID is required');
             
             // Make API request to generate summary
-            const response = await this.post(`channels/${channelId}/summary`, {});
+            const response = await this.post<{ summary?: string }>(
+                `channels/${channelId}/summary`,
+                {}
+            );
             
             // Assert response contains summary
             if (!response || typeof response.summary !== 'string') {
@@ -671,14 +692,18 @@ export class ApiService {
      * @param agentId ID of the agent making the update
      * @returns Promise resolving to updated channel context
      */
-    public async updateChannelContext(channelId: string, updates: any, agentId: string): Promise<ChannelContext> {
+    public async updateChannelContext(
+        channelId: string,
+        updates: Record<string, unknown>,
+        agentId: string
+    ): Promise<ChannelContext> {
         try {
             this.validator.assertIsNonEmptyString(channelId, 'Channel ID is required');
             this.validator.assertIsObject(updates, 'Updates must be an object');
             this.validator.assertIsNonEmptyString(agentId, 'Agent ID is required');
             
             // Make API request to update context
-            const response = await this.patch(`channels/${channelId}/context`, {
+            const response = await this.patch<ChannelContext>(`channels/${channelId}/context`, {
                 ...updates,
                 updatedBy: agentId,
                 updatedAt: Date.now()

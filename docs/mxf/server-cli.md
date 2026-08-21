@@ -230,8 +230,8 @@ bun run server:cli -- domain-key:generate
 # 3. Schedule restart of MXF server
 # (Plan for a maintenance window)
 
-# 4. Restart server
-npm restart
+# 4. Stop the current server process, then start it again
+bun run start
 
 # 5. Verify SDK connections work with new key
 # (Test with one SDK application first)
@@ -308,7 +308,7 @@ JWT_SECRET=your-jwt-secret-min-32-chars
 MXF_DOMAIN_KEY=generated-by-server-cli
 
 # Server Configuration
-PORT=3001
+MXF_PORT=3001
 NODE_ENV=production
 
 # Optional: LLM API Keys
@@ -385,8 +385,8 @@ bun run server:cli -- domain-key:generate
 # Verify .env file exists and contains MXF_DOMAIN_KEY
 cat .env | grep MXF_DOMAIN_KEY
 
-# Restart server
-npm restart
+# Stop the current server process, then start it again
+bun run start
 ```
 
 ## Production Deployment
@@ -413,7 +413,7 @@ NODE_ENV=production bun run server:cli -- user:create \
   --password $(openssl rand -base64 32)
 
 # 6. Start production server
-NODE_ENV=production npm start
+NODE_ENV=production bun run start
 ```
 
 ### Production Monitoring

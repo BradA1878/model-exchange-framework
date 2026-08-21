@@ -87,18 +87,29 @@ const PHASE_TOOLS = {
 
 ### 6. Channel-Scoped MCP Server
 
-Game tools are isolated to the game channel:
+Game tools are isolated to the game channel. This administrative operation requires
+an administrator-authenticated `MxfSDK` and the server-side
+`MXF_UNSAFE_STDIO_MCP_ENABLED=true` opt-in:
 
 ```typescript
-const mcpResult = await adminAgent.registerChannelMcpServer({
-    id: 'twenty-questions-mcp-server',
-    name: 'Twenty Questions Game Server',
-    transport: 'http',
-    url: `http://localhost:${GAME_PORT}/mcp`,
-    autoStart: true,
-    keepAliveMinutes: 30
+const channel = await sdk.createChannel('twenty-questions-game', {
+    name: 'Twenty Questions Arena',
+    mcpServers: [{
+        id: 'twenty-questions-mcp-server',
+        name: 'Twenty Questions Game Tools',
+        transport: 'stdio',
+        command: 'bun',
+        args: ['run', './examples/twenty-questions/server/mcp/TwentyQuestionsMcpServer.ts'],
+        autoStart: true,
+        keepAliveMinutes: 30,
+        environmentVariables: {
+            GAME_SERVER_URL: `http://localhost:${GAME_PORT}`
+        }
+    }]
 });
 ```
+
+The child process uses MCP over `stdio` and separately calls the game HTTP API.
 
 ## Tools Reference
 
@@ -151,8 +162,8 @@ const mcpResult = await adminAgent.registerChannelMcpServer({
 
 ```bash
 cd examples/twenty-questions
-npm install
-cd client && npm install && cd ..
+bun install
+cd client && bun install && cd ..
 bun run game
 ```
 
@@ -162,7 +173,7 @@ This starts both the game agents and the Vue.js dashboard at http://localhost:30
 
 ```bash
 cd examples/twenty-questions
-npm install
+bun install
 bun run connect-agents
 ```
 
@@ -208,25 +219,17 @@ The Vue.js dashboard (port 3007) visualizes:
 
 ## Event Tracking
 
-The orchestration script listens for events from multiple MXF subsystems:
+The channel monitor accepts only events in the SDK public-event whitelist:
 
 ```typescript
 // ORPAR events
 channel.on(Events.Orpar.OBSERVE, ...)
 channel.on(Events.Orpar.REASON, ...)
-
-// Knowledge Graph events
-channel.on(Events.KnowledgeGraph.ENTITY_CREATED, ...)
-channel.on(Events.KnowledgeGraph.RELATIONSHIP_CREATED, ...)
-
-// MULS events
-channel.on(Events.MemoryUtility.REWARD_ATTRIBUTED, ...)
-channel.on(Events.MemoryUtility.QVALUE_UPDATED, ...)
-
-// TensorFlow events
-channel.on(Events.TensorFlow.INFERENCE_COMPLETED, ...)
-channel.on(Events.TensorFlow.INFERENCE_FALLBACK, ...)
 ```
+
+Knowledge Graph, MULS, and TensorFlow lifecycle events remain on the internal server
+event bus. The public SDK observes their effects through tool results and the public
+ORPAR events rather than subscribing to those internal event names.
 
 ## ORPAR-Memory Integration
 

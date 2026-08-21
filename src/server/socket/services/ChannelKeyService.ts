@@ -45,8 +45,18 @@
 import crypto from 'crypto';
 import bcrypt from 'bcrypt';
 import ChannelKey, { IChannelKey, generateChannelKey } from '@mxf-dev/core/models/channelKey';
+import { Channel } from '@mxf-dev/core/models/channel';
+import { Types } from 'mongoose';
+import { User, UserRole } from '@mxf-dev/core/models/user';
 import { createStrictValidator } from '@mxf-dev/core/utils/validation';
 import { Logger } from '@mxf-dev/core/utils/Logger';
+import {
+    isReservedAgentId,
+    isReservedChannelId
+} from '@mxf-dev/core/constants/ReservedIdentities';
+import agentIdentityOwnershipService, {
+    AgentIdentityOwnershipError
+} from '../../security/AgentIdentityOwnershipService';
 
 // Create validator and logger
 const validator = createStrictValidator('ChannelKeyService');
@@ -87,6 +97,8 @@ export interface CreatedChannelKey {
     channelId: string;
     /** Agent this key authenticates as. */
     agentId: string;
+    /** Immutable maximum tool grant carried by this credential. */
+    allowedTools?: string[];
     /** Optional human-readable label. */
     name?: string;
     /** Whether the key is usable. */
@@ -107,12 +119,42 @@ export interface ChannelKeyValidation {
     channelId?: string;
     /** Agent the key is bound to. Authoritative — never taken from the client. */
     agentId?: string;
+    /** Immutable maximum tool grant. Omitted means curated core tools. */
+    allowedTools?: string[];
+    /** Credential expiry used to terminate already-authenticated sockets. */
+    expiresAt?: Date;
+}
+
+/** Socket cleanup installed by SocketService once the realtime server exists. */
+export interface ChannelKeySocketLifecycle {
+    disconnectKeySockets(keyId: string): number | Promise<number>;
+    disconnectChannelSockets(channelId: string): number | Promise<number>;
 }
 
 /**
  * Channel Key Service Implementation
  */
 class ChannelKeyService {
+    private socketLifecycle: ChannelKeySocketLifecycle | null = null;
+
+    /** Install the sole realtime credential cleanup bridge. */
+    public setSocketLifecycle(lifecycle: ChannelKeySocketLifecycle): void {
+        this.socketLifecycle = lifecycle;
+    }
+
+    /** Remove a bridge only when it is still the registered instance. */
+    public clearSocketLifecycle(lifecycle: ChannelKeySocketLifecycle): void {
+        if (this.socketLifecycle === lifecycle) {
+            this.socketLifecycle = null;
+        }
+    }
+
+    private getSocketLifecycle(): ChannelKeySocketLifecycle {
+        if (!this.socketLifecycle) {
+            throw new Error('Socket credential lifecycle is not initialized');
+        }
+        return this.socketLifecycle;
+    }
     /**
      * Whether the ChannelKey schema can store an agent binding.
      *
@@ -153,8 +195,16 @@ class ChannelKeyService {
                 return { valid: false };
             }
 
+            // Legacy or manually inserted keys must not make an internal routing
+            // sentinel externally claimable, even when their secret is valid.
+            if (isReservedChannelId(keyRecord.channelId) ||
+                isReservedAgentId((keyRecord as BoundChannelKey).agentId)) {
+                logger.error(`Key ${keyId} references an MXF-reserved agent or channel identity`);
+                return { valid: false };
+            }
+
             // Check if key has expired
-            if (keyRecord.expiresAt && keyRecord.expiresAt < new Date()) {
+            if (keyRecord.expiresAt && keyRecord.expiresAt <= new Date()) {
                 logger.warn(`Key expired: ${keyId}`);
                 return { valid: false };
             }
@@ -180,15 +230,6 @@ class ChannelKeyService {
                 return { valid: false };
             }
 
-            // Update last used timestamp
-            await ChannelKey.updateOne(
-                { keyId },
-                {
-                    lastUsed: new Date(),
-                    updatedAt: new Date()
-                }
-            );
-
             const agentId = (keyRecord as BoundChannelKey).agentId;
 
             if (!agentId) {
@@ -202,16 +243,114 @@ class ChannelKeyService {
                 return { valid: false };
             }
 
+            // A valid secret is not enough to establish an agent principal.
+            // The key owner must also be the permanent owner of this globally
+            // keyed agentId. Re-check legacy evidence on every authentication
+            // so a stale or manually inserted conflicting key fails before it
+            // can reach socket registration, memory, or default core tools.
+            await agentIdentityOwnershipService.claimOrValidate(
+                agentId,
+                String(keyRecord.createdBy)
+            );
+
+            // A credential cannot outlive its authorization resource. Channel
+            // deletion used to leave active keys behind, allowing stale keys to
+            // authenticate sockets even though joining the channel had failed.
+            const channelExists = await Channel.exists({
+                channelId: keyRecord.channelId,
+                active: true,
+                // Channel ids are globally reserved, but this additional owner
+                // binding prevents a stale or corrupted key row from crossing
+                // ownership boundaries if persistence is ever repaired or
+                // imported incorrectly.
+                createdBy: String(keyRecord.createdBy)
+            });
+            if (!channelExists) {
+                logger.warn(`Key ${keyId} references a missing or inactive channel`);
+                return { valid: false };
+            }
+
+            // Finish validation with an atomic active/expiry check. A revocation
+            // that wins while bcrypt or the channel lookup is in flight must
+            // make this update return null, rather than allowing a stale read to
+            // authenticate a new socket after the credential became inactive.
+            const validatedAt = new Date();
+            const validatedKey = await ChannelKey.findOneAndUpdate(
+                {
+                    keyId,
+                    secretKey: storedSecret,
+                    channelId: keyRecord.channelId,
+                    agentId,
+                    createdBy: keyRecord.createdBy,
+                    isActive: true,
+                    $or: [
+                        { expiresAt: { $exists: false } },
+                        { expiresAt: null },
+                        { expiresAt: { $gt: validatedAt } }
+                    ]
+                },
+                {
+                    $set: {
+                        lastUsed: validatedAt,
+                        updatedAt: validatedAt
+                    }
+                },
+                { new: true }
+            );
+
+            if (!validatedKey) {
+                logger.warn(`Key was revoked or expired during validation: ${keyId}`);
+                return { valid: false };
+            }
+
             return {
                 valid: true,
-                channelId: keyRecord.channelId,
-                agentId
+                channelId: validatedKey.channelId,
+                agentId,
+                allowedTools: Array.isArray(validatedKey.allowedTools)
+                    ? [...validatedKey.allowedTools]
+                    : undefined,
+                expiresAt: validatedKey.expiresAt
+                    ? new Date(validatedKey.expiresAt)
+                    : undefined
             };
 
         } catch (error) {
             logger.error(`Error validating key ${keyId}: ${error}`);
             return { valid: false };
         }
+    }
+
+    /**
+     * A key for an existing channel may only be issued by the channel's creator
+     * or by an administrator. The REST and socket entry points already check
+     * this before calling in; the service checks again so a new caller cannot
+     * mint keys into another tenant's channel by skipping the middleware.
+     *
+     * A channel that does not exist yet is allowed through: the REST key-first
+     * flow derives a temporary channel id before the channel is created.
+     */
+    private async assertMayIssueKeysForChannel(channelId: string, createdBy: string): Promise<void> {
+        const channel = await Channel.findOne({ channelId })
+            .select('createdBy active')
+            .lean<{ createdBy?: unknown; active?: boolean } | null>();
+        if (!channel) {
+            return;
+        }
+        if (channel.active === false) {
+            throw new Error(`Channel ${channelId} is not active`);
+        }
+        if (String(channel.createdBy) === createdBy) {
+            return;
+        }
+
+        const requester = Types.ObjectId.isValid(createdBy)
+            ? await User.findById(createdBy).select('role').lean<{ role?: string } | null>()
+            : null;
+        if (requester?.role === UserRole.ADMIN) {
+            return;
+        }
+        throw new Error(`User ${createdBy} does not own channel ${channelId}`);
     }
 
     /**
@@ -232,11 +371,32 @@ class ChannelKeyService {
         createdBy: string,
         agentId: string,
         name?: string,
-        expiresAt?: Date
+        expiresAt?: Date,
+        allowedTools?: string[]
     ): Promise<CreatedChannelKey> {
         validator.assertIsNonEmptyString(channelId, 'channelId is required');
         validator.assertIsNonEmptyString(createdBy, 'createdBy is required');
         validator.assertIsNonEmptyString(agentId, 'agentId is required — a key names the agent it authenticates');
+
+        if (isReservedChannelId(channelId)) {
+            throw new AgentIdentityOwnershipError(
+                'INVALID_IDENTITY',
+                `Channel identity "${channelId}" is reserved for internal MXF routing; choose a different channelId.`,
+                400
+            );
+        }
+
+        if (allowedTools !== undefined && (
+            !Array.isArray(allowedTools) ||
+            allowedTools.some(toolName => (
+                typeof toolName !== 'string' || toolName.trim().length === 0
+            ))
+        )) {
+            throw new Error('allowedTools must be an array of non-empty strings when provided');
+        }
+        const credentialAllowedTools = allowedTools === undefined
+            ? undefined
+            : [...new Set(allowedTools.map(toolName => toolName.trim()))];
 
         if (!this.schemaSupportsAgentBinding()) {
             throw new Error(
@@ -247,7 +407,14 @@ class ChannelKeyService {
             );
         }
 
+        await this.assertMayIssueKeysForChannel(channelId, createdBy);
+
         try {
+            // Claim before a key exists. This preserves the key-first SDK flow:
+            // the same owner can create the Agent later, while another tenant
+            // cannot reserve that globally keyed identity in the meantime.
+            await agentIdentityOwnershipService.claimOrValidate(agentId, createdBy);
+
             // Generate new key credentials
             const { keyId, secretKey } = generateChannelKey();
 
@@ -260,6 +427,7 @@ class ChannelKeyService {
                 secretKey: secretKeyHash,
                 channelId,
                 agentId,
+                allowedTools: credentialAllowedTools,
                 name,
                 createdBy,
                 expiresAt,
@@ -277,6 +445,7 @@ class ChannelKeyService {
                 secretKey,
                 channelId: savedKey.channelId,
                 agentId,
+                allowedTools: credentialAllowedTools,
                 name: savedKey.name,
                 isActive: savedKey.isActive,
                 expiresAt: savedKey.expiresAt,
@@ -300,19 +469,70 @@ class ChannelKeyService {
             validator.assertIsNonEmptyString(keyId, 'keyId is required');
 
             const result = await ChannelKey.updateOne(
-                { keyId },
-                {
-                    isActive: false,
-                    updatedAt: new Date()
-                }
+                { keyId, isActive: true },
+                { $set: { isActive: false, updatedAt: new Date() } }
             );
 
-            return result.modifiedCount > 0;
+            const matchedCount = result.matchedCount ?? result.modifiedCount;
+            // Mongo is inactive before runtime eviction. Validation performs a
+            // final atomic active check, so no process-local credential cache or
+            // tombstone is required to close the validate/revoke race.
+            await this.getSocketLifecycle().disconnectKeySockets(keyId);
+
+            return matchedCount > 0;
 
         } catch (error) {
             logger.error(`Error deactivating channel key ${keyId}: ${error}`);
             return false;
         }
+    }
+
+    /**
+     * Revoke every live credential for a channel.
+     *
+     * This deliberately does not filter by owner: deletion is the terminal
+     * lifecycle boundary for the channel, so even malformed or legacy rows
+     * with the wrong owner must be made unusable.
+     */
+    async deactivateChannelKeys(channelId: string): Promise<number> {
+        validator.assertIsNonEmptyString(channelId, 'channelId is required');
+
+        const result = await ChannelKey.updateMany(
+            { channelId, isActive: true },
+            { $set: { isActive: false, updatedAt: new Date() } }
+        );
+
+        await this.getSocketLifecycle().disconnectChannelSockets(channelId);
+
+        return result.modifiedCount;
+    }
+
+    /**
+     * Revoke credentials bound to one exact persisted agent/owner pair.
+     * The owner predicate prevents an agent-id collision from revoking another
+     * tenant's credentials.
+     */
+    async deactivateAgentKeys(agentId: string, createdBy: string): Promise<number> {
+        validator.assertIsNonEmptyString(agentId, 'agentId is required');
+        validator.assertIsNonEmptyString(createdBy, 'createdBy is required');
+
+        // Resolve the exact credential ids for this owner before changing
+        // persistence. We include already-inactive rows so a cleanup retry can
+        // still evict a socket after an earlier post-revocation eviction failed.
+        const keyRecords = await ChannelKey.find({ agentId, createdBy })
+            .select('keyId');
+        const keyIds = [...new Set(keyRecords.map(record => record.keyId))];
+
+        const result = await ChannelKey.updateMany(
+            { agentId, createdBy, isActive: true },
+            { $set: { isActive: false, updatedAt: new Date() } }
+        );
+
+        await Promise.all(
+            keyIds.map(keyId => this.getSocketLifecycle().disconnectKeySockets(keyId))
+        );
+
+        return result.modifiedCount;
     }
 
     /**
@@ -331,7 +551,7 @@ class ChannelKeyService {
         try {
             validator.assertIsNonEmptyString(channelId, 'channelId is required');
 
-            const query: any = { channelId };
+            const query: { channelId: string; isActive?: boolean } = { channelId };
             if (activeOnly) {
                 query.isActive = true;
             }
@@ -358,7 +578,11 @@ class ChannelKeyService {
      * @param keyId - Key ID to look up
      * @returns The key's channel and agent, or null when no active key matches
      */
-    async describeKey(keyId: string): Promise<{ channelId: string; agentId?: string } | null> {
+    async describeKey(keyId: string): Promise<{
+        channelId: string;
+        agentId?: string;
+        allowedTools?: string[];
+    } | null> {
         try {
             validator.assertIsNonEmptyString(keyId, 'keyId is required');
 
@@ -370,7 +594,10 @@ class ChannelKeyService {
 
             return {
                 channelId: keyRecord.channelId,
-                agentId: (keyRecord as BoundChannelKey).agentId
+                agentId: (keyRecord as BoundChannelKey).agentId,
+                allowedTools: Array.isArray(keyRecord.allowedTools)
+                    ? [...keyRecord.allowedTools]
+                    : undefined
             };
 
         } catch (error) {
@@ -390,6 +617,11 @@ class ChannelKeyService {
         try {
             validator.assertIsNonEmptyString(keyId, 'keyId is required');
             validator.assertIsNonEmptyString(newChannelId, 'newChannelId is required');
+
+            if (isReservedChannelId(newChannelId)) {
+                logger.warn(`Refused to associate key ${keyId} with reserved channel ${newChannelId}`);
+                return false;
+            }
 
             const result = await ChannelKey.updateOne(
                 { keyId, isActive: true },

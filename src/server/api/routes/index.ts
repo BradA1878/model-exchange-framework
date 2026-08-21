@@ -19,12 +19,24 @@
  */
 
 import express from 'express';
+import { createRequire } from 'module';
 import * as agentController from '../controllers/agentController';
 import * as channelController from '../controllers/channelController';
 import { userController } from '../controllers/userController';
-import { requireChannelAccess } from '../middleware/channelAuth';
+import {
+    requireChannelAccess,
+    requireChannelDeletionOwner,
+    requireChannelOwner
+} from '../middleware/channelAuth';
+import { requireAdmin } from '../middleware/dualAuth';
+import {
+    requireResourceAccess,
+    requireResourceOwner,
+    requireUserPrincipal
+} from '../middleware/resourceOwnership';
 import { createAuthRateLimiter } from '../middleware/rateLimit';
 import { isWebhookEnabled } from '../middleware/webhookAuth';
+import { isDemoApiEnabled, requireUnsafeStdioMcpEnabled } from '../middleware/runtimeFeaturePolicy';
 import { Logger } from '@mxf-dev/core/utils/Logger';
 import mcpRoutes from './mcp';
 import hybridMcpRoutes from './hybridMcp';
@@ -43,11 +55,14 @@ import demoRoutes from './demoRoutes';
 import knowledgeGraphRoutes from './knowledgeGraph';
 import dagRoutes from './dag';
 import memoryBrowserRoutes from './memory';
+import memoryRoutes from './memoryRoutes';
 import orparRoutes from './orpar';
 import tokenRoutes from './tokenRoutes';
+import { getDocumentsByChannel } from '../controllers/documentController';
 
 const router = express.Router();
 const logger = new Logger('info', 'ApiRoutes', 'server');
+const loadRouteModule = createRequire(__filename);
 
 // Protected routes (require authentication)
 // Middleware will be added by the server when routes are registered
@@ -66,20 +81,22 @@ router.patch('/users/profile', userController.updateProfile);
 router.delete('/users/profile', userController.deleteProfile);
 router.get('/users', userController.getAllUsers);
 router.patch('/users/role', userController.updateUserRole);
+router.patch('/users/status', userController.updateUserStatus);
 
 // Agent routes
-router.get('/agents', agentController.getAgents);
-router.get('/agents/:agentId', agentController.getAgentById);
-router.post('/agents', agentController.createAgent);
-router.put('/agents/:agentId', agentController.updateAgent);
-router.delete('/agents/:agentId', agentController.deleteAgent);
-router.get('/agents/services/:serviceType', agentController.getAgentsByService);
+router.get('/agents', requireUserPrincipal, agentController.getAgents);
+router.post('/agents', requireUserPrincipal, agentController.createAgent);
+router.get('/agents/services/:serviceType', requireUserPrincipal, agentController.getAgentsByService);
+router.get('/agents/:agentId', requireResourceOwner('agent', req => req.params.agentId), agentController.getAgentById);
+router.put('/agents/:agentId', requireResourceOwner('agent', req => req.params.agentId), agentController.updateAgent);
+router.delete('/agents/:agentId', requireResourceOwner('agent', req => req.params.agentId), agentController.deleteAgent);
 
-// Agent context and memory routes (using keyId as lookup)
-router.get('/agents/context/:keyId', agentController.getAgentContext);
-router.get('/agents/memory/:keyId', agentController.getOrCreateAgentMemory);
-router.patch('/agents/memory/:keyId', agentController.updateAgentMemory);
-router.patch('/agents/context/:keyId', agentController.updateAgentContext);
+// Agent context routes (using keyId as lookup)
+router.get('/agents/context/:keyId', requireResourceAccess('agent-key', req => req.params.keyId), agentController.getAgentContext);
+router.patch('/agents/context/:keyId', requireResourceOwner('agent-key', req => req.params.keyId), agentController.updateAgentContext);
+
+// Agent, channel, and relationship memory share one canonical service boundary.
+router.use('/', memoryRoutes);
 
 // Channel routes - Core CRUD operations
 //
@@ -88,31 +105,48 @@ router.patch('/agents/context/:keyId', agentController.updateAgentContext);
 // gate, knowing a channelId was enough to rename, delete, or read any channel
 // in the system — getChannelById and getAllChannels already filtered by
 // createdBy, so the write paths were the ones that never checked.
-router.get('/channels', channelController.getAllChannels);
-router.post('/channels', channelController.registerChannel);
-router.get('/channels/:channelId', channelController.getChannelById);
-router.put('/channels/:channelId', requireChannelAccess, channelController.updateChannel);
-router.delete('/channels/:channelId', requireChannelAccess, channelController.deleteChannel);
-router.get('/channels/:channelId/documents', requireChannelAccess, require('../controllers/documentController').getDocumentsByChannel);
+router.get('/channels', requireUserPrincipal, channelController.getAllChannels);
+router.post('/channels', requireUserPrincipal, channelController.registerChannel);
 
-// Channel additional operations
-router.post('/channels/workspace', channelController.createChannelWorkspace);
-router.get('/channels/verify/:token', channelController.verifyChannel);
-
-// Channel discovery and search operations
+// Static discovery routes must precede /channels/:channelId. In particular,
+// Express otherwise treats the literal "search" as a channel id and never
+// reaches the search controller.
 router.get('/channels/search', channelController.searchChannels);
 router.get('/channels/discover/:channelId', channelController.findByChannelId);
 router.get('/channels/domain/:domain', channelController.listChannelsByDomain);
 
-// Channel memory routes (using channelId as lookup)
-// Context routes have been moved to channelContextRoutes
-router.get('/channels/memory/:channelId', requireChannelAccess, channelController.getOrCreateChannelMemory);
-router.patch('/channels/memory/:channelId', requireChannelAccess, channelController.updateChannelMemory);
+router.get('/channels/:channelId', requireChannelOwner, channelController.getChannelById);
+router.put('/channels/:channelId', requireChannelOwner, channelController.updateChannel);
+router.delete('/channels/:channelId', requireChannelDeletionOwner, channelController.deleteChannel);
+router.get('/channels/:channelId/documents', requireChannelAccess, getDocumentsByChannel);
+
+// Channel additional operations
+router.post('/channels/workspace', requireUserPrincipal, channelController.createChannelWorkspace);
+router.get('/channels/verify/:token', channelController.verifyChannel);
 
 // Channel MCP server management routes
-router.post('/channels/:channelId/mcp-servers', requireChannelAccess, channelController.registerChannelMcpServer);
-router.get('/channels/:channelId/mcp-servers', requireChannelAccess, channelController.listChannelMcpServers);
-router.delete('/channels/:channelId/mcp-servers/:serverId', requireChannelAccess, channelController.unregisterChannelMcpServer);
+router.post(
+    '/channels/:channelId/mcp-servers',
+    requireAdmin,
+    requireUnsafeStdioMcpEnabled,
+    requireChannelOwner,
+    channelController.registerChannelMcpServer
+);
+// Channel MCP configs may contain process commands, environment variables, and
+// credentials. Starting, inspecting, and stopping those server processes are
+// one administrative capability; channel ownership alone is not sufficient.
+router.get(
+    '/channels/:channelId/mcp-servers',
+    requireAdmin,
+    requireChannelOwner,
+    channelController.listChannelMcpServers
+);
+router.delete(
+    '/channels/:channelId/mcp-servers/:serverId',
+    requireAdmin,
+    requireChannelOwner,
+    channelController.unregisterChannelMcpServer
+);
 
 // Task management routes
 router.use('/tasks', taskRoutes);
@@ -120,8 +154,12 @@ router.use('/tasks', taskRoutes);
 // Agent lifecycle management routes (separate path to avoid conflicts)
 router.use('/agents', agentLifecycleRoutes);
 
-// Bulk operations routes
-router.use('/bulk', bulkRoutes);
+// These routers expose cross-channel operational views or accept bulk/global
+// mutations. Their controllers are not tenant-scoped, so allowing any valid
+// user or channel key to reach them turns authentication into global access.
+// Keep them administrator-only until each surface has an explicit resource
+// policy comparable to channels, tasks, and documents.
+router.use('/bulk', requireAdmin, bulkRoutes);
 
 // Mount MCP routes at /mcp
 router.use('/mcp', mcpRoutes);
@@ -141,20 +179,25 @@ router.use('/channel-keys', channelKeyRoutes);
 // Agent key management routes  
 router.use('/agent-keys', agentKeyRoutes);
 
-// Dashboard routes
-router.use('/dashboard', dashboardRoutes);
+// Dashboard routes aggregate all tenants.
+router.use('/dashboard', requireAdmin, dashboardRoutes);
 
-// Analytics routes
-router.use('/analytics', analyticsRoutes);
+// Analytics routes aggregate agents, channels, executions, and audit data.
+router.use('/analytics', requireAdmin, analyticsRoutes);
 
-// Configuration routes
-router.use('/config', configRoutes);
+// Configuration templates and deployments are server-wide resources.
+router.use('/config', requireAdmin, configRoutes);
 
-// Task effectiveness routes
-router.use('/effectiveness', taskEffectivenessRoutes);
+// Effectiveness controllers currently query across channels.
+router.use('/effectiveness', requireAdmin, taskEffectivenessRoutes);
 
-// Demo routes (public access for presentation)
-router.use('/demo', demoRoutes);
+// Demo routes can launch a process and spend LLM credits. Keep the entire route
+// surface absent unless an operator explicitly opts in, and never mount it in
+// production even if a stale environment value says otherwise.
+if (isDemoApiEnabled()) {
+    router.use('/demo', demoRoutes);
+    logger.warn('Demo API mounted at /api/demo (non-production, administrator only, single-flight)');
+}
 
 // n8n Webhook routes.
 //
@@ -165,22 +208,26 @@ router.use('/demo', demoRoutes);
 // require(), which keeps that boot check off the path of servers that never
 // turn webhooks on.
 if (isWebhookEnabled()) {
-    const n8nWebhookRoutes = require('./n8nWebhooks').default;
+    // Deliberately load this router only when enabled: importing it validates
+    // MXF_WEBHOOK_SECRET and initializes the task service at module load.
+    const { default: n8nWebhookRoutes } = loadRouteModule('./n8nWebhooks') as {
+        default: ReturnType<typeof express.Router>;
+    };
     router.use('/webhooks/n8n', n8nWebhookRoutes);
     logger.info('n8n webhook routes mounted at /api/webhooks/n8n (HMAC signature required)');
 }
 
-// Knowledge Graph routes
-router.use('/kg', knowledgeGraphRoutes);
+// Knowledge graph views currently span all persisted entities.
+router.use('/kg', requireAdmin, knowledgeGraphRoutes);
 
 // DAG (Directed Acyclic Graph) routes
-router.use('/dag', dagRoutes);
+router.use('/dag', requireAdmin, dagRoutes);
 
 // Memory Browser routes
-router.use('/memory-browser', memoryBrowserRoutes);
+router.use('/memory-browser', requireAdmin, memoryBrowserRoutes);
 
 // ORPAR Control Loop routes
-router.use('/orpar', orparRoutes);
+router.use('/orpar', requireAdmin, orparRoutes);
 
 // Personal Access Token routes (for SDK authentication)
 router.use('/tokens', tokenRoutes);

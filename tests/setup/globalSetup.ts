@@ -3,7 +3,7 @@
  *
  * Checks that the MXF server is running before integration tests
  * and ensures the demo user exists for authentication.
- * The server must be started manually with: npm run dev
+ * The server must be started manually with: bun run dev
  */
 
 import waitOn from 'wait-on';
@@ -37,14 +37,14 @@ export default async function globalSetup(): Promise<void> {
         console.error('');
         console.error('Please start the server before running integration tests:');
         console.error('');
-        console.error('  npm run dev');
+        console.error('  bun run dev');
         console.error('');
         console.error('Then run tests in another terminal:');
         console.error('');
-        console.error('  npm run test:integration');
+        console.error('  bun run test:integration');
         console.error('');
         console.error('='.repeat(60));
-        throw new Error(`Server not available at ${healthEndpoint}. Start server with 'npm run dev' first.`);
+        throw new Error(`Server not available at ${healthEndpoint}. Start server with 'bun run dev' first.`);
     }
 
     // Create demo user for test authentication
@@ -58,14 +58,23 @@ export default async function globalSetup(): Promise<void> {
             role: 'consumer'
         });
         console.log('[Setup] Created demo-user for testing');
-    } catch (error: any) {
+    } catch (error: unknown) {
+        if (!axios.isAxiosError(error)) {
+            throw error;
+        }
+
+        const responseData = error.response?.data as { message?: unknown } | undefined;
+        const responseMessage = typeof responseData?.message === 'string'
+            ? responseData.message
+            : undefined;
         if (error.response?.status === 409) {
             console.log('[Setup] Demo user already exists');
-        } else if (error.response?.status === 400 && error.response?.data?.message?.includes('already')) {
+        } else if (error.response?.status === 400 && responseMessage?.includes('already')) {
             console.log('[Setup] Demo user already exists');
         } else {
-            // Log warning but don't fail - user might exist from previous run
-            console.warn(`[Setup] Demo user setup warning: ${error.response?.data?.message || error.message}`);
+            throw new Error(
+                `Unable to prepare integration-test user: ${responseMessage ?? error.message}`
+            );
         }
     }
 

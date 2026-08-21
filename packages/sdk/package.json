@@ -1,6 +1,6 @@
 {
   "name": "@mxf-dev/sdk",
-  "version": "2.0.5",
+  "version": "3.0.0",
   "description": "Model Exchange Framework agent client SDK",
   "type": "module",
   "license": "Apache-2.0",
@@ -22,12 +22,6 @@
       "bun": "./src/index.ts",
       "import": "./dist/index.js",
       "default": "./dist/index.js"
-    },
-    "./*": {
-      "types": "./dist/*.d.ts",
-      "bun": "./src/*.ts",
-      "import": "./dist/*.js",
-      "default": "./dist/*.js"
     },
     "./package.json": "./package.json"
   },

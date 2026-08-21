@@ -30,29 +30,28 @@
  * connect time — they are the caller's real identity, not a client claim. The
  * `taskId` inside `payload.data` is the opposite: it comes straight off the wire.
  *
- * So every mutation here goes through TaskService.updateTaskInChannel, which
- * scopes the write to the caller's channel, and state changes that only the
- * assignee may make (complete, fail) additionally require the assignment. These
- * handlers used to call updateTask(taskId, ...) directly, which resolved to
- * Task.findByIdAndUpdate with no scoping at all: an agent in one channel could
- * complete, reassign, or cancel a task in any other channel by naming its id.
+ * Generic field updates go through TaskService.updateTaskInChannel, while
+ * assignment and lifecycle changes use dedicated compare-and-set operations.
+ * Every write remains scoped to the authenticated channel and actor authority.
  */
 
 import { Socket } from 'socket.io';
+import type { Subscription } from 'rxjs';
 import { EventBus } from '@mxf-dev/core/events/EventBus';
 import { TaskEvents } from '@mxf-dev/core/events/event-definitions/TaskEvents';
-import { createTaskEventPayload, TaskEventPayload, TaskEventData, createBaseEventPayload } from '@mxf-dev/core/schemas/EventPayloadSchema';
+import { CoreSocketEvents } from '@mxf-dev/core/events/EventNames';
+import { createTaskEventPayload, TaskEventPayload, TaskEventData } from '@mxf-dev/core/schemas/EventPayloadSchema';
 import { createStrictValidator } from '@mxf-dev/core/utils/validation';
 import { Logger } from '@mxf-dev/core/utils/Logger';
 import { TaskService } from '../services/TaskService';
 import { 
     CreateTaskRequest, 
-    UpdateTaskRequest,
-    TaskQueryFilters 
+    UpdateTaskRequest
 } from '@mxf-dev/core/types/TaskTypes';
 
 // Global flag to ensure task handlers are only registered once
 let globalTaskHandlersRegistered = false;
+let globalTaskHandlerSubscriptions: Subscription[] = [];
 const activeConnections = new Set<string>(); // Track active agent connections
 
 // Create module logger
@@ -62,7 +61,7 @@ const moduleLogger = new Logger('debug', 'TaskHandlers', 'server');
  * Register global task event handlers for EventBus (singleton)
  * These handlers should only be registered once globally, not per connection
  */
-const registerGlobalTaskHandlers = (): void => {
+export const initializeTaskHandlers = (): void => {
 
     if (globalTaskHandlersRegistered) {
         return;
@@ -71,10 +70,41 @@ const registerGlobalTaskHandlers = (): void => {
     const validator = createStrictValidator('GlobalTaskHandlers');
     const taskService = TaskService.getInstance();
 
+    const emitTaskRequestError = (payload: TaskEventPayload, error: unknown): void => {
+        const agentId = payload?.agentId;
+        const channelId = payload?.channelId;
+        const outerData = payload?.data;
+        const nestedData = outerData?.task?.data?.task?.data
+            ?? outerData?.task?.data
+            ?? outerData;
+        const taskId = nestedData?.taskId ?? outerData?.taskId;
+        const requestId = nestedData?.requestId ?? outerData?.requestId ?? outerData?.taskId;
+
+        if (typeof agentId !== 'string' || agentId.trim().length === 0 ||
+            typeof channelId !== 'string' || channelId.trim().length === 0 ||
+            typeof taskId !== 'string' || taskId.trim().length === 0) {
+            moduleLogger.error('Cannot address task error because trusted task identity is incomplete');
+            return;
+        }
+
+        EventBus.server.emit(
+            TaskEvents.ERROR,
+            createTaskEventPayload(TaskEvents.ERROR, agentId, channelId, {
+                taskId,
+                ...(typeof requestId === 'string' && requestId.trim().length > 0
+                    ? { requestId }
+                    : {}),
+                fromAgentId: 'system',
+                toAgentId: agentId,
+                task: `Task request ${taskId} failed`,
+                error: error instanceof Error ? error.message : String(error)
+            })
+        );
+    };
+
     // Handler for task creation - GLOBAL SINGLETON
-    const handleTaskCreate = async (payload: any): Promise<void> => {
+    const handleTaskCreate = async (payload: TaskEventPayload): Promise<void> => {
         try {
-            // Extract the originating agent info from payload
             const agentId = payload.agentId || 'unknown';
             const channelId = payload.channelId || 'unknown';
             
@@ -82,6 +112,8 @@ const registerGlobalTaskHandlers = (): void => {
             // Extract task creation data from socket payload (after eventForwardingHandlers wrapping)
             validator.assertIsObject(payload.data, 'payload.data is required');
             validator.assertIsObject(payload.data.task, 'payload.data.task is required');
+            const requestId = payload.data.taskId;
+            validator.assertIsNonEmptyString(requestId, 'request taskId');
             
             // The actual task data is nested inside payload.data.task.data due to eventForwardingHandlers wrapper
             const taskData = payload.data.task.data || payload.data.task;
@@ -89,14 +121,14 @@ const registerGlobalTaskHandlers = (): void => {
             validator.assertIsNonEmptyString(taskData.title, 'task title');
             validator.assertIsNonEmptyString(taskData.description, 'task description');
 
-            const createRequest: any = {
+            const createRequest: CreateTaskRequest = {
                 title: taskData.title,
                 description: taskData.description,
                 channelId,
                 priority: taskData.priority || 'medium',
                 requiredRoles: taskData.requiredRoles || [],
                 requiredCapabilities: taskData.requiredCapabilities || [],
-                assignmentStrategy: taskData.assignmentStrategy || 'auto',
+                assignmentStrategy: taskData.assignmentStrategy || 'intelligent',
                 assignedAgentId: taskData.assignedAgentId,
                 dueDate: taskData.dueDate,
                 estimatedDuration: taskData.estimatedDuration,
@@ -109,43 +141,45 @@ const registerGlobalTaskHandlers = (): void => {
                 assignmentDistribution: taskData.assignmentDistribution,
                 coordinationMode: taskData.coordinationMode,
                 leadAgentId: taskData.leadAgentId,
+                completionAgentId: taskData.completionAgentId,
                 // Channel-wide task fields - CRITICAL for validation
                 channelWideTask: taskData.channelWideTask,
                 maxParticipants: taskData.maxParticipants,
                 targetAgentRoles: taskData.targetAgentRoles || [],
                 excludeAgentIds: taskData.excludeAgentIds || []
             };
-            const createdBy = taskData.createdBy || 'socket_user';
+            // The socket forwarder rebuilt payload.agentId from the validated
+            // channel key. A nested createdBy is untrusted model state and is
+            // deliberately absent from the fresh createRequest above.
+            const createdBy = agentId;
             
-            const task = await taskService.createTask(createRequest, createdBy);
+            await taskService.createTask(createRequest, createdBy, requestId);
             
             // Note: TaskService.createTask() already emits TaskEvents.CREATED, so no need to emit here
             
         } catch (error) {
             moduleLogger.error(`❌ Error handling task creation: ${error}`);
-            // Use helper to create task error event payload
-            const errorPayload = createBaseEventPayload(
-                TaskEvents.ERROR,
-                payload.agentId || 'unknown',
-                payload.channelId || 'unknown',
-                { error: error instanceof Error ? error.message : 'Unknown error' },
-                { source: 'TaskHandler' }
-            );
-            EventBus.server.emit(TaskEvents.ERROR, errorPayload);
+            emitTaskRequestError(payload, error);
         }
     };
 
     // Handler for task updates  
-    const handleTaskUpdate = async (payload: any): Promise<void> => {
+    const handleTaskUpdate = async (payload: TaskEventPayload): Promise<void> => {
         try {
             // Extract the originating agent info from payload
             const agentId = payload.agentId || 'unknown';
             const channelId = payload.channelId || 'unknown';
             
             
-            // Handle both direct and nested payload structures
-            const taskData = payload.data.task?.data || payload.data;
-            const { taskId, ...updateRequest } = taskData;
+            const taskData = payload.data.task?.data
+                ?? (typeof payload.data.task === 'object' && payload.data.task !== null
+                    ? payload.data.task
+                    : payload.data);
+            const taskId = payload.data.taskId ?? taskData.taskId;
+            const requestId = payload.data.requestId ?? taskData.requestId;
+            const updateRequest: UpdateTaskRequest & Record<string, unknown> = { ...taskData };
+            delete updateRequest.taskId;
+            delete updateRequest.requestId;
             validator.assertIsNonEmptyString(taskId, 'taskId is required');
             validator.assertIsNonEmptyString(channelId, 'channelId is required');
 
@@ -155,6 +189,7 @@ const registerGlobalTaskHandlers = (): void => {
             // Use PROGRESS_UPDATED since UPDATED doesn't exist
             const taskEventData: TaskEventData = {
                 taskId: updatedTask.id,
+                requestId,
                 fromAgentId: agentId,
                 toAgentId: updatedTask.assignedAgentId || agentId,
                 task: updatedTask
@@ -164,68 +199,44 @@ const registerGlobalTaskHandlers = (): void => {
             
         } catch (error) {
             moduleLogger.error(`❌ Error handling task update: ${error}`);
-            // Use helper to create task error event payload
-            const errorPayload = createBaseEventPayload(
-                TaskEvents.ERROR,
-                payload.agentId || 'unknown',
-                payload.channelId || 'unknown',
-                { error: error instanceof Error ? error.message : 'Unknown error' },
-                { source: 'TaskHandler' }
-            );
-            EventBus.server.emit(TaskEvents.ERROR, errorPayload);
+            emitTaskRequestError(payload, error);
         }
     };
 
     // Handler for task assignment
-    const handleTaskAssign = async (payload: any): Promise<void> => {
+    const handleTaskAssign = async (payload: TaskEventPayload): Promise<void> => {
         try {
             // Extract the originating agent info from payload
             const agentId = payload.agentId || 'unknown';
             const channelId = payload.channelId || 'unknown';
             
             
-            // Handle both direct and nested payload structures
-            const taskData = payload.data.task?.data || payload.data;
-            const { taskId, targetAgentId } = taskData;
+            const taskData = payload.data.task?.data
+                ?? (typeof payload.data.task === 'object' && payload.data.task !== null
+                    ? payload.data.task
+                    : payload.data);
+            const taskId = payload.data.taskId ?? taskData.taskId;
+            const targetAgentId = payload.data.targetAgentId ?? taskData.targetAgentId;
             validator.assertIsNonEmptyString(taskId, 'taskId is required');
             validator.assertIsNonEmptyString(targetAgentId, 'targetAgentId is required');
             validator.assertIsNonEmptyString(channelId, 'channelId is required');
 
-            // Scoped to the caller's channel — reassigning a task in someone else's
-            // channel is not something a client gets to ask for
-            const updatedTask = await taskService.updateTaskInChannel(taskId, channelId, {
-                assignedAgentId: targetAgentId,
-                status: 'assigned'
-            });
-
-            const taskEventData: TaskEventData = {
-                taskId: updatedTask.id,
-                fromAgentId: agentId,
-                toAgentId: targetAgentId,
-                task: updatedTask
-            };
-            const eventPayload = createTaskEventPayload(TaskEvents.ASSIGNED, agentId, channelId, taskEventData);
-            EventBus.server.emit(TaskEvents.ASSIGNED, eventPayload);
+            await taskService.assignTaskInChannel(
+                taskId,
+                channelId,
+                targetAgentId,
+                agentId
+            );
             
         } catch (error) {
             moduleLogger.error(`❌ Error handling task assignment: ${error}`);
-            // Use helper to create task error event payload
-            const errorPayload = createBaseEventPayload(
-                TaskEvents.ERROR,
-                payload.agentId || 'unknown',
-                payload.channelId || 'unknown',
-                { error: error instanceof Error ? error.message : 'Unknown error' },
-                { source: 'TaskHandler' }
-            );
-            EventBus.server.emit(TaskEvents.ERROR, errorPayload);
+            emitTaskRequestError(payload, error);
         }
     };
 
     // Handler for intelligent task assignment
-    const handleTaskAssignIntelligent = async (payload: any): Promise<void> => {
+    const handleTaskAssignIntelligent = async (payload: TaskEventPayload): Promise<void> => {
         try {
-            // Extract the originating agent info from payload
-            const agentId = payload.agentId || 'unknown';
             const channelId = payload.channelId || 'unknown';
             
             
@@ -237,33 +248,21 @@ const registerGlobalTaskHandlers = (): void => {
 
             // Scoped to the caller's channel. Assignment runs an LLM pass, so an
             // unscoped taskId here was also a way to make another channel spend budget.
-            const assignmentResult = await taskService.assignTaskIntelligentlyInChannel(taskId, channelId);
+            await taskService.assignTaskIntelligentlyInChannel(taskId, channelId);
 
-            const taskEventData: TaskEventData = {
-                taskId: taskId,
-                fromAgentId: agentId,
-                toAgentId: assignmentResult.assignedAgentId,
-                task: assignmentResult
-            };
-            const eventPayload = createTaskEventPayload(TaskEvents.ASSIGNMENT_REQUESTED, agentId, channelId, taskEventData);
-            EventBus.server.emit(TaskEvents.ASSIGNMENT_REQUESTED, eventPayload);
+            // TaskService persists the assignment and emits the authoritative
+            // ASSIGNED event. Emitting ASSIGNMENT_REQUESTED here used to invoke
+            // this same ingress handler recursively, then report a false error
+            // because the task was no longer pending.
             
         } catch (error) {
             moduleLogger.error(`❌ Error handling intelligent task assignment: ${error}`);
-            // Use helper to create task error event payload
-            const errorPayload = createBaseEventPayload(
-                TaskEvents.ERROR,
-                payload.agentId || 'unknown',
-                payload.channelId || 'unknown',
-                { error: error instanceof Error ? error.message : 'Unknown error' },
-                { source: 'TaskHandler' }
-            );
-            EventBus.server.emit(TaskEvents.ERROR, errorPayload);
+            emitTaskRequestError(payload, error);
         }
     };
 
     // Handler for task lifecycle events
-    const handleTaskStart = async (payload: any): Promise<void> => {
+    const handleTaskStart = async (payload: TaskEventPayload): Promise<void> => {
         try {
             // Extract the originating agent info from payload
             const agentId = payload.agentId || 'unknown';
@@ -272,23 +271,23 @@ const registerGlobalTaskHandlers = (): void => {
             
             // Handle both direct and nested payload structures
             const taskData = payload.data.task?.data || payload.data;
-            const { taskId, startingAgentId } = taskData;
+            const { taskId, requestId } = taskData;
             validator.assertIsNonEmptyString(taskId, 'taskId is required');
-            validator.assertIsNonEmptyString(startingAgentId, 'startingAgentId is required');
             validator.assertIsNonEmptyString(channelId, 'channelId is required');
 
             // Only the assignee starts a task, and only in their own channel
-            const updatedTask = await taskService.updateTaskInChannel(
+            const updatedTask = await taskService.transitionTaskInChannel(
                 taskId,
                 channelId,
-                { status: 'in_progress' },
-                { requireAssignedAgentId: agentId }
+                agentId,
+                { kind: 'start' }
             );
 
             const taskEventData: TaskEventData = {
                 taskId: updatedTask.id,
+                requestId,
                 fromAgentId: agentId,
-                toAgentId: startingAgentId,
+                toAgentId: agentId,
                 task: updatedTask
             };
             const eventPayload = createTaskEventPayload(TaskEvents.STARTED, agentId, channelId, taskEventData);
@@ -296,19 +295,11 @@ const registerGlobalTaskHandlers = (): void => {
             
         } catch (error) {
             moduleLogger.error(`❌ Error handling task start: ${error}`);
-            // Use helper to create task error event payload
-            const errorPayload = createBaseEventPayload(
-                TaskEvents.ERROR,
-                payload.agentId || 'unknown',
-                payload.channelId || 'unknown',
-                { error: error instanceof Error ? error.message : 'Unknown error' },
-                { source: 'TaskHandler' }
-            );
-            EventBus.server.emit(TaskEvents.ERROR, errorPayload);
+            emitTaskRequestError(payload, error);
         }
     };
 
-    const handleTaskComplete = async (payload: any): Promise<void> => {
+    const handleTaskComplete = async (payload: TaskEventPayload): Promise<void> => {
         try {
             // Extract the originating agent info from payload
             const agentId = payload.agentId || 'unknown';
@@ -317,71 +308,64 @@ const registerGlobalTaskHandlers = (): void => {
             
             // Handle multiple levels of nesting from EventBus forwarding
             const taskData = payload.data.task?.data?.task?.data || payload.data.task?.data || payload.data;
-            const { taskId, completingAgentId, result } = taskData;
+            const { taskId, requestId, result } = taskData;
             
             // Resolve 'current' taskId to actual task ID
             let resolvedTaskId = taskId;
             if (taskId === 'current') {
                 // Find the most recent assigned task for this agent that's not yet completed
                 const activeTasks = await taskService.getTasks({ channelId });
-                const agentTask = activeTasks.find(task => 
-                    (task.assignedAgentIds?.includes(agentId) || task.assignedAgentId === agentId) && 
-                    task.status !== 'completed' && 
-                    task.status !== 'failed' && 
-                    task.status !== 'cancelled'
-                );
+                const agentTask = activeTasks.find(task => {
+                    const canComplete = task.completionAgentId
+                        ? task.completionAgentId === agentId
+                        : task.assignedAgentIds?.includes(agentId) || task.assignedAgentId === agentId;
+                    return canComplete &&
+                        task.status !== 'completed' &&
+                        task.status !== 'failed' &&
+                        task.status !== 'cancelled';
+                });
                 
                 if (agentTask) {
                     resolvedTaskId = agentTask.id;
                 } else {
-                    moduleLogger.warn(`⚠️ Could not find active task for agent ${agentId}, using 'current' as-is`);
+                    throw new Error(
+                        `No active task can be completed by agent ${agentId} in channel ${channelId}`
+                    );
                 }
             }
             
             validator.assertIsNonEmptyString(resolvedTaskId, 'resolvedTaskId is required');
             validator.assertIsNonEmptyString(channelId, 'channelId is required');
+            validator.assertIsObject(result, 'task completion result is required');
 
             // Completion is restricted twice over: the task must be in the caller's
             // channel, and the caller must be the agent it is assigned to.
             // `completingAgentId` from the payload is not used for the check —
             // `agentId` is the identity the socket authenticated as.
-            const updatedTask = await taskService.updateTaskInChannel(
+            const updatedTask = await taskService.transitionTaskInChannel(
                 resolvedTaskId,
                 channelId,
-                {
-                    status: 'completed',
-                    progress: 100
-                },
-                { requireAssignedAgentId: agentId }
+                agentId,
+                { kind: 'complete', output: result }
             );
 
             const taskEventData: TaskEventData = {
                 taskId: updatedTask.id,
+                requestId,
                 fromAgentId: agentId,
-                toAgentId: completingAgentId || agentId,
-                task: {
-                    ...updatedTask,
-                    result: result
-                }
+                toAgentId: agentId,
+                task: updatedTask
             };
             const eventPayload = createTaskEventPayload(TaskEvents.COMPLETED, agentId, channelId, taskEventData);
             EventBus.server.emit(TaskEvents.COMPLETED, eventPayload);
             
         } catch (error) {
             moduleLogger.error(`❌ Error handling task complete: ${error}`);
-            // Use helper to create task error event payload
-            const errorPayload = createBaseEventPayload(
-                TaskEvents.ERROR,
-                payload.agentId || 'unknown',
-                payload.channelId || 'unknown',
-                { error: error instanceof Error ? error.message : 'Unknown error' },
-                { source: 'TaskHandler' }
-            );
-            EventBus.server.emit(TaskEvents.ERROR, errorPayload);
+            emitTaskRequestError(payload, error);
         }
     };
 
-    const handleTaskFail = async (payload: any): Promise<void> => {
+    const handleTaskFail = async (payload: TaskEventPayload): Promise<void> => {
         try {
             // Extract the originating agent info from payload
             const agentId = payload.agentId || 'unknown';
@@ -390,46 +374,36 @@ const registerGlobalTaskHandlers = (): void => {
             
             // Handle multiple levels of nesting from EventBus forwarding
             const taskData = payload.data.task?.data?.task?.data || payload.data.task?.data || payload.data;
-            const { taskId, failingAgentId, error: taskError } = taskData;
+            const { taskId, requestId, error: taskError } = taskData;
             validator.assertIsNonEmptyString(taskId, 'taskId is required');
-            validator.assertIsNonEmptyString(failingAgentId, 'failingAgentId is required');
             validator.assertIsNonEmptyString(channelId, 'channelId is required');
+            validator.assertIsNonEmptyString(taskError, 'task failure error is required');
 
             // Only the assignee can fail a task, and only in their own channel
-            const updatedTask = await taskService.updateTaskInChannel(
+            const updatedTask = await taskService.transitionTaskInChannel(
                 taskId,
                 channelId,
-                { status: 'failed' },
-                { requireAssignedAgentId: agentId }
+                agentId,
+                { kind: 'fail', error: taskError }
             );
 
             const taskEventData: TaskEventData = {
                 taskId: updatedTask.id,
+                requestId,
                 fromAgentId: agentId,
-                toAgentId: failingAgentId,
-                task: {
-                    ...updatedTask,
-                    error: taskError
-                }
+                toAgentId: agentId,
+                task: updatedTask
             };
             const eventPayload = createTaskEventPayload(TaskEvents.FAILED, agentId, channelId, taskEventData);
             EventBus.server.emit(TaskEvents.FAILED, eventPayload);
             
         } catch (error) {
             moduleLogger.error(`❌ Error handling task fail: ${error}`);
-            // Use helper to create task error event payload
-            const errorPayload = createBaseEventPayload(
-                TaskEvents.ERROR,
-                payload.agentId || 'unknown',
-                payload.channelId || 'unknown',
-                { error: error instanceof Error ? error.message : 'Unknown error' },
-                { source: 'TaskHandler' }
-            );
-            EventBus.server.emit(TaskEvents.ERROR, errorPayload);
+            emitTaskRequestError(payload, error);
         }
     };
 
-    const handleTaskCancel = async (payload: any): Promise<void> => {
+    const handleTaskCancel = async (payload: TaskEventPayload): Promise<void> => {
         try {
             // Extract the originating agent info from payload
             const agentId = payload.agentId || 'unknown';
@@ -438,45 +412,35 @@ const registerGlobalTaskHandlers = (): void => {
             
             // Handle both direct and nested payload structures
             const taskData = payload.data.task?.data || payload.data;
-            const { taskId, reason } = taskData;
+            const { taskId, requestId, reason } = taskData;
             validator.assertIsNonEmptyString(taskId, 'taskId is required');
             validator.assertIsNonEmptyString(channelId, 'channelId is required');
 
-            // Scoped to the caller's channel. Cancellation is not restricted to the
-            // assignee — any agent in the channel may call off work in that channel —
-            // but it can no longer reach across into another one.
-            const updatedTask = await taskService.updateTaskInChannel(taskId, channelId, {
-                status: 'cancelled'
-            });
+            const updatedTask = await taskService.transitionTaskInChannel(
+                taskId,
+                channelId,
+                agentId,
+                { kind: 'cancel', reason }
+            );
 
             const taskEventData: TaskEventData = {
                 taskId: updatedTask.id,
+                requestId,
                 fromAgentId: agentId,
-                toAgentId: updatedTask.assignedAgentId || agentId,
-                task: {
-                    ...updatedTask,
-                    reason: reason
-                }
+                toAgentId: agentId,
+                task: updatedTask
             };
             const eventPayload = createTaskEventPayload(TaskEvents.CANCELLED, agentId, channelId, taskEventData);
             EventBus.server.emit(TaskEvents.CANCELLED, eventPayload);
             
         } catch (error) {
             moduleLogger.error(`❌ Error handling task cancel: ${error}`);
-            // Use helper to create task error event payload
-            const errorPayload = createBaseEventPayload(
-                TaskEvents.ERROR,
-                payload.agentId || 'unknown',
-                payload.channelId || 'unknown',
-                { error: error instanceof Error ? error.message : 'Unknown error' },
-                { source: 'TaskHandler' }
-            );
-            EventBus.server.emit(TaskEvents.ERROR, errorPayload);
+            emitTaskRequestError(payload, error);
         }
     };
 
     // Handler for workload analysis
-    const handleAnalyzeWorkload = async (payload: any): Promise<void> => {
+    const handleAnalyzeWorkload = async (payload: TaskEventPayload): Promise<void> => {
         try {
             // Extract the originating agent info from payload
             const agentId = payload.agentId || 'unknown';
@@ -503,56 +467,53 @@ const registerGlobalTaskHandlers = (): void => {
         } catch (error) {
             moduleLogger.error(`❌ CRITICAL ERROR in workload analysis handler: ${error}`);
             moduleLogger.error(`❌ Error stack:`, error);
-            // Use helper to create task error event payload
-            const errorPayload = createBaseEventPayload(
-                TaskEvents.ERROR,
-                payload.agentId || 'unknown',
-                payload.channelId || 'unknown',
-                { error: error instanceof Error ? error.message : 'Unknown error' },
-                { source: 'TaskHandler' }
-            );
-            EventBus.server.emit(TaskEvents.ERROR, errorPayload);
+            emitTaskRequestError(payload, error);
         }
     };
 
-    // Handler for task assigned notifications
-    const handleTaskAssigned = async (payload: any): Promise<void> => {
-        try {
-            // Extract the originating agent info from payload
-            const agentId = payload.agentId || 'unknown';
-            const channelId = payload.channelId || 'unknown';
-                        
-            // Server handler processes all assignments for forwarding to agents
-            const taskData = payload.data;
-            const targetAgentId = taskData?.toAgentId;
-            
-            if (targetAgentId) {
-                
-                // Forward the assignment notification to the client
-                // The client should receive this and start working on the task
-                // This goes through eventForwardingHandlers to reach the agent
-            } else {
-            }
-            
-        } catch (error) {
-            moduleLogger.error(`❌ Error handling task assigned notification: ${error}`);
-        }
-    };
+    try {
+        globalTaskHandlerSubscriptions.push(
+            EventBus.server.on(TaskEvents.CREATE_REQUEST, handleTaskCreate)
+        );
+        globalTaskHandlerSubscriptions.push(
+            EventBus.server.on(TaskEvents.UPDATE_REQUEST, handleTaskUpdate)
+        );
+        globalTaskHandlerSubscriptions.push(
+            EventBus.server.on(TaskEvents.ASSIGN_REQUEST, handleTaskAssign)
+        );
+        globalTaskHandlerSubscriptions.push(
+            EventBus.server.on(TaskEvents.ASSIGNMENT_REQUESTED, handleTaskAssignIntelligent)
+        );
+        globalTaskHandlerSubscriptions.push(
+            EventBus.server.on(TaskEvents.START_REQUEST, handleTaskStart)
+        );
+        globalTaskHandlerSubscriptions.push(
+            EventBus.server.on(TaskEvents.COMPLETE_REQUEST, handleTaskComplete)
+        );
+        globalTaskHandlerSubscriptions.push(
+            EventBus.server.on(TaskEvents.FAIL_REQUEST, handleTaskFail)
+        );
+        globalTaskHandlerSubscriptions.push(
+            EventBus.server.on(TaskEvents.CANCEL_REQUEST, handleTaskCancel)
+        );
+        globalTaskHandlerSubscriptions.push(
+            EventBus.server.on(TaskEvents.WORKLOAD_ANALYZE_REQUEST, handleAnalyzeWorkload)
+        );
+        globalTaskHandlersRegistered = true;
+    } catch (error) {
+        shutdownTaskHandlers();
+        throw error;
+    }
+};
 
-    // Register GLOBAL EventBus listeners (once only)
-    EventBus.server.on(TaskEvents.CREATE_REQUEST, handleTaskCreate);
-    EventBus.server.on(TaskEvents.UPDATE_REQUEST, handleTaskUpdate);
-    EventBus.server.on(TaskEvents.ASSIGN_REQUEST, handleTaskAssign);
-    EventBus.server.on(TaskEvents.ASSIGNMENT_REQUESTED, handleTaskAssignIntelligent);
-    EventBus.server.on(TaskEvents.START_REQUEST, handleTaskStart);
-    EventBus.server.on(TaskEvents.COMPLETE_REQUEST, handleTaskComplete);
-    EventBus.server.on(TaskEvents.FAIL_REQUEST, handleTaskFail);
-    EventBus.server.on(TaskEvents.CANCEL_REQUEST, handleTaskCancel);
-    EventBus.server.on(TaskEvents.WORKLOAD_ANALYZE_REQUEST, handleAnalyzeWorkload);
-    EventBus.server.on(TaskEvents.ASSIGNED, handleTaskAssigned);
-    
-    
-    globalTaskHandlersRegistered = true;
+/** Release process-global task handlers so cold restart installs one fresh set. */
+export const shutdownTaskHandlers = (): void => {
+    for (const subscription of globalTaskHandlerSubscriptions) {
+        subscription.unsubscribe();
+    }
+    globalTaskHandlerSubscriptions = [];
+    activeConnections.clear();
+    globalTaskHandlersRegistered = false;
 };
 
 /**
@@ -566,14 +527,14 @@ const registerGlobalTaskHandlers = (): void => {
 export const registerTaskHandlers = (socket: Socket, agentId: string, channelId: string): void => {
     
     // Ensure global handlers are registered (singleton)
-    registerGlobalTaskHandlers();
+    initializeTaskHandlers();
     
     // Track this connection
     const connectionKey = `${agentId}:${channelId}`;
     activeConnections.add(connectionKey);
     
     // Handle socket disconnection - clean up connection tracking
-    socket.on('disconnect', () => {
+    socket.on(CoreSocketEvents.DISCONNECT, () => {
         activeConnections.delete(connectionKey);
         
         // Note: We do NOT remove global EventBus handlers here since other agents may still be connected

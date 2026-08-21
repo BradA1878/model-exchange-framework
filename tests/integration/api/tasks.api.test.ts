@@ -51,7 +51,8 @@ describe('Task API Endpoints', () => {
         await api.post('/api/channels', {
             channelId: testChannelId,
             name: 'Task Test Channel',
-            description: 'Channel for task API tests'
+            description: 'Channel for task API tests',
+            systemLlmEnabled: false
         });
     }, TIMEOUTS.connection);
 

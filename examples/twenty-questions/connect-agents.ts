@@ -537,8 +537,8 @@ async function connectAgents() {
     // Using Haiku 4.5 without extended thinking to showcase ORPAR cognitive cycle
     // The framework's ORPAR cycle provides the reasoning structure, not the model's built-in thinking
     const models = {
-        thinker: 'anthropic/claude-haiku-4.5',  // Fast model - ORPAR provides reasoning
-        guesser: 'anthropic/claude-haiku-4.5'   // Fast model - ORPAR provides reasoning
+        thinker: '~anthropic/claude-haiku-latest',  // Fast model - ORPAR provides reasoning
+        guesser: '~anthropic/claude-haiku-latest'   // Fast model - ORPAR provides reasoning
     };
 
     const agents: Record<string, any> = {};
@@ -1305,20 +1305,16 @@ Categories: animal, object, food, place, vehicle, plant, or any fitting category
             // Using direct function call (not EventBus) for synchronous guarantee
             for (const [role, agent] of Object.entries(agents)) {
                 const agentId = role === 'thinker' ? PLAYERS.thinker.id : PLAYERS.guesser.id;
-                try {
-                    // Clear conversation history (awaited to ensure persist completes before next turn)
-                    const memoryManager = (agent as any).getMemoryManager?.();
-                    if (memoryManager?.clearConversationHistory) {
-                        await memoryManager.clearConversationHistory();
-                    }
-
-                    // Clear ORPAR state DIRECTLY (not via EventBus) for synchronous guarantee
-                    // This eliminates the race condition where the event might not be processed
-                    // before the new task is created
-                    clearAgentOrparState(agentId, channelId);
-                } catch (e) {
-                    // Silently ignore errors
+                const memoryManager = agent.getMemoryManager?.();
+                if (!memoryManager?.clearConversationHistory) {
+                    throw new Error(`Memory manager unavailable for ${agentId}`);
                 }
+                await memoryManager.clearConversationHistory();
+
+                // Clear ORPAR state DIRECTLY (not via EventBus) for synchronous guarantee
+                // This eliminates the race condition where the event might not be processed
+                // before the new task is created
+                clearAgentOrparState(agentId, channelId);
             }
 
             // STEP 3: NOW fetch game state AFTER clearing

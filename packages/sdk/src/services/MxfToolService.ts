@@ -25,6 +25,7 @@
  */
 
 import { v4 as uuidv4 } from 'uuid';
+import type { Subscription } from 'rxjs';
 import { Logger } from '@mxf-dev/core/utils/Logger';
 import { Events } from '@mxf-dev/core/events/EventNames';
 import { EventBus } from '@mxf-dev/core/events/EventBus';
@@ -48,7 +49,7 @@ export interface IToolService {
     getToolCount(): number;
     getTool(name: string): ClientTool | null;
     setupPersistentToolListener(): void;
-    onToolsUpdated(callback: (tools: ClientTool[]) => void): void;
+    onToolsUpdated(callback: (tools: ClientTool[]) => Promise<void>): void;
     cleanup(): void;
 }
 
@@ -79,8 +80,8 @@ export class MxfToolService implements IToolService {
     private loadingPromise: Promise<ClientTool[]> | null = null;
 
     // Persistent listener for unsolicited tool updates
-    private persistentListenerActive = false;
-    private toolUpdateCallbacks: Array<(tools: ClientTool[]) => void> = [];
+    private persistentToolSubscription?: Subscription;
+    private toolUpdateCallbacks: Array<(tools: ClientTool[]) => Promise<void>> = [];
     private lastUpdateHash: string = '';  // Deduplication: track last update to prevent redundant regeneration
 
     constructor(private agentId: string, private channelId: string) {
@@ -200,12 +201,13 @@ export class MxfToolService implements IToolService {
 
     /**
      * Filter tools by the agent's current allowedTools list.
-     * If allowedTools is empty/undefined, returns all tools (no restriction).
+     * Undefined preserves the server-provided default tool set. An explicit
+     * empty list is an intentional deny-all policy.
      * This is used to filter tools at the point of LLM request assembly.
      */
     public filterToolsByAllowed(tools: ClientTool[], allowedTools?: string[]): ClientTool[] {
-        if (!allowedTools || allowedTools.length === 0) {
-            return tools; // No restriction
+        if (allowedTools === undefined) {
+            return tools;
         }
         return tools.filter(tool => allowedTools.includes(tool.name));
     }
@@ -255,13 +257,15 @@ export class MxfToolService implements IToolService {
      * This handles cases like Meilisearch backfill completion where the server sends new tools
      */
     public setupPersistentToolListener(): void {
-        if (this.persistentListenerActive) {
+        if (this.persistentToolSubscription && !this.persistentToolSubscription.closed) {
             return;
         }
-
+        this.persistentToolSubscription = undefined;
 
         // Listen for ALL MXF_TOOL_LIST_RESULT events, not just ones with matching requestId
-        EventBus.client.on(Events.Mcp.MXF_TOOL_LIST_RESULT, (payload: BaseEventPayload<MxfToolListResultEventData>) => {
+        this.persistentToolSubscription = EventBus.client.on(Events.Mcp.MXF_TOOL_LIST_RESULT, async (
+            payload: BaseEventPayload<MxfToolListResultEventData>
+        ): Promise<void> => {
             try {
                 // CRITICAL: Only process events for THIS agent
                 // Events are broadcast to entire channel, so we must filter by agentId
@@ -291,28 +295,24 @@ export class MxfToolService implements IToolService {
                     this.toolsLoaded = true;
 
                     // Notify all registered callbacks
-                    this.toolUpdateCallbacks.forEach(callback => {
-                        try {
-                            callback(tools);
-                        } catch (error) {
-                            this.logger.error(`Error in tool update callback: ${error}`);
-                        }
-                    });
+                    for (const callback of this.toolUpdateCallbacks) {
+                        await callback(tools);
+                    }
 
                 }
             } catch (error) {
                 this.logger.error(`Error handling persistent tool update: ${error}`);
+                throw error;
             }
         });
 
-        this.persistentListenerActive = true;
     }
 
     /**
      * Register a callback to be notified when tools are updated
      * Useful for regenerating system prompts with new tools
      */
-    public onToolsUpdated(callback: (tools: ClientTool[]) => void): void {
+    public onToolsUpdated(callback: (tools: ClientTool[]) => Promise<void>): void {
         this.toolUpdateCallbacks.push(callback);
     }
 
@@ -360,9 +360,9 @@ export class MxfToolService implements IToolService {
         this.tools = [];
         this.toolsLoaded = false;
         this.loadingPromise = null;
-        this.persistentListenerActive = false;
+        this.persistentToolSubscription?.unsubscribe();
+        this.persistentToolSubscription = undefined;
         this.toolUpdateCallbacks = [];
         this.lastUpdateHash = '';
-        // Note: EventBus subscriptions are cleaned up by EventBus.disconnect()
     }
 }

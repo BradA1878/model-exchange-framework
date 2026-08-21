@@ -29,28 +29,56 @@ import { TaskEffectivenessService } from '@mxf-dev/core/services/TaskEffectivene
 import { Logger } from '@mxf-dev/core/utils/Logger';
 import { AgentId } from '@mxf-dev/core/types/Agent';
 import { ChannelId } from '@mxf-dev/core/types/ChannelContext';
+import { UserRole } from '@mxf-dev/core/models/user';
+import { authorizationService } from '../services/AuthorizationService';
 
 const logger = new Logger('info', 'TaskEffectivenessController', 'server');
 // Lazy-load effectivenessService inside each handler to avoid module-level instantiation
+
+/**
+ * Every effectiveness read takes agent and channel ids from the request and
+ * reports across tenants, so it is administrator-only. The router mounts this
+ * controller behind requireAdmin; the check is repeated here so a different
+ * mount or a reused handler cannot serve the data to anyone else.
+ *
+ * @returns true when the request may proceed; otherwise the response is sent
+ */
+const requireAdministrator = (req: Request, res: Response): boolean => {
+    const principal = authorizationService.readPrincipal(req);
+    if (principal.kind === 'unauthenticated') {
+        res.status(401).json({ success: false, error: 'Authentication required' });
+        return false;
+    }
+    if (principal.kind !== 'user' || principal.role !== UserRole.ADMIN) {
+        res.status(403).json({ success: false, error: 'Admin access required' });
+        return false;
+    }
+    return true;
+};
 
 /**
  * Get task effectiveness metrics
  * GET /api/effectiveness/task/:taskId
  */
 export const getTaskEffectiveness = async (req: Request, res: Response): Promise<void> => {
+    if (!requireAdministrator(req, res)) {
+        return;
+    }
     const effectivenessService = TaskEffectivenessService.getInstance();
     try {
         const { taskId } = req.params;
+        const agentId = typeof req.query.agentId === 'string' ? req.query.agentId : undefined;
+        const channelId = typeof req.query.channelId === 'string' ? req.query.channelId : undefined;
 
-        if (!taskId) {
+        if (!taskId || !agentId || !channelId) {
             res.status(400).json({
                 success: false,
-                error: 'Task ID is required'
+                error: 'Task ID, agent ID, and channel ID are required'
             });
             return;
         }
 
-        const metrics = await effectivenessService.getTaskMetrics(taskId);
+        const metrics = await effectivenessService.getTaskMetrics(taskId, agentId, channelId);
         if (!metrics) {
             res.status(404).json({
                 success: false,
@@ -59,7 +87,7 @@ export const getTaskEffectiveness = async (req: Request, res: Response): Promise
             return;
         }
         
-        const comparison = await effectivenessService.compareWithBaseline(taskId);
+        const comparison = await effectivenessService.compareWithBaseline(taskId, agentId, channelId);
         
         res.json({
             success: true,
@@ -86,6 +114,9 @@ export const getTaskEffectiveness = async (req: Request, res: Response): Promise
  * GET /api/effectiveness/analytics/:channelId
  */
 export const getChannelEffectivenessAnalytics = async (req: Request, res: Response): Promise<void> => {
+    if (!requireAdministrator(req, res)) {
+        return;
+    }
     const effectivenessService = TaskEffectivenessService.getInstance();
     try {
         const { channelId } = req.params;
@@ -109,10 +140,11 @@ export const getChannelEffectivenessAnalytics = async (req: Request, res: Respon
         };
         
         const startTime = now - (ranges[timeRange as keyof typeof ranges] || ranges.day);
-        const analytics = await effectivenessService.getAnalytics(
+        const analytics = await effectivenessService.getAdministrativeChannelAnalytics(
             startTime,
             now,
-            channelId as ChannelId
+            channelId as ChannelId,
+            typeof taskType === 'string' ? taskType : undefined
         );
         
         // Filter by task type if specified
@@ -158,6 +190,9 @@ export const getChannelEffectivenessAnalytics = async (req: Request, res: Respon
  * GET /api/effectiveness/agent/:agentId
  */
 export const getAgentEffectiveness = async (req: Request, res: Response): Promise<void> => {
+    if (!requireAdministrator(req, res)) {
+        return;
+    }
     const effectivenessService = TaskEffectivenessService.getInstance();
     try {
         const { agentId } = req.params;
@@ -182,7 +217,7 @@ export const getAgentEffectiveness = async (req: Request, res: Response): Promis
         const startTime = now - (ranges[timeRange as keyof typeof ranges] || ranges.week);
         
         // Get agent-specific analytics
-        const agentAnalytics = await effectivenessService.getAgentEffectiveness(
+        const agentAnalytics = await effectivenessService.getAdministrativeAgentEffectiveness(
             agentId as AgentId,
             startTime,
             now,
@@ -220,19 +255,24 @@ export const getAgentEffectiveness = async (req: Request, res: Response): Promis
  * GET /api/effectiveness/compare/:taskId
  */
 export const compareTaskEffectiveness = async (req: Request, res: Response): Promise<void> => {
+    if (!requireAdministrator(req, res)) {
+        return;
+    }
     const effectivenessService = TaskEffectivenessService.getInstance();
     try {
         const { taskId } = req.params;
+        const agentId = typeof req.query.agentId === 'string' ? req.query.agentId : undefined;
+        const channelId = typeof req.query.channelId === 'string' ? req.query.channelId : undefined;
         
-        if (!taskId) {
+        if (!taskId || !agentId || !channelId) {
             res.status(400).json({
                 success: false,
-                error: 'Task ID is required'
+                error: 'Task ID, agent ID, and channel ID are required'
             });
             return;
         }
         
-        const comparison = await effectivenessService.compareWithBaseline(taskId);
+        const comparison = await effectivenessService.compareWithBaseline(taskId, agentId, channelId);
         if (!comparison) {
             res.status(404).json({
                 success: false,
@@ -269,6 +309,9 @@ export const compareTaskEffectiveness = async (req: Request, res: Response): Pro
  * GET /api/effectiveness/trends
  */
 export const getEffectivenessTrends = async (req: Request, res: Response): Promise<void> => {
+    if (!requireAdministrator(req, res)) {
+        return;
+    }
     const effectivenessService = TaskEffectivenessService.getInstance();
     try {
         const { channelId, timeRange = 'month', interval = 'day' } = req.query;
@@ -289,7 +332,7 @@ export const getEffectivenessTrends = async (req: Request, res: Response): Promi
         const startTime = now - (ranges[timeRange as keyof typeof ranges] || ranges.month);
         const intervalMs = intervals[interval as keyof typeof intervals] || intervals.day;
         
-        const trends = await effectivenessService.getEffectivenessTrends(
+        const trends = await effectivenessService.getAdministrativeEffectivenessTrends(
             startTime,
             now,
             intervalMs,

@@ -437,7 +437,7 @@ describe('Dynamic Inference Parameters (P1)', () => {
             const result = await agent.executeTool('request_inference_params', {
                 reason: 'Upgrading to more capable model for complex task',
                 suggested: {
-                    model: 'anthropic/claude-sonnet-4-5',
+                    model: '~anthropic/claude-sonnet-latest',
                     reasoningTokens: 8000
                 },
                 scope: 'next_call'

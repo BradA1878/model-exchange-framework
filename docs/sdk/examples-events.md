@@ -11,7 +11,7 @@ See [Basic Examples](examples-basic.md#prerequisites) for setup instructions.
 MXF provides two ways to listen to events:
 
 1. **Agent-Level Events** (`agent.on`) - Listen across all channels the agent participates in
-2. **Channel-Level Events** (`channelService.on`) - Listen only within the agent's channel (auto-filtered)
+2. **Channel-Level Events** (`agent.mxfService.on`) - Listen only within the agent's channel (auto-filtered)
 
 ## Example 1: Basic Event Listening
 
@@ -34,7 +34,7 @@ const agent = await sdk.createAgent({
     keyId: credentials.keys.agent1.keyId,
     secretKey: credentials.keys.agent1.secretKey,
     llmProvider: 'openrouter',
-    defaultModel: 'anthropic/claude-3.5-sonnet',
+    defaultModel: '~anthropic/claude-sonnet-latest',
     apiKey: process.env.OPENROUTER_API_KEY
 });
 
@@ -43,7 +43,7 @@ await agent.connect();
 // Message events
 agent.on(Events.Message.AGENT_MESSAGE, (payload) => {
     console.log('Message from:', payload.data.senderId);
-    console.log('Content:', payload.data.content);
+    console.log('Content:', payload.data.content.data);
 });
 
 // Task events
@@ -73,17 +73,17 @@ agent.on(Events.Agent.ERROR, (payload) => {
 
 ```typescript
 // Channel-level events are automatically filtered to this channel
-agent.channelService.on(Events.Message.AGENT_MESSAGE, (payload) => {
+agent.mxfService.on(Events.Message.AGENT_MESSAGE, (payload) => {
     // payload.channelId will always be this agent's channel
-    console.log('Message in my channel:', payload.data.content);
+    console.log('Message in my channel:', payload.data.content.data);
 });
 
-agent.channelService.on(Events.Task.ASSIGNED, (payload) => {
+agent.mxfService.on(Events.Task.ASSIGNED, (payload) => {
     console.log('Task in my channel:', payload.data.taskId);
 });
 
 // Remove listener when done
-agent.channelService.off(Events.Message.AGENT_MESSAGE);
+agent.mxfService.off(Events.Message.AGENT_MESSAGE);
 ```
 
 ## Example 3: Tool Execution Events
@@ -189,7 +189,7 @@ class EventMonitor {
         // Track all message events
         this.agent.on(Events.Message.AGENT_MESSAGE, (payload) => {
             this.incrementCount('messages');
-            console.log(`[${new Date().toISOString()}] Message:`, payload.data.content);
+            console.log(`[${new Date().toISOString()}] Message:`, payload.data.content.data);
         });
 
         // Track all task events

@@ -26,203 +26,128 @@
  */
 
 import { Observable, throwError } from 'rxjs';
+import { map } from 'rxjs/operators';
 
 import { 
     ChannelId,
-    AgentId, 
-    ChannelContextType, 
-    ChannelContextHistoryEntry,
     ChannelMessage
 } from '../types/ChannelContext.js';
 
-import { Logger } from '../utils/Logger.js';
 import { createStrictValidator } from '../utils/validation.js';
 import { EventBus } from '../events/EventBus.js';
+import { EventBusBase } from '../events/EventBusBase.js';
 import { Events } from '../events/EventNames.js';
 import { MemoryScope } from '../types/MemoryTypes.js';
 import { createMemoryGetEventPayload, createMemoryUpdateEventPayload } from '../schemas/EventPayloadSchema.js';
 import { v4 as uuidv4 } from 'uuid';
 
+interface MemoryOperationResponseData {
+    operationId?: string;
+    memory?: unknown;
+    error?: string;
+}
+
+interface MemoryOperationResponse {
+    data?: MemoryOperationResponseData;
+}
+
+type MemoryEventBus = EventBusBase & {
+    emit(event: string, payload: unknown): void;
+};
+
+const SYSTEM_AGENT_ID = 'SYSTEM_AGENT';
+
 /**
  * Provides message operations for the channel context service
  */
 export class ChannelContextMessageOperations {
-    private logger: Logger;
-    private eventBus: any; // Will be either EventBus.client or this.eventBus
+    private eventBus: MemoryEventBus;
     
     constructor(isClientContext: boolean = false) {
-        const target = isClientContext ? 'client' : 'server';
-        this.logger = new Logger('debug', 'ChannelContextMessageOperations', target);
-        this.eventBus = isClientContext ? EventBus.client : EventBus.server;
+        this.eventBus = (isClientContext ? EventBus.client : EventBus.server) as MemoryEventBus;
+    }
+
+    private requestMemoryResult(
+        resultEvent: string,
+        operationId: string,
+        emitRequest: () => void
+    ): Observable<MemoryOperationResponseData> {
+        return new Observable(observer => {
+            let settled = false;
+            const handler = (response: unknown): void => {
+                if (!response || typeof response !== 'object') return;
+                const data = (response as MemoryOperationResponse).data;
+                if (data?.operationId !== operationId || settled) return;
+                settled = true;
+                if (data.error) {
+                    observer.error(new Error(data.error));
+                    return;
+                }
+                observer.next(data);
+                observer.complete();
+            };
+            const subscription = this.eventBus.on(resultEvent, handler);
+            try {
+                emitRequest();
+            } catch (error) {
+                settled = true;
+                observer.error(error instanceof Error ? error : new Error(String(error)));
+            }
+            return () => subscription.unsubscribe();
+        });
+    }
+
+    private isChannelMessage(value: unknown): value is ChannelMessage {
+        if (!value || typeof value !== 'object') return false;
+        const message = value as Partial<ChannelMessage>;
+        return typeof message.messageId === 'string' &&
+            (typeof message.content === 'string' || (
+                message.content !== null && typeof message.content === 'object'
+            )) &&
+            typeof message.senderId === 'string' &&
+            typeof message.timestamp === 'number' &&
+            ['text', 'command', 'response', 'system'].includes(message.type ?? '');
     }
     /**
-     * Helper method to handle common memory get/update pattern
+     * Append a message batch through the authoritative atomic memory bridge.
      * @param channelId - Channel ID
      * @param messagesMemoryKey - Memory key for messages
      * @param messages - Array of channel messages to add
      * @param updateMetadata - Metadata for the update operation
      * @returns Observable of success status
      */
-    private handleMemoryGetAndUpdate = (
+    private appendMessages = (
         channelId: ChannelId,
         messagesMemoryKey: string,
         messages: ChannelMessage[],
-        updateMetadata: any
+        updateMetadata: Record<string, unknown>
     ): Observable<boolean> => {
-        return new Observable<boolean>(observer => {
-            // Set up timeout for bulk operation (longer timeout for larger batches)
-            const timeoutMs = Math.min(15000, 5000 + (messages.length * 100)); // Base 5s + 100ms per message, max 15s
-            let timeoutId: NodeJS.Timeout | null = setTimeout(() => {
-                this.logger.warn(`Bulk message timeout triggered for ${messages.length} messages after ${timeoutMs}ms`);
-                
-                if (timeoutId) {
-                    clearTimeout(timeoutId);
-                    timeoutId = null;
-                }
-                this.eventBus.off(Events.Memory.GET_RESULT, getResponseHandler);
-                
-                // Fallback: save just the new messages without merging
-                const fallbackData = { [messagesMemoryKey]: messages };
-                const fallbackMetadata = {
-                    type: 'channelMessages',
-                    channelId: channelId,
-                    lastUpdated: Date.now(),
-                    isBulkInsert: true,
-                    messageCount: messages.length
-                };
-                
-                
-                this.eventBus.emit(
+        const uniqueMessages = [...new Map(
+            messages.map(message => [message.messageId, message])
+        ).values()];
+        const operationId = uuidv4();
+        return this.requestMemoryResult(
+            Events.Memory.UPDATE_RESULT,
+            operationId,
+            () => this.eventBus.emit(
+                Events.Memory.UPDATE,
+                createMemoryUpdateEventPayload(
                     Events.Memory.UPDATE,
-                    createMemoryUpdateEventPayload(
-                        Events.Memory.UPDATE,
-                        'system',
-                        channelId,
-                        {
-                            operationId: uuidv4(),
-                            scope: MemoryScope.CHANNEL,
-                            id: channelId,
-                            data: fallbackData,
-                            metadata: fallbackMetadata
-                        }
-                    )
-                );
-                
-                observer.next(true);
-                observer.complete();
-            }, timeoutMs);
-            
-            // Set up response handler for bulk GET operation
-            const getResponseHandler = (response: any): void => {
-                
-                if (!response?.data || response.data.id !== messagesMemoryKey) {
-                    return; // Not our response
-                }
-                
-                // Clear timeout since we got a response
-                if (timeoutId) {
-                    clearTimeout(timeoutId);
-                    timeoutId = null;
-                }
-                
-                // Remove the listener since we're handling the response
-                this.eventBus.off(Events.Memory.GET_RESULT, getResponseHandler);
-                
-                
-                try {
-                    let existingMessages: ChannelMessage[] = [];
-                    
-                    // Extract existing messages if they exist
-                    if (response.data.data && Array.isArray(response.data.data)) {
-                        existingMessages = response.data.data
-                            .filter((msg: any) => msg && typeof msg === 'object' && msg.messageId && msg.content && msg.senderId)
-                            .map((msg: any) => ({
-                                messageId: msg.messageId,
-                                content: msg.content,
-                                senderId: msg.senderId,
-                                timestamp: msg.timestamp || Date.now(),
-                                type: ['text', 'command', 'response', 'system'].includes(msg.type) ? msg.type : 'text',
-                                metadata: typeof msg.metadata === 'object' ? msg.metadata : {}
-                            }));
-                    }
-                    
-                    // Merge existing messages with new messages
-                    const allMessages = [...existingMessages, ...messages];
-                    
-                    // Sort by timestamp (oldest first)
-                    allMessages.sort((a, b) => a.timestamp - b.timestamp);
-                    
-                    // Remove duplicates based on messageId (keep the latest)
-                    const uniqueMessages = new Map<string, ChannelMessage>();
-                    for (const msg of allMessages) {
-                        uniqueMessages.set(msg.messageId, msg);
-                    }
-                    const finalMessages = Array.from(uniqueMessages.values()).sort((a, b) => a.timestamp - b.timestamp);
-                    
-                    // Prepare update data
-                    const updateData = { [messagesMemoryKey]: finalMessages };
-                    const updateMetadataWithMessageCount = {
-                        ...updateMetadata,
-                        messageCount: finalMessages.length,
-                        newMessageCount: messages.length
-                    };
-                    
-                    
-                    // Update memory with all messages
-                    this.eventBus.emit(
-                        Events.Memory.UPDATE,
-                        createMemoryUpdateEventPayload(
-                            Events.Memory.UPDATE,
-                            'system',
-                            channelId,
-                            {
-                                operationId: uuidv4(),
-                                scope: MemoryScope.CHANNEL,
-                                id: channelId,
-                                data: updateData,
-                                metadata: updateMetadataWithMessageCount
-                            }
-                        )
-                    );
-                    
-                    observer.next(true);
-                    observer.complete();
-                    
-                } catch (error) {
-                    this.logger.error(`[ChannelContextMessageOperations:BULK] Error processing bulk messages: ${error instanceof Error ? error.message : String(error)}`);
-                    observer.error(error instanceof Error ? error : new Error(String(error)));
-                }
-            };
-            
-            // Listen for the GET response
-            this.eventBus.on(Events.Memory.GET_RESULT, getResponseHandler);
-            
-            
-            // Get existing messages first
-            this.eventBus.emit(
-                Events.Memory.GET,
-                createMemoryGetEventPayload(
-                    Events.Memory.GET,
-                    'system',
+                    SYSTEM_AGENT_ID,
                     channelId,
                     {
-                        operationId: uuidv4(),
+                        operationId,
                         scope: MemoryScope.CHANNEL,
-                        id: channelId,
-                        key: messagesMemoryKey
+                        id: messagesMemoryKey,
+                        data: { [messagesMemoryKey]: uniqueMessages },
+                        metadata: {
+                            ...updateMetadata,
+                            newMessageCount: uniqueMessages.length
+                        }
                     }
                 )
-            );
-            
-            // Return cleanup function
-            return (): void => {
-                if (timeoutId) {
-                    clearTimeout(timeoutId);
-                    timeoutId = null;
-                }
-                this.eventBus.off(Events.Memory.GET_RESULT, getResponseHandler);
-            };
-        });
+            )
+        ).pipe(map(() => true));
     };
 
     /**
@@ -270,7 +195,7 @@ export class ChannelContextMessageOperations {
         
         const messagesMemoryKey = `channel:messages:${channelId}`;
         
-        return this.handleMemoryGetAndUpdate(channelId, messagesMemoryKey, messages, {
+        return this.appendMessages(channelId, messagesMemoryKey, messages, {
             type: 'channelMessages',
             channelId: channelId,
             lastUpdated: Date.now(),
@@ -313,123 +238,36 @@ export class ChannelContextMessageOperations {
         }
         
         const messagesMemoryKey = `channel:messages:${channelId}`;
-        
-        return new Observable<ChannelMessage[]>(observer => {
-            
-            // Set up an internal timeout to ensure we don't wait forever
-            const internalTimeoutMs = 8000; // 8 seconds - less than controller's 10s
-            let timeoutId: NodeJS.Timeout | null = setTimeout(() => {
-                this.logger.warn(`Internal timeout triggered for getMessages (channel ${channelId}) after ${internalTimeoutMs}ms`);
-                
-                // Clean up event listener when timeout occurs
-                if (timeoutId) {
-                    clearTimeout(timeoutId);
-                    timeoutId = null;
-                }
-                this.eventBus.off(Events.Memory.GET_RESULT, responseHandler);
-                
-                // Try direct database query as a fallback
-                // Since this is just a read operation, it's reasonable to complete with empty results
-                observer.next([]);
-                observer.complete();
-            }, internalTimeoutMs);
-            
-            // Set up response handler with detailed logging
-            const responseHandler = (response: any): void => {
-                
-                // Only process if this is the response we're waiting for
-                if (!response?.data) {
-                    this.logger.warn('[ChannelContextMessageOperations] Received undefined response or missing data');
-                    return;
-                }
-                
-                if (response.data.id !== messagesMemoryKey) {
-                    return;
-                }
-                
-                
-                // Clear the timeout since we got a response
-                if (timeoutId) {
-                    clearTimeout(timeoutId);
-                    timeoutId = null;
-                }
-                
-                // Clean up listener
-                this.eventBus.off(Events.Memory.GET_RESULT, responseHandler);
-                
-                let messages: ChannelMessage[] = [];
-                
-                if (Array.isArray(response.data.data)) {
-                    try {
-                        const validator = createStrictValidator('ChannelMessages');
-                        
-                        // Process and validate each message
-                        messages = response.data.data.filter((msg: any) => {
-                            // Basic structure validation
-                            if (!msg || typeof msg !== 'object') return false;
-                            if (!msg.messageId || !msg.content || !msg.senderId) return false;
-                            
-                            return true;
-                        }).map((msg: any) => {
-                            // Ensure consistent structure even if some fields are missing
-                            return {
-                                messageId: msg.messageId,
-                                content: msg.content,
-                                senderId: msg.senderId,
-                                timestamp: msg.timestamp || Date.now(),
-                                type: ['text', 'command', 'response', 'system'].includes(msg.type) ? 
-                                    msg.type : 'text',
-                                metadata: typeof msg.metadata === 'object' ? msg.metadata : {}
-                            };
-                        });
-                        
-                        // Sort by timestamp (oldest first)
-                        messages.sort((a, b) => a.timestamp - b.timestamp);
-                        
-                        // Apply limit if specified
-                        if (limit && limit > 0 && messages.length > limit) {
-                            messages = messages.slice(-limit); // Get most recent messages
-                        }
-                        
-                    } catch (error) {
-                        this.logger.error(`Error processing messages: ${error instanceof Error ? error.message : String(error)}`);
-                        // Fall back to empty array on error
-                        messages = [];
-                    }
-                } else {
-                    this.logger.warn(`No message array found in memory response for id ${messagesMemoryKey}`);
-                }
-                
-                observer.next(messages);
-                observer.complete();
-            };
-            
-            // Listen for the response
-            this.eventBus.on(Events.Memory.GET_RESULT, responseHandler);
-            
-            this.eventBus.emit(
-                Events.Memory.GET, 
+
+        const operationId = uuidv4();
+        return this.requestMemoryResult(
+            Events.Memory.GET_RESULT,
+            operationId,
+            () => this.eventBus.emit(
+                Events.Memory.GET,
                 createMemoryGetEventPayload(
-                    Events.Memory.GET, // eventType
-                    'system', // agentId - placeholder
-                    channelId, // channelId
-                    { // MemoryGetEventData
-                        operationId: uuidv4(), // Generate a new operationId for this GET request
+                    Events.Memory.GET,
+                    SYSTEM_AGENT_ID,
+                    channelId,
+                    {
+                        operationId,
                         scope: MemoryScope.CHANNEL,
-                        id: channelId,
+                        id: messagesMemoryKey,
                         key: messagesMemoryKey
                     }
                 )
-            );
-            
-            // Return cleanup function
-            return (): void => {
-                if (timeoutId) {
-                    clearTimeout(timeoutId);
-                    timeoutId = null;
-                }
-                this.eventBus.off(Events.Memory.GET_RESULT, responseHandler);
-            };
-        });
+            )
+        ).pipe(
+            map(result => {
+                const messages = Array.isArray(result.memory)
+                    ? result.memory.filter((message): message is ChannelMessage =>
+                        this.isChannelMessage(message))
+                    : [];
+                messages.sort((left, right) => left.timestamp - right.timestamp);
+                return limit && limit > 0 && messages.length > limit
+                    ? messages.slice(-limit)
+                    : messages;
+            })
+        );
     };
 }

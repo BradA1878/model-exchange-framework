@@ -38,14 +38,27 @@ import { TOOL_CATEGORIES } from '../../../constants/ToolNames.js';
 import { defineTool, ToolRunContext } from '../defineTool.js';
 import { ToolError } from '../ToolError.js';
 import { executeShellCommand, ShellCommandResult } from './InfrastructureTools.js';
+import * as path from 'path';
+import { resolveWorkspacePath } from '../security/McpToolPolicy.js';
 
 /** Exit code the shell reports when a command could not be found or spawned. */
 const COMMAND_NOT_FOUND = 127;
 
 const workingDirectoryProperty = {
     type: 'string',
-    description: 'Working directory path (defaults to the server working directory)'
+    description: 'Working directory under MXF_WORKSPACE_ROOT (defaults to MXF_WORKSPACE_ROOT)'
 };
+
+function resolveInputPaths(
+    inputs: string[] | undefined,
+    workingDirectory: string,
+    consumer: string
+): string[] {
+    return (inputs ?? []).map(input => resolveWorkspacePath(
+        path.resolve(workingDirectory, input),
+        consumer
+    ));
+}
 
 /**
  * Run one of the node toolchain binaries via npx.
@@ -64,7 +77,7 @@ async function runNpx(
             channelId: context.channelId,
             requestId: context.requestId
         },
-        workingDirectory: workingDirectory || process.cwd(),
+        workingDirectory,
         captureOutput: true
     });
 
@@ -144,12 +157,20 @@ export const typescriptCheckTool = defineTool<
         }
     },
     run: async (input, context) => {
+        const workingDirectory = resolveWorkspacePath(
+            input.workingDirectory,
+            'typescript_check workingDirectory'
+        );
         const tscArgs = ['tsc', '--noEmit', '--pretty', 'false'];
         if (input.files && input.files.length > 0) {
-            tscArgs.push(...input.files);
+            tscArgs.push(...resolveInputPaths(
+                input.files,
+                workingDirectory,
+                'typescript_check file'
+            ));
         }
 
-        const result = await runNpx(tscArgs, input.workingDirectory, context);
+        const result = await runNpx(tscArgs, workingDirectory, context);
 
         // tsc writes diagnostics to stdout and exits 1 when it finds any. That is
         // the tool working, not the tool failing.
@@ -195,11 +216,15 @@ export const typescriptBuildTool = defineTool<
     },
     run: async (input, context) => {
         const startedAt = Date.now();
+        const workingDirectory = resolveWorkspacePath(
+            input.workingDirectory,
+            'typescript_build workingDirectory'
+        );
 
         if (input.clean) {
             const cleanResult = await runNpx(
                 ['tsc', '--build', '--clean'],
-                input.workingDirectory,
+                workingDirectory,
                 context
             );
             // A failed clean leaves stale output behind, which makes the build's
@@ -212,7 +237,7 @@ export const typescriptBuildTool = defineTool<
             }
         }
 
-        const result = await runNpx(['tsc', '--build'], input.workingDirectory, context);
+        const result = await runNpx(['tsc', '--build'], workingDirectory, context);
 
         const errors = (result.stdout ?? '')
             .split('\n')
@@ -255,15 +280,23 @@ export const typescriptFormatTool = defineTool<
     },
     run: async (input, context) => {
         const mode: 'check' | 'write' = input.check ? 'check' : 'write';
+        const workingDirectory = resolveWorkspacePath(
+            input.workingDirectory,
+            'typescript_format workingDirectory'
+        );
         const prettierArgs = ['prettier', input.check ? '--check' : '--write'];
 
         if (input.files && input.files.length > 0) {
-            prettierArgs.push(...input.files);
+            prettierArgs.push(...resolveInputPaths(
+                input.files,
+                workingDirectory,
+                'typescript_format file'
+            ));
         } else {
             prettierArgs.push('**/*.{ts,tsx,js,jsx}');
         }
 
-        const result = await runNpx(prettierArgs, input.workingDirectory, context);
+        const result = await runNpx(prettierArgs, workingDirectory, context);
 
         // In check mode prettier exits 1 when files need formatting — a finding,
         // not a failure. In write mode a non-zero exit means it could not write.
@@ -314,18 +347,26 @@ export const typescriptLintTool = defineTool<
         }
     },
     run: async (input, context) => {
+        const workingDirectory = resolveWorkspacePath(
+            input.workingDirectory,
+            'typescript_lint workingDirectory'
+        );
         const eslintArgs = ['eslint', '--format', 'json'];
         if (input.fix) {
             eslintArgs.push('--fix');
         }
 
         if (input.files && input.files.length > 0) {
-            eslintArgs.push(...input.files);
+            eslintArgs.push(...resolveInputPaths(
+                input.files,
+                workingDirectory,
+                'typescript_lint file'
+            ));
         } else {
             eslintArgs.push('**/*.{ts,tsx,js,jsx}');
         }
 
-        const result = await runNpx(eslintArgs, input.workingDirectory, context);
+        const result = await runNpx(eslintArgs, workingDirectory, context);
 
         // ESLint exits 1 when it finds errors, but always prints its JSON report.
         // No parseable report means ESLint itself fell over — that is a failure,
@@ -386,16 +427,24 @@ export const typescriptTestTool = defineTool<
         }
     },
     run: async (input, context) => {
+        const workingDirectory = resolveWorkspacePath(
+            input.workingDirectory,
+            'typescript_test workingDirectory'
+        );
         const jestArgs = ['jest', '--no-watchman', '--passWithNoTests'];
 
         if (input.coverage) {
             jestArgs.push('--coverage');
         }
         if (input.testFiles && input.testFiles.length > 0) {
-            jestArgs.push(...input.testFiles);
+            jestArgs.push(...resolveInputPaths(
+                input.testFiles,
+                workingDirectory,
+                'typescript_test file'
+            ));
         }
 
-        const result = await runNpx(jestArgs, input.workingDirectory, context);
+        const result = await runNpx(jestArgs, workingDirectory, context);
 
         // Jest writes its summary to stderr, not stdout.
         const output = [result.stdout, result.stderr].filter(Boolean).join('\n');

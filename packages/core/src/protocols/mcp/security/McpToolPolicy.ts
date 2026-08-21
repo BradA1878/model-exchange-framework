@@ -47,6 +47,8 @@
  */
 
 import * as path from 'path';
+import { extractEffectiveCommands } from '../tools/shell/ShellCommandParser.js';
+import * as fs from 'fs';
 
 /**
  * Environment variables always forwarded to a shell child.
@@ -108,6 +110,33 @@ function parseBoolean(value: string | undefined, fallback: boolean): boolean {
  */
 export function getShellAllowedCommands(): string[] {
     return parseList(process.env.MXF_SHELL_ALLOWED_COMMANDS);
+}
+
+/**
+ * Enforce MXF_SHELL_ALLOWED_COMMANDS against a full command line.
+ *
+ * Applies to every agent-driven command, whether it arrives through
+ * shell_execute or through a host tool that calls executeShellCommand.
+ * Wrappers and env prefixes (`sudo cmd`, `FOO=bar cmd`, `timeout 5 cmd`) are
+ * resolved to the command they run, and compound lines (`a && b`) are checked
+ * command by command, so an allowlisted wrapper cannot smuggle another binary.
+ *
+ * @throws Error when an allowlist is configured and any effective command is not on it
+ */
+export function assertCommandAllowlisted(commandLine: string): void {
+    if (!hasShellAllowlist()) {
+        return;
+    }
+    const allowedCommands = getShellAllowedCommands();
+    for (const effectiveCommand of extractEffectiveCommands(commandLine)) {
+        const baseCommand = effectiveCommand.trim().split(/\s+/)[0];
+        if (!allowedCommands.includes(baseCommand)) {
+            throw new Error(
+                `Command '${baseCommand}' is not in the configured allowlist ` +
+                `(MXF_SHELL_ALLOWED_COMMANDS). Allowed: ${allowedCommands.join(', ')}`
+            );
+        }
+    }
 }
 
 /**
@@ -205,6 +234,51 @@ export function requireWorkspaceRoot(consumer: string): string {
         );
     }
     return root;
+}
+
+const isWithinPath = (root: string, candidate: string): boolean => (
+    candidate === root || candidate.startsWith(`${root}${path.sep}`)
+);
+
+/**
+ * Resolve a caller path under MXF_WORKSPACE_ROOT and reject lexical and symlink
+ * escapes. Non-existent leaf paths are checked through their nearest existing
+ * ancestor so create/write operations cannot traverse an existing symlink.
+ */
+export function resolveWorkspacePath(
+    candidate: string | undefined,
+    consumer: string
+): string {
+    const configuredRoot = requireWorkspaceRoot(consumer);
+    const realRoot = fs.realpathSync(configuredRoot);
+    const resolved = candidate && candidate.trim().length > 0
+        ? path.resolve(realRoot, candidate.trim())
+        : realRoot;
+
+    if (!isWithinPath(realRoot, resolved)) {
+        throw new Error(`${consumer} path is outside MXF_WORKSPACE_ROOT`);
+    }
+
+    let existingAncestor = resolved;
+    while (!fs.existsSync(existingAncestor)) {
+        const parent = path.dirname(existingAncestor);
+        if (parent === existingAncestor) {
+            throw new Error(`${consumer} path has no existing workspace ancestor`);
+        }
+        existingAncestor = parent;
+    }
+
+    const realAncestor = fs.realpathSync(existingAncestor);
+    if (!isWithinPath(realRoot, realAncestor)) {
+        throw new Error(`${consumer} path escapes MXF_WORKSPACE_ROOT through a symlink`);
+    }
+
+    const suffix = path.relative(existingAncestor, resolved);
+    const finalPath = path.resolve(realAncestor, suffix);
+    if (!isWithinPath(realRoot, finalPath)) {
+        throw new Error(`${consumer} path is outside MXF_WORKSPACE_ROOT`);
+    }
+    return finalPath;
 }
 
 /**

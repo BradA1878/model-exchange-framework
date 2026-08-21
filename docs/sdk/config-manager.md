@@ -8,7 +8,7 @@ The ConfigManager follows a singleton pattern and provides:
 
 - **LLM Model Configuration**: Manage multiple LLM providers and model selection
 - **Agent Type Management**: Define roles, service types, and specializations
-- **Channel SystemLLM Control**: Configure SystemLLM at the channel level
+- **Process-Local SystemLLM Settings**: Read and adjust SystemLLM settings for the process the ConfigManager runs in
 - **Observable Configuration**: React to configuration changes in real-time
 - **Environment-Specific Settings**: Support for development, staging, and production
 
@@ -26,20 +26,34 @@ Comprehensive agent type management with:
 - **Capability Mapping**: Automatic capability assignment based on service types
 - **Role Permissions**: Fine-grained permission control per role
 
-### Channel-Level SystemLLM Control
+### SystemLLM Settings Are Process-Local
 
-Control SystemLLM behavior at the channel level:
+The ConfigManager is a singleton inside one process. Its SystemLLM methods
+(`isChannelSystemLlmEnabled`, `setChannelSystemLlmEnabled`,
+`setChannelSystemLlmOperationOverride`, `getChannelSystemLlmConfig`) read and
+change the configuration of *that process*. Calling them in an SDK client does
+not configure a remote MXF server: the server decides whether SystemLLM runs for
+a channel from the channel record it persisted at creation.
 
-- **Global Enable/Disable**: Turn off SystemLLM for entire channel
-- **Operation-Specific Overrides**: Control individual operations (taskAssignment, reasoning, interpretation, reflection, coordination)
-- **Inheritance**: Agent and task-level settings respect channel configuration
+To control SystemLLM for a channel, set it when the channel is created:
+
+```typescript
+const channel = await sdk.createChannel('demo-channel', {
+    name: 'Demo channel',
+    systemLlmEnabled: false   // agents coordinate on their own; no SystemLLM spend
+});
+```
+
+Operation-specific overrides (taskAssignment, reasoning, interpretation,
+reflection, coordination) apply within the process that hosts SystemLLM, which
+is the MXF server.
 
 ## Usage
 
 ### Getting the Singleton Instance
 
 ```typescript
-import { ConfigManager } from '@mxf-dev/sdk/config/ConfigManager';
+import { ConfigManager } from '@mxf-dev/sdk';
 
 const configManager = ConfigManager.getInstance();
 ```
@@ -86,26 +100,20 @@ const recommended = configManager.getRecommendedCapabilities(
 );
 ```
 
-### Channel SystemLLM Configuration
+### Reading SystemLLM Settings
+
+These calls report the configuration of the current process. In an SDK client
+they describe the client, not the server; see "SystemLLM Settings Are
+Process-Local" above for how to turn SystemLLM off for a channel.
 
 ```typescript
-// Check if SystemLLM is enabled
+// Is SystemLLM enabled in this process?
 const isEnabled = configManager.isChannelSystemLlmEnabled();
 
-// Check specific operation
+// Is a specific operation enabled in this process?
 const isTaskAssignmentEnabled = configManager.isChannelSystemLlmEnabled('taskAssignment');
 
-// Disable SystemLLM for the channel
-configManager.setChannelSystemLlmEnabled(false, 'Reducing API costs').subscribe(success => {
-    console.log('SystemLLM disabled:', success);
-});
-
-// Set operation-specific override
-configManager.setChannelSystemLlmOperationOverride('reasoning', false).subscribe(success => {
-    console.log('Reasoning operation disabled:', success);
-});
-
-// Get full configuration
+// Full configuration for this process
 const systemLlmConfig = configManager.getChannelSystemLlmConfig();
 console.log(systemLlmConfig);
 ```
@@ -169,9 +177,18 @@ configManager.loadConfig({
 
 ### LLM Models
 
-**Note:** The ConfigManager has legacy default models. In practice, MXF supports and recommends modern models:
+**Note:** The ConfigManager has legacy default models. In practice, MXF supports and recommends modern models.
 
-**Recommended Models (2024+):**
+> **Note:** Model ids change often. The ids in these docs are a snapshot of what was
+> available when they were written; providers add, rename, and retire models all the
+> time. Check your provider's current list before relying on an id — for OpenRouter,
+> <https://openrouter.ai/models>. For Claude on OpenRouter, `~anthropic/claude-opus-latest`,
+> `~anthropic/claude-sonnet-latest`, and `~anthropic/claude-haiku-latest` resolve to the
+> newest release in each family, so they are the ids to use unless you need a specific
+> version. `~anthropic/claude-fable-latest` is the same kind of alias for the top-tier
+> family; it is priced well above the others and nothing in MXF selects it by default.
+
+**Recommended Models:**
 
 **Anthropic:**
 - `claude-3-5-sonnet-20241022` - Latest Sonnet (200K context, best reasoning)
@@ -190,7 +207,10 @@ configManager.loadConfig({
 - `gemini-1.5-flash` - Fast, cost-effective (1M context)
 
 **OpenRouter (Multi-Provider):**
-- `anthropic/claude-3.5-sonnet` - Via OpenRouter
+- `~anthropic/claude-opus-latest` - Newest Claude Opus, via OpenRouter's latest-resolution alias
+- `~anthropic/claude-sonnet-latest` - Newest Claude Sonnet
+- `~anthropic/claude-haiku-latest` - Newest Claude Haiku
+- `~anthropic/claude-fable-latest` - Newest Claude Fable; the most capable and the most expensive, never selected by default
 - `openai/gpt-4o` - Via OpenRouter
 - `google/gemini-2.0-flash-lite-001` - Ultra-fast observation
 - `x-ai/grok-3` - XAI's latest
@@ -285,10 +305,9 @@ If you need to react to configuration changes in your agent, consider:
 
 ### SystemLLM Control
 
-1. **Channel-Level First**: Set channel-level SystemLLM settings before agent/task settings
-2. **Operation Granularity**: Use operation-specific overrides for fine-grained control
-3. **Document Reasons**: Always provide reasons when disabling SystemLLM
-4. **Monitor Impact**: Track system behavior when SystemLLM is disabled
+1. **Decide at Channel Creation**: Pass `systemLlmEnabled` to `sdk.createChannel()`; the server persists it with the channel
+2. **Do Not Expect Remote Effect**: `setChannelSystemLlmEnabled()` in a client process changes only that process
+3. **Monitor Impact**: Track system behavior when SystemLLM is disabled
 
 ### Performance
 
@@ -338,8 +357,7 @@ configManager.updateConfig({
 The ConfigManager is integrated into MxfAgent and automatically configures agent behavior:
 
 ```typescript
-import { MxfSDK } from '@mxf-dev/sdk/MxfSDK';
-import { ConfigManager } from '@mxf-dev/sdk/config/ConfigManager';
+import { ConfigManager, MxfSDK } from '@mxf-dev/sdk';
 
 // Configure before creating agents
 const configManager = ConfigManager.getInstance();
@@ -367,7 +385,7 @@ import {
     FeatureToggle,
     ConfigUpdateEvent,
     FeatureStateChangeEvent
-} from '@mxf-dev/sdk/config/ConfigManager';
+} from '@mxf-dev/core/config/ConfigManager';
 
 // Type-safe configuration
 const config: SdkConfig = configManager.getConfig();

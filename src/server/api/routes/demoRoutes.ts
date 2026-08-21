@@ -20,27 +20,34 @@
 
 import { Router } from 'express';
 import { startInterviewDemo, stopDemo, getDemoStatus } from '../controllers/demoController';
+import { requireAdmin } from '../middleware/dualAuth';
+import { requireDemoApiEnabled } from '../middleware/runtimeFeaturePolicy';
 
 const router = Router();
+
+// The top-level router mounts this module only when explicitly enabled. Keep
+// the same check here as defense in depth, and require a real JWT administrator
+// for every operation (agent/channel keys do not carry roles).
+router.use(requireDemoApiEnabled, requireAdmin);
 
 /**
  * @route POST /api/demo/interview/start
  * @desc Start the real interview scheduling demo
- * @access Public (for presentation)
+ * @access Admin; non-production opt-in only
  */
 router.post('/interview/start', startInterviewDemo);
 
 /**
  * @route POST /api/demo/:demoId/stop
  * @desc Stop a running demo
- * @access Public (for presentation)
+ * @access Admin; non-production opt-in only
  */
 router.post('/:demoId/stop', stopDemo);
 
 /**
  * @route GET /api/demo/status
  * @desc Get status of running demos
- * @access Public (for presentation)
+ * @access Admin; non-production opt-in only
  */
 router.get('/status', getDemoStatus);
 

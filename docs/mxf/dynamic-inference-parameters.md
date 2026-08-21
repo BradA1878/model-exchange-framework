@@ -67,7 +67,7 @@ Dynamic Inference Parameters enable agents to operate with phase-optimized LLM c
 
 ```typescript
 {
-  model: 'anthropic/claude-sonnet-4-5',
+  model: '~anthropic/claude-sonnet-latest',
   temperature: 0.5,              // Moderate for exploratory thinking
   reasoningTokens: 8000,         // Extended thinking budget
   maxOutputTokens: 4000,
@@ -106,7 +106,7 @@ Dynamic Inference Parameters enable agents to operate with phase-optimized LLM c
 
 ```typescript
 {
-  model: 'anthropic/claude-sonnet-4-5',
+  model: '~anthropic/claude-sonnet-latest',
   temperature: 0.4,              // Moderate for balanced evaluation
   reasoningTokens: 4000,         // Evaluation thinking budget
   maxOutputTokens: 2000,
@@ -131,7 +131,7 @@ Request inference parameter modifications for improved task performance.
 {
   reason: string,              // Required: Why the adjustment is needed
   suggested: {
-    model?: string,            // e.g., "anthropic/claude-sonnet-4-5"
+    model?: string,            // e.g., "~anthropic/claude-sonnet-latest"
     temperature?: number,      // 0.0-2.0
     reasoningTokens?: number,  // Extended thinking budget
     maxOutputTokens?: number,  // Response length limit
@@ -155,7 +155,7 @@ Request inference parameter modifications for improved task performance.
 
 **Example:**
 ```typescript
-const response = await agent.callTool('request_inference_params', {
+const response = await agent.executeTool('request_inference_params', {
   reason: 'This complex algorithm requires deep analysis with extended reasoning',
   suggested: {
     reasoningTokens: 12000,
@@ -318,7 +318,7 @@ Parameters are resolved in priority order:
   maxRequestsPerTask: 3,       // Max 3 parameter changes per task
   allowedModels: [             // Limited to proven models
     'google/gemini-2.5-flash',
-    'anthropic/claude-sonnet-4-5',
+    '~anthropic/claude-sonnet-latest',
     'openai/gpt-4.1-mini'
   ],
   minTemperature: 0.0,
@@ -332,24 +332,40 @@ Parameters are resolved in priority order:
 
 ## Model Cost Tiers
 
+These rows mirror `MODEL_COST_ESTIMATES` in `packages/core/src/constants/DefaultPhaseProfiles.ts`,
+the table `estimateCost()` and the governance cost checks read. Figures are input/output
+USD per 1M tokens.
+
+> **Note:** Model ids and prices change often. This table is a snapshot of what was
+> available when it was written, not a live catalog. Check your provider's current
+> list before relying on an id — for OpenRouter, <https://openrouter.ai/models>. The
+> `~anthropic/claude-*-latest` rows are OpenRouter's latest-resolution aliases; they
+> carry the rate of the release they currently resolve to.
+
 ### Ultra-Cheap Tier (< $0.10/1M tokens)
-- `google/gemini-2.5-flash` - $0.07/$0.30 per 1K tokens
-- `openai/gpt-4.1-nano` - $0.10/$0.40 per 1K tokens
+- `google/gemini-2.5-flash` - $0.07/$0.30
+- `openai/gpt-4.1-nano` - $0.10/$0.40
 
 ### Budget Tier (< $1.00/1M tokens)
-- `openai/gpt-4.1-mini` - $0.15/$0.60 per 1K tokens
-- `anthropic/claude-haiku-4` - $0.25/$1.25 per 1K tokens
+- `openai/gpt-4.1-mini` - $0.15/$0.60
+- `anthropic/claude-haiku-4` - $0.25/$1.25
+- `~anthropic/claude-haiku-latest` - $1.00/$5.00
 
 ### Standard Tier (< $5.00/1M tokens)
-- `google/gemini-2.5-pro` - $1.25/$5.00 per 1K tokens (with reasoning)
-- `anthropic/claude-sonnet-4` - $3.00/$15.00 per 1K tokens (with reasoning)
+- `google/gemini-2.5-pro` - $1.25/$5.00 (with reasoning)
+- `anthropic/claude-sonnet-4` - $3.00/$15.00 (with reasoning)
 
 ### Premium Tier (< $15.00/1M tokens)
-- `anthropic/claude-sonnet-4-5` - $3.00/$15.00 per 1K tokens (with reasoning)
-- `openai/gpt-4.1` - $2.50/$10.00 per 1K tokens (with reasoning)
+- `anthropic/claude-sonnet-4-5` - $3.00/$15.00 (with reasoning)
+- `~anthropic/claude-sonnet-latest` - $2.00/$10.00 (with reasoning)
+- `openai/gpt-4.1` - $2.50/$10.00 (with reasoning)
 
 ### Ultra-Premium Tier (Most Capable)
-- `anthropic/claude-opus-4-5` - $15.00/$75.00 per 1K tokens (with reasoning)
+- `anthropic/claude-opus-4-5` - $15.00/$75.00 (with reasoning)
+- `~anthropic/claude-opus-latest` - $5.00/$25.00 (with reasoning)
+- `~anthropic/claude-fable-latest` - $10.00/$50.00 (with reasoning); listed for pricing, not selected by default
+
+Alias rates are what OpenRouter listed on 2026-08-21 and move with each release.
 
 ## Provider-Specific Profiles
 
@@ -406,7 +422,7 @@ Uses the default cross-provider profiles shown above.
 
 ```typescript
 // During reasoning phase, agent recognizes complexity
-const response = await agent.callTool('request_inference_params', {
+const response = await agent.executeTool('request_inference_params', {
   reason: 'This algorithmic problem requires extensive search space exploration',
   suggested: {
     reasoningTokens: 12000,  // Increase from default 8000
@@ -424,7 +440,7 @@ console.log(`Estimated cost increase: $${response.costDelta}`);
 
 ```typescript
 // Check current parameters before requesting changes
-const current = await agent.callTool('get_current_params', {
+const current = await agent.executeTool('get_current_params', {
   phase: 'reasoning'
 });
 
@@ -437,7 +453,7 @@ console.log(`Has override: ${current.hasActiveOverride}`);
 
 ```typescript
 // Review cost analytics to optimize parameter usage
-const analytics = await agent.callTool('get_parameter_cost_analytics', {
+const analytics = await agent.executeTool('get_parameter_cost_analytics', {
   timeRange: '24h',
   groupBy: 'phase'
 });
@@ -458,7 +474,7 @@ analytics.optimizationTips.forEach(tip => {
 
 ```typescript
 // Action phase needs deterministic tool execution
-const response = await agent.callTool('request_inference_params', {
+const response = await agent.executeTool('request_inference_params', {
   reason: 'Critical data validation requires deterministic output',
   suggested: {
     temperature: 0.0,  // Maximum determinism
@@ -550,7 +566,7 @@ MAX_REQUESTS_PER_PHASE=3
 MAX_REQUESTS_PER_TASK=10
 
 # Model restrictions (comma-separated)
-ALLOWED_MODELS=google/gemini-2.5-flash,anthropic/claude-sonnet-4-5
+ALLOWED_MODELS=google/gemini-2.5-flash,~anthropic/claude-sonnet-latest
 
 # Parameter limits
 MIN_TEMPERATURE=0.0

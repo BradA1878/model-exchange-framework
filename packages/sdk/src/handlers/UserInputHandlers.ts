@@ -68,8 +68,8 @@ export class UserInputHandlers extends Handler {
 
     /**
      * Track processed request IDs to prevent duplicate handling.
-     * The server broadcasts user_input:request to all sockets in the channel room,
-     * so the same request arrives once per socket. Only the first arrival is processed.
+     * The server targets the exact owning agent, but transport retries must not
+     * render the same prompt twice.
      */
     private processedRequestIds: Set<string> = new Set();
 
@@ -98,6 +98,9 @@ export class UserInputHandlers extends Handler {
      * @internal Called by MxfClient during initialization
      */
     public initialize(): void {
+        if (this.subscriptions.length > 0) {
+            return;
+        }
         this.setupUserInputRequestHandler();
     }
 
@@ -146,18 +149,14 @@ export class UserInputHandlers extends Handler {
                     return;
                 }
 
-                // Only the agent that called user_input should process and respond.
-                // The server broadcasts the REQUEST to all sockets in the channel,
-                // but only the requesting agent needs to render the prompt and emit
-                // RESPONSE. Other agents skip to avoid duplicate responses that
-                // cause "already responded" warnings and potential event delivery issues.
+                // Defense in depth: even though the server targets the exact
+                // owning agent, reject a misaddressed request locally.
                 const requestingAgentId = payload.agentId;
                 if (requestingAgentId && requestingAgentId !== this.agentId) {
                     return;
                 }
 
-                // Deduplicate: the same request can arrive multiple times via different
-                // sockets (channel broadcast + direct). Only process the first arrival.
+                // Deduplicate transport retries. Only process the first arrival.
                 if (this.processedRequestIds.has(requestData.requestId)) {
                     return;
                 }
@@ -170,8 +169,7 @@ export class UserInputHandlers extends Handler {
                 }, 30_000);
                 this.evictionTimers.set(requestData.requestId, evictionTimer);
 
-                // Only process requests targeted at this agent's channel
-                // (requests are broadcast to the channel, any client can respond)
+                // Only process requests targeted at this agent's channel.
                 if (requestData.channelId && requestData.channelId !== this.channelId) {
                     return;
                 }

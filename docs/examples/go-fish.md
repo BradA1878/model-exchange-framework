@@ -13,16 +13,29 @@ Watch AI players with distinct personalities play Go Fish:
 
 ### 1. Channel-Scoped MCP Server Registration
 
+The user connected through `MxfSDK` must be an administrator, and the MXF server
+operator must set `MXF_UNSAFE_STDIO_MCP_ENABLED=true` before starting the server.
+
 ```typescript
-const mcpResult = await adminAgent.registerChannelMcpServer({
-    id: 'go-fish-mcp-server',
-    name: 'Go Fish Game Server',
-    transport: 'http',
-    url: `http://localhost:${GAME_PORT}/mcp`,
-    autoStart: true,
-    keepAliveMinutes: 30
+const channel = await sdk.createChannel('go-fish-game', {
+    name: 'Go Fish Table',
+    mcpServers: [{
+        id: 'go-fish-mcp-server',
+        name: 'Go Fish Game Tools',
+        transport: 'stdio',
+        command: 'bun',
+        args: ['run', './examples/go-fish/server/mcp/GoFishMcpServer.ts'],
+        autoStart: true,
+        keepAliveMinutes: 10,
+        environmentVariables: {
+            GAME_SERVER_URL: `http://localhost:${GAME_PORT}`
+        }
+    }]
 });
 ```
+
+The registered process speaks MCP over `stdio`; it calls the separate game HTTP
+API through `GAME_SERVER_URL`.
 
 ### 2. Memory-Based Strategy
 
@@ -30,7 +43,10 @@ Agents remember what cards opponents have asked for:
 
 ```typescript
 // Agent can use memory to track opponent requests
-const recentRequests = await agent.getChannelMemory('opponent_requests');
+const recentRequests = await agent.executeTool('agent_memory_read', {
+    key: 'opponent_requests',
+    memorySection: 'notes'
+});
 ```
 
 ### 3. Custom Game Tools
@@ -46,11 +62,10 @@ const recentRequests = await agent.getChannelMemory('opponent_requests');
 ### 4. Turn-Based Task Management
 
 ```typescript
-const turnTask = await sdk.createTask({
+const turnTaskId = await currentPlayer.mxfService.createTask({
     title: `${currentPlayer.name}'s Turn`,
     description: `It's your turn. Your hand: ${hand.join(', ')}`,
-    channelId: gameChannelId,
-    assignedAgentId: currentPlayer.agentId
+    assignedAgentIds: [currentPlayer.agentId]
 });
 ```
 
@@ -66,18 +81,14 @@ const turnTask = await sdk.createTask({
 2. Install dependencies:
    ```bash
    cd examples/go-fish
-   npm install
-   cd client && npm install && cd ..
+   bun install
+   cd client && bun install && cd ..
    ```
 
 ### Start the Game
 
 ```bash
-# Terminal 1: Start game server
-bun run server
-
-# Terminal 2: Connect agents and play
-bun run agents
+bun run game
 ```
 
 ## Game Flow

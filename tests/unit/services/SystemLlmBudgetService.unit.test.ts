@@ -76,6 +76,19 @@ describe('SystemLlmBudgetService', () => {
             expect(cost).toBeCloseTo(90, 6);
         });
 
+        it('prices the OpenRouter latest aliases at their family rates, not the unknown tier', () => {
+            const unknown = jest.fn();
+            const usage = { inputTokens: 1_000_000, outputTokens: 1_000_000 };
+
+            // OpenRouter's listed rates for the aliases on 2026-08-21 (USD per 1M tokens, in/out):
+            // fable 10/50, opus 5/25, sonnet 2/10, haiku 1/5.
+            expect(priceCall('~anthropic/claude-fable-latest', usage, unknown)).toBeCloseTo(60, 6);
+            expect(priceCall('~anthropic/claude-opus-latest', usage, unknown)).toBeCloseTo(30, 6);
+            expect(priceCall('~anthropic/claude-sonnet-latest', usage, unknown)).toBeCloseTo(12, 6);
+            expect(priceCall('~anthropic/claude-haiku-latest', usage, unknown)).toBeCloseTo(6, 6);
+            expect(unknown).not.toHaveBeenCalled();
+        });
+
         it('matches a model with or without its provider prefix', () => {
             const withPrefix = priceCall('anthropic/claude-sonnet-4.5', {
                 inputTokens: 1_000_000,

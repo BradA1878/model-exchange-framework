@@ -24,20 +24,97 @@
  * Enables agents to track and measure their own effectiveness
  */
 
-import { McpToolDefinition, McpToolHandlerResult } from '../McpServerTypes.js';
+import {
+    McpToolDefinition,
+    McpToolHandlerContext,
+    McpToolHandlerResult
+} from '../McpServerTypes.js';
 import { TaskEffectivenessService } from '../../../services/TaskEffectivenessService.js';
 import { AgentId } from '../../../types/Agent.js';
 import { ChannelId } from '../../../types/ChannelContext.js';
 import { 
     TaskDefinition,
     TaskExecutionEvent,
-    EffectivenessComparison,
-    EffectivenessAnalytics
+    TaskEffectivenessMetrics
 } from '../../../types/EffectivenessTypes.js';
 import { v4 as uuidv4 } from 'uuid';
 
+interface EffectivenessTenantIdentity {
+    agentId: AgentId;
+    channelId: ChannelId;
+}
+
+interface EffectivenessStartInput extends Record<string, unknown> {
+    taskType: string;
+    description: string;
+    successCriteria?: TaskDefinition['successCriteria'];
+    baselineMetrics?: {
+        completionTime?: number;
+        humanInterventions?: number;
+    };
+}
+
+interface EffectivenessEventInput extends Record<string, unknown> {
+    taskId: string;
+    eventType: TaskExecutionEvent['type'];
+    details?: Record<string, unknown>;
+}
+
+interface EffectivenessQualityInput extends Record<string, unknown> {
+    taskId: string;
+    completenessScore?: number;
+    iterationCount?: number;
+    customMetrics?: Record<string, number>;
+}
+
+interface EffectivenessCompleteInput extends Record<string, unknown> {
+    taskId: string;
+    success: boolean;
+    customMetrics?: Record<string, number>;
+}
+
+interface EffectivenessAnalyticsInput extends Record<string, unknown> {
+    timeRange: 'hour' | 'day' | 'week' | 'month';
+    taskType?: string;
+}
+
+interface EffectivenessCompareInput extends Record<string, unknown> {
+    taskId: string;
+}
+
+function requireTenantIdentity(context: McpToolHandlerContext): EffectivenessTenantIdentity {
+    if (!context.agentId?.trim() || !context.channelId?.trim() ||
+        context.agentId !== context.agentId.trim() ||
+        context.channelId !== context.channelId.trim()) {
+        throw new Error('Authenticated agent and channel context are required');
+    }
+
+    return {
+        agentId: context.agentId as AgentId,
+        channelId: context.channelId as ChannelId
+    };
+}
+
+function rejectCallerSelectedTenant(input: Record<string, unknown>): void {
+    if (Object.prototype.hasOwnProperty.call(input, 'agentId') ||
+        Object.prototype.hasOwnProperty.call(input, 'channelId')) {
+        throw new Error('Agent and channel identity are derived from authenticated tool context');
+    }
+}
+
+function errorMessage(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
+}
+
+function requireObjectInput<T extends Record<string, unknown>>(input: unknown): T {
+    if (input === null || typeof input !== 'object' || Array.isArray(input)) {
+        throw new Error('Tool input must be an object');
+    }
+    return input as T;
+}
+
 // Helper to create tool result
-function createToolResult(success: boolean, data: any): McpToolHandlerResult {
+function createToolResult(success: boolean, data: Record<string, unknown>): McpToolHandlerResult {
     return {
         content: {
             type: 'application/json',
@@ -94,15 +171,24 @@ export const task_effectiveness_start: McpToolDefinition = {
                 }
             }
         },
-        required: ['taskType', 'description']
+        required: ['taskType', 'description'],
+        additionalProperties: false
     },
     enabled: true,
-    handler: async ({ taskType, description, successCriteria, baselineMetrics }: any, { agentId, channelId }: any) => {
+    handler: async (
+        rawInput: unknown,
+        context: McpToolHandlerContext
+    ): Promise<McpToolHandlerResult> => {
         const effectivenessService = TaskEffectivenessService.getInstance();
         try {
+            const input = requireObjectInput<EffectivenessStartInput>(rawInput);
+            rejectCallerSelectedTenant(input);
+            const { taskType, description, successCriteria, baselineMetrics } = input;
+            const { agentId, channelId } = requireTenantIdentity(context);
             const definition: TaskDefinition = {
                 taskId: uuidv4(),
-                channelId: channelId as ChannelId,
+                agentId,
+                channelId,
                 taskType,
                 description,
                 successCriteria,
@@ -111,7 +197,7 @@ export const task_effectiveness_start: McpToolDefinition = {
                     metrics: {
                         performance: {
                             completionTime: baselineMetrics.completionTime,
-                            humanInterventions: baselineMetrics.humanInterventions,
+                            humanInterventions: baselineMetrics.humanInterventions ?? 0,
                             autonomyScore: 0, // Human baseline has 0 autonomy
                             stepCount: 0,
                             toolsUsed: 0,
@@ -129,9 +215,9 @@ export const task_effectiveness_start: McpToolDefinition = {
                 message: `Started tracking effectiveness for ${taskType} task`,
                 trackingStarted: Date.now()
             });
-        } catch (error) {
+        } catch (error: unknown) {
             return createToolResult(false, {
-                error: `Failed to start effectiveness tracking: ${error}`
+                error: `Failed to start effectiveness tracking: ${errorMessage(error)}`
             });
         }
     }
@@ -160,18 +246,27 @@ export const task_effectiveness_event: McpToolDefinition = {
                 description: 'Event-specific details (e.g., tool name, error message, milestone name)'
             }
         },
-        required: ['taskId', 'eventType']
+        required: ['taskId', 'eventType'],
+        additionalProperties: false
     },
     enabled: true,
-    handler: async ({ taskId, eventType, details = {} }: any, { agentId }: any) => {
+    handler: async (
+        rawInput: unknown,
+        context: McpToolHandlerContext
+    ): Promise<McpToolHandlerResult> => {
         const effectivenessService = TaskEffectivenessService.getInstance();
         try {
+            const input = requireObjectInput<EffectivenessEventInput>(rawInput);
+            rejectCallerSelectedTenant(input);
+            const { taskId, eventType, details = {} } = input;
+            const { agentId, channelId } = requireTenantIdentity(context);
             const event: TaskExecutionEvent = {
                 eventId: uuidv4(),
                 taskId,
                 timestamp: Date.now(),
-                type: eventType as any,
-                agentId: agentId as AgentId,
+                type: eventType,
+                agentId,
+                channelId,
                 details
             };
             
@@ -181,9 +276,9 @@ export const task_effectiveness_event: McpToolDefinition = {
                 message: `Recorded ${eventType} event for task`,
                 eventId: event.eventId
             });
-        } catch (error) {
+        } catch (error: unknown) {
             return createToolResult(false, {
-                error: `Failed to record event: ${error}`
+                error: `Failed to record event: ${errorMessage(error)}`
             });
         }
     }
@@ -218,26 +313,34 @@ export const task_effectiveness_quality: McpToolDefinition = {
                 additionalProperties: { type: 'number' }
             }
         },
-        required: ['taskId']
+        required: ['taskId'],
+        additionalProperties: false
     },
     enabled: true,
-    handler: async ({ taskId, completenessScore, iterationCount, customMetrics }: any, { agentId }: any) => {
+    handler: async (
+        rawInput: unknown,
+        context: McpToolHandlerContext
+    ): Promise<McpToolHandlerResult> => {
         const effectivenessService = TaskEffectivenessService.getInstance();
         try {
-            const updates: any = {};
+            const input = requireObjectInput<EffectivenessQualityInput>(rawInput);
+            rejectCallerSelectedTenant(input);
+            const { taskId, completenessScore, iterationCount, customMetrics } = input;
+            const { agentId, channelId } = requireTenantIdentity(context);
+            const updates: Partial<TaskEffectivenessMetrics['quality']> = {};
             if (completenessScore !== undefined) updates.completenessScore = completenessScore;
             if (iterationCount !== undefined) updates.iterationCount = iterationCount;
             if (customMetrics) updates.customMetrics = customMetrics;
             
-            effectivenessService.updateQuality(taskId, updates, agentId as AgentId);
+            effectivenessService.updateQuality(taskId, agentId, channelId, updates);
             
             return createToolResult(true, {
                 message: 'Updated quality metrics',
                 updates
             });
-        } catch (error) {
+        } catch (error: unknown) {
             return createToolResult(false, {
-                error: `Failed to update quality metrics: ${error}`
+                error: `Failed to update quality metrics: ${errorMessage(error)}`
             });
         }
     }
@@ -266,20 +369,39 @@ export const task_effectiveness_complete: McpToolDefinition = {
                 additionalProperties: { type: 'number' }
             }
         },
-        required: ['taskId', 'success']
+        required: ['taskId', 'success'],
+        additionalProperties: false
     },
     enabled: true,
-    handler: async ({ taskId, success, customMetrics }: any) => {
+    handler: async (
+        rawInput: unknown,
+        context: McpToolHandlerContext
+    ): Promise<McpToolHandlerResult> => {
         const effectivenessService = TaskEffectivenessService.getInstance();
         try {
-            const metrics = await effectivenessService.completeTask(taskId, success, customMetrics);
+            const input = requireObjectInput<EffectivenessCompleteInput>(rawInput);
+            rejectCallerSelectedTenant(input);
+            const { taskId, success, customMetrics } = input;
+            const { agentId, channelId } = requireTenantIdentity(context);
+            const metrics = await effectivenessService.completeTask(
+                taskId,
+                agentId,
+                channelId,
+                success,
+                customMetrics
+            );
             if (!metrics) {
                 return createToolResult(false, {
                     error: 'Task not found or already completed'
                 });
             }
             
-            const comparison = await effectivenessService.compareWithBaseline(taskId);
+            const comparison = await effectivenessService.compareWithBaseline(taskId, agentId, channelId);
+            if (!comparison) {
+                return createToolResult(false, {
+                    error: 'Task completed, but its persisted comparison could not be loaded'
+                });
+            }
             
             return createToolResult(true, {
                 message: 'Task completed and effectiveness measured',
@@ -288,17 +410,17 @@ export const task_effectiveness_complete: McpToolDefinition = {
                     autonomyScore: metrics.performance.autonomyScore,
                     toolsUsed: metrics.performance.toolsUsed,
                     errorCount: metrics.quality.errorCount,
-                    overallScore: comparison?.summary.overallScore || 0
+                    overallScore: comparison.summary.overallScore
                 },
-                comparison: comparison ? {
+                comparison: {
                     speedImprovement: `${comparison.improvements.speedImprovement.toFixed(1)}%`,
                     achievements: comparison.summary.achievements,
                     recommendations: comparison.summary.recommendations
-                } : undefined
+                }
             });
-        } catch (error) {
+        } catch (error: unknown) {
             return createToolResult(false, {
-                error: `Failed to complete task: ${error}`
+                error: `Failed to complete task: ${errorMessage(error)}`
             });
         }
     }
@@ -323,12 +445,20 @@ export const task_effectiveness_analytics: McpToolDefinition = {
                 description: 'Optional: Filter by specific task type'
             }
         },
-        required: ['timeRange']
+        required: ['timeRange'],
+        additionalProperties: false
     },
     enabled: true,
-    handler: async ({ timeRange, taskType }: any, { channelId }: any) => {
+    handler: async (
+        rawInput: unknown,
+        context: McpToolHandlerContext
+    ): Promise<McpToolHandlerResult> => {
         const effectivenessService = TaskEffectivenessService.getInstance();
         try {
+            const input = requireObjectInput<EffectivenessAnalyticsInput>(rawInput);
+            rejectCallerSelectedTenant(input);
+            const { timeRange, taskType } = input;
+            const { agentId, channelId } = requireTenantIdentity(context);
             const now = Date.now();
             const ranges = {
                 hour: 60 * 60 * 1000,
@@ -337,18 +467,20 @@ export const task_effectiveness_analytics: McpToolDefinition = {
                 month: 30 * 24 * 60 * 60 * 1000
             };
             
-            const startTime = now - ranges[timeRange as keyof typeof ranges];
+            const startTime = now - ranges[timeRange];
             const analytics = await effectivenessService.getAnalytics(
                 startTime, 
-                now, 
-                channelId as ChannelId,
+                now,
+                agentId,
+                channelId,
                 taskType
             );
             
             // Filter by task type if specified
             let relevantStats = analytics.byTaskType;
             if (taskType) {
-                relevantStats = { [taskType]: analytics.byTaskType[taskType] };
+                const taskStats = analytics.byTaskType[taskType];
+                relevantStats = taskStats ? { [taskType]: taskStats } : {};
             }
             
             return createToolResult(true, {
@@ -367,9 +499,9 @@ export const task_effectiveness_analytics: McpToolDefinition = {
                     }
                 }
             });
-        } catch (error) {
+        } catch (error: unknown) {
             return createToolResult(false, {
-                error: `Failed to get analytics: ${error}`
+                error: `Failed to get analytics: ${errorMessage(error)}`
             });
         }
     }
@@ -389,13 +521,21 @@ export const task_effectiveness_compare: McpToolDefinition = {
                 description: 'Current task ID to compare'
             }
         },
-        required: ['taskId']
+        required: ['taskId'],
+        additionalProperties: false
     },
     enabled: true,
-    handler: async ({ taskId }: any) => {
+    handler: async (
+        rawInput: unknown,
+        context: McpToolHandlerContext
+    ): Promise<McpToolHandlerResult> => {
         const effectivenessService = TaskEffectivenessService.getInstance();
         try {
-            const comparison = await effectivenessService.compareWithBaseline(taskId);
+            const input = requireObjectInput<EffectivenessCompareInput>(rawInput);
+            rejectCallerSelectedTenant(input);
+            const { taskId } = input;
+            const { agentId, channelId } = requireTenantIdentity(context);
+            const comparison = await effectivenessService.compareWithBaseline(taskId, agentId, channelId);
             if (!comparison) {
                 return createToolResult(false, {
                     error: 'Task not found or no comparison available'
@@ -415,9 +555,9 @@ export const task_effectiveness_compare: McpToolDefinition = {
                     recommendations: comparison.summary.recommendations
                 }
             });
-        } catch (error) {
+        } catch (error: unknown) {
             return createToolResult(false, {
-                error: `Failed to compare task: ${error}`
+                error: `Failed to compare task: ${errorMessage(error)}`
             });
         }
     }

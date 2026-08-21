@@ -31,6 +31,9 @@ import channelKeyService from '../../socket/services/ChannelKeyService';
 import { createStrictValidator } from '@mxf-dev/core/utils/validation';
 import { Logger } from '@mxf-dev/core/utils/Logger';
 import crypto from 'crypto';
+import { requireAdmin } from '../middleware/dualAuth';
+import { requireResourceOwner } from '../middleware/resourceOwnership';
+import { AgentIdentityOwnershipError } from '../../security/AgentIdentityOwnershipService';
 
 // Create validator and logger
 const validator = createStrictValidator('AgentKeyRoutes');
@@ -42,10 +45,14 @@ const router = express.Router();
  * Generate and assign a new key to an agent
  * POST /api/agents/:agentId/keys
  */
-router.post('/:agentId/keys', async (req, res) => {
+router.post(
+    '/:agentId/keys',
+    requireResourceOwner('agent', req => req.params.agentId),
+    requireResourceOwner('channel', req => req.body.channelId),
+    async (req, res) => {
     try {
         const { agentId } = req.params;
-        const { channelId, name, expiresAt } = req.body;
+        const { channelId, name, expiresAt, allowedTools } = req.body;
         
         // Validate required fields
         validator.assertIsNonEmptyString(agentId, 'agentId is required');
@@ -57,6 +64,13 @@ router.post('/:agentId/keys', async (req, res) => {
             return res.status(404).json({
                 success: false,
                 error: 'Agent not found'
+            });
+        }
+
+        if (agent.keyId) {
+            return res.status(409).json({
+                success: false,
+                error: 'Agent already has a key; use the rotation endpoint'
             });
         }
         
@@ -88,7 +102,8 @@ router.post('/:agentId/keys', async (req, res) => {
             userId.toString(), // Created by authenticated user
             agentId,
             name || `Key for agent ${agentId}`,
-            expirationDate
+            expirationDate,
+            allowedTools
         );
 
         // Update agent with the keyId
@@ -103,6 +118,7 @@ router.post('/:agentId/keys', async (req, res) => {
                 keyId: createdKey.keyId,
                 secretKey: createdKey.secretKey, // Only returned on creation
                 channelId: createdKey.channelId,
+                allowedTools: createdKey.allowedTools,
                 name: createdKey.name,
                 isActive: createdKey.isActive,
                 expiresAt: createdKey.expiresAt,
@@ -112,18 +128,26 @@ router.post('/:agentId/keys', async (req, res) => {
 
     } catch (error) {
         logger.error(`Error generating key for agent: ${error}`);
+        if (error instanceof AgentIdentityOwnershipError) {
+            res.status(error.statusCode).json({
+                success: false,
+                error: error.message
+            });
+            return;
+        }
         res.status(500).json({
             success: false,
             error: 'Failed to generate agent key'
         });
     }
-});
+    }
+);
 
 /**
  * Get agent key information
  * GET /api/agents/:agentId/keys
  */
-router.get('/:agentId/keys', async (req, res) => {
+router.get('/:agentId/keys', requireResourceOwner('agent', req => req.params.agentId), async (req, res) => {
     try {
         const { agentId } = req.params;
         
@@ -177,10 +201,14 @@ router.get('/:agentId/keys', async (req, res) => {
  * Rotate agent's authentication key
  * POST /api/agents/:agentId/keys/rotate
  */
-router.post('/:agentId/keys/rotate', async (req, res) => {
+router.post(
+    '/:agentId/keys/rotate',
+    requireResourceOwner('agent', req => req.params.agentId),
+    requireResourceOwner('channel', req => req.body.channelId),
+    async (req, res) => {
     try {
         const { agentId } = req.params;
-        const { channelId, name, expiresAt } = req.body;
+        const { channelId, name, expiresAt, allowedTools } = req.body;
         
         validator.assertIsNonEmptyString(agentId, 'agentId is required');
         validator.assertIsNonEmptyString(channelId, 'channelId is required');
@@ -192,11 +220,6 @@ router.post('/:agentId/keys/rotate', async (req, res) => {
                 success: false,
                 error: 'Agent not found'
             });
-        }
-        
-        // Deactivate old key if exists
-        if (agent.keyId) {
-            await channelKeyService.deactivateChannelKey(agent.keyId);
         }
         
         // Parse expiration date if provided
@@ -220,29 +243,46 @@ router.post('/:agentId/keys/rotate', async (req, res) => {
             });
         }
         
-        // Create new key, bound to the same agent
+        const oldKeyId = agent.keyId;
+
+        // Create the replacement before revoking the current credential. An
+        // invalid request or key-generation failure must never lock the agent
+        // out. If persisting the replacement fails, deactivate the orphan.
+        const currentKey = agent.keyId
+            ? await channelKeyService.describeKey(agent.keyId)
+            : null;
         const createdKey = await channelKeyService.createChannelKey(
             channelId,
             userId.toString(), // Created by authenticated user
             agentId,
             name || `Rotated key for agent ${agentId}`,
-            expirationDate
+            expirationDate,
+            allowedTools === undefined ? currentKey?.allowedTools : allowedTools
         );
 
-        // Update agent with new keyId
-        agent.keyId = createdKey.keyId;
-        await agent.save();
+        try {
+            agent.keyId = createdKey.keyId;
+            await agent.save();
+        } catch (error) {
+            await channelKeyService.deactivateChannelKey(createdKey.keyId);
+            throw error;
+        }
+
+        const oldKeyDeactivated = oldKeyId
+            ? await channelKeyService.deactivateChannelKey(oldKeyId)
+            : true;
 
 
         res.json({
             success: true,
             data: {
                 agentId,
-                oldKeyDeactivated: true,
+                oldKeyDeactivated,
                 newKey: {
                     keyId: createdKey.keyId,
                     secretKey: createdKey.secretKey, // Only returned on creation
                     channelId: createdKey.channelId,
+                    allowedTools: createdKey.allowedTools,
                     name: createdKey.name,
                     isActive: createdKey.isActive,
                     expiresAt: createdKey.expiresAt,
@@ -253,18 +293,26 @@ router.post('/:agentId/keys/rotate', async (req, res) => {
         
     } catch (error) {
         logger.error(`Error rotating agent key: ${error}`);
+        if (error instanceof AgentIdentityOwnershipError) {
+            res.status(error.statusCode).json({
+                success: false,
+                error: error.message
+            });
+            return;
+        }
         res.status(500).json({
             success: false,
             error: 'Failed to rotate agent key'
         });
     }
-});
+    }
+);
 
 /**
  * Revoke agent's authentication key
  * DELETE /api/agents/:agentId/keys
  */
-router.delete('/:agentId/keys', async (req, res) => {
+router.delete('/:agentId/keys', requireResourceOwner('agent', req => req.params.agentId), async (req, res) => {
     try {
         const { agentId } = req.params;
         
@@ -324,9 +372,9 @@ router.delete('/:agentId/keys', async (req, res) => {
  * Generate agent keys for dialog preview (before agent creation)
  * POST /api/agents/keys/generate
  */
-router.post('/keys/generate', async (req, res) => {
+router.post('/keys/generate', requireResourceOwner('channel', req => req.body.channelId), async (req, res) => {
     try {
-        const { channelId, agentId, agentName } = req.body;
+        const { channelId, agentId, agentName, allowedTools } = req.body;
 
         // Validate required fields. agentId is the identity the key authenticates
         // as; agentName is only a label.
@@ -349,7 +397,8 @@ router.post('/keys/generate', async (req, res) => {
             userId.toString(),
             agentId,
             `Key for agent: ${agentName}`,
-            undefined // No expiration for agent keys
+            undefined, // No expiration for agent keys
+            allowedTools
         );
 
 
@@ -359,6 +408,7 @@ router.post('/keys/generate', async (req, res) => {
                 keyId: createdKey.keyId,
                 secretKey: createdKey.secretKey,
                 channelId: createdKey.channelId,
+                allowedTools: createdKey.allowedTools,
                 agentId: createdKey.agentId,
                 agentName,
                 createdAt: createdKey.createdAt
@@ -367,6 +417,13 @@ router.post('/keys/generate', async (req, res) => {
 
     } catch (error) {
         logger.error(`Error generating agent keys: ${error}`);
+        if (error instanceof AgentIdentityOwnershipError) {
+            res.status(error.statusCode).json({
+                success: false,
+                error: error.message
+            });
+            return;
+        }
         res.status(500).json({
             success: false,
             error: 'Failed to generate agent keys'
@@ -378,7 +435,7 @@ router.post('/keys/generate', async (req, res) => {
  * Cleanup unused agent keys (when dialog is cancelled)
  * DELETE /api/agents/keys/cleanup/:keyId
  */
-router.delete('/keys/cleanup/:keyId', async (req, res) => {
+router.delete('/keys/cleanup/:keyId', requireResourceOwner('key', req => req.params.keyId), async (req, res) => {
     try {
         const { keyId } = req.params;
         
@@ -412,7 +469,7 @@ router.delete('/keys/cleanup/:keyId', async (req, res) => {
  * List all agents with their key status
  * GET /api/agents/keys/status
  */
-router.get('/keys/status', async (req, res) => {
+router.get('/keys/status', requireAdmin, async (req, res) => {
     try {
         const { channelId } = req.query;
         

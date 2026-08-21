@@ -38,6 +38,10 @@ jest.mock('../../../src/server/socket/services/SystemLlmServiceManager', () => (
     SystemLlmServiceManager: { getInstance: jest.fn() }
 }));
 
+jest.mock('../../../src/server/socket/services/McpService', () => ({
+    McpService: { getInstance: jest.fn() }
+}));
+
 jest.mock('../../../src/server/api/services/McpToolRegistry', () => ({
     McpToolRegistry: { getInstance: jest.fn() }
 }));
@@ -167,14 +171,11 @@ describe('task_complete handler summary normalization', () => {
         );
     });
 
-    it('defaults to "Task completed" when neither summary nor result is provided', async () => {
-        await task_complete.handler({}, context);
+    it('rejects missing completion evidence instead of fabricating a summary', async () => {
+        await expect(task_complete.handler({}, context))
+            .rejects.toThrow(/completion summary or result is required/i);
 
-        expect(mockHandleTaskCompletion).toHaveBeenCalledWith(
-            context.agentId,
-            context.channelId,
-            expect.objectContaining({ summary: 'Task completed' })
-        );
+        expect(mockHandleTaskCompletion).not.toHaveBeenCalled();
     });
 
     it('falls through an empty-string summary to result (unchanged behavior)', async () => {
@@ -184,6 +185,19 @@ describe('task_complete handler summary normalization', () => {
             context.agentId,
             context.channelId,
             expect.objectContaining({ summary: 'from result' })
+        );
+    });
+
+    it('preserves an explicit failure outcome for the authoritative service', async () => {
+        await task_complete.handler({ summary: 'validation failed', success: false }, context);
+
+        expect(mockHandleTaskCompletion).toHaveBeenCalledWith(
+            context.agentId,
+            context.channelId,
+            expect.objectContaining({
+                summary: 'validation failed',
+                success: false
+            })
         );
     });
 });
@@ -226,6 +240,22 @@ describe('task_complete_bridge summary coercion', () => {
             context.agentId,
             context.channelId,
             expect.objectContaining({ summary })
+        );
+    });
+
+    it('handler preserves an explicit failure outcome', async () => {
+        await completeTaskBridgeTool.handler({
+            summary: 'bridge validation failed',
+            success: false
+        }, context);
+
+        expect(mockHandleTaskCompletion).toHaveBeenCalledWith(
+            context.agentId,
+            context.channelId,
+            expect.objectContaining({
+                summary: 'bridge validation failed',
+                success: false
+            })
         );
     });
 });

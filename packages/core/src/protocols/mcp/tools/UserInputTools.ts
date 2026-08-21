@@ -343,8 +343,22 @@ Use after calling request_user_input to retrieve the response.`,
         context: McpToolHandlerContext
     ): Promise<McpToolHandlerResult> => {
         try {
+            const agentId = context.agentId as AgentId;
+            const channelId = context.channelId as ChannelId;
+            if (!agentId || !channelId) {
+                return {
+                    content: {
+                        type: 'text',
+                        data: JSON.stringify({
+                            success: false,
+                            error: 'Agent ID and channel ID are required to read a user input response'
+                        })
+                    }
+                };
+            }
+
             const manager = UserInputRequestManager.getInstance();
-            const result = manager.getRequest(input.requestId);
+            const result = manager.getRequest(input.requestId, agentId, channelId);
 
             if (!result) {
                 return {

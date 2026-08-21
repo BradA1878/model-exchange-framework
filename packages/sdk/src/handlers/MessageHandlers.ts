@@ -215,8 +215,14 @@ export class MessageHandlers extends Handler {
             }
         }
         
-        // Use the main channelService for sending messages
-        await channelService.sendMessage(processedContent, this.agentId, { type, context: messageContext });
+        // Use the identity-bound service. Preserve the caller's semantic message type
+        // as context; sender and channel identities are owned by MxfService.
+        await channelService.sendMessage(processedContent, {
+            context: {
+                ...messageContext,
+                messageType: type,
+            },
+        });
         return true;
     }
     

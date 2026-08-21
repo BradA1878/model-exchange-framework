@@ -43,10 +43,29 @@ import { AutoCorrectionService } from '../../../services/AutoCorrectionService.j
 import { IToolEventEmitter } from './IToolEventEmitter.js';
 import { Events } from '../../../events/EventNames.js';
 import { v4 as uuidv4 } from 'uuid';
+import { assertUnsafeStdioMcpEnabled } from '../security/ExternalMcpRegistrationPolicy.js';
 
 // Create logger and validator instances
 const logger = new Logger('info', 'ExternalMcpServerManager', 'server');
 const validator = createStrictValidator('ExternalMcpServerManager');
+
+interface ExternalMcpRegistrationRequestData extends Partial<ExternalServerConfig> {
+    id: string;
+    name: string;
+    channelId?: string;
+    keepAliveMinutes?: number;
+}
+
+interface ExternalMcpUnregistrationRequestData {
+    serverId: string;
+    channelId?: string;
+}
+
+interface ExternalMcpLifecycleRequestPayload<TData> {
+    agentId: AgentId;
+    channelId: ChannelId;
+    data: TData;
+}
 
 /**
  * Configuration for an external MCP server
@@ -64,6 +83,10 @@ export interface ExternalServerConfig {
     command: string;
     /** Arguments for the command */
     args: string[];
+    /** Transport requested by a remote registration. Omitted means stdio. */
+    transport?: 'stdio' | 'http';
+    /** Endpoint for an HTTP transport registration. */
+    url?: string;
     /** Working directory for the process */
     workingDirectory?: string;
     /** Environment variables for the process */
@@ -109,6 +132,10 @@ export interface ExternalMcpTool {
     description: string;
     inputSchema: Record<string, any>;
     serverId: string;
+    /** Authoritative visibility scope assigned when the server was registered. */
+    scope: 'global' | 'channel' | 'agent';
+    /** Channel or agent identifier for non-global scopes. */
+    scopeId?: string;
 }
 
 /**
@@ -205,12 +232,22 @@ export class ExternalMcpServerManager extends EventEmitter {
         };
     }> = new Map();
 
+    /**
+     * Channel ids which crossed their terminal deletion boundary in this
+     * process. Channel ids are reserved in persistence, so this tombstone never
+     * needs to be removed and closes register/delete races in both directions.
+     */
+    private retiredChannelIds = new Set<string>();
+
     private autoCorrectionService: AutoCorrectionService;
 
     /** Injectable event emitter — decouples from direct EventBus.server dependency.
      *  Server-side: uses default ServerToolEventEmitter (wraps EventBus.server).
      *  Client-side: uses ClientToolEventEmitter (wraps EventBus.client + socketEmit). */
     private toolEventEmitter: IToolEventEmitter | null = null;
+
+    /** EventBus subscriptions owned by this manager instance. */
+    private eventSubscriptions: Array<{ unsubscribe: () => void }> = [];
 
     /** Delay before restarting a crashed server. Overridable for tests. */
     private restartDelayMs: number = DEFAULT_RESTART_DELAY_MS;
@@ -256,8 +293,15 @@ export class ExternalMcpServerManager extends EventEmitter {
     private setupEventHandlers(): void {
 
         // Handle external server registration requests from SDK
-        EventBus.server.on(Events.Mcp.EXTERNAL_SERVER_REGISTER, async (payload: any) => {
+        this.eventSubscriptions.push(EventBus.server.on(Events.Mcp.EXTERNAL_SERVER_REGISTER, async (
+            payload: ExternalMcpLifecycleRequestPayload<ExternalMcpRegistrationRequestData>
+        ) => {
             try {
+
+                // EventBus registrations originate outside this manager (normally
+                // from a socket). They are caller-controlled and stdio means host
+                // process execution, so require the operator's explicit opt-in.
+                assertUnsafeStdioMcpEnabled(payload.data?.transport);
 
                 const serverConfig = {
                     id: payload.data.id,
@@ -310,10 +354,12 @@ export class ExternalMcpServerManager extends EventEmitter {
                     }
                 });
             }
-        });
+        }));
 
         // Handle external server unregistration requests from SDK
-        EventBus.server.on(Events.Mcp.EXTERNAL_SERVER_UNREGISTER, async (payload: any) => {
+        this.eventSubscriptions.push(EventBus.server.on(Events.Mcp.EXTERNAL_SERVER_UNREGISTER, async (
+            payload: ExternalMcpLifecycleRequestPayload<ExternalMcpUnregistrationRequestData>
+        ) => {
             try {
 
                 const serverId = payload.data.serverId;
@@ -353,11 +399,17 @@ export class ExternalMcpServerManager extends EventEmitter {
                     }
                 });
             }
-        });
+        }));
 
         // Handle channel-scoped server registration requests
-        EventBus.server.on(Events.Mcp.CHANNEL_SERVER_REGISTER, async (payload: any) => {
+        this.eventSubscriptions.push(EventBus.server.on(Events.Mcp.CHANNEL_SERVER_REGISTER, async (
+            payload: ExternalMcpLifecycleRequestPayload<ExternalMcpRegistrationRequestData>
+        ) => {
             try {
+                // Channel membership is not permission to execute a host command.
+                // The HTTP/socket entry point must also establish administrator
+                // authority; this is the defense-in-depth feature gate.
+                assertUnsafeStdioMcpEnabled(payload.data?.transport);
                 logger.info(`[CHANNEL_SERVER_REGISTER] Received registration request: ${JSON.stringify({ agentId: payload.agentId, channelId: payload.channelId, serverId: payload.data?.id })}`);
                 
 
@@ -408,10 +460,12 @@ export class ExternalMcpServerManager extends EventEmitter {
                     )
                 );
             }
-        });
+        }));
 
         // Handle channel server unregistration requests
-        EventBus.server.on(Events.Mcp.CHANNEL_SERVER_UNREGISTER, async (payload: any) => {
+        this.eventSubscriptions.push(EventBus.server.on(Events.Mcp.CHANNEL_SERVER_UNREGISTER, async (
+            payload: ExternalMcpLifecycleRequestPayload<ExternalMcpUnregistrationRequestData>
+        ) => {
             try {
 
                 const channelId = payload.data.channelId || payload.channelId;
@@ -454,7 +508,7 @@ export class ExternalMcpServerManager extends EventEmitter {
                     )
                 );
             }
-        });
+        }));
 
     }
 
@@ -462,6 +516,13 @@ export class ExternalMcpServerManager extends EventEmitter {
      * Register a new external server configuration
      */
     public async registerServer(config: ExternalServerConfig): Promise<void> {
+        // This manager currently speaks line-delimited MCP over child-process
+        // stdio only. Never let an HTTP-labelled registration fall through to
+        // spawn(config.command, ...), which would bypass the stdio feature gate.
+        if (config.transport === 'http') {
+            throw new Error('HTTP transport registration is not implemented by ExternalMcpServerManager');
+        }
+
         logger.info(`[REGISTER_SERVER] Registering server ${config.id}: command="${config.command}", args=${JSON.stringify(config.args)}, autoStart=${config.autoStart}`);
         
         // Validate configuration
@@ -526,6 +587,10 @@ export class ExternalMcpServerManager extends EventEmitter {
         const serverId = `${channelId}:${config.id}`;
         const keepAliveMinutes = config.keepAliveMinutes || 5;
 
+        if (this.retiredChannelIds.has(channelId)) {
+            throw new Error(`Channel ${channelId} is deleted; MCP servers cannot be registered`);
+        }
+
         const existingScope = this.serverScopes.get(serverId);
         if (existingScope?.keepAliveTimer) {
             clearTimeout(existingScope.keepAliveTimer);
@@ -549,6 +614,14 @@ export class ExternalMcpServerManager extends EventEmitter {
         const { keepAliveMinutes: _ignored, ...serverConfig } = config;
         try {
             await this.registerServer({ ...serverConfig, id: serverId });
+
+            // Deletion may have won while process startup/handshake was in
+            // flight. Remove the just-created runtime before returning so a
+            // late registration cannot resurrect a deleted channel's server.
+            if (this.retiredChannelIds.has(channelId)) {
+                await this.removeServer(serverId, 'registration raced channel deletion');
+                throw new Error(`Channel ${channelId} was deleted during MCP server registration`);
+            }
         } catch (error) {
             // Registration failed before the server record existed — do not leave
             // a scope entry behind for agents to "join" (unless one existed before).
@@ -572,6 +645,45 @@ export class ExternalMcpServerManager extends EventEmitter {
         validator.assertIsNonEmptyString(channelId, 'channelId must be a non-empty string');
         validator.assertIsNonEmptyString(serverId, 'serverId must be a non-empty string');
         await this.removeServer(`${channelId}:${serverId}`, 'channel server unregistration');
+    }
+
+    /**
+     * Permanently retire a channel's MCP runtime in this process.
+     *
+     * The tombstone is installed before process cleanup, which makes concurrent
+     * registrations fail both before and after their asynchronous startup.
+     * Every known scoped record is removed, including orphaned records whose
+     * scope metadata or server entry is only partially present.
+     */
+    public async retireChannel(channelId: string): Promise<void> {
+        validator.assertIsNonEmptyString(channelId, 'channelId must be a non-empty string');
+        this.retiredChannelIds.add(channelId);
+
+        const serverIds = new Set<string>();
+        for (const [serverId, scopeData] of this.serverScopes.entries()) {
+            if (scopeData.scope === 'channel' && scopeData.scopeId === channelId) {
+                serverIds.add(serverId);
+            }
+        }
+        for (const serverId of this.servers.keys()) {
+            if (serverId.startsWith(`${channelId}:`)) {
+                serverIds.add(serverId);
+            }
+        }
+
+        const results = await Promise.allSettled(
+            Array.from(serverIds, serverId => (
+                this.removeServer(serverId, 'channel deletion')
+            ))
+        );
+        const failures = results.filter(
+            (result): result is PromiseRejectedResult => result.status === 'rejected'
+        );
+        if (failures.length > 0) {
+            throw new Error(
+                `Failed to retire ${failures.length} MCP server(s) for channel ${channelId}`
+            );
+        }
     }
 
     /**
@@ -916,21 +1028,23 @@ export class ExternalMcpServerManager extends EventEmitter {
     public getServersByScope(scope: 'global' | 'channel' | 'agent', scopeId?: string): ExternalServerStatus[] {
         const servers: ExternalServerStatus[] = [];
 
-        for (const [serverId, scopeData] of this.serverScopes.entries()) {
-            if (scopeData.scope === scope) {
+        for (const [serverId, serverData] of this.servers.entries()) {
+            // Servers registered through the original global registration path
+            // predate serverScopes and are explicitly global, matching the tool
+            // snapshot contract in getAllExternalTools().
+            const scopeData = this.serverScopes.get(serverId);
+            const actualScope = scopeData?.scope ?? 'global';
+            if (actualScope === scope) {
                 // For channel/agent scope, match scopeId
-                if ((scope === 'channel' || scope === 'agent') && scopeData.scopeId !== scopeId) {
+                if ((scope === 'channel' || scope === 'agent') && scopeData?.scopeId !== scopeId) {
                     continue;
                 }
 
-                const serverData = this.servers.get(serverId);
-                if (serverData) {
-                    servers.push(serverData.status);
-                }
+                servers.push(serverData.status);
             }
         }
 
-        return servers;
+        return servers.sort((a, b) => a.id.localeCompare(b.id));
     }
 
     /**
@@ -1032,10 +1146,16 @@ export class ExternalMcpServerManager extends EventEmitter {
         const tools: ExternalMcpTool[] = [];
 
         for (const [serverId, serverData] of this.servers) {
+            const scopeData = this.serverScopes.get(serverId);
+            const scope = scopeData?.scope ?? 'global';
+            const scopeId = scopeData?.scopeId;
+
             for (const tool of serverData.status.tools) {
                 tools.push({
                     ...tool,
-                    serverId
+                    serverId,
+                    scope,
+                    scopeId
                 });
             }
         }
@@ -1752,6 +1872,14 @@ export class ExternalMcpServerManager extends EventEmitter {
      */
     public async shutdown(): Promise<void> {
 
+        // Stop accepting lifecycle requests before child-process teardown. Node's
+        // removeAllListeners() below only affects this class's EventEmitter; it
+        // does not detach RxJS EventBus subscriptions.
+        for (const subscription of this.eventSubscriptions) {
+            subscription.unsubscribe();
+        }
+        this.eventSubscriptions = [];
+
         const shutdownPromises = Array.from(this.servers.keys()).map(serverId => 
             this.stopServer(serverId)
         );
@@ -1767,6 +1895,7 @@ export class ExternalMcpServerManager extends EventEmitter {
 
         this.servers.clear();
         this.serverScopes.clear();
+        this.retiredChannelIds.clear();
         this.removeAllListeners();
 
     }

@@ -29,8 +29,12 @@
  * for LLM workflows (observations, reasoning, plans, reflections).
  */
 
-import { Observable, of } from 'rxjs';
-import { IMemoryPersistence } from '../interfaces/IMemoryPersistence.js';
+import { firstValueFrom, Observable, of, throwError } from 'rxjs';
+import {
+    ChannelMemoryAtomicMutation,
+    ChannelMemoryAtomicMutationResult,
+    IMemoryPersistence
+} from '../interfaces/IMemoryPersistence.js';
 import { MxfMeilisearchService } from './MxfMeilisearchService.js';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -40,8 +44,6 @@ import {
     IRelationshipMemory,
     MemoryScope, 
     MemoryPersistenceLevel,
-    MemoryData,
-    MemoryQueryParams,
     createMemoryValidator
 } from '../types/MemoryTypes.js';
 
@@ -56,13 +58,12 @@ import {
 import { Logger } from '../utils/Logger.js';
 import { EventBus } from '../events/EventBus.js';
 import { Events } from '../events/EventNames.js';
-import { MemoryGetEvent, MemoryUpdateEvent } from '../events/event-definitions/MemoryEvents.js';
 import { createBaseEventPayload, createMemoryUpdateResultEventPayload,
     createMemoryDeleteResultEventPayload,
-    MemoryDeleteResultEventData,
     MemoryUpdateResultEventData,
     MemoryGetEventPayload,
     MemoryUpdateEventPayload,
+    MemoryDeleteEventPayload,
     createMemoryGetResultEventPayload,
     MemoryGetResultEventData
 } from '../schemas/EventPayloadSchema.js';
@@ -122,6 +123,11 @@ export interface CognitiveMemoryQueryOptions {
     fromTimestamp?: number;
     toTimestamp?: number;
     textQuery?: string;
+}
+
+interface GeneralDataRecord {
+    expiresAt?: number;
+    [key: string]: unknown;
 }
 
 /**
@@ -186,8 +192,11 @@ export class MemoryService {
     private agentMemory: Map<string, IEnhancedAgentMemory> = new Map();
     private channelMemory: Map<string, IEnhancedChannelMemory> = new Map();
     private relationshipMemory: Map<string, IRelationshipMemory> = new Map();
-    private generalData: Map<string, any> = new Map();
-    private cognitiveMemory: Map<string, CognitiveMemoryEntry<any>> = new Map();
+    private generalData: Map<string, unknown> = new Map();
+    private cognitiveMemory: Map<string, CognitiveMemoryEntry<unknown>> = new Map();
+    private agentMutationTails: Map<string, Promise<void>> = new Map();
+    private channelMutationTails: Map<string, Promise<void>> = new Map();
+    private relationshipMutationTails: Map<string, Promise<void>> = new Map();
     
     // Configuration
     private config: MemoryServiceConfig;
@@ -209,10 +218,6 @@ export class MemoryService {
         this.config = { ...DEFAULT_CONFIG, ...config };
         this.persistenceService = config.persistenceService;
 
-        if (this.persistenceService) {
-        } else {
-        }
-
         // Set up event listeners
         this.setupEventListeners();
     }
@@ -221,373 +226,656 @@ export class MemoryService {
      * Set up event listeners
      */
     private setupEventListeners(): void {
-        // Listen for memory update events to keep cache in sync
-        EventBus.server.on(Events.Memory.UPDATE_RESULT, (data: { scope: MemoryScope, id: string, memory: any }) => {
-            if (data.scope === MemoryScope.AGENT && data.memory) {
-                this.agentMemory.set(data.id, data.memory);
-                // ;
-            } else if (data.scope === MemoryScope.CHANNEL && data.memory) {
-                this.channelMemory.set(data.id, data.memory);
-                // ;
-            } else if (data.scope === MemoryScope.RELATIONSHIP && data.memory) {
-                this.relationshipMemory.set(data.id, data.memory);
-                // ;
-            }
-        });
-        
-        // Set up EventBus bridge for Memory.UPDATE events
-        // This bridges EventBus memory events to internal memory operations
-        // Required for ChannelContextMemoryOperations to save data
-        EventBus.server.on(Events.Memory.UPDATE, (event: MemoryUpdateEventPayload) => {
-            try {
-                // Extract memory operation data from the event (handle EventBus forwarding nesting)
-                const memoryEventData = event.data.scope ? event.data : (event.data as any).data;
-                
-                // Validate required fields
-                this.validator.assertIsString(memoryEventData.scope, 'Memory scope is required');
-                this.validator.assertIsString(memoryEventData.operationId, 'Operation ID is required');
-                
-                // Determine the action based on memory scope and handle UPDATE operations
-                if (memoryEventData.scope === MemoryScope.CHANNEL) {
-                    // For channel data, store by key (e.g., "channel:context:${channelId}")
-                    const memoryKey = memoryEventData.id; // Use the id as the key
-                    const memoryData = memoryEventData.data;
-                    
-                    if (memoryKey && memoryData) {
-                        // Store the data in generalData map (in-memory cache)
-                        this.generalData.set(memoryKey, memoryData);
-                        
-                        // Also persist to MongoDB for durability (if persistence service available)
-                        // Extract actual context data - it's wrapped in another object with the key
-                        const actualContextData = memoryData[memoryKey];
-                        if (actualContextData && actualContextData.channelId && this.persistenceService) {
-                            try {
-                                // Convert to IChannelMemory format for persistence
-                                const channelMemoryUpdate: any = {
-                                    id: `${actualContextData.channelId}-context`,
-                                    channelId: actualContextData.channelId,
-                                    createdAt: new Date(actualContextData.createdAt || Date.now()),
-                                    updatedAt: new Date(),
-                                    persistenceLevel: 'persistent' as any,
-                                    sharedState: { context: actualContextData },
-                                    notes: { channelContext: 'Auto-saved from ChannelContextService' },
-                                    conversationHistory: [],
-                                    customData: { contextMetadata: memoryEventData.metadata || {} }
-                                };
+        // Return each request promise so EventBus.drain() retains ownership of
+        // acknowledged memory work until persistence and the response event
+        // have both completed.
+        EventBus.server.on(
+            Events.Memory.GET,
+            (event: MemoryGetEventPayload): Promise<void> => this.handleMemoryGetRequest(event)
+        );
+        EventBus.server.on(
+            Events.Memory.UPDATE,
+            (event: MemoryUpdateEventPayload): Promise<void> => this.handleMemoryUpdateRequest(event)
+        );
+        EventBus.server.on(
+            Events.Memory.DELETE,
+            (event: MemoryDeleteEventPayload): Promise<void> => this.handleMemoryDeleteRequest(event)
+        );
+    }
 
-                                // Persist to MongoDB (fire and forget for performance)
-                                this.persistenceService.saveChannelMemory(channelMemoryUpdate)
-                                    .subscribe({
-                                        next: () => this.logger.info(`Channel context persisted to MongoDB for ${actualContextData.channelId}`),
-                                        error: (err: Error) => this.logger.warn(`Failed to persist channel context to MongoDB: ${err.message}`)
-                                    });
-                            } catch (persistError) {
-                                this.logger.warn(`Error persisting channel context: ${persistError}`);
-                            }
-                        }
-                        
-                        // Create success result payload
-                        const updateResultData: MemoryUpdateResultEventData = {
-                            operationId: memoryEventData.operationId,
-                            scope: MemoryScope.CHANNEL,
-                            id: memoryKey,
-                            memory: memoryData
-                        };
-                        
-                        const systemAgentId: AgentId = 'SYSTEM_AGENT';
-                        const channelId: ChannelId = event.channelId || 'NO_CHANNEL';
-                        
-                        const payload = createMemoryUpdateResultEventPayload(
-                            Events.Memory.UPDATE_RESULT,
-                            systemAgentId,
-                            channelId,
-                            updateResultData
-                        );
-                        
-                        EventBus.server.emit(Events.Memory.UPDATE_RESULT, payload);
-                    } else {
-                        this.logger.warn(`Invalid UPDATE data - missing key or data: key=${memoryKey}, data=${!!memoryData}`);
+    private validateMemoryRequestIdentity(
+        event: MemoryGetEventPayload | MemoryUpdateEventPayload | MemoryDeleteEventPayload
+    ): void {
+        this.validator.assertIsNonEmptyString(event.agentId, 'Memory request agentId is required');
+        this.validator.assertIsNonEmptyString(event.channelId, 'Memory request channelId is required');
+        this.validator.assertIsNonEmptyString(event.data.operationId, 'Memory operationId is required');
+        this.validator.validateMemoryScope(event.data.scope);
+    }
+
+    private requireScalarMemoryId(id: string | string[], scope: MemoryScope): string {
+        if (Array.isArray(id)) {
+            throw new Error(`${scope} memory requires a scalar ID`);
+        }
+        this.validator.assertIsNonEmptyString(id, `${scope} memory ID is required`);
+        return id;
+    }
+
+    /**
+     * Agent-scoped requests address the requesting agent's own memory. The
+     * socket gateway checks this too; the service checks it again so no other
+     * caller of the event bridge can read or change another agent's memory by
+     * naming it.
+     */
+    private requireOwnAgentMemoryId(id: string | string[], requestingAgentId: AgentId): string {
+        const agentId = this.requireScalarMemoryId(id, MemoryScope.AGENT);
+        if (agentId !== requestingAgentId) {
+            throw new Error('Agent memory requests are limited to the requesting agent');
+        }
+        return agentId;
+    }
+
+    /**
+     * Channel-scoped requests address the request's own channel: either the
+     * whole channel document (id equal to the request channel) or one of its
+     * keyed sub-resources (`channel:...:<channelId>`, validated where the key
+     * is resolved).
+     */
+    private requireOwnChannelMemoryId(id: string | string[], requestChannelId: ChannelId): string {
+        const channelMemoryId = this.requireScalarMemoryId(id, MemoryScope.CHANNEL);
+        if (!channelMemoryId.startsWith('channel:') && channelMemoryId !== requestChannelId) {
+            throw new Error('Channel memory requests are limited to the request channel');
+        }
+        return channelMemoryId;
+    }
+
+    /**
+     * Relationship-scoped requests must come from one of the two agents in
+     * the relationship, and the channel component must match the request.
+     */
+    private requireRelationshipMemoryId(
+        id: string | string[],
+        channelId: ChannelId,
+        requestingAgentId: AgentId
+    ): [string, string, string] {
+        if (!Array.isArray(id) || (id.length !== 2 && id.length !== 3)) {
+            throw new Error('Relationship memory requires two agent IDs and an optional channel ID');
+        }
+        id.forEach((part, index) => {
+            this.validator.assertIsNonEmptyString(part, `Relationship memory ID part ${index} is required`);
+        });
+        if (id.length === 3 && id[2] !== channelId) {
+            throw new Error('Relationship memory channel must match the request channel');
+        }
+        if (id[0] !== requestingAgentId && id[1] !== requestingAgentId) {
+            throw new Error('Relationship memory requests are limited to a participant of the relationship');
+        }
+        return [id[0], id[1], channelId];
+    }
+
+    private ownsPathOrDescendant(value: unknown, reservedPath: string): boolean {
+        if (!value || typeof value !== 'object') {
+            return false;
+        }
+        return Object.keys(value).some(key =>
+            key === reservedPath || key.startsWith(`${reservedPath}.`)
+        );
+    }
+
+    private getChannelMemoryKey(
+        key: string,
+        expectedChannelId?: ChannelId
+    ): { channelId: string; kind: 'messages' | 'context' | 'history' } {
+        const prefixes = [
+            { prefix: 'channel:context:history:', kind: 'history' as const },
+            { prefix: 'channel:messages:', kind: 'messages' as const },
+            { prefix: 'channel:context:', kind: 'context' as const }
+        ];
+        const matched = prefixes.find(({ prefix }) => key.startsWith(prefix));
+        if (!matched) {
+            throw new Error(`Unsupported channel memory key: ${key}`);
+        }
+        const channelId = key.slice(matched.prefix.length);
+        this.validator.assertIsNonEmptyString(channelId, 'Channel memory key channelId is required');
+        if (expectedChannelId && channelId !== expectedChannelId) {
+            throw new Error('Channel memory key must match the request channel');
+        }
+        return { channelId, kind: matched.kind };
+    }
+
+    private async getKeyedChannelMemory(
+        key: string,
+        requestChannelId: ChannelId
+    ): Promise<MemoryGetResultEventData['memory']> {
+        const { channelId, kind } = this.getChannelMemoryKey(key, requestChannelId);
+        if (!this.persistenceService && this.generalData.has(key)) {
+            return this.generalData.get(key) as MemoryGetResultEventData['memory'];
+        }
+
+        const channelMemory = this.persistenceService
+            ? await firstValueFrom(this.persistenceService.getChannelMemory(channelId))
+            : await firstValueFrom(this.getChannelMemory(channelId));
+        const value = kind === 'messages'
+            ? channelMemory.conversationHistory
+            : kind === 'context'
+                ? channelMemory.sharedState?.context
+                : channelMemory.customData?.contextHistory;
+        const cachedMemory = this.channelMemory.get(channelId);
+        this.channelMemory.set(channelId, {
+            ...channelMemory,
+            sharedCognitiveInsights: cachedMemory?.sharedCognitiveInsights ?? {
+                systemSummaries: [],
+                topicExtractions: [],
+                collaborativeReflections: []
+            }
+        });
+        if (value !== undefined) {
+            this.generalData.set(key, value);
+        } else {
+            this.generalData.delete(key);
+        }
+        return (value as MemoryGetResultEventData['memory']) ?? null;
+    }
+
+    private serializeChannelMutation<T>(
+        channelId: string,
+        operation: () => Promise<T>
+    ): Promise<T> {
+        const previousTail = this.channelMutationTails.get(channelId) ?? Promise.resolve();
+        const result = previousTail.then(operation);
+        const nextTail = result.then(() => undefined, () => undefined);
+        this.channelMutationTails.set(channelId, nextTail);
+
+        return result.finally(() => {
+            if (this.channelMutationTails.get(channelId) === nextTail) {
+                this.channelMutationTails.delete(channelId);
+            }
+        });
+    }
+
+    private serializeAgentMutation<T>(
+        agentId: string,
+        operation: () => Promise<T>
+    ): Promise<T> {
+        const previousTail = this.agentMutationTails.get(agentId) ?? Promise.resolve();
+        const result = previousTail.then(operation);
+        const nextTail = result.then(() => undefined, () => undefined);
+        this.agentMutationTails.set(agentId, nextTail);
+
+        return result.finally(() => {
+            if (this.agentMutationTails.get(agentId) === nextTail) {
+                this.agentMutationTails.delete(agentId);
+            }
+        });
+    }
+
+    private serializeRelationshipMutation<T>(
+        agentId1: string,
+        agentId2: string,
+        channelId: string,
+        operation: () => Promise<T>
+    ): Promise<T> {
+        const relationshipKey = this.getRelationshipKey(agentId1, agentId2, channelId);
+        const previousTail = this.relationshipMutationTails.get(relationshipKey) ?? Promise.resolve();
+        const result = previousTail.then(operation);
+        const nextTail = result.then(() => undefined, () => undefined);
+        this.relationshipMutationTails.set(relationshipKey, nextTail);
+
+        return result.finally(() => {
+            if (this.relationshipMutationTails.get(relationshipKey) === nextTail) {
+                this.relationshipMutationTails.delete(relationshipKey);
+            }
+        });
+    }
+
+    private getAtomicMutation(
+        kind: 'messages' | 'context' | 'history',
+        value: unknown,
+        expectedContextUpdatedAt?: number
+    ): ChannelMemoryAtomicMutation {
+        switch (kind) {
+            case 'messages':
+                if (!Array.isArray(value) || value.length === 0) {
+                    throw new Error('Keyed channel message updates require a non-empty array');
+                }
+                return { kind: 'append_messages', messages: value };
+            case 'context':
+                if (!value || typeof value !== 'object' || Array.isArray(value)) {
+                    throw new Error('Keyed channel context updates require an object');
+                }
+                return {
+                    kind: 'replace_context',
+                    context: value,
+                    expectedUpdatedAt: expectedContextUpdatedAt
+                };
+            case 'history':
+                if (!Array.isArray(value) || value.length === 0) {
+                    throw new Error('Keyed channel history updates require a non-empty array');
+                }
+                return { kind: 'append_context_history', entries: value, retainLast: 100 };
+        }
+    }
+
+    private getDeleteMutation(
+        kind: 'messages' | 'context' | 'history'
+    ): ChannelMemoryAtomicMutation {
+        switch (kind) {
+            case 'messages':
+                return { kind: 'delete_messages' };
+            case 'context':
+                return { kind: 'delete_context' };
+            case 'history':
+                return { kind: 'delete_context_history' };
+        }
+    }
+
+    private async mutateLocalChannelMemory(
+        channelId: string,
+        mutation: ChannelMemoryAtomicMutation
+    ): Promise<ChannelMemoryAtomicMutationResult> {
+        const deleting = mutation.kind.startsWith('delete_');
+        const existingMemory = this.channelMemory.get(channelId);
+        if (deleting && !existingMemory) {
+            return { found: false, memory: null, value: null };
+        }
+        const originalMemory = existingMemory ?? await firstValueFrom(this.getChannelMemory(channelId));
+        if (mutation.kind === 'replace_context') {
+            const existingContext = originalMemory.sharedState?.context as
+                | { updatedAt?: unknown }
+                | undefined;
+            const actualUpdatedAt = existingContext?.updatedAt;
+            const versionMatches = mutation.expectedUpdatedAt === undefined
+                ? existingContext === undefined
+                : actualUpdatedAt === mutation.expectedUpdatedAt;
+            if (!versionMatches) {
+                return { found: false, memory: originalMemory, value: existingContext ?? null };
+            }
+        }
+        const targetExists = mutation.kind === 'delete_messages'
+            ? originalMemory.conversationHistory !== undefined
+            : mutation.kind === 'delete_context'
+                ? Object.prototype.hasOwnProperty.call(originalMemory.sharedState ?? {}, 'context')
+                : mutation.kind === 'delete_context_history'
+                    ? Object.prototype.hasOwnProperty.call(
+                        originalMemory.customData ?? {},
+                        'contextHistory'
+                    )
+                    : true;
+        if (!targetExists) {
+            return { found: false, memory: originalMemory, value: null };
+        }
+        let updatedMemory: IEnhancedChannelMemory;
+        let value: unknown;
+
+        switch (mutation.kind) {
+            case 'append_messages':
+                value = [...(originalMemory.conversationHistory ?? []), ...mutation.messages];
+                updatedMemory = { ...originalMemory, conversationHistory: value as unknown[] };
+                break;
+            case 'replace_context':
+                value = mutation.context;
+                updatedMemory = {
+                    ...originalMemory,
+                    sharedState: { ...originalMemory.sharedState, context: value }
+                };
+                break;
+            case 'append_context_history':
+                value = [
+                    ...((originalMemory.customData?.contextHistory as unknown[] | undefined) ?? []),
+                    ...mutation.entries
+                ].slice(-mutation.retainLast);
+                updatedMemory = {
+                    ...originalMemory,
+                    customData: { ...originalMemory.customData, contextHistory: value }
+                };
+                break;
+            case 'delete_messages':
+                value = [];
+                updatedMemory = { ...originalMemory, conversationHistory: [] };
+                break;
+            case 'delete_context': {
+                const sharedState = { ...originalMemory.sharedState };
+                delete sharedState.context;
+                value = null;
+                updatedMemory = { ...originalMemory, sharedState };
+                break;
+            }
+            case 'delete_context_history': {
+                const customData = { ...originalMemory.customData };
+                delete customData.contextHistory;
+                value = null;
+                updatedMemory = { ...originalMemory, customData };
+                break;
+            }
+        }
+
+        updatedMemory.updatedAt = new Date();
+        this.channelMemory.set(channelId, updatedMemory);
+        return { found: true, memory: updatedMemory, value };
+    }
+
+    private async executeKeyedChannelMutation(
+        key: string,
+        requestChannelId: ChannelId | undefined,
+        mutation: ChannelMemoryAtomicMutation
+    ): Promise<ChannelMemoryAtomicMutationResult> {
+        const { channelId } = this.getChannelMemoryKey(key, requestChannelId);
+        return this.serializeChannelMutation(channelId, async () => {
+            const result = this.persistenceService
+                ? await firstValueFrom(
+                    this.persistenceService.mutateChannelMemory(channelId, mutation)
+                )
+                : await this.mutateLocalChannelMemory(channelId, mutation);
+
+            if (result.memory) {
+                const cachedMemory = this.channelMemory.get(channelId);
+                this.channelMemory.set(channelId, {
+                    ...result.memory,
+                    sharedCognitiveInsights: cachedMemory?.sharedCognitiveInsights ?? {
+                        systemSummaries: [],
+                        topicExtractions: [],
+                        collaborativeReflections: []
                     }
-                }
-            } catch (error) {
-                this.logger.error(`Error handling Memory.UPDATE event: ${error instanceof Error ? error.message : String(error)}`);
+                });
             }
+            if (result.found) {
+                this.generalData.set(key, result.value);
+            } else {
+                this.generalData.delete(key);
+            }
+            return result;
         });
-        
-        // Set up EventBus bridge for Memory.GET events
-        // This bridges EventBus memory events to internal memory operations
-        // Required for ChannelContextMessageOperations to work with the memory system
-        EventBus.server.on(Events.Memory.GET, (event: MemoryGetEventPayload) => {
-            try {
-                // Extract memory operation data from the event (handle EventBus forwarding nesting)
-                const memoryEventData = event.data.scope ? event.data : (event.data as any).data;
-                
-                // Validate required fields
-                this.validator.assertIsString(memoryEventData.scope, 'Memory scope is required');
-                this.validator.assertIsString(memoryEventData.operationId, 'Operation ID is required');
-                
-                let memoryObservable: any = null;
-                
-                // Determine the action based on memory scope and handle GET operations
-                switch (memoryEventData.scope) {
-                    case MemoryScope.CHANNEL:
-                        // Determine the memory key to look up - prioritize key field over id field
-                        const memoryKey = memoryEventData.key || (Array.isArray(memoryEventData.id) ? memoryEventData.id[0] : memoryEventData.id);
-                        
-                        if (memoryKey) {
-                            // For channel data, look up by key (e.g., "channel:messages:${channelId}" or "channel:context:${channelId}")
-                            const channelMemory = this.generalData.get(memoryKey);
-                            
-                            // Create result payload
-                            const getResultData: MemoryGetResultEventData = {
-                                operationId: memoryEventData.operationId,
-                                scope: MemoryScope.CHANNEL,
-                                id: memoryKey, // Use the memory key as the id for proper matching
-                                memory: channelMemory || null
-                            };
-                            
-                            const systemAgentId: AgentId = 'SYSTEM_AGENT';
-                            const noChannelId: ChannelId = 'NO_CHANNEL';
-                            
-                            const payload = createMemoryGetResultEventPayload(
-                                Events.Memory.GET_RESULT,
-                                systemAgentId,
-                                noChannelId,
-                                getResultData
+    }
+
+    private async updateKeyedChannelMemory(
+        key: string,
+        value: unknown,
+        requestChannelId: ChannelId,
+        expectedContextUpdatedAt?: number
+    ): Promise<MemoryUpdateResultEventData['memory']> {
+        const { kind } = this.getChannelMemoryKey(key, requestChannelId);
+        const result = await this.executeKeyedChannelMutation(
+            key,
+            requestChannelId,
+            this.getAtomicMutation(kind, value, expectedContextUpdatedAt)
+        );
+        if (!result.found) {
+            throw new Error(`Channel context changed concurrently while updating ${key}`);
+        }
+        return result.value as MemoryUpdateResultEventData['memory'];
+    }
+
+    private async deleteKeyedChannelMemory(key: string): Promise<boolean> {
+        const { kind } = this.getChannelMemoryKey(key);
+        const result = await this.executeKeyedChannelMutation(
+            key,
+            undefined,
+            this.getDeleteMutation(kind)
+        );
+        if (result.found) {
+            this.generalData.delete(key);
+        }
+        return result.found;
+    }
+
+    private async handleMemoryGetRequest(event: MemoryGetEventPayload): Promise<void> {
+        let responseId: string | string[] = event.data.id;
+        try {
+            this.validateMemoryRequestIdentity(event);
+            let memory: MemoryGetResultEventData['memory'];
+
+            switch (event.data.scope) {
+                case MemoryScope.AGENT: {
+                    const agentId = this.requireOwnAgentMemoryId(event.data.id, event.agentId);
+                    responseId = agentId;
+                    memory = await firstValueFrom(this.getAgentMemory(agentId));
+                    break;
+                }
+                case MemoryScope.CHANNEL: {
+                    const channelMemoryId = this.requireOwnChannelMemoryId(
+                        event.data.key ?? event.data.id,
+                        event.channelId
+                    );
+                    responseId = channelMemoryId;
+                    memory = channelMemoryId.startsWith('channel:')
+                        ? await this.getKeyedChannelMemory(channelMemoryId, event.channelId)
+                        : await firstValueFrom(this.getChannelMemory(channelMemoryId));
+                    break;
+                }
+                case MemoryScope.RELATIONSHIP: {
+                    const [agentId1, agentId2, channelId] = this.requireRelationshipMemoryId(
+                        event.data.id,
+                        event.channelId,
+                        event.agentId
+                    );
+                    responseId = [agentId1, agentId2, channelId];
+                    memory = await firstValueFrom(
+                        this.getRelationshipMemory(agentId1, agentId2, channelId)
+                    );
+                    break;
+                }
+            }
+
+            EventBus.server.emit(
+                Events.Memory.GET_RESULT,
+                createMemoryGetResultEventPayload(
+                    Events.Memory.GET_RESULT,
+                    event.agentId,
+                    event.channelId,
+                    {
+                        operationId: event.data.operationId,
+                        scope: event.data.scope,
+                        id: responseId,
+                        memory
+                    }
+                )
+            );
+        } catch (error) {
+            this.emitMemoryGetError(event, responseId, error);
+        }
+    }
+
+    private async handleMemoryUpdateRequest(event: MemoryUpdateEventPayload): Promise<void> {
+        let responseId: string | string[] = event.data.id;
+        try {
+            this.validateMemoryRequestIdentity(event);
+            this.validator.assertIsObject(event.data.data, 'Memory update data is required');
+            let memory: MemoryUpdateResultEventData['memory'];
+
+            switch (event.data.scope) {
+                case MemoryScope.AGENT: {
+                    const agentId = this.requireOwnAgentMemoryId(event.data.id, event.agentId);
+                    responseId = agentId;
+                    memory = await firstValueFrom(this.updateAgentMemory(agentId, event.data.data));
+                    break;
+                }
+                case MemoryScope.CHANNEL: {
+                    const channelMemoryId = this.requireOwnChannelMemoryId(
+                        event.data.id,
+                        event.channelId
+                    );
+                    responseId = channelMemoryId;
+                    const embeddedMemoryKeys = Object.keys(event.data.data)
+                        .filter(key => key.startsWith('channel:'));
+                    const keyedMemoryId = channelMemoryId.startsWith('channel:')
+                        ? channelMemoryId
+                        : embeddedMemoryKeys.length === 1
+                            ? embeddedMemoryKeys[0]
+                            : undefined;
+                    if (keyedMemoryId) {
+                        responseId = keyedMemoryId;
+                        const nestedValue = event.data.data[keyedMemoryId];
+                        const value = nestedValue === undefined ? event.data.data : nestedValue;
+                        const expectedContextUpdatedAt =
+                            event.data.metadata?.expectedContextUpdatedAt;
+                        if (
+                            expectedContextUpdatedAt !== undefined &&
+                            (
+                                typeof expectedContextUpdatedAt !== 'number' ||
+                                !Number.isFinite(expectedContextUpdatedAt) ||
+                                expectedContextUpdatedAt < 0
+                            )
+                        ) {
+                            throw new Error(
+                                'Memory update expectedContextUpdatedAt must be a non-negative number'
                             );
-                            
-                            //// this.logger.info(`[CRITICAL] MemoryService emitting GET_RESULT:`, Object.keys(payload));
-                            EventBus.server.emit(Events.Memory.GET_RESULT, payload);
-                        } else {
-                            this.logger.warn(`[DEBUG] No memory key found in GET event data`);
                         }
-                        break;
-                        
-                    case MemoryScope.AGENT:
-                        if (typeof memoryEventData.id === 'string') {
-                            // ;
-                            memoryObservable = this.getAgentMemory(memoryEventData.id);
-                            
-                            // Subscribe to the observable and emit result
-                            memoryObservable.subscribe({
-                                next: (agentMemory: IEnhancedAgentMemory) => {
-                                    // Create result payload
-                                    const getResultData: MemoryGetResultEventData = {
-                                        operationId: memoryEventData.operationId,
-                                        scope: MemoryScope.AGENT,
-                                        id: memoryEventData.id as string,
-                                        memory: agentMemory || null
-                                    };
-                                    
-                                    const payload = createMemoryGetResultEventPayload(
-                                        Events.Memory.GET_RESULT,
-                                        event.agentId,
-                                        event.channelId,
-                                        getResultData
-                                    );
-                                    
-                                    EventBus.server.emit(Events.Memory.GET_RESULT, payload);
-                                },
-                                error: (error: Error) => {
-                                    this.logger.error(`Error getting agent memory: ${error}`);
-                                    
-                                    // Create error result payload
-                                    const getResultData: MemoryGetResultEventData = {
-                                        operationId: memoryEventData.operationId,
-                                        scope: MemoryScope.AGENT,
-                                        id: memoryEventData.id as string,
-                                        memory: null
-                                    };
-                                    
-                                    const payload = createMemoryGetResultEventPayload(
-                                        Events.Memory.GET_RESULT,
-                                        event.agentId,
-                                        event.channelId,
-                                        getResultData
-                                    );
-                                    
-                                    EventBus.server.emit(Events.Memory.GET_RESULT, payload);
-                                }
-                            });
-                        }
-                        break;
-                        
-                    case MemoryScope.RELATIONSHIP:
-                        // Handle relationship memory GET
-                        break;
-                        
-                    default:
-                        this.logger.warn(`Unsupported memory scope: ${memoryEventData.scope}`);
+                        memory = await this.updateKeyedChannelMemory(
+                            keyedMemoryId,
+                            value,
+                            event.channelId,
+                            expectedContextUpdatedAt
+                        );
+                    } else {
+                        memory = await firstValueFrom(
+                            this.updateChannelMemory(channelMemoryId, event.data.data)
+                        );
+                    }
+                    break;
                 }
-                
-            } catch (error) {
-                this.logger.error('[ERROR] Error processing EventBus Memory.GET:', error);
-                
-                // Log error details for debugging without creating fake event payloads
-                const operationId = event.data?.operationId || '[NO_OPERATION_ID]';
-                const memoryId = event.data?.id || event.data?.key || '[NO_MEMORY_ID]';
-                this.logger.error(`Memory GET operation failed - OperationId: ${operationId}, MemoryId: ${memoryId}, Error: ${(error as Error).message}`);
-                
-                // Cannot emit GET_RESULT event without valid agentId and channelId from original request
-                // Original event should have contained these required identifiers
-                this.logger.warn('Cannot emit Memory.GET_RESULT event - original event lacked valid agentId/channelId. Memory operation errors should be handled by the requesting component.');
-            }
-        });
-        
-        // Set up EventBus bridge for Memory.UPDATE events
-        EventBus.server.on(Events.Memory.UPDATE, (event: MemoryUpdateEventPayload) => {
-            try {
-                // Extract memory operation data from the event (handle EventBus forwarding nesting)
-                const memoryEventData = event.data.scope ? event.data : (event.data as any).data;
-                
-                // Validate required fields
-                this.validator.assertIsString(memoryEventData.scope, 'Memory scope is required');
-                this.validator.assertIsString(memoryEventData.operationId, 'Operation ID is required');
-                
-                // Handle UPDATE operations
-                switch (memoryEventData.scope) {
-                    case MemoryScope.CHANNEL:
-                        // For UPDATE operations, the id field contains the memory key
-                        const updateMemoryKey = Array.isArray(memoryEventData.id) ? memoryEventData.id[0] : memoryEventData.id;
-                        
-                        // Handle the actual data structure from ChannelContextMessageOperations and ChannelContextMemoryOperations
-                        // Data comes in format: 
-                        // - { "channel:messages:${channelId}": [...messages] } for messages
-                        // - { "channel:context:${channelId}": {...context} } for context
-                        if (memoryEventData.data && typeof memoryEventData.data === 'object') {
-                            // Check if the data is already properly keyed or needs to be keyed
-                            const dataKeys = Object.keys(memoryEventData.data);
-                            
-                            if (updateMemoryKey.startsWith('channel:')) {
-                                // Direct storage: id field is the memory key, data field contains the actual data
-                                // ;
-                                
-                                // If data has nested structure with the same key, extract the nested data
-                                const actualData = memoryEventData.data[updateMemoryKey] || memoryEventData.data;
-                                
-                                // Check if data has actually changed before updating
-                                const existingData = this.generalData.get(updateMemoryKey);
-                                const dataHasChanged = !this.isDataEqual(existingData, actualData);
-                                
-                                if (!dataHasChanged) {
-                                    // ;
-                                    return; // Skip update and event emission
-                                }
-                                
-                                // ;
-                                this.generalData.set(updateMemoryKey, actualData);
-                                
-                                // Create success result payload
-                                const updateResult: MemoryUpdateResultEventData = {
-                                    operationId: memoryEventData.operationId,
-                                    scope: MemoryScope.CHANNEL,
-                                    id: updateMemoryKey, // Use the memory key as the id for proper matching
-                                    memory: actualData
-                                };
-                                
-                                const systemAgentId: AgentId = 'SYSTEM_AGENT';
-                                const noChannelId: ChannelId = 'NO_CHANNEL';
-                                
-                                const payload = createMemoryUpdateResultEventPayload(
-                                    Events.Memory.UPDATE_RESULT,
-                                    systemAgentId,
-                                    noChannelId,
-                                    updateResult
-                                );
-                                
-                                // ;
-                                EventBus.server.emit(Events.Memory.UPDATE_RESULT, payload);
-                            } else {
-                                // Legacy format: Find any channel-related key and data in the data object
-                                const channelKey = dataKeys.find(key => 
-                                    key.startsWith('channel:messages:') || key.startsWith('channel:context:')
-                                );
-                                
-                                if (channelKey && memoryEventData.data[channelKey]) {
-                                    // ;
-                                    
-                                    const newData = memoryEventData.data[channelKey];
-                                    
-                                    // Check if data has actually changed before updating
-                                    const existingData = this.generalData.get(channelKey);
-                                    const dataHasChanged = !this.isDataEqual(existingData, newData);
-                                    
-                                    if (!dataHasChanged) {
-                                        // ;
-                                        return; // Skip update and event emission
-                                    }
-                                    
-                                    // Store the data by the key (messages array or context object)
-                                    // ;
-                                    this.generalData.set(channelKey, newData);
-                                    
-                                    // Create success result payload
-                                    const updateResult: MemoryUpdateResultEventData = {
-                                        operationId: memoryEventData.operationId,
-                                        scope: MemoryScope.CHANNEL,
-                                        id: channelKey, // Use the memory key as the id for proper matching
-                                        memory: newData
-                                    };
-                                    
-                                    const systemAgentId: AgentId = 'SYSTEM_AGENT';
-                                    const noChannelId: ChannelId = 'NO_CHANNEL';
-                                    
-                                    const payload = createMemoryUpdateResultEventPayload(
-                                        Events.Memory.UPDATE_RESULT,
-                                        systemAgentId,
-                                        noChannelId,
-                                        updateResult
-                                    );
-                                    
-                                    // ;
-                                    EventBus.server.emit(Events.Memory.UPDATE_RESULT, payload);
-                                } else {
-                                    this.logger.warn(`No recognized channel key found in data keys: ${dataKeys.join(', ')}`);
-                                }
-                            }
-                        }
-                        break;
-                        
-                    case MemoryScope.AGENT:
-                        // Handle agent memory UPDATE
-                        if (typeof memoryEventData.id === 'string' && memoryEventData.data) {
-                            // CRITICAL: Must subscribe to Observable to trigger execution!
-                            // The request context routes the UPDATE_RESULT back to the
-                            // requesting agent with its own operationId — without it the
-                            // SDK's pending save can never observe its result.
-                            this.updateAgentMemory(memoryEventData.id, memoryEventData.data, {
-                                operationId: memoryEventData.operationId,
-                                requesterAgentId: event.agentId,
-                                requesterChannelId: event.channelId
-                            }).subscribe({
-                                next: () => null,
-                                error: (err) => this.logger.error(`Agent memory update failed for ${memoryEventData.id}: ${err}`)
-                            });
-                        }
-                        break;
-                        
-                    case MemoryScope.RELATIONSHIP:
-                        // Handle relationship memory UPDATE
-                        break;
-                        
-                    default:
-                        this.logger.warn(`Unsupported memory scope: ${memoryEventData.scope}`);
+                case MemoryScope.RELATIONSHIP: {
+                    const [agentId1, agentId2, channelId] = this.requireRelationshipMemoryId(
+                        event.data.id,
+                        event.channelId,
+                        event.agentId
+                    );
+                    responseId = [agentId1, agentId2, channelId];
+                    memory = await firstValueFrom(
+                        this.updateRelationshipMemory(agentId1, agentId2, channelId, event.data.data)
+                    );
+                    break;
                 }
-                
-            } catch (error) {
-                this.logger.error('[ERROR] Error processing EventBus Memory.UPDATE:', error);
-                
-                // Log error details for debugging without creating fake event payloads
-                const operationId = event.data?.operationId || '[NO_OPERATION_ID]';
-                const memoryId = event.data?.id || '[NO_MEMORY_ID]';
-                this.logger.error(`Memory UPDATE operation failed - OperationId: ${operationId}, MemoryId: ${memoryId}, Error: ${(error as Error).message}`);
-                
-                // Cannot emit UPDATE_RESULT event without valid agentId and channelId from original request
-                // Original event should have contained these required identifiers
-                this.logger.warn('Cannot emit Memory.UPDATE_RESULT event - original event lacked valid agentId/channelId. Memory operation errors should be handled by the requesting component.');
             }
-        });
-        
+
+            EventBus.server.emit(
+                Events.Memory.UPDATE_RESULT,
+                createMemoryUpdateResultEventPayload(
+                    Events.Memory.UPDATE_RESULT,
+                    event.agentId,
+                    event.channelId,
+                    {
+                        operationId: event.data.operationId,
+                        scope: event.data.scope,
+                        id: responseId,
+                        memory
+                    }
+                )
+            );
+        } catch (error) {
+            this.emitMemoryUpdateError(event, responseId, error);
+        }
+    }
+
+    private async handleMemoryDeleteRequest(event: MemoryDeleteEventPayload): Promise<void> {
+        let responseId: string | string[] = event.data.id;
+        try {
+            this.validateMemoryRequestIdentity(event);
+            if (event.data.scope === MemoryScope.RELATIONSHIP) {
+                responseId = this.requireRelationshipMemoryId(
+                    event.data.id,
+                    event.channelId,
+                    event.agentId
+                );
+            } else if (event.data.scope === MemoryScope.AGENT) {
+                responseId = this.requireOwnAgentMemoryId(event.data.id, event.agentId);
+            } else {
+                responseId = this.requireOwnChannelMemoryId(event.data.id, event.channelId);
+                if (responseId.startsWith('channel:')) {
+                    this.getChannelMemoryKey(responseId, event.channelId);
+                }
+            }
+
+            const success = await firstValueFrom(
+                this.deleteMemory(event.data.scope, responseId)
+            );
+            EventBus.server.emit(
+                Events.Memory.DELETE_RESULT,
+                createMemoryDeleteResultEventPayload(
+                    Events.Memory.DELETE_RESULT,
+                    event.agentId,
+                    event.channelId,
+                    {
+                        operationId: event.data.operationId,
+                        scope: event.data.scope,
+                        id: responseId,
+                        success
+                    }
+                )
+            );
+        } catch (error) {
+            this.emitMemoryDeleteError(event, responseId, error);
+        }
+    }
+
+    private emitMemoryGetError(
+        event: MemoryGetEventPayload,
+        id: string | string[],
+        error: unknown
+    ): void {
+        const message = error instanceof Error ? error.message : String(error);
+        this.logger.error(`Memory GET failed: ${message}`);
+        EventBus.server.emit(
+            Events.Memory.GET_RESULT,
+            createMemoryGetResultEventPayload(
+                Events.Memory.GET_RESULT,
+                event.agentId,
+                event.channelId,
+                {
+                    operationId: event.data.operationId,
+                    scope: event.data.scope,
+                    id,
+                    memory: null,
+                    error: message
+                }
+            )
+        );
+    }
+
+    private emitMemoryUpdateError(
+        event: MemoryUpdateEventPayload,
+        id: string | string[],
+        error: unknown
+    ): void {
+        const message = error instanceof Error ? error.message : String(error);
+        this.logger.error(`Memory UPDATE failed: ${message}`);
+        EventBus.server.emit(
+            Events.Memory.UPDATE_RESULT,
+            createMemoryUpdateResultEventPayload(
+                Events.Memory.UPDATE_RESULT,
+                event.agentId,
+                event.channelId,
+                {
+                    operationId: event.data.operationId,
+                    scope: event.data.scope,
+                    id,
+                    memory: null,
+                    error: message
+                }
+            )
+        );
+    }
+
+    private emitMemoryDeleteError(
+        event: MemoryDeleteEventPayload,
+        id: string | string[],
+        error: unknown
+    ): void {
+        const message = error instanceof Error ? error.message : String(error);
+        this.logger.error(`Memory DELETE failed: ${message}`);
+        EventBus.server.emit(
+            Events.Memory.DELETE_RESULT,
+            createMemoryDeleteResultEventPayload(
+                Events.Memory.DELETE_RESULT,
+                event.agentId,
+                event.channelId,
+                {
+                    operationId: event.data.operationId,
+                    scope: event.data.scope,
+                    id,
+                    success: false,
+                    error: message
+                }
+            )
+        );
     }
     
     /**
@@ -625,11 +913,14 @@ export class MemoryService {
         if (persistence) {
             return new Observable<IEnhancedAgentMemory>(observer => {
                 persistence.getAgentMemory(agentId).subscribe({
-                    next: (loadedMemory: any) => {
+                    next: (loadedMemory: IAgentMemory) => {
                         // Enhance the loaded memory with cognitive memory structure
+                        const loadedCognitiveMemory = (
+                            loadedMemory as Partial<IEnhancedAgentMemory>
+                        ).cognitiveMemory;
                         const enhancedMemory: IEnhancedAgentMemory = {
                             ...loadedMemory,
-                            cognitiveMemory: loadedMemory.cognitiveMemory || {
+                            cognitiveMemory: loadedCognitiveMemory ?? {
                                 observationIds: [],
                                 reasoningIds: [],
                                 planIds: [],
@@ -644,12 +935,10 @@ export class MemoryService {
                         observer.next(enhancedMemory);
                         observer.complete();
                     },
-                    error: (error: any) => {
-                        this.logger.warn(`Failed to load agent memory from MongoDB for ${agentId}: ${error.message}`);
-                        // Fall back to creating new memory
-                        const newMemory = this.createNewAgentMemory(agentId);
-                        observer.next(newMemory);
-                        observer.complete();
+                    error: (error: unknown) => {
+                        const message = error instanceof Error ? error.message : String(error);
+                        this.logger.error(`Failed to load agent memory from MongoDB for ${agentId}: ${message}`);
+                        observer.error(error);
                     }
                 });
             });
@@ -685,167 +974,98 @@ export class MemoryService {
 
         this.agentMemory.set(agentId, newMemory);
 
-        const operationId_agent_get_new = uuidv4();
-        const systemAgentId_agent_get_new: AgentId = 'SYSTEM_AGENT';
-        const noChannelId_agent_get_new: ChannelId = 'NO_CHANNEL';
-        const updateResultData_agent_get_new: MemoryUpdateResultEventData = {
-            operationId: operationId_agent_get_new,
-            scope: MemoryScope.AGENT,
-            id: agentId,
-            memory: newMemory
-        };
-        EventBus.server.emit(
-            Events.Memory.UPDATE_RESULT,
-            createMemoryUpdateResultEventPayload(
-                Events.Memory.UPDATE_RESULT,
-                systemAgentId_agent_get_new,
-                noChannelId_agent_get_new,
-                updateResultData_agent_get_new
-            )
-        );
-
         return newMemory;
     }
     
     /**
      * Update agent memory
      *
-     * When the update was requested over the wire (SDK → Events.Memory.UPDATE),
-     * requestContext carries the requester's operationId and identity. The
-     * UPDATE_RESULT emitted here must echo that operationId and be addressed to
-     * the requesting agent: the SDK matches results by operationId, and event
-     * forwarding routes them by payload.agentId. Before this parameter existed,
-     * agent-scope results were emitted with a freshly generated operationId under
-     * SYSTEM_AGENT — no SDK save round-trip could ever observe its own result, so
-     * every awaited save hung forever and every fire-and-forget save leaked its
-     * result listener.
-     *
      * @param pAgentId Agent ID
      * @param updates Memory updates
-     * @param requestContext Requester identity for result routing (wire requests only)
      * @returns Observable of updated agent memory
      */
     public updateAgentMemory(
         pAgentId: string,
-        updates: Partial<IEnhancedAgentMemory>,
-        requestContext?: { operationId: string; requesterAgentId: AgentId; requesterChannelId: ChannelId }
+        updates: Partial<IEnhancedAgentMemory>
     ): Observable<IEnhancedAgentMemory> {
         this.validator.assertIsNonEmptyString(pAgentId, 'Agent ID must be a non-empty string');
         this.validator.assertIsObject(updates, 'Updates must be an object');
-        
-        // Get existing memory or create new one
+
         return new Observable<IEnhancedAgentMemory>(observer => {
-            this.getAgentMemory(pAgentId).subscribe(originalAgentMemory => {
-                // Apply updates
-                const updatedMemory: IEnhancedAgentMemory = {
-                    ...originalAgentMemory,
-                    ...updates,
-                    updatedAt: new Date(),
-                    // Ensure these fields can't be overridden
-                    id: originalAgentMemory.id,
-                    agentId: originalAgentMemory.agentId,
-                    createdAt: originalAgentMemory.createdAt
-                };
-                
-                // Deep merge for nested objects
-                if (updates.notes) {
-                    updatedMemory.notes = { ...originalAgentMemory.notes, ...updates.notes };
-                }
-                
-                if (updates.customData) {
-                    updatedMemory.customData = { ...originalAgentMemory.customData, ...updates.customData };
-                }
-                
-                if (updates.cognitiveMemory) {
-                    updatedMemory.cognitiveMemory = {
-                        ...originalAgentMemory.cognitiveMemory,
-                        ...updates.cognitiveMemory
-                    };
-                }
-                
-                // Replace conversation history if provided (SDK sends full array, not incremental)
-                if (updates.conversationHistory !== undefined) {
-                    updatedMemory.conversationHistory = updates.conversationHistory;
-                }
-                
-                // Store updated memory in cache
-                this.agentMemory.set(pAgentId, updatedMemory);
+            let cancelled = false;
+            void (async (): Promise<void> => {
+                try {
+                    const enhancedStoredMemory = await this.serializeAgentMutation(
+                        pAgentId,
+                        async (): Promise<IEnhancedAgentMemory> => {
+                            const originalAgentMemory = await firstValueFrom(
+                                this.getAgentMemory(pAgentId)
+                            );
+                            const updatedMemory: IEnhancedAgentMemory = {
+                                ...originalAgentMemory,
+                                ...updates,
+                                updatedAt: new Date(),
+                                id: originalAgentMemory.id,
+                                agentId: originalAgentMemory.agentId,
+                                createdAt: originalAgentMemory.createdAt,
+                                notes: updates.notes
+                                    ? { ...originalAgentMemory.notes, ...updates.notes }
+                                    : originalAgentMemory.notes,
+                                customData: updates.customData
+                                    ? { ...originalAgentMemory.customData, ...updates.customData }
+                                    : originalAgentMemory.customData,
+                                cognitiveMemory: updates.cognitiveMemory
+                                    ? {
+                                        ...originalAgentMemory.cognitiveMemory,
+                                        ...updates.cognitiveMemory
+                                    }
+                                    : originalAgentMemory.cognitiveMemory
+                            };
 
-                // Persist to MongoDB if persistence service is available (async, non-blocking)
-                if (this.persistenceService) {
-                    this.persistenceService.saveAgentMemory(updatedMemory)
-                        .subscribe({
-                            next: () => null,
-                            error: (err: any) => this.logger.warn(`Failed to persist agent memory to MongoDB for ${pAgentId}: ${err.message}`)
-                        });
-                }
+                            const storedMemory = this.persistenceService
+                                ? await firstValueFrom(
+                                    this.persistenceService.saveAgentMemory(updatedMemory)
+                                )
+                                : updatedMemory;
+                            const enhancedMemory: IEnhancedAgentMemory = {
+                                ...storedMemory,
+                                cognitiveMemory: updatedMemory.cognitiveMemory
+                            };
+                            this.agentMemory.set(pAgentId, enhancedMemory);
+                            return enhancedMemory;
+                        }
+                    );
 
-                // Trigger entity extraction from conversation history if Knowledge Graph is enabled
-                // This extracts entities and relationships for the Knowledge Graph
-                if (updates.conversationHistory && updates.conversationHistory.length > 0) {
-                    const lastMessages = updates.conversationHistory.slice(-3);
-                    const contentToExtract = lastMessages
-                        .filter((msg): msg is typeof msg & { content: string } =>
-                            typeof msg.content === 'string' && msg.content.length > 0)
-                        .map(msg => msg.content)
-                        .join('\n\n');
+                    if (updates.conversationHistory && updates.conversationHistory.length > 0) {
+                        const contentToExtract = updates.conversationHistory
+                            .slice(-3)
+                            .filter((message): message is typeof message & { content: string } =>
+                                typeof message.content === 'string' && message.content.length > 0)
+                            .map(message => message.content)
+                            .join('\n\n');
+                        if (contentToExtract.length > 0) {
+                            const channelContext = `agent-memory-${pAgentId}`;
+                            const memoryId = `agent-${pAgentId}-${Date.now()}`;
+                            this.triggerEntityExtraction(channelContext, memoryId, contentToExtract)
+                                .catch(error => this.logger.warn(
+                                    `Entity extraction failed: ${error instanceof Error ? error.message : String(error)}`
+                                ));
+                        }
+                    }
 
-                    if (contentToExtract.length > 0) {
-                        // Use agent ID as channel context for agent-level memories
-                        // Entities extracted from agent memory are scoped to a pseudo-channel
-                        const channelContext = `agent-memory-${pAgentId}`;
-                        const memoryId = `agent-${pAgentId}-${Date.now()}`;
-                        this.triggerEntityExtraction(channelContext, memoryId, contentToExtract)
-                            .catch(err => this.logger.warn(`Entity extraction failed: ${err.message}`));
+                    if (!cancelled) {
+                        observer.next(enhancedStoredMemory);
+                        observer.complete();
+                    }
+                } catch (error) {
+                    if (!cancelled) {
+                        observer.error(error);
                     }
                 }
-
-                // Emit update event through EventBus. Echo the requester's
-                // operationId and address the result to the requesting agent so
-                // the SDK's pending save resolves; internal callers (no
-                // requestContext) keep the system-level identity.
-                const operationId = requestContext?.operationId ?? uuidv4();
-                const updateResultData: MemoryUpdateResultEventData = {
-                    operationId,
-                    scope: MemoryScope.AGENT,
-                    id: pAgentId,
-                    memory: updatedMemory
-                };
-
-                const resultAgentId: AgentId = requestContext?.requesterAgentId ?? 'SYSTEM_AGENT';
-                const resultChannelId: ChannelId = requestContext?.requesterChannelId ?? 'NO_CHANNEL';
-
-                const payload = createMemoryUpdateResultEventPayload(
-                    Events.Memory.UPDATE_RESULT,
-                    resultAgentId,
-                    resultChannelId,
-                    updateResultData
-                );
-                EventBus.server.emit(Events.Memory.UPDATE_RESULT, payload);
-                
-                observer.next(updatedMemory);
-                observer.complete();
-            }, error => {
-                // Errors must reach the requester too — a save whose failure is
-                // only logged server-side leaves the requesting SDK waiting forever.
-                const updateResultData_agent_update_error: MemoryUpdateResultEventData = {
-                    operationId: requestContext?.operationId ?? uuidv4(),
-                    scope: MemoryScope.AGENT,
-                    id: pAgentId,
-                    memory: null,
-                    error: (error as Error).message
-                };
-                EventBus.server.emit(
-                    Events.Memory.UPDATE_RESULT,
-                    createMemoryUpdateResultEventPayload(
-                        Events.Memory.UPDATE_RESULT,
-                        requestContext?.requesterAgentId ?? 'SYSTEM_AGENT',
-                        requestContext?.requesterChannelId ?? 'NO_CHANNEL',
-                        updateResultData_agent_update_error
-                    )
-                );
-                observer.error(error);
-            });
+            })();
+            return () => {
+                cancelled = true;
+            };
         });
     }
     
@@ -1147,7 +1367,7 @@ export class MemoryService {
      * @param options Query options
      * @returns Observable of cognitive memory entries
      */
-    public queryCognitiveMemory(agentId: AgentId, channelId: ChannelId, options: CognitiveMemoryQueryOptions = {}): Observable<CognitiveMemoryEntry<any>[]> {
+    public queryCognitiveMemory(agentId: AgentId, channelId: ChannelId, options: CognitiveMemoryQueryOptions = {}): Observable<CognitiveMemoryEntry<unknown>[]> {
         this.validator.assertIsNonEmptyString(agentId, 'Agent ID must be a non-empty string');
         this.validator.assertIsNonEmptyString(channelId, 'Channel ID must be a non-empty string');
         
@@ -1201,18 +1421,38 @@ export class MemoryService {
      * @returns Observable of channel memory
      */
     public getChannelMemory(channelId: string): Observable<IEnhancedChannelMemory> {
-        // ;
         this.validator.assertIsNonEmptyString(channelId, 'Channel ID must be a non-empty string');
-        
-        // Return from cache if available
-        if (this.channelMemory.has(channelId)) {
-            const memory = this.channelMemory.get(channelId)!;
-            // ;
-            return of(memory);
+
+        const existingMemory = this.channelMemory.get(channelId);
+        if (existingMemory) {
+            return of(existingMemory);
         }
-        
-        
-        // Create new memory
+
+        const getPersistedChannelMemory = this.persistenceService?.getChannelMemory;
+        if (this.persistenceService && !getPersistedChannelMemory) {
+            return throwError(() => new Error('Channel memory persistence is not available'));
+        }
+        if (getPersistedChannelMemory) {
+            return new Observable<IEnhancedChannelMemory>(observer => {
+                getPersistedChannelMemory.call(this.persistenceService, channelId).subscribe({
+                    next: (loadedMemory: IChannelMemory) => {
+                        const enhancedMemory: IEnhancedChannelMemory = {
+                            ...loadedMemory,
+                            sharedCognitiveInsights: {
+                                systemSummaries: [],
+                                topicExtractions: [],
+                                collaborativeReflections: []
+                            }
+                        };
+                        this.channelMemory.set(channelId, enhancedMemory);
+                        observer.next(enhancedMemory);
+                        observer.complete();
+                    },
+                    error: (error: unknown) => observer.error(error)
+                });
+            });
+        }
+
         const newMemory: IEnhancedChannelMemory = {
             id: uuidv4(),
             channelId,
@@ -1234,28 +1474,7 @@ export class MemoryService {
                 collaborativeReflections: []
             }
         };
-        
         this.channelMemory.set(channelId, newMemory);
-        
-        const operationId_channel_get_new = uuidv4();
-        const systemAgentId_channel_get_new: AgentId = 'SYSTEM_AGENT';
-        const noChannelId_channel_get_new: ChannelId = 'NO_CHANNEL';
-        const updateResultData_channel_get_new: MemoryUpdateResultEventData = {
-            operationId: operationId_channel_get_new,
-            scope: MemoryScope.CHANNEL,
-            id: channelId,
-            memory: newMemory
-        };
-        EventBus.server.emit(
-            Events.Memory.UPDATE_RESULT, 
-            createMemoryUpdateResultEventPayload(
-                Events.Memory.UPDATE_RESULT,
-                systemAgentId_channel_get_new,
-                noChannelId_channel_get_new,
-                updateResultData_channel_get_new
-            )
-        );
-        
         return of(newMemory);
     }
     
@@ -1267,85 +1486,85 @@ export class MemoryService {
      */
     public updateChannelMemory(channelId: ChannelId, updates: Partial<IEnhancedChannelMemory>): Observable<IEnhancedChannelMemory> {
         this.validator.assertIsNonEmptyString(channelId, 'Channel ID must be a non-empty string');
+        this.validator.assertIsObject(updates, 'Channel memory updates must be an object');
+        if (
+            this.ownsPathOrDescendant(updates, 'conversationHistory') ||
+            this.ownsPathOrDescendant(updates, 'sharedState.context') ||
+            this.ownsPathOrDescendant(updates, 'customData.contextHistory') ||
+            this.ownsPathOrDescendant(updates.sharedState, 'context') ||
+            this.ownsPathOrDescendant(updates.customData, 'contextHistory')
+        ) {
+            throw new Error(
+                'Reserved channel memory fields must use the atomic keyed-memory operations'
+            );
+        }
 
         return new Observable<IEnhancedChannelMemory>(observer => {
-            this.getChannelMemory(channelId).subscribe(originalChannelMemory => {
-                // Create updated memory by merging with original
-                const updatedMemory: IEnhancedChannelMemory = {
-                    ...originalChannelMemory, // This spreads all base properties
-                    channelId,
-                    lastActivity: updates.lastActivity || originalChannelMemory.lastActivity || Date.now(),
-                    messageCount: updates.messageCount !== undefined ? updates.messageCount : originalChannelMemory.messageCount,
-                    participants: updates.participants 
-                        ? [...new Set([...(originalChannelMemory.participants || []), ...updates.participants])] 
-                        : originalChannelMemory.participants,
-                    topics: updates.topics 
-                        ? [...new Set([...(originalChannelMemory.topics || []), ...updates.topics])] 
-                        : originalChannelMemory.topics,
-                    summary: updates.summary || originalChannelMemory.summary,
-                    conversationHistory: [...(originalChannelMemory.conversationHistory || [])],
-                    sharedCognitiveInsights: {
-                        ...originalChannelMemory.sharedCognitiveInsights,
-                        ...updates.sharedCognitiveInsights
+            let cancelled = false;
+            void (async (): Promise<void> => {
+                try {
+                    const enhancedStoredMemory = await this.serializeChannelMutation(
+                        channelId,
+                        async (): Promise<IEnhancedChannelMemory> => {
+                            const originalMemory = await firstValueFrom(this.getChannelMemory(channelId));
+                            const updatedMemory: IEnhancedChannelMemory = {
+                                ...originalMemory,
+                                ...updates,
+                                id: originalMemory.id,
+                                channelId,
+                                createdAt: originalMemory.createdAt,
+                                updatedAt: new Date(),
+                                notes: updates.notes
+                                    ? { ...originalMemory.notes, ...updates.notes }
+                                    : originalMemory.notes,
+                                sharedState: updates.sharedState
+                                    ? { ...originalMemory.sharedState, ...updates.sharedState }
+                                    : originalMemory.sharedState,
+                                customData: updates.customData
+                                    ? { ...originalMemory.customData, ...updates.customData }
+                                    : originalMemory.customData,
+                                participants: updates.participants
+                                    ? [...new Set([...(originalMemory.participants ?? []), ...updates.participants])]
+                                    : originalMemory.participants,
+                                topics: updates.topics
+                                    ? [...new Set([...(originalMemory.topics ?? []), ...updates.topics])]
+                                    : originalMemory.topics,
+                                conversationHistory: updates.conversationHistory
+                                    ? [
+                                        ...(originalMemory.conversationHistory ?? []),
+                                        ...updates.conversationHistory
+                                    ]
+                                    : originalMemory.conversationHistory,
+                                sharedCognitiveInsights: {
+                                    ...originalMemory.sharedCognitiveInsights,
+                                    ...updates.sharedCognitiveInsights
+                                }
+                            };
+
+                            const storedMemory = this.persistenceService
+                                ? await firstValueFrom(this.persistenceService.saveChannelMemory(updatedMemory))
+                                : updatedMemory;
+                            const enhancedMemory: IEnhancedChannelMemory = {
+                                ...storedMemory,
+                                sharedCognitiveInsights: updatedMemory.sharedCognitiveInsights
+                            };
+                            this.channelMemory.set(channelId, enhancedMemory);
+                            return enhancedMemory;
+                        }
+                    );
+                    if (!cancelled) {
+                        observer.next(enhancedStoredMemory);
+                        observer.complete();
                     }
-                };
-
-                // Handle conversation history updates  
-                if (updates.conversationHistory && updates.conversationHistory.length > 0) {
-                    updatedMemory.conversationHistory = [
-                        ...(originalChannelMemory.conversationHistory || []),
-                        ...updates.conversationHistory
-                    ];
+                } catch (error) {
+                    if (!cancelled) {
+                        observer.error(error);
+                    }
                 }
-
-                // Store updated memory in cache
-                this.channelMemory.set(channelId, updatedMemory);
-
-                // Emit update event through EventBus
-                const operationId = uuidv4();
-                const updateResultData: MemoryUpdateResultEventData = {
-                    operationId,
-                    scope: MemoryScope.CHANNEL,
-                    id: channelId,
-                    memory: updatedMemory
-                };
-
-                // Define standard agentId and channelId for system-level memory events
-                const systemAgentId: AgentId = 'SYSTEM_AGENT';
-                const systemChannelId: ChannelId = channelId; // Use the actual channel ID for channel operations
-
-                const payload = createMemoryUpdateResultEventPayload(
-                    Events.Memory.UPDATE_RESULT,
-                    systemAgentId,
-                    systemChannelId,
-                    updateResultData
-                );
-                EventBus.server.emit(Events.Memory.UPDATE_RESULT, payload);
-
-                observer.next(updatedMemory);
-                observer.complete();
-            }, error => {
-                const operationId_channel_update_error = uuidv4();
-                const updateResultData_channel_update_error: MemoryUpdateResultEventData = {
-                    operationId: operationId_channel_update_error,
-                    scope: MemoryScope.CHANNEL,
-                    id: channelId,
-                    memory: null,
-                    error: (error as Error).message
-                };
-                const systemAgentId_channel_update_error: AgentId = 'SYSTEM_AGENT';
-                const systemChannelId_channel_update_error: ChannelId = channelId;
-                EventBus.server.emit(
-                    Events.Memory.UPDATE_RESULT,
-                    createMemoryUpdateResultEventPayload(
-                        Events.Memory.UPDATE_RESULT,
-                        systemAgentId_channel_update_error,
-                        systemChannelId_channel_update_error,
-                        updateResultData_channel_update_error
-                    )
-                );
-                observer.error(error);
-            });
+            })();
+            return () => {
+                cancelled = true;
+            };
         });
     }
     
@@ -1374,7 +1593,28 @@ export class MemoryService {
             return of(existingMemory);
         }
         
-        // Create new memory
+        const getPersistedRelationshipMemory = this.persistenceService?.getRelationshipMemory;
+        if (this.persistenceService && !getPersistedRelationshipMemory) {
+            return throwError(() => new Error('Relationship memory persistence is not available'));
+        }
+        if (channelId && getPersistedRelationshipMemory) {
+            return new Observable<IRelationshipMemory>(observer => {
+                getPersistedRelationshipMemory.call(
+                    this.persistenceService,
+                    sortedId1,
+                    sortedId2,
+                    channelId
+                ).subscribe({
+                    next: (loadedMemory: IRelationshipMemory) => {
+                        this.relationshipMemory.set(relationshipKey, loadedMemory);
+                        observer.next(loadedMemory);
+                        observer.complete();
+                    },
+                    error: (error: unknown) => observer.error(error)
+                });
+            });
+        }
+
         const newMemory: IRelationshipMemory = {
             id: uuidv4(),
             agentId1: sortedId1,
@@ -1387,28 +1627,7 @@ export class MemoryService {
             interactionHistory: [],
             customData: {}
         };
-        
         this.relationshipMemory.set(relationshipKey, newMemory);
-        
-        const operationId_rel_get_new = uuidv4();
-        const systemAgentId_rel_get_new: AgentId = 'SYSTEM_AGENT';
-        const noChannelId_rel_get_new: ChannelId = 'NO_CHANNEL';
-        const updateResultData_rel_get_new: MemoryUpdateResultEventData = {
-            operationId: operationId_rel_get_new,
-            scope: MemoryScope.RELATIONSHIP,
-            id: relationshipKey,
-            memory: newMemory
-        };
-        EventBus.server.emit(
-            Events.Memory.UPDATE_RESULT, 
-            createMemoryUpdateResultEventPayload(
-                Events.Memory.UPDATE_RESULT,
-                systemAgentId_rel_get_new,
-                noChannelId_rel_get_new,
-                updateResultData_rel_get_new
-            )
-        );
-        
         return of(newMemory);
     }
     
@@ -1428,123 +1647,195 @@ export class MemoryService {
         
         const relationshipKey = this.getRelationshipKey(pAgentId1, pAgentId2, pChannelId);
         
-        // Get existing memory or create new one
         return new Observable<IRelationshipMemory>(observer => {
-            this.getRelationshipMemory(pAgentId1, pAgentId2, pChannelId).subscribe(originalRelationshipMemory => {
-                // Apply updates
-                const updatedMemory: IRelationshipMemory = {
-                    ...originalRelationshipMemory,
-                    ...updates,
-                    updatedAt: new Date(),
-                    // Ensure these fields can't be overridden
-                    id: originalRelationshipMemory.id,
-                    agentId1: originalRelationshipMemory.agentId1,
-                    agentId2: originalRelationshipMemory.agentId2,
-                    channelId: originalRelationshipMemory.channelId,
-                    createdAt: originalRelationshipMemory.createdAt
-                };
-                
-                // Deep merge for nested objects (if any)
-                // Example: if (updates.customData) { updatedMemory.customData = { ...originalRelationshipMemory.customData, ...updates.customData }; }
-                
-                // Update in-memory store
-                this.relationshipMemory.set(relationshipKey, updatedMemory);
-                
-                const operationId_rel_update_success = uuidv4();
-                const systemAgentId_rel_update_success: AgentId = 'SYSTEM_AGENT';
-                const noChannelId_rel_update_success: ChannelId = 'NO_CHANNEL'; // General system event
-                const updateResultData_rel_update_success: MemoryUpdateResultEventData = {
-                    operationId: operationId_rel_update_success,
-                    scope: MemoryScope.RELATIONSHIP,
-                    id: relationshipKey,
-                    memory: updatedMemory
-                };
-                EventBus.server.emit(
-                    Events.Memory.UPDATE_RESULT, 
-                    createMemoryUpdateResultEventPayload(
-                        Events.Memory.UPDATE_RESULT,
-                        systemAgentId_rel_update_success,
-                        noChannelId_rel_update_success,
-                        updateResultData_rel_update_success
-                    )
-                );
-                
-                // Return updated memory
-                observer.next(updatedMemory);
-                observer.complete();
-            }, error => { // This 'error' is from getRelationshipMemory()
-                const operationId_rel_update_error = uuidv4();
-                const systemAgentId_rel_update_error: AgentId = 'SYSTEM_AGENT';
-                const noChannelId_rel_update_error: ChannelId = 'NO_CHANNEL';
-                // Reconstruct the key for the 'id' field as it was the one attempted for the update.
-                const attemptedRelationshipKey = this.getRelationshipKey(pAgentId1, pAgentId2, pChannelId);
-                const updateResultData_rel_update_error: MemoryUpdateResultEventData = {
-                    operationId: operationId_rel_update_error,
-                    scope: MemoryScope.RELATIONSHIP,
-                    id: attemptedRelationshipKey, // Use the key that was attempted
-                    memory: null,
-                    error: (error as Error).message
-                };
-                EventBus.server.emit(
-                    Events.Memory.UPDATE_RESULT, 
-                    createMemoryUpdateResultEventPayload(
-                        Events.Memory.UPDATE_RESULT,
-                        systemAgentId_rel_update_error,
-                        noChannelId_rel_update_error,
-                        updateResultData_rel_update_error
-                    )
-                );
-                observer.error(error);
-            });
+            let cancelled = false;
+            void (async (): Promise<void> => {
+                try {
+                    const storedMemory = await this.serializeRelationshipMutation(
+                        pAgentId1,
+                        pAgentId2,
+                        pChannelId,
+                        async (): Promise<IRelationshipMemory> => {
+                            const originalMemory = await firstValueFrom(
+                                this.getRelationshipMemory(pAgentId1, pAgentId2, pChannelId)
+                            );
+                            const updatedMemory: IRelationshipMemory = {
+                                ...originalMemory,
+                                ...updates,
+                                id: originalMemory.id,
+                                agentId1: originalMemory.agentId1,
+                                agentId2: originalMemory.agentId2,
+                                channelId: originalMemory.channelId,
+                                createdAt: originalMemory.createdAt,
+                                updatedAt: new Date(),
+                                notes: updates.notes
+                                    ? { ...originalMemory.notes, ...updates.notes }
+                                    : originalMemory.notes,
+                                customData: updates.customData
+                                    ? { ...originalMemory.customData, ...updates.customData }
+                                    : originalMemory.customData
+                            };
+                            const saveRelationshipMemory = this.persistenceService?.saveRelationshipMemory;
+                            if (this.persistenceService && !saveRelationshipMemory) {
+                                throw new Error('Relationship memory persistence is not available');
+                            }
+                            const persistedMemory = saveRelationshipMemory
+                                ? await firstValueFrom(saveRelationshipMemory.call(
+                                    this.persistenceService,
+                                    updatedMemory
+                                ))
+                                : updatedMemory;
+                            this.relationshipMemory.set(relationshipKey, persistedMemory);
+                            return persistedMemory;
+                        }
+                    );
+                    if (!cancelled) {
+                        observer.next(storedMemory);
+                        observer.complete();
+                    }
+                } catch (error) {
+                    if (!cancelled) {
+                        observer.error(error);
+                    }
+                }
+            })();
+            return () => {
+                cancelled = true;
+            };
         });
     }
     
     /**
      * Delete memory by scope and ID
      * @param scope Memory scope
-     * @param id Entity ID
+     * @param id Entity ID or relationship composite ID
      * @returns Observable of success status
      */
-    public deleteMemory(scope: MemoryScope, id: string): Observable<boolean> {
+    public deleteMemory(scope: MemoryScope, id: string | string[]): Observable<boolean> {
         this.validator.validateMemoryScope(scope);
-        this.validator.assertIsNonEmptyString(id, 'ID must be a non-empty string');
-        
-        let success = false;
-        const operationId = uuidv4(); // Generate operationId for the event data
-
-        switch (scope) {
-            case MemoryScope.AGENT:
-                success = this.agentMemory.delete(id);
-                break;
-            case MemoryScope.CHANNEL:
-                success = this.channelMemory.delete(id);
-                break;
-            case MemoryScope.RELATIONSHIP:
-                success = this.relationshipMemory.delete(id);
-                break;
+        if (scope === MemoryScope.RELATIONSHIP) {
+            if (!Array.isArray(id) || id.length !== 3) {
+                throw new Error('Relationship memory deletion requires agentId1, agentId2, and channelId');
+            }
+            id.forEach((part, index) => {
+                this.validator.assertIsNonEmptyString(part, `Relationship delete ID part ${index}`);
+            });
+        } else {
+            this.validator.assertIsNonEmptyString(id, 'Memory ID must be a non-empty string');
         }
-        
-        // Emit delete event through EventBus
-        const deleteResultData: MemoryDeleteResultEventData = {
-            operationId,
-            scope,
-            id,
-            success
-        };
 
-        // Define standard agentId and channelId for system-level memory events
-        const systemAgentId: AgentId = 'SYSTEM_AGENT'; // Or a more specific system agent ID
-        const noChannelId: ChannelId = 'NO_CHANNEL';   // Or a more specific system channel ID or null if appropriate
+        return new Observable<boolean>(observer => {
+            let cancelled = false;
+            void (async (): Promise<void> => {
+                try {
+                    if (
+                        scope === MemoryScope.CHANNEL &&
+                        typeof id === 'string' &&
+                        id.startsWith('channel:')
+                    ) {
+                        const success = await this.deleteKeyedChannelMemory(id);
+                        if (!cancelled) {
+                            observer.next(success);
+                            observer.complete();
+                        }
+                        return;
+                    }
+                    const deleteAuthoritatively = async (): Promise<boolean> => {
+                        const deletePersistentMemory = this.persistenceService?.deleteMemory;
+                        if (this.persistenceService && !deletePersistentMemory) {
+                            throw new Error('Memory deletion persistence is not available');
+                        }
+                        const persisted = deletePersistentMemory
+                            ? await firstValueFrom(deletePersistentMemory.call(
+                                this.persistenceService,
+                                scope,
+                                id
+                            ))
+                            : false;
+                        if (this.persistenceService && !persisted) {
+                            return false;
+                        }
+                        let cached = false;
 
-        const payload = createMemoryDeleteResultEventPayload(
-            Events.Memory.DELETE_RESULT,
-            systemAgentId,
-            noChannelId,
-            deleteResultData
-        );
-        EventBus.server.emit(Events.Memory.DELETE_RESULT, payload);
-        
-        return of(success);
+                        switch (scope) {
+                            case MemoryScope.AGENT: {
+                                const agentId = id as string;
+                                cached = this.agentMemory.delete(agentId);
+                                for (const [key, memory] of this.relationshipMemory.entries()) {
+                                    if (memory.agentId1 === agentId || memory.agentId2 === agentId) {
+                                        cached = this.relationshipMemory.delete(key) || cached;
+                                    }
+                                }
+                                for (const [key, memory] of this.cognitiveMemory.entries()) {
+                                    if (memory.agentId === agentId) {
+                                        cached = this.cognitiveMemory.delete(key) || cached;
+                                    }
+                                }
+                                break;
+                            }
+                            case MemoryScope.CHANNEL: {
+                                const channelId = id as string;
+                                cached = this.channelMemory.has(channelId);
+                                cached = this.channelMemory.delete(channelId) || cached;
+                                for (const key of this.generalData.keys()) {
+                                    if (key.endsWith(`:${channelId}`)) {
+                                        cached = this.generalData.delete(key) || cached;
+                                    }
+                                }
+                                break;
+                            }
+                            case MemoryScope.RELATIONSHIP: {
+                                const [agentId1, agentId2, channelId] = id as string[];
+                                cached = this.relationshipMemory.delete(
+                                    this.getRelationshipKey(agentId1, agentId2, channelId)
+                                );
+                                break;
+                            }
+                        }
+
+                        return this.persistenceService ? persisted : cached;
+                    };
+
+                    let deleted: boolean;
+                    switch (scope) {
+                        case MemoryScope.AGENT:
+                            deleted = await this.serializeAgentMutation(
+                                id as string,
+                                deleteAuthoritatively
+                            );
+                            break;
+                        case MemoryScope.CHANNEL:
+                            deleted = await this.serializeChannelMutation(
+                                id as string,
+                                deleteAuthoritatively
+                            );
+                            break;
+                        case MemoryScope.RELATIONSHIP: {
+                            const [agentId1, agentId2, channelId] = id as string[];
+                            deleted = await this.serializeRelationshipMutation(
+                                agentId1,
+                                agentId2,
+                                channelId,
+                                deleteAuthoritatively
+                            );
+                            break;
+                        }
+                    }
+
+                    if (!cancelled) {
+                        observer.next(deleted);
+                        observer.complete();
+                    }
+                } catch (error) {
+                    if (!cancelled) {
+                        observer.error(error);
+                    }
+                }
+            })();
+            return () => {
+                cancelled = true;
+            };
+        });
     }
     
     /**
@@ -1599,15 +1890,15 @@ export class MemoryService {
      * Get general key-value data
      * Used for tool-level key-value storage
      */
-    public getGeneralData(key: string): any {
-        return this.generalData.get(key);
+    public getGeneralData<T = GeneralDataRecord>(key: string): T | undefined {
+        return this.generalData.get(key) as T | undefined;
     }
 
     /**
      * Set general key-value data
      * Used for tool-level key-value storage
      */
-    public setGeneralData(key: string, value: any): void {
+    public setGeneralData(key: string, value: unknown): void {
         this.generalData.set(key, value);
     }
 
@@ -1857,9 +2148,9 @@ export class MemoryService {
                     `${result.relationshipsExtracted} relationships from memory ${memoryId}`
                 );
             }
-        } catch (error: any) {
+        } catch (error: unknown) {
             this.logger.warn(
-                `[MemoryService] Entity extraction failed for memory ${memoryId}: ${error.message}`
+                `[MemoryService] Entity extraction failed for memory ${memoryId}: ${error instanceof Error ? error.message : String(error)}`
             );
         }
     }
@@ -1907,7 +2198,7 @@ export class MemoryService {
      * Compare two data objects to determine if they are equal
      * Uses deep comparison for objects and arrays
      */
-    private isDataEqual(data1: any, data2: any): boolean {
+    private isDataEqual(data1: unknown, data2: unknown): boolean {
         // Handle null/undefined cases
         if (data1 === data2) return true;
         if (data1 == null || data2 == null) return false;
@@ -1926,13 +2217,15 @@ export class MemoryService {
         // Handle objects
         if (Array.isArray(data1) || Array.isArray(data2)) return false;
         
-        const keys1 = Object.keys(data1);
-        const keys2 = Object.keys(data2);
+        const record1 = data1 as Record<string, unknown>;
+        const record2 = data2 as Record<string, unknown>;
+        const keys1 = Object.keys(record1);
+        const keys2 = Object.keys(record2);
         
         if (keys1.length !== keys2.length) return false;
         
         return keys1.every(key => 
-            keys2.includes(key) && this.isDataEqual(data1[key], data2[key])
+            keys2.includes(key) && this.isDataEqual(record1[key], record2[key])
         );
     }
 }

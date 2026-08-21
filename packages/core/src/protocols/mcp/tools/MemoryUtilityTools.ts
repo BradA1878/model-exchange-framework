@@ -21,35 +21,62 @@
 /**
  * Memory Utility Learning System (MULS) Tools
  *
- * Tools for viewing and configuring the utility-based memory retrieval system.
- * These tools allow agents to:
- * - View Q-value analytics and top-performing memories
- * - Configure lambda values for utility vs similarity weighting
- * - Monitor convergence and learning progress
+ * Agent-facing boundaries for the utility-based memory retrieval system.
+ * The current backing store is process-global and does not retain authoritative
+ * agent/channel ownership, so analytics, configuration, and reward mutation
+ * fail closed until a tenant-scoped persistence contract exists.
  */
 
 import { McpToolDefinition, McpToolHandlerContext, McpToolHandlerResult, McpToolResultContent } from '../McpServerTypes.js';
 import { Logger } from '../../../utils/Logger.js';
-import { QValueManager } from '../../../services/QValueManager.js';
-import { UtilityScorerService } from '../../../services/UtilityScorerService.js';
-import { RewardSignalProcessor } from '../../../services/RewardSignalProcessor.js';
-import { OrparPhase, PhaseLambdaConfig } from '../../../types/MemoryUtilityTypes.js';
 
 const logger = new Logger('info', 'MemoryUtilityTools', 'server');
+
+interface MemoryUtilityIdentity {
+    agentId: string;
+    channelId: string;
+}
+
+const requireMemoryUtilityIdentity = (
+    context: McpToolHandlerContext
+): MemoryUtilityIdentity => {
+    if (typeof context.agentId !== 'string' || context.agentId.trim().length === 0 ||
+        typeof context.channelId !== 'string' || context.channelId.trim().length === 0) {
+        throw new Error('Authenticated agentId and channelId are required for Memory Utility tools');
+    }
+    return {
+        agentId: context.agentId.trim(),
+        channelId: context.channelId.trim()
+    };
+};
+
+const requireInputRecord = (input: unknown): Record<string, unknown> => {
+    if (typeof input !== 'object' || input === null || Array.isArray(input)) {
+        throw new Error('input must be an object');
+    }
+    return input as Record<string, unknown>;
+};
+
+const unavailableResult = (code: string, error: string): McpToolHandlerResult => ({
+    content: {
+        type: 'application/json',
+        data: { success: false, code, error }
+    }
+});
 
 /**
  * View Q-value analytics and distributions
  */
 export const memory_qvalue_analytics: McpToolDefinition = {
     name: 'memory_qvalue_analytics',
-    description: 'View Q-value analytics for the Memory Utility Learning System (MULS). Shows distribution statistics, top-performing memories, convergence metrics, and reward history. Use this to understand which memories are most useful for task completion.',
+    description: 'Request agent-scoped MULS analytics. This fails closed until utility storage can enforce authoritative agent and channel ownership.',
     enabled: true,
     inputSchema: {
         type: 'object',
         properties: {
             agentId: {
                 type: 'string',
-                description: 'Optional: Filter analytics to a specific agent. If omitted, shows global analytics.'
+                description: 'Optional self assertion. It must match the authenticated agent.'
             },
             includeHistory: {
                 type: 'boolean',
@@ -70,90 +97,42 @@ export const memory_qvalue_analytics: McpToolDefinition = {
         {
             input: {},
             output: {
-                success: true,
-                enabled: true,
-                statistics: {
-                    mean: 0.52,
-                    stdDev: 0.15,
-                    min: 0.1,
-                    max: 0.95,
-                    count: 150
-                },
-                topPerformers: [
-                    { memoryId: 'mem-001', qValue: 0.95, retrievalCount: 45 }
-                ],
-                convergence: {
-                    isConverging: true,
-                    stableMemoryCount: 120
-                }
+                success: false,
+                code: 'MULS_AGENT_ANALYTICS_UNAVAILABLE'
             },
-            description: 'Get global Q-value analytics'
+            description: 'Agent analytics fail closed while the backing store is process-global'
         },
         {
             input: {
-                agentId: 'agent-123',
+                agentId: 'another-agent',
                 topN: 5,
                 includeHistory: true
             },
             output: {
-                success: true,
-                enabled: true,
-                statistics: {
-                    mean: 0.58,
-                    stdDev: 0.12,
-                    min: 0.25,
-                    max: 0.92,
-                    count: 35
-                }
+                success: false,
+                code: 'MULS_ANALYTICS_SCOPE_DENIED'
             },
-            description: 'Get agent-specific analytics with history'
+            description: 'An agent cannot request another agent identity\'s analytics'
         }
     ],
-    handler: async (input: any, context: McpToolHandlerContext): Promise<McpToolHandlerResult> => {
+    handler: async (input: unknown, context: McpToolHandlerContext): Promise<McpToolHandlerResult> => {
         try {
-            const qValueManager = QValueManager.getInstance();
-            const rewardProcessor = RewardSignalProcessor.getInstance();
-
-            // Check if MULS is enabled
-            if (!qValueManager.isEnabled()) {
-                const content: McpToolResultContent = {
-                    type: 'application/json',
-                    data: {
-                        success: true,
-                        enabled: false,
-                        message: 'Memory Utility Learning System (MULS) is disabled. Set MEMORY_UTILITY_LEARNING_ENABLED=true to enable.',
-                        config: qValueManager.getConfig()
-                    }
-                };
-                return { content };
+            const identity = requireMemoryUtilityIdentity(context);
+            const request = requireInputRecord(input);
+            if (request.agentId !== undefined && request.agentId !== identity.agentId) {
+                return unavailableResult(
+                    'MULS_ANALYTICS_SCOPE_DENIED',
+                    'An agent may request analytics only for its authenticated identity'
+                );
             }
 
-            // Get analytics
-            const analytics = qValueManager.getAnalytics(input.agentId);
-            const cacheStats = qValueManager.getCacheStats();
-            const trackingStats = rewardProcessor.getTrackingStats();
-
-            // Build response
-            const response: Record<string, any> = {
-                success: true,
-                enabled: true,
-                statistics: analytics.statistics,
-                topPerformers: analytics.topPerformers.slice(0, input.topN || 10),
-                convergence: analytics.convergence,
-                rewardDistribution: analytics.rewardDistribution,
-                cache: cacheStats,
-                tracking: trackingStats
-            };
-
-            if (input.agentId) {
-                response.agentId = input.agentId;
-            }
-
-            const content: McpToolResultContent = {
-                type: 'application/json',
-                data: response
-            };
-            return { content };
+            // QValueManager's in-memory cache is process-global and does not retain
+            // authoritative agent/channel ownership for every entry. Returning its
+            // apparent "agent" view would therefore disclose global values.
+            return unavailableResult(
+                'MULS_AGENT_ANALYTICS_UNAVAILABLE',
+                'Agent-scoped MULS analytics are unavailable until utility storage is authoritatively partitioned by agent and channel'
+            );
         } catch (error) {
             logger.error('[memory_qvalue_analytics] Error:', error);
             const content: McpToolResultContent = {
@@ -173,7 +152,7 @@ export const memory_qvalue_analytics: McpToolDefinition = {
  */
 export const memory_utility_config: McpToolDefinition = {
     name: 'memory_utility_config',
-    description: 'Get or set Memory Utility Learning System (MULS) configuration. Configure lambda values for balancing similarity vs utility scoring, learning rate for Q-value updates, and phase-specific lambda values for ORPAR phases.',
+    description: 'Global MULS configuration is unavailable from an agent MCP context and requires a separate trusted administration plane.',
     enabled: true,
     inputSchema: {
         type: 'object',
@@ -261,21 +240,10 @@ export const memory_utility_config: McpToolDefinition = {
         {
             input: { action: 'get' },
             output: {
-                success: true,
-                config: {
-                    enabled: true,
-                    lambda: 0.5,
-                    learningRate: 0.1,
-                    phaseLambdas: {
-                        observation: 0.2,
-                        reasoning: 0.5,
-                        planning: 0.7,
-                        action: 0.3,
-                        reflection: 0.6
-                    }
-                }
+                success: false,
+                code: 'MULS_ADMIN_CONTEXT_REQUIRED'
             },
-            description: 'Get current MULS configuration'
+            description: 'Global configuration reads require a trusted administration plane'
         },
         {
             input: {
@@ -286,105 +254,19 @@ export const memory_utility_config: McpToolDefinition = {
                 }
             },
             output: {
-                success: true,
-                message: 'Configuration updated',
-                config: {
-                    lambda: 0.6,
-                    phaseLambdas: { planning: 0.8 }
-                }
+                success: false,
+                code: 'MULS_ADMIN_CONTEXT_REQUIRED'
             },
-            description: 'Update lambda values'
+            description: 'Global configuration mutation is unavailable to ordinary agents'
         }
     ],
-    handler: async (input: any, context: McpToolHandlerContext): Promise<McpToolHandlerResult> => {
+    handler: async (_input: unknown, context: McpToolHandlerContext): Promise<McpToolHandlerResult> => {
         try {
-            const qValueManager = QValueManager.getInstance();
-            const utilityScorer = UtilityScorerService.getInstance();
-            const rewardProcessor = RewardSignalProcessor.getInstance();
-
-            const action = input.action || 'get';
-
-            if (action === 'get') {
-                // Return current configuration
-                const qConfig = qValueManager.getConfig();
-                const scorerConfig = utilityScorer.getConfig();
-                const rewardMapping = rewardProcessor.getRewardMapping();
-                const phaseLambdas = utilityScorer.getPhaseLambdas();
-
-                const content: McpToolResultContent = {
-                    type: 'application/json',
-                    data: {
-                        success: true,
-                        config: {
-                            enabled: qConfig.enabled,
-                            lambda: scorerConfig.lambda,
-                            learningRate: qConfig.learningRate,
-                            defaultQValue: qConfig.defaultQValue,
-                            maxCandidates: qConfig.maxCandidates,
-                            maxResults: qConfig.maxResults,
-                            similarityThreshold: qConfig.similarityThreshold,
-                            normalizationMethod: qConfig.normalizationMethod,
-                            phaseLambdas,
-                            rewardMapping
-                        }
-                    }
-                };
-                return { content };
-            } else if (action === 'set') {
-                // Update configuration
-                const updates: Record<string, any> = {};
-                const scorerUpdates: Record<string, any> = {};
-
-                if (input.lambda !== undefined) {
-                    utilityScorer.setLambda(input.lambda, 'global');
-                    updates.lambda = input.lambda;
-                }
-
-                if (input.learningRate !== undefined) {
-                    qValueManager.updateConfig({ learningRate: input.learningRate });
-                    updates.learningRate = input.learningRate;
-                }
-
-                if (input.phaseLambdas) {
-                    for (const [phase, lambda] of Object.entries(input.phaseLambdas)) {
-                        if (typeof lambda === 'number' && lambda >= 0 && lambda <= 1) {
-                            utilityScorer.setLambda(lambda, phase as OrparPhase);
-                            if (!updates.phaseLambdas) updates.phaseLambdas = {};
-                            updates.phaseLambdas[phase] = lambda;
-                        }
-                    }
-                }
-
-                if (input.rewardMapping) {
-                    rewardProcessor.setRewardMapping(input.rewardMapping);
-                    updates.rewardMapping = input.rewardMapping;
-                }
-
-                const content: McpToolResultContent = {
-                    type: 'application/json',
-                    data: {
-                        success: true,
-                        message: 'Configuration updated',
-                        updates,
-                        currentConfig: {
-                            lambda: utilityScorer.getLambda('global'),
-                            learningRate: qValueManager.getConfig().learningRate,
-                            phaseLambdas: utilityScorer.getPhaseLambdas(),
-                            rewardMapping: rewardProcessor.getRewardMapping()
-                        }
-                    }
-                };
-                return { content };
-            } else {
-                const content: McpToolResultContent = {
-                    type: 'application/json',
-                    data: {
-                        success: false,
-                        error: `Invalid action: ${action}. Use 'get' or 'set'.`
-                    }
-                };
-                return { content };
-            }
+            requireMemoryUtilityIdentity(context);
+            return unavailableResult(
+                'MULS_ADMIN_CONTEXT_REQUIRED',
+                'Global MULS configuration is unavailable from an agent MCP context'
+            );
         } catch (error) {
             logger.error('[memory_utility_config] Error:', error);
             const content: McpToolResultContent = {
@@ -404,7 +286,7 @@ export const memory_utility_config: McpToolDefinition = {
  */
 export const memory_inject_reward: McpToolDefinition = {
     name: 'memory_inject_reward',
-    description: 'Manually inject a reward signal for a specific memory. Use this to provide explicit feedback about a memory\'s usefulness. Positive rewards increase Q-value, negative rewards decrease it.',
+    description: 'Manual MULS reward injection is unavailable from an agent MCP context until memory ownership can be authoritatively verified.',
     enabled: true,
     inputSchema: {
         type: 'object',
@@ -434,11 +316,10 @@ export const memory_inject_reward: McpToolDefinition = {
                 reason: 'This memory provided crucial context for solving the bug'
             },
             output: {
-                success: true,
-                memoryId: 'mem-abc123',
-                newQValue: 0.65
+                success: false,
+                code: 'MULS_MEMORY_OWNERSHIP_UNAVAILABLE'
             },
-            description: 'Reward a helpful memory'
+            description: 'Reward mutation fails closed without authoritative memory ownership'
         },
         {
             input: {
@@ -447,47 +328,19 @@ export const memory_inject_reward: McpToolDefinition = {
                 reason: 'This memory was misleading and caused confusion'
             },
             output: {
-                success: true,
-                memoryId: 'mem-xyz789',
-                newQValue: 0.35
+                success: false,
+                code: 'MULS_MEMORY_OWNERSHIP_UNAVAILABLE'
             },
-            description: 'Penalize an unhelpful memory'
+            description: 'Penalty mutation also fails closed without authoritative memory ownership'
         }
     ],
-    handler: async (input: any, context: McpToolHandlerContext): Promise<McpToolHandlerResult> => {
+    handler: async (_input: unknown, context: McpToolHandlerContext): Promise<McpToolHandlerResult> => {
         try {
-            const rewardProcessor = RewardSignalProcessor.getInstance();
-
-            if (!rewardProcessor.isEnabled()) {
-                const content: McpToolResultContent = {
-                    type: 'application/json',
-                    data: {
-                        success: false,
-                        error: 'Memory Utility Learning System (MULS) is disabled. Set MEMORY_UTILITY_LEARNING_ENABLED=true to enable.'
-                    }
-                };
-                return { content };
-            }
-
-            // Pass agent and channel context from the tool handler
-            const result = await rewardProcessor.injectReward(
-                input.memoryId,
-                input.reward,
-                input.reason,
-                context.agentId,
-                context.channelId
+            requireMemoryUtilityIdentity(context);
+            return unavailableResult(
+                'MULS_MEMORY_OWNERSHIP_UNAVAILABLE',
+                'Manual reward injection is unavailable from an agent MCP context because memory ownership cannot be authoritatively verified'
             );
-
-            const content: McpToolResultContent = {
-                type: 'application/json',
-                data: {
-                    success: result.success,
-                    memoryId: result.memoryId,
-                    newQValue: result.newQValue,
-                    error: result.error
-                }
-            };
-            return { content };
         } catch (error) {
             logger.error('[memory_inject_reward] Error:', error);
             const content: McpToolResultContent = {

@@ -217,6 +217,15 @@ Tests function call generation accuracy across Python, Java, JavaScript, REST AP
 
 ## MXF Configuration Examples
 
+> **Note:** Model ids change often. The ids in these docs are a snapshot of what was
+> available when they were written; providers add, rename, and retire models all the
+> time. Check your provider's current list before relying on an id — for OpenRouter,
+> <https://openrouter.ai/models>. For Claude on OpenRouter, `~anthropic/claude-opus-latest`,
+> `~anthropic/claude-sonnet-latest`, and `~anthropic/claude-haiku-latest` resolve to the
+> newest release in each family, so they are the ids to use unless you need a specific
+> version. `~anthropic/claude-fable-latest` is the same kind of alias for the top-tier
+> family; it is priced well above the others and nothing in MXF selects it by default.
+
 ### Production Setup (Claude)
 
 ```typescript
@@ -236,7 +245,7 @@ const agentConfig: AgentConfig = {
 const openRouterConfig: AgentConfig = {
     llmProvider: {
         type: LlmProviderType.OPENROUTER,
-        model: 'anthropic/claude-opus-4-5',
+        model: '~anthropic/claude-opus-latest',
         options: {
             temperature: 0.2
         }
@@ -284,10 +293,10 @@ const agentConfig: AgentConfig = {
 const systemLlmConfig = {
     orparModels: {
         observation: 'google/gemini-2.0-flash',     // Fast observation
-        reasoning: 'anthropic/claude-opus-4-5',     // Deep reasoning
-        action: 'anthropic/claude-haiku-4.5',       // Reliable tool execution
-        planning: 'anthropic/claude-opus-4-5',      // Strategic planning
-        reflection: 'anthropic/claude-opus-4.5'    // Meta-cognitive
+        reasoning: '~anthropic/claude-opus-latest',     // Deep reasoning
+        action: '~anthropic/claude-haiku-latest',       // Reliable tool execution
+        planning: '~anthropic/claude-opus-latest',      // Strategic planning
+        reflection: '~anthropic/claude-opus-latest'    // Meta-cognitive
     }
 };
 
@@ -317,8 +326,8 @@ const badConfig = {
 ```typescript
 // Example fallback chain
 const modelFallback = [
-    'anthropic/claude-opus-4-5',      // Primary
-    'anthropic/claude-sonnet-4.5',    // Fallback 1
+    '~anthropic/claude-opus-latest',      // Primary
+    '~anthropic/claude-sonnet-latest',    // Fallback 1
     'google/gemini-3-pro',            // Fallback 2
     'openai/gpt-5'                    // Fallback 3 (full model, not mini)
 ];

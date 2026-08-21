@@ -27,36 +27,51 @@
 
 import express from 'express';
 import * as hybridMcpController from '../controllers/hybridMcpController';
-import { authenticateUser } from '../middleware/auth';
+import { requireAdmin } from '../middleware/dualAuth';
+import { requireChannelAccess } from '../middleware/channelAuth';
+import { requireUnsafeStdioMcpEnabled } from '../middleware/runtimeFeaturePolicy';
 
 const router = express.Router();
 
 // Get hybrid service status
-router.get('/status', hybridMcpController.getHybridStatus);
+router.get('/status', requireAdmin, hybridMcpController.getHybridStatus);
 
 // Get hybrid service statistics
-router.get('/stats', hybridMcpController.getHybridStats);
+router.get('/stats', requireAdmin, hybridMcpController.getHybridStats);
 
-// Get all tools (internal + external)
-router.get('/tools', hybridMcpController.getAllTools);
+// Global topology is administrator-only. Channel-bound principals use the
+// explicit channel route, whose middleware proves ownership/bound-key access.
+router.get('/tools', requireAdmin, hybridMcpController.getAllTools);
+router.get('/channels/:channelId/tools', requireChannelAccess, hybridMcpController.getAllTools);
 
 // Get external server statuses
-router.get('/servers', hybridMcpController.getExternalServers);
+router.get('/servers', requireAdmin, hybridMcpController.getExternalServers);
+router.get('/channels/:channelId/servers', requireChannelAccess, hybridMcpController.getExternalServers);
 
 // Start an external server
-router.post('/servers/:serverId/start', hybridMcpController.startExternalServer);
+router.post('/servers/:serverId/start', requireAdmin, hybridMcpController.startExternalServer);
 
 // Stop an external server
-router.post('/servers/:serverId/stop', hybridMcpController.stopExternalServer);
+router.post('/servers/:serverId/stop', requireAdmin, hybridMcpController.stopExternalServer);
 
 // Register a new external server (for dashboard/HTTP access)
 // NOTE: SDK uses EventBus events (EXTERNAL_SERVER_REGISTER) - this is for dashboard UI
-router.post('/servers/register', authenticateUser, hybridMcpController.registerExternalServer);
+router.post(
+    '/servers/register',
+    requireAdmin,
+    requireUnsafeStdioMcpEnabled,
+    hybridMcpController.registerExternalServer
+);
 
 // Unregister an external server (for dashboard/HTTP access)
-router.delete('/servers/:serverId', authenticateUser, hybridMcpController.unregisterExternalServer);
+router.delete('/servers/:serverId', requireAdmin, hybridMcpController.unregisterExternalServer);
 
 // Get server status
-router.get('/servers/:serverId/status', hybridMcpController.getServerStatus);
+router.get('/servers/:serverId/status', requireAdmin, hybridMcpController.getServerStatus);
+router.get(
+    '/channels/:channelId/servers/:serverId/status',
+    requireChannelAccess,
+    hybridMcpController.getServerStatus
+);
 
 export default router;

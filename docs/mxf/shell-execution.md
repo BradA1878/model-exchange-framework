@@ -83,7 +83,7 @@ interface ParsedCommand {
 | Env prefixes | `NODE_ENV=prod node app.js` | envPrefixes: `{NODE_ENV: "prod"}`, effectiveCommand: `node` |
 | Wrapper commands | `sudo timeout 30 curl url` | wrappers: `["sudo", "timeout"]`, effectiveCommand: `curl` |
 | Redirections | `ls > output.txt 2>&1` | hasRedirections: true |
-| Subshells | `echo $(date)` | hasSubshells: true |
+| Subshells | `echo $(date)` | hasSubshells: true — the guard denies the command, because what runs inside `$()` or backticks is not parsed and would bypass the allowlist and block rules |
 | Quoted strings | `grep "hello world" file` | Quotes stripped, content preserved |
 
 ### Known Wrapper Commands

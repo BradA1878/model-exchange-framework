@@ -23,7 +23,7 @@
  * Phase 1: Extension of AgentPerformanceService for validation metrics
  */
 
-import { Observable, Subject, of } from 'rxjs';
+import { Observable, Subject, type Subscription } from 'rxjs';
 import { Logger } from '../utils/Logger.js';
 import { EventBus } from '../events/EventBus.js';
 import { Events } from '../events/EventNames.js';
@@ -52,8 +52,11 @@ export class ValidationPerformanceService {
     
     // Observable for validation events
     private readonly validationEvents$ = new Subject<ValidationEvent>();
-    
-    private static instance: ValidationPerformanceService;
+
+    // EventBus subscriptions owned by this singleton, released by shutdown()
+    private readonly eventSubscriptions: Subscription[] = [];
+
+    private static instance: ValidationPerformanceService | undefined;
 
     private constructor() {
         this.logger = new Logger('info', 'ValidationPerformanceService', 'server');
@@ -77,42 +80,61 @@ export class ValidationPerformanceService {
     // =============================================================================
 
     private setupEventListeners(): void {
+        // Handlers return their promise so the EventBus shutdown drain waits for
+        // in-flight tracking and logs a rejection instead of leaving it unhandled.
+
         // Track validation errors
-        EventBus.server.on(Events.Mcp.TOOL_ERROR, (payload) => {
+        this.eventSubscriptions.push(EventBus.server.on(Events.Mcp.TOOL_ERROR, (payload): Promise<void> | undefined => {
             const error = payload.error || payload.data?.error || payload.data?.errorMessage;
-            if (this.isValidationError(error)) {
-                this.trackValidationError(
-                    payload.agentId,
-                    payload.channelId,
-                    payload.data?.toolName || payload.toolName,
-                    error,
-                    payload.data?.parameters
-                );
+            if (!this.isValidationError(error)) {
+                return undefined;
             }
-        });
+            return this.trackValidationError(
+                payload.agentId,
+                payload.channelId,
+                payload.data?.toolName || payload.toolName,
+                error,
+                payload.data?.parameters
+            );
+        }));
 
         // Track successful tool calls (for success rate calculation)
-        EventBus.server.on(Events.Mcp.TOOL_RESULT, (payload) => {
+        this.eventSubscriptions.push(EventBus.server.on(Events.Mcp.TOOL_RESULT, (payload) =>
             this.trackValidationSuccess(
                 payload.agentId,
                 payload.channelId,
                 payload.data?.toolName || payload.toolName
-            );
-        });
+            )
+        ));
 
         // Track help tool usage
-        EventBus.server.on(Events.Mcp.TOOL_CALL, (payload) => {
+        this.eventSubscriptions.push(EventBus.server.on(Events.Mcp.TOOL_CALL, (payload): Promise<void> | undefined => {
             const toolName = payload.data?.toolName || payload.toolName;
-            if (this.isHelpTool(toolName)) {
-                this.trackHelpToolUsage(
-                    payload.agentId,
-                    payload.channelId,
-                    toolName,
-                    payload.data?.parameters
-                );
+            if (!this.isHelpTool(toolName)) {
+                return undefined;
             }
-        });
+            return this.trackHelpToolUsage(
+                payload.agentId,
+                payload.channelId,
+                toolName,
+                payload.data?.parameters
+            );
+        }));
+    }
 
+    /** Release every EventBus subscription and cached state owned by this singleton. */
+    public shutdown(): void {
+        for (const subscription of this.eventSubscriptions) {
+            subscription.unsubscribe();
+        }
+        this.eventSubscriptions.length = 0;
+        this.validationMetrics.clear();
+        this.errorTimestamps.clear();
+        this.validationEvents$.complete();
+
+        if (ValidationPerformanceService.instance === this) {
+            ValidationPerformanceService.instance = undefined;
+        }
     }
 
     // =============================================================================

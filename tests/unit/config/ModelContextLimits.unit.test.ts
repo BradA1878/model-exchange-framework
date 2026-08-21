@@ -23,6 +23,15 @@ describe('ModelContextLimits', () => {
             expect(getContextLimit('gemini-1.5-pro')).toBe(2_000_000);
         });
 
+        it('knows the OpenRouter latest Claude aliases at their current windows', () => {
+            // "~anthropic/claude-sonnet-latest" strips the provider and matches "claude-sonnet-latest".
+            // Windows as listed by OpenRouter on 2026-08-21: opus, sonnet, and fable at 1M; haiku at 200k.
+            expect(getContextLimit('~anthropic/claude-fable-latest')).toBe(1_000_000);
+            expect(getContextLimit('~anthropic/claude-opus-latest')).toBe(1_000_000);
+            expect(getContextLimit('~anthropic/claude-sonnet-latest')).toBe(1_000_000);
+            expect(getContextLimit('~anthropic/claude-haiku-latest')).toBe(200_000);
+        });
+
         it('should return prefix match for versioned model IDs', () => {
             // "claude-opus-4-20250101" should match "claude-opus-4"
             expect(getContextLimit('claude-opus-4-20250101')).toBe(200_000);

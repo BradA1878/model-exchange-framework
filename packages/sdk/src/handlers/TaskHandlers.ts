@@ -29,7 +29,8 @@ import { AgentEvents } from '@mxf-dev/core/events/event-definitions/AgentEvents'
 import { EventBus } from '@mxf-dev/core/events/EventBus';
 import { Handler } from './Handler.js';
 import { TaskHelper } from '../services/internal/TaskHelper.js';
-import { SimpleTaskRequest, SimpleTaskResponse, TaskRequestHandler } from '@mxf-dev/core/interfaces/TaskInterfaces';
+import { TaskHelpers } from '../MxfAgentHelpers.js';
+import { SimpleTaskRequest, SimpleTaskResponse, TaskRequestHandler, TaskEndedHandler, TaskOutcome } from '@mxf-dev/core/interfaces/TaskInterfaces';
 import { Subscription } from 'rxjs';
 import { TaskRequestEvent, TaskResponseEvent } from '@mxf-dev/core/events/EventNames'; // These types might become obsolete or change
 import { 
@@ -58,6 +59,9 @@ export class TaskHandlers extends Handler {
 
     // Task-related handlers and callbacks
     private taskRequestHandler: TaskRequestHandler | null = null;
+    private taskEndedHandler: TaskEndedHandler | null = null;
+    /** The task this agent is currently assigned, until the server ends it. */
+    private activeAssignedTaskId: string | null = null;
     private responseHandlers: Map<string, (response: SimpleTaskResponse) => void> = new Map();
     private globalResponseHandler: (response: SimpleTaskResponse) => void = () => {};
     
@@ -89,6 +93,7 @@ export class TaskHandlers extends Handler {
         this.setupTaskRequestHandler();
         this.setupTaskResponseHandler();
         this.setupTaskAssignedHandler();
+        this.setupTaskEndedHandler();
     }
     
     /**
@@ -109,6 +114,20 @@ export class TaskHandlers extends Handler {
     public setTaskRequestHandler(handler: TaskRequestHandler): void {
         this.validator.assertIsFunction(handler);
         this.taskRequestHandler = handler;
+    }
+
+    /**
+     * Set the handler called once when the task this agent was assigned ends.
+     *
+     * The server broadcasts completed/failed/cancelled to the whole channel;
+     * this narrows it to the agent's own assignment so the agent can stop
+     * working a task that is over.
+     *
+     * @internal - This method is called internally by MxfClient
+     */
+    public setTaskEndedHandler(handler: TaskEndedHandler): void {
+        this.validator.assertIsFunction(handler);
+        this.taskEndedHandler = handler;
     }
     
     /**
@@ -294,6 +313,36 @@ export class TaskHandlers extends Handler {
      * Set up handler for task assignments
      * @private
      */
+    /**
+     * Tell the agent when its assigned task reaches a terminal outcome.
+     *
+     * Before this, nothing in the SDK reacted to the server's outcome broadcast:
+     * an agent kept its finished task as the active one, every later message
+     * re-entered the task loop, and the completion agent reported the same
+     * failure again at each iteration limit.
+     */
+    private setupTaskEndedHandler(): void {
+        const outcomes: Array<[string, TaskOutcome]> = [
+            [TaskEvents.COMPLETED, 'completed'],
+            [TaskEvents.FAILED, 'failed'],
+            [TaskEvents.CANCELLED, 'cancelled']
+        ];
+        for (const [eventName, outcome] of outcomes) {
+            const subscription = EventBus.client.on(eventName, (payload: unknown) => {
+                const data = (payload as { data?: { taskId?: unknown; task?: { id?: unknown } } } | undefined)?.data;
+                const taskId = typeof data?.taskId === 'string'
+                    ? data.taskId
+                    : (typeof data?.task?.id === 'string' ? data.task.id : null);
+                if (!taskId || taskId !== this.activeAssignedTaskId) {
+                    return;
+                }
+                this.activeAssignedTaskId = null;
+                this.taskEndedHandler?.(taskId, outcome);
+            });
+            this.subscriptions.push(subscription);
+        }
+    }
+
     private setupTaskAssignedHandler(): void {
         this.logger.debug(`[TaskHandlers:${this.agentId}] Setting up ASSIGNED handler subscription`);
         
@@ -346,7 +395,12 @@ export class TaskHandlers extends Handler {
                     content: assignedTask.description,
                     title: assignedTask.title, // Include title for proper display
                     description: assignedTask.description, // Include description for buildTaskDesc compatibility
-                    metadata: assignedTask.metadata // Include metadata with completion agent info
+                    // The designation and assignee list are what the server checks when
+                    // an agent reports the terminal outcome; metadata only carries role
+                    // flags on the late-assignment flows, so they travel separately.
+                    completionAgentId: assignedTask.completionAgentId,
+                    assignedAgentIds: assignedTask.assignedAgentIds,
+                    metadata: assignedTask.metadata
                 };
                 
                 // Emit an event to notify that a task has been assigned
@@ -363,6 +417,8 @@ export class TaskHandlers extends Handler {
                 );
                 EventBus.client.emitOn(this.agentId,AgentEvents.TASK_ASSIGNED, taskAssignmentPayload);
                 
+                this.activeAssignedTaskId = assignedTask.id;
+
                 // Always trigger task execution — agent roles affect behaviour, not whether
                 // the task is processed.
                 if (this.taskRequestHandler) {
@@ -372,7 +428,7 @@ export class TaskHandlers extends Handler {
                         // disabled by default — so the server kept the task in `in_progress`
                         // forever and agent.onTaskFailed() never fired for anyone.
                         this.failAssignedTask(
-                            assignedTask.id,
+                            taskRequest,
                             assignedTask.channelId || this.channelId,
                             error
                         );
@@ -381,7 +437,7 @@ export class TaskHandlers extends Handler {
                     const reason = 'No task request handler set — cannot execute assigned task';
                     this.logger.error(reason);
                     this.failAssignedTask(
-                        assignedTask.id,
+                        taskRequest,
                         assignedTask.channelId || this.channelId,
                         new Error(reason)
                     );
@@ -420,9 +476,37 @@ export class TaskHandlers extends Handler {
      *
      * @private
      */
-    private failAssignedTask(taskId: string, channelId: string, error: unknown): void {
+    /**
+     * Turn a local execution failure into the task's outcome — when this agent
+     * is the one allowed to report it.
+     *
+     * Failing a task is terminal, gated on the server exactly like completing
+     * it: the designated completion agent when the task names one, otherwise
+     * any assignee. A contributor to a multi-agent task therefore only
+     * surfaces its error on the agent error channel; the task stays open for
+     * the agent designated to finish it.
+     */
+    private failAssignedTask(taskRequest: SimpleTaskRequest, channelId: string, error: unknown): void {
+        const taskId = taskRequest.taskId;
         const message = error instanceof Error ? error.message : String(error);
         this.logger.error(`Error executing assigned task ${taskId}: ${message}`);
+
+        const holdsCompletionAuthority = TaskHelpers.isCurrentTaskCompletionAgent(
+            { agentId: this.agentId, currentTask: taskRequest },
+            this.logger
+        );
+        if (!holdsCompletionAuthority) {
+            this.logger.warn(
+                `Not reporting task ${taskId} as failed: another agent is designated to report its outcome`
+            );
+            EventBus.client.emitOn(this.agentId, AgentEvents.ERROR, createBaseEventPayload(
+                AgentEvents.ERROR,
+                this.agentId,
+                channelId,
+                { message, phase: 'task_execution', taskId }
+            ));
+            return;
+        }
 
         TaskHelper.failTask(taskId, this.agentId, channelId, message).catch((emitError: unknown) => {
             this.logger.error(

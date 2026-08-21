@@ -65,24 +65,26 @@ export interface IKnowledgeGraphRepository {
      * @param entityId - The entity ID
      * @returns The entity or null if not found
      */
-    getEntity(entityId: string): Promise<Entity | null>;
+    getEntity(entityId: string, channelId?: ChannelId): Promise<Entity | null>;
 
     /**
-     * Update an entity
+     * Update an entity inside its channel
      *
      * @param entityId - The entity ID
+     * @param channelId - Channel the entity must belong to
      * @param updates - Partial entity updates
-     * @returns The updated entity or null if not found
+     * @returns The updated entity, or null if no such entity exists in the channel
      */
-    updateEntity(entityId: string, updates: Partial<Entity>): Promise<Entity | null>;
+    updateEntity(entityId: string, channelId: ChannelId, updates: Partial<Entity>): Promise<Entity | null>;
 
     /**
-     * Delete an entity
+     * Delete an entity and its relationships inside its channel
      *
      * @param entityId - The entity ID
+     * @param channelId - Channel the entity must belong to
      * @returns true if deleted
      */
-    deleteEntity(entityId: string): Promise<boolean>;
+    deleteEntity(entityId: string, channelId: ChannelId): Promise<boolean>;
 
     /**
      * Find entities matching filters
@@ -138,7 +140,8 @@ export interface IKnowledgeGraphRepository {
      */
     mergeEntities(
         targetEntityId: string,
-        sourceEntityIds: string[]
+        sourceEntityIds: string[],
+        channelId?: ChannelId
     ): Promise<EntityMergeResult>;
 
     /**
@@ -174,24 +177,27 @@ export interface IKnowledgeGraphRepository {
     getRelationship(relationshipId: string): Promise<Relationship | null>;
 
     /**
-     * Update a relationship
+     * Update a relationship inside its channel
      *
      * @param relationshipId - The relationship ID
+     * @param channelId - Channel the relationship must belong to
      * @param updates - Partial relationship updates
-     * @returns The updated relationship or null if not found
+     * @returns The updated relationship, or null if no such relationship exists in the channel
      */
     updateRelationship(
         relationshipId: string,
+        channelId: ChannelId,
         updates: Partial<Relationship>
     ): Promise<Relationship | null>;
 
     /**
-     * Delete a relationship
+     * Delete a relationship inside its channel
      *
      * @param relationshipId - The relationship ID
+     * @param channelId - Channel the relationship must belong to
      * @returns true if deleted
      */
-    deleteRelationship(relationshipId: string): Promise<boolean>;
+    deleteRelationship(relationshipId: string, channelId: ChannelId): Promise<boolean>;
 
     /**
      * Get relationships between two entities
@@ -238,7 +244,8 @@ export interface IKnowledgeGraphRepository {
             entityType?: EntityType | EntityType[];
             maxDepth?: number;
             limit?: number;
-        }
+        },
+        channelId?: ChannelId
     ): Promise<{
         entities: Entity[];
         relationships: Relationship[];
@@ -255,7 +262,8 @@ export interface IKnowledgeGraphRepository {
     findPath(
         fromEntityId: string,
         toEntityId: string,
-        maxHops?: number
+        maxHops?: number,
+        channelId?: ChannelId
     ): Promise<GraphPath | null>;
 
     /**
@@ -271,7 +279,8 @@ export interface IKnowledgeGraphRepository {
         fromEntityId: string,
         toEntityId: string,
         maxHops?: number,
-        limit?: number
+        limit?: number,
+        channelId?: ChannelId
     ): Promise<GraphPath[]>;
 
     /**
@@ -294,7 +303,8 @@ export interface IKnowledgeGraphRepository {
     getSubgraph(
         entityId: string,
         depth?: number,
-        limit?: number
+        limit?: number,
+        channelId?: ChannelId
     ): Promise<{
         entities: Entity[];
         relationships: Relationship[];
@@ -333,25 +343,29 @@ export interface IKnowledgeGraphRepository {
     // ========================================================================
 
     /**
-     * Update entity Q-value
+     * Update entity Q-value inside its channel
      *
      * @param entityId - The entity ID
+     * @param channelId - Channel the entity must belong to
      * @param newQValue - The new Q-value
      * @param reason - Reason for update
-     * @returns Updated entity
+     * @returns Updated entity, or null if no such entity exists in the channel
      */
     updateEntityQValue(
         entityId: string,
+        channelId: ChannelId,
         newQValue: number,
         reason: string
     ): Promise<Entity | null>;
 
     /**
-     * Batch update Q-values
+     * Batch update Q-values for entities of one channel
      *
+     * @param channelId - Channel every entity must belong to
      * @param updates - Array of updates
      */
     batchUpdateQValues(
+        channelId: ChannelId,
         updates: Array<{
             entityId: string;
             qValue: number;
@@ -376,39 +390,43 @@ export interface IKnowledgeGraphRepository {
     ): Promise<Entity[]>;
 
     /**
-     * Increment retrieval count for entities
+     * Increment retrieval count for entities of one channel
      *
+     * @param channelId - Channel every entity must belong to
      * @param entityIds - Entity IDs to update
      */
-    incrementRetrievalCount(entityIds: string[]): Promise<void>;
+    incrementRetrievalCount(channelId: ChannelId, entityIds: string[]): Promise<void>;
 
     /**
-     * Record success/failure for entities (for Q-value learning)
+     * Record success/failure for entities of one channel (for Q-value learning)
      *
+     * @param channelId - Channel every entity must belong to
      * @param entityIds - Entity IDs
      * @param success - Whether outcome was successful
      */
-    recordOutcome(entityIds: string[], success: boolean): Promise<void>;
+    recordOutcome(channelId: ChannelId, entityIds: string[], success: boolean): Promise<void>;
 
     // ========================================================================
     // Batch Operations
     // ========================================================================
 
     /**
-     * Get multiple entities by their IDs in a single query
+     * Get multiple entities of one channel by their IDs in a single query
      *
+     * @param channelId - Channel every entity must belong to
      * @param entityIds - Array of entity IDs to fetch
-     * @returns Array of found entities (excludes missing IDs)
+     * @returns Array of found entities (excludes missing and foreign IDs)
      */
-    getEntitiesByIds(entityIds: string[]): Promise<Entity[]>;
+    getEntitiesByIds(channelId: ChannelId, entityIds: string[]): Promise<Entity[]>;
 
     /**
-     * Get all relationships where either endpoint is in the given entity IDs
+     * Get all relationships of one channel where either endpoint is in the given entity IDs
      *
+     * @param channelId - Channel every relationship must belong to
      * @param entityIds - Array of entity IDs to find relationships for
      * @returns Array of relationships involving the given entities
      */
-    getRelationshipsByEntityIds(entityIds: string[]): Promise<Relationship[]>;
+    getRelationshipsByEntityIds(channelId: ChannelId, entityIds: string[]): Promise<Relationship[]>;
 
     // ========================================================================
     // Context Operations

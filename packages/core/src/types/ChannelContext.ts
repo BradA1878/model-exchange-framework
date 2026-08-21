@@ -272,12 +272,14 @@ export interface IChannelContextService {
      * @param channelId - Channel ID
      * @param context - Channel context to save
      * @param historyEntry - Optional history entry to record with this update
+     * @param expectedContextUpdatedAt - Persisted revision required for an update
      * @returns Observable of the saved context
      */
     saveContextToMemory(
         channelId: ChannelId,
         context: ChannelContextType,
-        historyEntry?: ChannelContextHistoryEntry
+        historyEntry?: ChannelContextHistoryEntry,
+        expectedContextUpdatedAt?: number
     ): Observable<ChannelContextType>;
     
     /**

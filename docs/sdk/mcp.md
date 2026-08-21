@@ -11,42 +11,25 @@ MCP integration in MXF allows:
 - Custom tool development
 - Hybrid client-server tool execution
 
-## Network Stability & Reliability
+## Network error handling
 
-MXF includes sophisticated network recovery and error handling capabilities built into all MCP provider clients:
-
-### Network Recovery Manager
-
-**Automatic Retry Logic with Circuit Breaker:**
-- **Exponential Backoff**: Intelligent retry delays that increase exponentially (with jitter)
-- **Circuit Breaker Pattern**: Prevents cascading failures by temporarily blocking requests after repeated failures
-- **Error Classification**: Distinguishes between retryable (network, timeout) and non-retryable (auth, validation) errors
-- **Configurable Thresholds**: Customize max retries, circuit breaker threshold, and cooldown periods
-
-**Circuit Breaker States:**
-- **CLOSED**: Normal operation, all requests allowed
-- **OPEN**: Service temporarily unavailable after threshold failures
-- **HALF_OPEN**: Testing if service has recovered
+MXF provider clients classify network failures and retry eligible requests. This is
+managed internally; `AgentCreationConfig` does not expose per-agent retry or circuit
+breaker settings.
 
 ```typescript
-// Network recovery is built-in, but can be configured
+import { LlmProviderType } from '@mxf-dev/sdk';
+
 const agent = await sdk.createAgent({
     agentId: 'resilient-agent',
     name: 'Resilient Agent',
     channelId: 'main',
     keyId: 'key-123',
     secretKey: 'secret-456',
-    llmConfig: {
-        provider: 'openrouter',
-        networkRecovery: {
-            maxRetries: 3,
-            circuitBreakerThreshold: 5,
-            circuitBreakerCooldownMs: 60000,
-            enableDetailedLogging: true
-        }
-    }
+    llmProvider: LlmProviderType.OPENROUTER,
+    defaultModel: '~anthropic/claude-haiku-latest',
+    apiKey: process.env.OPENROUTER_API_KEY!
 });
-
 ```
 
 ### JSON Recovery Manager
@@ -185,7 +168,7 @@ console.log('Search results:', result);
 
 ```typescript
 // Get all available tools (includes global + channel-scoped tools)
-const tools = await agent.getAvailableTools();
+const tools = await agent.listTools();
 
 tools.forEach(tool => {
     console.log(`Tool: ${tool.name}`);
@@ -200,17 +183,19 @@ tools.forEach(tool => {
 Agents automatically see tools from channel-scoped MCP servers:
 
 ```typescript
-// Register a channel-scoped MCP server
-await agent.registerChannelMcpServer({
+// An administrator-authenticated SDK registers the host process.
+// The server operator must set MXF_UNSAFE_STDIO_MCP_ENABLED=true.
+const registration = await sdk.registerChannelMcpServer('chess-room', {
     id: 'game-tools',
     name: 'Game Tools',
-    command: 'npx',
-    args: ['-y', '@mcp/chess'],
+    transport: 'stdio',
+    command: 'bun',
+    args: ['run', './mcp/chess.ts'],
     keepAliveMinutes: 10
 });
 
-// Tools from chess server now available (only to this channel)
-const tools = await agent.getAvailableTools();
+// An authorized agent in chess-room can now discover and use the tools.
+const tools = await agent.listTools();
 const gameTools = tools.filter(t => t.scope === 'channel');
 console.log('Game tools:', gameTools.map(t => t.name));
 
@@ -220,7 +205,9 @@ await agent.executeTool('chess_move', { from: 'e2', to: 'e4' });
 
 Channel and external tools are called by the raw name their origin server reports — the names returned in `toolsDiscovered`, and the names to put in `allowedTools`. The registry's canonical `<serverId>__<toolName>` form is accepted in allowlists too.
 
-See [External MCP Servers](external-mcp-servers.md#server-scopes-global-vs-channel) and [Tool Names](external-mcp-servers.md#tool-names) for more details.
+See [Register a channel server](external-mcp-servers.md#register-a-channel-server)
+and [Tool names and allowlists](external-mcp-servers.md#tool-names-and-allowlists)
+for more details.
 
 ### Tool with Complex Arguments
 
@@ -389,48 +376,20 @@ const emailTool = {
 };
 ```
 
-## Resource Management
+## Tool Discovery
 
-### Accessing Resources
-
-```typescript
-// Get available resources
-const resources = await agent.getResources();
-
-// Read a specific resource
-const promptTemplate = await agent.getResource({
-    type: 'prompt',
-    name: 'research_assistant'
-});
-
-console.log('Prompt:', promptTemplate.content);
-```
-
-### Resource Types
+The public agent API exposes the tools authorized for that exact agent and channel.
+It does not expose direct MCP resource reads.
 
 ```typescript
-// Prompt resources
-const analysisPrompt = await agent.getResource({
-    type: 'prompt',
-    name: 'data_analysis',
-    variables: {
-        dataset: 'sales_2024',
-        metrics: ['revenue', 'growth']
-    }
-});
+const tools = await agent.listTools();
 
-// Template resources
-const reportTemplate = await agent.getResource({
-    type: 'template',
-    name: 'monthly_report',
-    format: 'markdown'
-});
+for (const tool of tools) {
+    console.log(`${tool.name}: ${tool.description}`);
+}
 
-// Data resources
-const configData = await agent.getResource({
-    type: 'data',
-    name: 'app_config',
-    version: '2.0'
+const result = await agent.executeTool('research_assistant', {
+    topic: 'quarterly sales'
 });
 ```
 
@@ -585,28 +544,15 @@ const executeWithRetry = async (toolRequest: ToolRequest, maxRetries = 3) => {
 };
 ```
 
-## Tool Discovery and Metadata
-
-### Dynamic Tool Discovery
+## Tool discovery
 
 ```typescript
-// Discover tools by capability
-const searchTools = await agent.discoverTools({
-    capability: 'search',
-    tags: ['web', 'api']
-});
+const tools = await agent.listTools();
+const searchTools = tools.filter((tool) =>
+    /search/i.test(`${tool.name} ${tool.description ?? ''}`)
+);
 
-// Discover tools by provider
-const anthropicTools = await agent.discoverTools({
-    provider: 'anthropic'
-});
-
-// Get tool metadata
-const toolInfo = await agent.getToolMetadata('web_search');
-console.log('Version:', toolInfo.version);
-console.log('Author:', toolInfo.author);
-console.log('Last updated:', toolInfo.lastUpdated);
-console.log('Usage stats:', toolInfo.usage);
+console.log('Search tools:', searchTools.map((tool) => tool.name));
 ```
 
 ## Enhanced Meta-Tools (Phase 3)
@@ -617,16 +563,13 @@ MXF Phase 3 introduces validation-aware meta-tools that provide intelligent reco
 
 ```typescript
 // Get enhanced tool recommendations with validation insights
-const recommendations = await agent.executeTool({
-    name: 'tools_recommend',
-    arguments: {
-        intent: 'I need to process customer data from CSV files',
-        context: 'Working with sales data for quarterly analysis',
-        maxRecommendations: 5,
-        includeValidationInsights: true,
-        includeParameterExamples: true,
-        includePatternRecommendations: true
-    }
+const recommendations = await agent.executeTool('tools_recommend', {
+    intent: 'I need to process customer data from CSV files',
+    context: 'Working with sales data for quarterly analysis',
+    maxRecommendations: 5,
+    includeValidationInsights: true,
+    includeParameterExamples: true,
+    includePatternRecommendations: true
 });
 
 console.log('Recommended tools:', recommendations.recommendedTools);
@@ -1430,18 +1373,13 @@ try {
 }
 ```
 
-### Tool Categories
+### Tool Inventory
 
 ```typescript
-// Get tools by category
-const categories = await agent.getToolCategories();
+const tools = await agent.listTools();
 
-for (const category of categories) {
-    console.log(`\n${category.name}:`);
-    const tools = await agent.getToolsByCategory(category.id);
-    tools.forEach(tool => {
-        console.log(`  - ${tool.name}: ${tool.description}`);
-    });
+for (const tool of tools) {
+    console.log(`${tool.providerId}: ${tool.name} — ${tool.description}`);
 }
 ```
 
@@ -1508,19 +1446,13 @@ const agent = await sdk.createAgent({
     channelId: 'main',
     keyId: 'key-123',
     secretKey: 'secret-456',
-    mcpConfig: {
-        permissions: {
-            allowedTools: ['web_search', 'calculator'],
-            deniedTools: ['file_system', 'shell_execute'],
-            requireConfirmation: ['email_send', 'api_post']
-        }
-    }
+    allowedTools: ['web_search', 'calculator']
 });
 
-// Check permissions before execution
-const canExecute = await agent.canExecuteTool('file_delete');
-if (!canExecute) {
-    console.log('Permission denied for file_delete tool');
+// listTools() returns only tools allowed for this authenticated agent and channel.
+const allowedTools = await agent.listTools();
+if (!allowedTools.some(tool => tool.name === 'file_delete')) {
+    console.log('file_delete is not in this agent\'s tool grant');
 }
 ```
 

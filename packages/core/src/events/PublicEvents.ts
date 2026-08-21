@@ -166,6 +166,13 @@ export const PUBLIC_MEILISEARCH_EVENTS = [
 ] as const;
 
 /**
+ * Public SDK Events - the SDK's own user connection
+ */
+export const PUBLIC_SDK_EVENTS = [
+    Events.Sdk.RECONNECTED,
+] as const;
+
+/**
  * Combined array of all public events
  */
 export const PUBLIC_EVENTS = [
@@ -179,6 +186,7 @@ export const PUBLIC_EVENTS = [
     ...PUBLIC_CHANNEL_EVENTS,
     ...PUBLIC_USER_INPUT_EVENTS,
     ...PUBLIC_MEILISEARCH_EVENTS,
+    ...PUBLIC_SDK_EVENTS,
 ] as const;
 
 /**

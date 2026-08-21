@@ -4,7 +4,7 @@ Author: [Brad Anderson](brada1878@gmail.com)
 Copyright 2024-2026 Brad Anderson
 
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](http://www.apache.org/licenses/LICENSE-2.0)
-[![Version](https://img.shields.io/badge/version-2.0.0-blue.svg)](https://github.com/BradA1878/model-exchange-framework)
+[![Version](https://img.shields.io/badge/version-3.0.0-blue.svg)](https://github.com/BradA1878/model-exchange-framework)
 [![npm](https://img.shields.io/badge/npm-@mxf--dev%2Fsdk-red.svg)](https://www.npmjs.com/package/@mxf-dev/sdk)
 [![Bun](https://img.shields.io/badge/Bun-1.1+-green.svg)](https://bun.sh/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.0+-blue.svg)](https://www.typescriptlang.org/)
@@ -21,11 +21,11 @@ A sophisticated framework for **autonomous multi-agent collaboration**, communic
 > **📦 New in 2.0 — the SDK is a standalone npm package.** Build agents against a
 > running MXF server without cloning this repo:
 > ```bash
-> npm install @mxf-dev/sdk        # or: bun add @mxf-dev/sdk
+> bun add @mxf-dev/sdk
 > ```
 > Packages: [`@mxf-dev/sdk`](https://www.npmjs.com/package/@mxf-dev/sdk) (agent client) ·
 > [`@mxf-dev/core`](https://www.npmjs.com/package/@mxf-dev/core) (events, schemas, types, protocol).
-> Run the dashboard against any server with `npx @mxf-dev/dashboard --api-url <server>`
+> Run the dashboard against any server with `bunx @mxf-dev/dashboard --api-url <server>`
 > ([mxf-dev/dashboard](https://github.com/mxf-dev/dashboard)). Clone this repo only to run the **server** itself.
 
 ## 🌟 Features
@@ -489,6 +489,15 @@ MXF provides comprehensive REST APIs for complete framework management:
   - Azure OpenAI - Enterprise GPT
   - [Ollama](https://ollama.ai/) - Local models (no API key needed)
 
+> **Note:** Model ids change often. The ids in these docs are a snapshot of what was
+> available when they were written; providers add, rename, and retire models all the
+> time. Check your provider's current list before relying on an id — for OpenRouter,
+> <https://openrouter.ai/models>. For Claude on OpenRouter, `~anthropic/claude-opus-latest`,
+> `~anthropic/claude-sonnet-latest`, and `~anthropic/claude-haiku-latest` resolve to the
+> newest release in each family, so they are the ids to use unless you need a specific
+> version. `~anthropic/claude-fable-latest` is the same kind of alias for the top-tier
+> family; it is priced well above the others and nothing in MXF selects it by default.
+
 > **Note:** Even for local development, Docker is required to run the infrastructure services (MongoDB, Meilisearch, Redis). Only the MXF server itself runs directly via Bun.
 
 ### Installation
@@ -533,7 +542,7 @@ bun run docker:health
 - Redis: `localhost:6379`
 
 The dashboard is a separate package — run it against this server with
-`npx @mxf-dev/dashboard --api-url http://localhost:3001`.
+`bunx @mxf-dev/dashboard --api-url http://localhost:3001`.
 
 📖 **[Complete Docker Deployment Guide](docs/deployment.md)**
 
@@ -593,7 +602,7 @@ runs against any MXF server:
 bun run docker:infra:up && bun run start:dev
 
 # In another terminal, run the dashboard against it — no clone, no build
-npx @mxf-dev/dashboard --api-url http://localhost:3001
+bunx @mxf-dev/dashboard --api-url http://localhost:3001
 # then open http://localhost:4173
 ```
 
@@ -799,15 +808,15 @@ OPENAI_API_KEY=sk-your-openai-key
 # SystemLLM Configuration (for ORPAR control loop, pattern learning, coordination)
 SYSTEMLLM_ENABLED=true
 SYSTEMLLM_PROVIDER=openrouter  # Options: openrouter, azure-openai, openai, anthropic, gemini, xai, ollama
-# SYSTEMLLM_DEFAULT_MODEL=google/gemini-2.5-flash  # Optional model override
-SYSTEMLLM_DYNAMIC_MODEL_SELECTION=true  # Enable complexity-based model switching (recommended for OpenRouter)
+SYSTEMLLM_DEFAULT_MODEL=~anthropic/claude-sonnet-latest  # Required when enabled - no built-in model, check your provider's current list
+SYSTEMLLM_DYNAMIC_MODEL_SELECTION=true  # Opt in to complexity-based upgrades into the latest Claude aliases (default: false)
 
 # MXP Protocol (Optional - for efficient agent communication)
 MXP_ENCRYPTION_KEY=your_secure_key_here
 MXP_ENCRYPTION_ENABLED=true
 
 # Server Configuration
-PORT=3001
+MXF_PORT=3001
 NODE_ENV=development
 
 # Validation System (Optional - for enhanced validation features)
@@ -1002,11 +1011,11 @@ export const customTool: McpTool = {
 ### Basic Agent Setup
 
 ```bash
-npm install @mxf-dev/sdk    # or: bun add @mxf-dev/sdk
+bun add @mxf-dev/sdk
 ```
 
 ```typescript
-import { MxfSDK, LlmProviderType } from '@mxf-dev/sdk';
+import { Events, LlmProviderType, MxfSDK } from '@mxf-dev/sdk';
 
 // Initialize SDK with Personal Access Token (REQUIRED)
 const sdk = new MxfSDK({
@@ -1018,17 +1027,17 @@ const sdk = new MxfSDK({
 await sdk.connect();
 
 // Create channel first
-await sdk.createChannel({
-    channelId: 'data-analysis-project',
+await sdk.createChannel('data-analysis-project', {
     name: 'Data Analysis Project',
     description: 'Channel for data analysis agents'
 });
 
 // Generate keys for the agent
-const keys = await sdk.generateKey({
-    channelId: 'data-analysis-project',
-    name: 'data-analyst-key'
-});
+const keys = await sdk.generateKey(
+    'data-analysis-project',
+    'my-agent-01',
+    'data-analyst-key'
+);
 
 // Create agent through SDK
 const agent = await sdk.createAgent({
@@ -1038,7 +1047,7 @@ const agent = await sdk.createAgent({
     keyId: keys.keyId,
     secretKey: keys.secretKey,
     llmProvider: LlmProviderType.OPENROUTER,
-    defaultModel: 'anthropic/claude-3.5-sonnet',
+    defaultModel: '~anthropic/claude-sonnet-latest',
     apiKey: process.env.OPENROUTER_API_KEY!,
     agentConfigPrompt: 'You are a data analyst specializing in statistics and visualization.',
     allowedTools: ['messaging_send', 'agent_discover']
@@ -1047,24 +1056,25 @@ const agent = await sdk.createAgent({
 await agent.connect();
 
 // Execute tools (with automatic validation)
-const result = await agent.toolService.executeTool('add', { a: 5, b: 3 });
+const result = await agent.executeTool('add', { a: 5, b: 3 });
 
 // Preview validation before execution
-const preview = await agent.toolService.executeTool('validation_preview', {
+const preview = await agent.executeTool('validation_preview', {
     toolName: 'file_write',
     parameters: { path: '/tmp/test.txt', content: 'Hello' }
 });
 
 // Get intelligent tool recommendations
-const recommendations = await agent.toolService.executeTool('tools_recommend', {
+const recommendations = await agent.executeTool('tools_recommend', {
     intent: 'analyze data and create visualizations',
     includeValidationInsights: true
 });
 
-// Send messages to other agents
-await agent.sendMessage('analysis-results', { 
+// Send a structured message from this authenticated agent
+await agent.mxfService.sendMessage({
+    topic: 'analysis-results',
     findings: 'Key insights discovered...',
-    confidence: 0.85 
+    confidence: 0.85
 });
 ```
 
@@ -1072,7 +1082,7 @@ await agent.sendMessage('analysis-results', {
 
 ```typescript
 // Create collaborative task for multiple agents
-const task = await agent.createTask({
+const taskId = await agent.mxfService.createTask({
     title: 'Multi-Agent Math Problem Collaboration',
     description: `
         Professor Puzzle: Create a challenging math problem and send it to Professor Calculator via messaging_send.
@@ -1081,8 +1091,8 @@ const task = await agent.createTask({
         Professor Calculator: When you receive a math problem message, solve it and send your complete solution 
         back to Professor Puzzle using messaging_send.
     `,
-    agents: ['problem-creator-agent', 'mathematician-agent'],
-    completionAgent: 'problem-creator-agent'  // Designate completion agent
+    assignedAgentIds: ['problem-creator-agent', 'mathematician-agent'],
+    completionAgentId: 'problem-creator-agent'  // Designate completion agent
 });
 
 // Agents collaborate autonomously:
@@ -1091,6 +1101,10 @@ const task = await agent.createTask({
 // 3. Mathematician receives problem and uses tools_recommend to find calculator tools
 // 4. Mathematician solves problem and sends solution via messaging_send
 // 5. Problem Creator receives solution and calls task_complete
+//
+// Only the designated completion agent can complete or fail the task. If the
+// Mathematician errors or runs out of iterations, the task stays open for the
+// Problem Creator; the error is reported on Events.Agent.ERROR instead.
 
 // Monitor task completion
 agent.onTaskCompleted((completedTask) => {
@@ -1098,18 +1112,19 @@ agent.onTaskCompleted((completedTask) => {
 });
 ```
 
-### Control Loop Integration
+### ORPAR Documentation
 
 ```typescript
-// Start ORPAR control loop
-const controlLoop = await agent.startControlLoop({
-    objective: 'Analyze sales data and generate insights',
-    context: { dataSource: 'Q4_sales.csv', priority: 'high' }
+// Observe agent-authored ORPAR records through the public event surface.
+agent.on(Events.Orpar.OBSERVE, (payload) => {
+    console.log(`ORPAR cycle ${payload.cycleNumber}:`, payload.data.observations);
 });
 
-// Monitor control loop events
-agent.onControlLoopEvent((event) => {
-    console.log(`Control Loop ${event.phase}: ${event.data}`);
+// ORPAR tools record the agent's cognitive cycle; they do not execute the work.
+await agent.executeTool('orpar_observe', {
+    observations: 'Q4_sales.csv is available and contains regional sales totals.',
+    keyFacts: ['The dataset covers all four regions'],
+    context: 'Beginning the sales analysis task'
 });
 ```
 
@@ -1179,4 +1194,3 @@ For questions, issues, or contributions:
 - **GitHub Issues**: [Report bugs](https://github.com/BradA1878/model-exchange-framework/issues)
 - **Examples**: Check `/examples` directory
 - **Architecture**: View the [interactive architecture diagram](./docs/diagram/mxf-architecture.html)
-

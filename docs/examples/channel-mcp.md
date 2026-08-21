@@ -1,29 +1,25 @@
-# Channel-Scoped MCP Server Registration Example
+# Channel-Scoped MCP Server Registration
 
-This example demonstrates how to register MCP servers that are scoped to a specific channel, making tools available only to agents within that channel.
+Channel-scoped registration starts an MCP child process on the MXF host and exposes
+its tools only to agents in one channel.
 
-## Overview
+## Security boundary
 
-Channel-scoped MCP registration is ideal for:
+Process registration is an administrative operation. It requires both:
 
-- **Game servers** where tools should only be available during gameplay
-- **Project-specific tools** that shouldn't pollute the global tool registry
-- **Multi-tenant deployments** where different channels need different tools
-- **Temporary tooling** that should be automatically cleaned up
+1. A user-authenticated `MxfSDK` connection whose server-side role is
+   `administrator`.
+2. `MXF_UNSAFE_STDIO_MCP_ENABLED=true` in the MXF server environment.
 
-## Key Difference from Global Registration
+The opt-in is disabled by default because the registered command executes on the MXF
+host. Agent keys can discover and execute granted tools, but cannot start or stop MCP
+processes. The deprecated process-management methods on `MxfAgent` and `MxfClient`
+throw `AgentMcpProcessManagementError`.
 
-| Feature | Global MCP Server | Channel MCP Server |
-|---------|------------------|-------------------|
-| **Scope** | Available to all agents | Only agents in the channel |
-| **Lifecycle** | Manual start/stop | Auto-start when first agent joins |
-| **Cleanup** | Manual unregister | Auto-stop with keepAlive after last agent leaves |
-| **Use Case** | System-wide tools | Channel-specific collaboration tools |
-| **Server ID** | Simple: `my-server` | Namespaced: `channelId:my-server` |
+Runtime registration supports MCP over child-process `stdio` only. HTTP MCP
+registration and URL-based server configuration are not implemented.
 
-## Implementation
-
-### 1. Create the Channel
+## Connect an administrator SDK
 
 ```typescript
 import { MxfSDK } from '@mxf-dev/sdk';
@@ -31,226 +27,144 @@ import { MxfSDK } from '@mxf-dev/sdk';
 const sdk = new MxfSDK({
     serverUrl: 'http://localhost:3001',
     domainKey: process.env.MXF_DOMAIN_KEY!,
-    username: 'admin',
-    password: 'admin-password'
+    accessToken: process.env.MXF_ADMIN_ACCESS_TOKEN!
 });
 
 await sdk.connect();
+```
 
-// Create a channel for the collaboration
-const channel = await sdk.createChannel({
-    name: 'game-room-42',
-    description: 'Private game room with custom tools'
+The server checks the authenticated user's role for each process-management request.
+
+## Create the channel
+
+`createChannel` takes the channel ID as its first argument:
+
+```typescript
+const channelMonitor = await sdk.createChannel('game-room-42', {
+    name: 'Game Room 42',
+    description: 'Private game room with custom tools',
+    allowedTools: ['game_move', 'game_attack', 'game_status']
 });
 ```
 
-### 2. Create an Agent and Join Channel
+The returned `MxfChannelMonitor` observes public events for the new channel. The
+channel ID remains `game-room-42`; it is not read from the monitor.
+
+## Register a stdio MCP process
 
 ```typescript
-// Create an agent that will use the channel tools
-const agent = await sdk.createAgent({
-    agentId: 'game-player',
-    name: 'Game Player',
-    channelId: channel.id,
-    provider: 'openrouter',
-    model: 'anthropic/claude-haiku-4.5'
-});
-```
-
-### 3. Register Channel-Scoped MCP Server
-
-```typescript
-// Register MCP server scoped to this channel
-const result = await agent.registerChannelMcpServer({
+const registration = await sdk.registerChannelMcpServer('game-room-42', {
     id: 'game-tools',
     name: 'Game Tools Server',
-    transport: 'http',
-    url: 'http://localhost:3002/mcp',
+    transport: 'stdio',
+    command: 'bun',
+    args: ['run', './mcp/game-tools.ts'],
     autoStart: true,
-    keepAliveMinutes: 10  // Auto-cleanup 10 min after last agent leaves
+    restartOnCrash: true,
+    keepAliveMinutes: 10,
+    environmentVariables: {
+        GAME_DATA_PATH: '/srv/mxf/game-data'
+    }
 });
 
-console.log('Registration result:', result);
-// { success: true, toolsDiscovered: ['game_move', 'game_attack', 'game_status'] }
+console.log(registration.toolsDiscovered);
+// ['game_move', 'game_attack', 'game_status']
 ```
 
-### 4. Tools Are Available to Channel Agents
+Registration rejects on authorization, configuration, process startup, MCP
+handshake, or tool-discovery failure. There is no `success` flag: a resolved result
+means every name in `toolsDiscovered` is registered.
+
+The command runs on the MXF server host, not on the machine running this SDK code.
+Only pass environment variables the child needs. MXF rejects protected runtime
+variable overrides.
+
+## Grant and use the tools
+
+The administrator grants the raw discovered names when generating an agent key:
 
 ```typescript
-// Get available tools - includes channel-scoped tools
-const tools = await agent.getAvailableTools();
+const key = await sdk.generateKey(
+    'game-room-42',
+    'game-player',
+    'Game Player',
+    undefined,
+    registration.toolsDiscovered
+);
 
-// Channel tools have metadata indicating their scope
-const gameTools = tools.filter(t => t.name.startsWith('game_'));
-console.log('Game tools available:', gameTools.map(t => t.name));
-```
-
-**Tool names**: agents see and call channel server tools by the raw name the server reports — the same names returned in `toolsDiscovered`. Use those names in `allowedTools` and in `executeTool()`:
-
-```typescript
 const player = await sdk.createAgent({
     agentId: 'game-player',
-    channelId: channel.id,
-    allowedTools: ['game_move', 'game_attack', 'game_status'],  // raw names
-    // ... config ...
+    name: 'Game Player',
+    channelId: 'game-room-42',
+    keyId: key.keyId,
+    secretKey: key.secretKey,
+    llmProvider: 'openrouter',
+    defaultModel: '~anthropic/claude-sonnet-latest',
+    allowedTools: registration.toolsDiscovered
 });
 
+await player.connect();
 await player.executeTool('game_move', { x: 3, y: 4 });
 ```
 
-Internally the registry stores each external tool under a canonical namespaced name, `<serverId>__<toolName>`, where a channel server's registry id is `<channelId>:<serverId>` — so `game_move` above is `<channelId>:game-tools__game_move`. Allowlists accept either form and execution resolves both, but prefer the raw name: LLM providers reject `:` in function names.
+An agent configuration can request an equal or narrower tool set than its key. It
+cannot add authority that the administrator did not grant.
 
-If a channel server's raw tool name collides with an internal MXF tool, the internal tool wins and the external one is not exposed to agents (the registry logs an error naming the server). Rename the tool on your server.
+Other authorized agents in `game-room-42` share the channel process. Agents in a
+different channel do not discover its tools.
 
-### 5. Other Agents in Same Channel Also See Tools
+## Tool names
+
+Use the raw names returned in `toolsDiscovered` for keys, agent `allowedTools`, and
+`executeTool()`. The registry also stores a canonical
+`<serverId>__<toolName>` identifier. If a raw external name collides with an internal
+MXF tool, the internal tool wins. Give tools distinct raw names rather than depending
+on registry ordering.
+
+## Read and cleanup operations
+
+An agent may list the channel servers it can see:
 
 ```typescript
-// Create another agent in the same channel
-const agent2 = await sdk.createAgent({
-    agentId: 'game-player-2',
-    name: 'Game Player 2',
-    channelId: channel.id,
-    provider: 'openrouter',
-    model: 'openai/gpt-4'
-});
-
-// Agent2 automatically has access to channel tools
-const tools2 = await agent2.getAvailableTools();
-const gameTools2 = tools2.filter(t => t.name.startsWith('game_'));
-console.log('Player 2 also sees:', gameTools2.map(t => t.name));
-// Same tools as agent1!
+const servers = await player.listChannelMcpServers();
 ```
 
-### 6. Agents in Other Channels Don't See Tools
+Only the administrator SDK can stop the process:
 
 ```typescript
-// Create agent in a different channel
-const otherAgent = await sdk.createAgent({
-    agentId: 'other-agent',
-    name: 'Other Agent',
-    channelId: 'different-channel',
-    provider: 'openrouter',
-    model: 'anthropic/claude-haiku-4.5'
-});
-
-// This agent does NOT see the game tools
-const otherTools = await otherAgent.getAvailableTools();
-const otherGameTools = otherTools.filter(t => t.name.startsWith('game_'));
-console.log('Other agent sees game tools:', otherGameTools.length);
-// 0 - channel-scoped tools are isolated
-```
-
-### 7. List Channel Servers
-
-```typescript
-// List all MCP servers registered to the channel
-const servers = await agent.listChannelMcpServers();
-console.log('Channel servers:', servers);
-// [{ id: 'game-tools', name: 'Game Tools Server', status: 'running' }]
-```
-
-### 8. Cleanup
-
-```typescript
-// Explicitly unregister (optional - happens automatically with keepAlive)
-await agent.unregisterChannelMcpServer('game-tools');
-
-// Disconnect agents
-await agent.disconnect();
-await agent2.disconnect();
+await sdk.unregisterChannelMcpServer('game-room-42', 'game-tools');
+await player.disconnect();
+channelMonitor.destroy();
 await sdk.disconnect();
 ```
 
-Unregistration is idempotent: it stops the process if it is running and removes the server record, the channel scope entry, and any pending keepAlive timer. Unregistering a server that is already gone cleans up whatever remains and succeeds rather than failing with "not found".
-
-## Configuration Options
+## Configuration
 
 ```typescript
-interface ChannelServerConfig {
-    // Required
-    id: string;           // Unique within channel
-    name: string;         // Display name
-
-    // Transport (same as global)
+interface ChannelMcpServerConfig {
+    id: string;
+    name: string;
     command?: string;
     args?: string[];
-    transport?: 'stdio' | 'http';
-    url?: string;
-
-    // Lifecycle
-    autoStart?: boolean;         // Start on registration (default: true)
-    restartOnCrash?: boolean;    // Restart after an unexpected exit (default: true)
-    maxRestartAttempts?: number; // Restart budget (default: 3)
-
-    // Channel-specific
-    keepAliveMinutes?: number;  // How long to keep server alive after last agent leaves (default: 5)
-
-    // Environment
+    transport?: 'stdio';
+    autoStart?: boolean;
     environmentVariables?: Record<string, string>;
+    restartOnCrash?: boolean;
+    keepAliveMinutes?: number;
 }
 ```
 
-## Lifecycle Behavior
+## Lifecycle behavior
 
-- Registration resolves after the MCP handshake and tool discovery, so a resolved call means the tools in `toolsDiscovered` are usable.
-- An unexpected process exit is logged at error level and the server's tools are removed from the registry. Any exit that was not requested counts, including a clean `exit 0`.
-- With `restartOnCrash` (the default), the server restarts after a short delay and its tools are re-discovered, up to `maxRestartAttempts`. A completed startup resets the restart count.
-- Exhausting the restart budget unregisters the server — record and channel scope removed — so it must be re-registered. The eviction is logged at error level.
-- Two consecutive failed `tools/list` health probes restart a `restartOnCrash` server.
-- When an agent joins the channel, each channel server is verified before the agent counts as connected: a stopped server is started, a server that claims to be running is probed and restarted if it does not answer.
-- Re-registering the same server id refreshes the channel's stored record (config, `registeredBy`, `registeredAt`, `keepAliveMinutes`). If the server is still registered at runtime, unregister it first — registration fails with "already registered" while a live record exists.
+- Registration resolves after process startup, the MCP initialize handshake, and
+  tool discovery.
+- An unexpected exit removes the process's tools before restart is attempted.
+- `restartOnCrash` uses the server's restart budget. Exhausting that budget
+  unregisters the process and its channel scope.
+- A channel join verifies that its scoped processes are running and answer an MCP
+  tool probe.
+- Unregistration removes the process, registry entries, channel scope, and owned
+  lifecycle work that still exist.
 
-## Use Cases
-
-### Game Servers
-
-```typescript
-// Each game room gets its own MCP server instance
-await agent.registerChannelMcpServer({
-    id: 'chess-game',
-    name: 'Chess Game Server',
-    transport: 'http',
-    url: `http://localhost:${gamePort}/mcp`,
-    keepAliveMinutes: 30
-});
-```
-
-### Project Collaboration
-
-```typescript
-// Project-specific tools for a development team
-await agent.registerChannelMcpServer({
-    id: 'project-tools',
-    name: 'Project X Tools',
-    command: 'npx',
-    args: ['-y', '@company/project-x-mcp'],
-    environmentVariables: {
-        PROJECT_API_KEY: process.env.PROJECT_X_KEY
-    }
-});
-```
-
-### Testing Environments
-
-```typescript
-// Isolated test tools per test channel
-await testAgent.registerChannelMcpServer({
-    id: 'test-fixtures',
-    name: 'Test Fixtures Server',
-    command: 'node',
-    args: ['./test-fixtures-mcp.js'],
-    keepAliveMinutes: 5  // Short keepAlive for tests
-});
-```
-
-## Best Practices
-
-1. **Use meaningful IDs** - IDs are scoped to channel, but use descriptive names
-2. **Set appropriate keepAlive** - Balance between cleanup and restart overhead
-3. **Handle reconnection** - Tools refresh automatically when agents rejoin
-4. **Consider lifecycle** - Channel servers start/stop with agent presence
-5. **Test isolation** - Verify tools don't leak to other channels
-
-## Source Code
-
-See the full implementation in `examples/channel-mcp-registration/`
+See the runnable implementation in `examples/channel-mcp-registration/` and the
+[external MCP server reference](../sdk/external-mcp-servers.md).

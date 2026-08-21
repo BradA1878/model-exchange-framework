@@ -41,7 +41,6 @@
  *   belong to this request is ignored, not mistaken for it.
  */
 
-import { Subscription } from 'rxjs';
 import { EventBus } from '@mxf-dev/core/events/EventBus';
 import { AnyEventName } from '@mxf-dev/core/events/EventBusBase';
 import { BaseEventPayload } from '@mxf-dev/core/schemas/EventPayloadSchema';
@@ -171,8 +170,9 @@ export function awaitEventResponse<TResult>(
         // the request settled once mapResult resolved, a failure event arriving in the
         // same tick would slip past and reject a request that had already succeeded.
         let claimed = false;
-        const subscriptions: Subscription[] = [];
         let timeoutId: ReturnType<typeof setTimeout> | null = null;
+        let successHandler: ((responsePayload: unknown) => void) | null = null;
+        let failureHandler: ((responsePayload: unknown) => void) | null = null;
 
         // Single teardown path, run the instant the request is claimed, so no timer
         // outlives its request and no subscription is left behind.
@@ -181,8 +181,12 @@ export function awaitEventResponse<TResult>(
                 clearTimeout(timeoutId);
                 timeoutId = null;
             }
-            subscriptions.forEach(sub => sub.unsubscribe());
-            subscriptions.length = 0;
+            if (successHandler) {
+                EventBus.client.off(successEvent, successHandler);
+            }
+            if (failureEvent && failureHandler) {
+                EventBus.client.off(failureEvent, failureHandler);
+            }
         };
 
         /** Take ownership of the outcome. Returns false if someone else already has it. */
@@ -193,38 +197,36 @@ export function awaitEventResponse<TResult>(
             return true;
         };
 
-        subscriptions.push(
-            EventBus.client.on(successEvent, (responsePayload: any) => {
+        successHandler = (responsePayload: unknown): void => {
+            if (!correlate(responsePayload) || !claim()) {
+                return;
+            }
+            // mapResult may be async (e.g. it refreshes the tool cache before the
+            // caller is allowed to continue) and may throw to signal that a
+            // nominally-successful response actually carried a failure.
+            Promise.resolve()
+                .then(() => mapResult(responsePayload))
+                .then(resolve)
+                .catch((error: unknown) =>
+                    reject(
+                        error instanceof Error
+                            ? error
+                            : new EventRequestError(String(error), String(successEvent), responsePayload)
+                    )
+                );
+        };
+        EventBus.client.on(successEvent, successHandler);
+
+        if (failureEvent) {
+            failureHandler = (responsePayload: unknown): void => {
                 if (!correlate(responsePayload) || !claim()) {
                     return;
                 }
-                // mapResult may be async (e.g. it refreshes the tool cache before the
-                // caller is allowed to continue) and may throw to signal that a
-                // nominally-successful response actually carried a failure.
-                Promise.resolve()
-                    .then(() => mapResult(responsePayload))
-                    .then(resolve)
-                    .catch((error: unknown) =>
-                        reject(
-                            error instanceof Error
-                                ? error
-                                : new EventRequestError(String(error), String(successEvent), responsePayload)
-                        )
-                    );
-            })
-        );
-
-        if (failureEvent) {
-            subscriptions.push(
-                EventBus.client.on(failureEvent, (responsePayload: any) => {
-                    if (!correlate(responsePayload) || !claim()) {
-                        return;
-                    }
-                    const reason = mapError(responsePayload) || `${description} failed`;
-                    logger.error(`${description} failed: ${reason}`);
-                    reject(new EventRequestError(reason, String(failureEvent), responsePayload));
-                })
-            );
+                const reason = mapError(responsePayload) || `${description} failed`;
+                logger.error(`${description} failed: ${reason}`);
+                reject(new EventRequestError(reason, String(failureEvent), responsePayload));
+            };
+            EventBus.client.on(failureEvent, failureHandler);
         }
 
         timeoutId = setTimeout(() => {

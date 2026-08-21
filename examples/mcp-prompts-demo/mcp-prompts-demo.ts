@@ -5,20 +5,16 @@
  * and intelligent argument resolution from multiple sources.
  *
  * @prerequisites
- * - MXF server running (`npm run dev`)
+ * - MXF server running (`bun run dev`)
  * - Environment variables configured
  *
  * @example
  * ```bash
- * cd examples/mcp-prompts-demo
- * cp .env.example .env
- * npx ts-node mcp-prompts-demo.ts
+ * bun run demo:mcp-prompts
  * ```
- *
- * Run with: npm run demo:mcp-prompts
  */
 
-import { MxfSDK } from '@mxf-dev/sdk/MxfSDK';
+import { MxfSDK } from '@mxf-dev/sdk';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -284,7 +280,7 @@ async function demo() {
       allowedTools: ['code_execute'],
       llmProvider: 'openrouter' as any,
       apiKey: process.env.OPENROUTER_API_KEY || '',
-      defaultModel: 'anthropic/claude-3.5-haiku'
+      defaultModel: '~anthropic/claude-haiku-latest'
     });
 
     await agent.connect();

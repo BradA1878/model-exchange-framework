@@ -29,6 +29,12 @@ import { Observable, of, throwError, from, firstValueFrom } from 'rxjs';
 import { map, mergeMap, catchError, switchMap } from 'rxjs/operators';
 import { createStrictValidator } from '@mxf-dev/core/utils/validation';
 import { Logger } from '@mxf-dev/core/utils/Logger';
+import {
+    getToolAuthorizationNames,
+    isAllowedByAgentPolicy,
+    isPrivilegedHostToolEnabled,
+    isPrivilegedNetworkToolEnabled
+} from '../../socket/services/ToolAuthorizationPolicy';
 import { McpToolDefinition, McpToolHandlerContext, McpToolHandlerResult } from '@mxf-dev/core/protocols/mcp/McpServerTypes';
 import { Events } from '@mxf-dev/core/events/EventNames';
 import { EventBus } from '@mxf-dev/core/events/EventBus';
@@ -54,6 +60,22 @@ export interface ExtendedMcpToolDefinition extends McpToolDefinition {
 }
 
 /**
+ * Minimal external-tool shape accepted from the hybrid registry.
+ * Scope is mandatory so a channel tool can never be treated as global merely
+ * because a composition caller omitted context.
+ */
+export interface ExternalToolProviderEntry extends Pick<
+    ExtendedMcpToolDefinition,
+    'name' | 'description' | 'inputSchema' | 'handler' | 'enabled' | 'metadata'
+> {
+    source: string;
+    scope: 'global' | 'channel' | 'agent';
+    scopeId?: string;
+    canonicalName?: string;
+    externalToolName?: string;
+}
+
+/**
  * MCP Tool Registry Service
  * 
  * This service manages the registration and listing of MCP tools
@@ -64,10 +86,15 @@ export class McpToolRegistry {
      * Late-bound supplier of external (hybrid) tools. Registered by
      * ServerHybridMcpService so neither class imports the other.
      */
-    private externalToolsProvider: (() => any[]) | null = null;
+    private externalToolsProvider: (() => ReadonlyArray<ExternalToolProviderEntry>) | null = null;
 
-    public registerExternalToolsProvider(provider: () => any[]): void {
+    public registerExternalToolsProvider(provider: () => ReadonlyArray<ExternalToolProviderEntry>): void {
         this.externalToolsProvider = provider;
+    }
+
+    /** Detach the hybrid provider during service shutdown. */
+    public clearExternalToolsProvider(): void {
+        this.externalToolsProvider = null;
     }
 
     private static instance: McpToolRegistry | null = null;
@@ -179,10 +206,14 @@ export class McpToolRegistry {
                             
                             // Convert MCP context to MXF tool context format
                             const mxfContext = {
+                                ...context.data,
+                                // Trusted execution identity and credential policy
+                                // are layered last. Optional context data must never
+                                // override the principal established at transport.
                                 agentId: context.agentId,
-                                channelId: context.channelId, 
+                                channelId: context.channelId,
                                 requestId: context.requestId,
-                                ...context.data
+                                authorization: context.authorization
                             };
                             
                             // Call the MXF tool handler
@@ -275,7 +306,7 @@ export class McpToolRegistry {
             throw error;
         }
     }
-    
+
     /**
      * Set up event handlers for MCP tool events
      */
@@ -295,10 +326,7 @@ export class McpToolRegistry {
                 // Extract tool info from payload (handle both raw and EventBus structured payloads)
                 const toolData = payload.data || payload;
                 const toolName = toolData.toolName || toolData.name;
-                const description = toolData.description || '';
-                const inputSchema = toolData.inputSchema || {};
-                const metadata = toolData.metadata || {};
-                
+
                 // Get channel and provider information - these are required for all MCP operations
                 if (!payload.channelId || typeof payload.channelId !== 'string') {
                     this.logger.error('channelId is required for MCP tool registration');
@@ -317,43 +345,24 @@ export class McpToolRegistry {
                     return;
                 }
 
-                // Create tool definition
-                const toolDef: ExtendedMcpToolDefinition = {
-                    name: toolName,
-                    description: description,
-                    inputSchema: inputSchema,
-                    handler: async () => {
-                        throw new Error('Event-registered tools must handle execution via events');
-                    },
-                    enabled: true,
-                    metadata: metadata,
-                };
-                
-                this.registerTool(toolDef, channelId, providerId).subscribe({
-                    next: (success) => {
-                        EventBus.server.emit(Events.Mcp.TOOL_REGISTERED, createBaseEventPayload(
-                            Events.Mcp.TOOL_REGISTERED,
-                            'system', // agentId for system events
-                            'global', // channelId for global registry events
-                            {
-                                name: toolName,
-                                success
-                            }
-                        ));
-                    },
-                    error: (error) => {
-                        this.logger.error(`Failed to register tool ${toolName}: ${error}`);
-                        EventBus.server.emit(Events.Mcp.TOOL_REGISTERED, createBaseEventPayload(
-                            Events.Mcp.TOOL_REGISTERED,
-                            'system', // agentId for system events
-                            'global', // channelId for global registry events
-                            {
-                                name: toolName,
-                                success: false
-                            }
-                        ));
+                // A socket payload contains metadata, not an executable handler.
+                // The SDK currently has no authenticated inbound provider-call
+                // protocol, so accepting this registration would persist an
+                // always-throwing tool and report a false success. Keep one
+                // authoritative response and fail closed until that protocol exists.
+                const error =
+                    'Dynamic socket tool registration is unavailable because provider invocation is not implemented';
+                this.logger.warn(`Rejected dynamic tool registration ${providerId}/${channelId}/${toolName}: ${error}`);
+                EventBus.server.emit(Events.Mcp.TOOL_REGISTERED, createBaseEventPayload(
+                    Events.Mcp.TOOL_REGISTERED,
+                    providerId,
+                    channelId,
+                    {
+                        toolName,
+                        success: false,
+                        error
                     }
-                });
+                ));
             }
         );
         
@@ -376,14 +385,20 @@ export class McpToolRegistry {
                     return;
                 }
 
-                this.unregisterTool(toolName).subscribe({
+                if (!payload.agentId || typeof payload.agentId !== 'string' ||
+                    !payload.channelId || typeof payload.channelId !== 'string') {
+                    this.logger.error('agentId and channelId are required for MCP tool unregistration');
+                    return;
+                }
+
+                this.unregisterToolForOwner(toolName, payload.agentId, payload.channelId).subscribe({
                     next: (success) => {
                         EventBus.server.emit(Events.Mcp.TOOL_UNREGISTERED, createBaseEventPayload(
                             Events.Mcp.TOOL_UNREGISTERED,
-                            'system', // agentId for system events
-                            'global', // channelId for global registry events
+                            payload.agentId,
+                            payload.channelId,
                             {
-                                name: toolName,
+                                toolName,
                                 success
                             }
                         ));
@@ -392,11 +407,12 @@ export class McpToolRegistry {
                         this.logger.error(`Failed to unregister tool ${toolName}: ${error}`);
                         EventBus.server.emit(Events.Mcp.TOOL_UNREGISTERED, createBaseEventPayload(
                             Events.Mcp.TOOL_UNREGISTERED,
-                            'system', // agentId for system events
-                            'global', // channelId for global registry events
+                            payload.agentId,
+                            payload.channelId,
                             {
-                                name: toolName,
-                                success: false
+                                toolName,
+                                success: false,
+                                error: error instanceof Error ? error.message : String(error)
                             }
                         ));
                     }
@@ -412,26 +428,48 @@ export class McpToolRegistry {
                 const listData = payload.data || payload;
                 const filter = listData.filter || '';
                 const requestId = listData.requestId;
+                const authorization = payload.authorization;
 
                 // Only proceed if we have valid agentId, channelId, and requestId
                 if (!payload.agentId || !payload.channelId || !requestId) {
                     this.logger.error(`Cannot process TOOL_LIST event - missing required fields. AgentId: ${payload.agentId || '[MISSING]'}, ChannelId: ${payload.channelId || '[MISSING]'}, RequestId: ${requestId || '[MISSING]'}`);
                     return;
                 }
+                if (!authorization ||
+                    typeof authorization.keyId !== 'string' ||
+                    authorization.keyId.trim().length === 0 ||
+                    (authorization.allowedTools !== undefined &&
+                        !Array.isArray(authorization.allowedTools))) {
+                    this.logger.error('Cannot process TOOL_LIST without credential-scoped policy');
+                    EventBus.server.emit(Events.Mcp.TOOL_LIST_ERROR, createBaseEventPayload(
+                        Events.Mcp.TOOL_LIST_ERROR,
+                        payload.agentId,
+                        payload.channelId,
+                        { error: 'Credential-scoped tool policy is required', requestId }
+                    ));
+                    return;
+                }
 
-                this.listTools(filter).subscribe({
+                this.listToolsForChannel(payload.channelId, filter, payload.agentId).subscribe({
                     next: (tools) => {
+                        const authorizedTools = tools.filter(tool => {
+                            const names = getToolAuthorizationNames(tool);
+                            return isAllowedByAgentPolicy(names, authorization.allowedTools) &&
+                                isPrivilegedHostToolEnabled(names) &&
+                                isPrivilegedNetworkToolEnabled(names);
+                        });
                         EventBus.server.emit(Events.Mcp.TOOL_LIST_RESULT, createBaseEventPayload(
                             Events.Mcp.TOOL_LIST_RESULT,
                             payload.agentId, // Use actual agentId from request
                             payload.channelId, // Use actual channelId from request
                             {
-                                tools: tools.map(tool => ({
+                                tools: authorizedTools.map(tool => ({
                                     name: tool.name,
                                     description: tool.description,
                                     inputSchema: tool.inputSchema
                                     // Ensure only fields defined in McpPayloads for 'mcp:tool:list:result' are included
-                                }))
+                                })),
+                                requestId
                             }
                         ));
                     },
@@ -439,10 +477,11 @@ export class McpToolRegistry {
                         this.logger.error(`Failed to list tools: ${error}`);
                         EventBus.server.emit(Events.Mcp.TOOL_LIST_ERROR, createBaseEventPayload(
                             Events.Mcp.TOOL_LIST_ERROR,
-                            'system', // agentId for system events
-                            'global', // channelId for global registry events
+                            payload.agentId,
+                            payload.channelId,
                             {
-                                error: error instanceof Error ? error.message : String(error)
+                                error: error instanceof Error ? error.message : String(error),
+                                requestId
                             }
                         ));
                     }
@@ -456,7 +495,7 @@ export class McpToolRegistry {
             // when the tool registry changes
         });
     }
-    
+
     /**
      * Notify listeners that the tool registry has changed
      *
@@ -777,87 +816,262 @@ export class McpToolRegistry {
         try {
             // Validate input
             validate.assertIsNonEmptyString(name, 'Tool name must be a non-empty string');
-            
-            // Ensure database is loaded
-            if (!this.databaseLoaded) {
-                return from(this.loadToolsFromDatabase()).pipe(
-                    switchMap(() => this.getTool(name))
-                );
-            }
-            
-            // Check if tool exists in memory
-            if (!this.tools.has(name)) {
-                return throwError(() => new Error(`Tool with name ${name} does not exist`));
-            }
-            
-            // Return the tool from memory
-            return of(this.tools.get(name)!);
+
+            // This context-free accessor backs the public exact-name endpoint.
+            // Resolve through the global-safe composed view rather than the raw
+            // internal map, which also contains channel-owned registrations.
+            return this.listTools().pipe(
+                mergeMap((tools) => {
+                    const tool = tools.find(candidate => candidate.name === name);
+                    return tool
+                        ? of(tool)
+                        : throwError(() => new Error(`Tool with name ${name} does not exist`));
+                })
+            );
         } catch (error) {
             this.logger.error(`Failed to get tool: ${error instanceof Error ? error.message : String(error)}`);
             return throwError(() => error);
         }
     }
-    
+
+    /** Apply the registry's literal name filter and deterministic ordering. */
+    private filterAndSortTools(
+        tools: ExtendedMcpToolDefinition[],
+        filter?: string
+    ): ExtendedMcpToolDefinition[] {
+        let result = tools;
+        if (filter) {
+            // Treat the user-supplied filter as a literal substring — raw input
+            // in new RegExp() allows regex injection / ReDoS.
+            const escaped = filter.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const regex = new RegExp(escaped, 'i');
+            result = result.filter(tool => regex.test(tool.name));
+        }
+
+        return [...result].sort((a, b) => a.name.localeCompare(b.name));
+    }
+
+    /** Core/system registrations are the only registry-owned global tools. */
+    private isGlobalRegistration(tool: ExtendedMcpToolDefinition): boolean {
+        const channelId = tool.channelId?.toLowerCase();
+        return !channelId || channelId === 'global' || channelId === 'system';
+    }
+
     /**
-     * List all registered MCP tools
-     * @param filter Optional filter pattern for tool names
-     * @returns Observable that emits the list of tools
+     * Merge a pre-filtered external snapshot into an internal view.
+     * The caller controls ordering, which also controls deterministic collision
+     * precedence. Registry-owned tools always win a public-name collision.
      */
-    public listTools(filter?: string): Observable<ExtendedMcpToolDefinition[]> {
+    private composeExternalTools(
+        internalTools: ExtendedMcpToolDefinition[],
+        externalTools: ReadonlyArray<ExternalToolProviderEntry>,
+        filter: string | undefined,
+        exposeRawNames: boolean
+    ): ExtendedMcpToolDefinition[] {
+        const byName = new Map<string, ExtendedMcpToolDefinition>();
+        for (const tool of internalTools) {
+            byName.set(tool.name, tool);
+        }
+
+        for (const tool of externalTools) {
+            const canonicalName = tool.canonicalName ?? tool.name;
+            const publicName = exposeRawNames
+                ? (tool.externalToolName ?? tool.name)
+                : canonicalName;
+
+            // Internal definitions always win, and repeated provider snapshots
+            // stay idempotent under their public name.
+            if (byName.has(publicName)) {
+                continue;
+            }
+
+            byName.set(publicName, {
+                name: publicName,
+                description: tool.description,
+                inputSchema: tool.inputSchema,
+                handler: tool.handler,
+                enabled: tool.enabled,
+                metadata: {
+                    ...(tool.metadata || {}),
+                    canonicalName,
+                    externalToolName: tool.externalToolName ?? tool.name,
+                    externalSource: tool.source,
+                    externalScope: tool.scope,
+                    externalScopeId: tool.scopeId
+                },
+                providerId: `external-mcp:${tool.source}`,
+                channelId: tool.scope === 'global' ? 'global' : tool.scopeId
+            });
+        }
+
+        return this.filterAndSortTools(Array.from(byName.values()), filter);
+    }
+
+    /**
+     * List only tools owned by this registry.
+     *
+     * HybridMcpToolRegistry must consume this view. Feeding listTools() back
+     * into the hybrid registry would re-import its own external provider output
+     * as internal tools and erase channel scope on the next refresh.
+     */
+    public listInternalTools(filter?: string): Observable<ExtendedMcpToolDefinition[]> {
         try {
-            // Ensure database is loaded
             if (!this.databaseLoaded) {
                 return from(this.loadToolsFromDatabase()).pipe(
-                    switchMap(() => this.listTools(filter))
+                    switchMap(() => this.listInternalTools(filter))
                 );
             }
-            
-            // Get internal tools
-            const internalTools = Array.from(this.tools.values());
-            
-            // External tools come from the hybrid service via late-bound provider
-            // registration (set in ServerHybridMcpService's constructor) — a static
-            // import here would create a genuine McpToolRegistry <-> hybrid cycle,
-            // and dynamic require() is banned. No provider registered simply means
-            // the hybrid feature is not active.
-            let allTools = internalTools;
-            if (this.externalToolsProvider) {
-                const externalTools = this.externalToolsProvider().map((tool: any) => ({
-                    name: tool.name,
-                    description: tool.description,
-                    inputSchema: tool.inputSchema,
-                    handler: tool.handler,
-                    enabled: tool.enabled,
-                    metadata: tool.metadata || {},
-                    providerId: 'external-mcp',
-                    channelId: 'global'
-                } as ExtendedMcpToolDefinition));
-                
-                // Combine internal and external tools
-                allTools = [...internalTools, ...externalTools];
-            }
-            
-            // Apply filter if provided
-            if (filter) {
-                // Treat the user-supplied filter as a literal substring — raw
-                // input in new RegExp() allows regex injection / ReDoS.
-                const escaped = filter.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                const regex = new RegExp(escaped, 'i');
-                return of(allTools.filter(tool => regex.test(tool.name)));
-            }
-            
-            return of(allTools);
+
+            return of(this.filterAndSortTools(Array.from(this.tools.values()), filter));
         } catch (error) {
-            this.logger.error(`Failed to list tools: ${error instanceof Error ? error.message : String(error)}`);
+            this.logger.error(`Failed to list internal tools: ${error instanceof Error ? error.message : String(error)}`);
             return throwError(() => error);
         }
     }
-    
+
     /**
-     * Unregister an MCP tool by name
-     * @param name Tool name
-     * @returns Observable that emits true if the tool was unregistered successfully
+     * List the administrative registry view.
+     *
+     * Stored tools are combined with explicitly global external tools only.
+     * Channel/agent external tools require a channel-aware hybrid lookup and
+     * must never be projected into this context-free list as global entries.
      */
+    public listTools(filter?: string): Observable<ExtendedMcpToolDefinition[]> {
+        return this.listInternalTools().pipe(
+            map((internalTools) => {
+                const globalInternalTools = internalTools.filter(tool => this.isGlobalRegistration(tool));
+                const globalExternalTools = this.externalToolsProvider
+                    ? [...this.externalToolsProvider()]
+                        .filter(tool => tool.scope === 'global')
+                        .sort((a, b) => {
+                            const aName = a.canonicalName ?? a.name;
+                            const bName = b.canonicalName ?? b.name;
+                            return aName.localeCompare(bName) || a.source.localeCompare(b.source);
+                        })
+                    : [];
+
+                return this.composeExternalTools(
+                    globalInternalTools,
+                    globalExternalTools,
+                    filter,
+                    false
+                );
+            }),
+            catchError((error) => {
+                this.logger.error(`Failed to list tools: ${error instanceof Error ? error.message : String(error)}`);
+                return throwError(() => error);
+            })
+        );
+    }
+
+    /**
+     * List the tools visible inside one authenticated channel context.
+     *
+     * Core/global tools and registrations owned by this channel are visible.
+     * External tools additionally honor their authoritative global/channel/agent
+     * scope, and are exposed under their raw agent-facing names while retaining
+     * the canonical name in metadata for routing.
+     */
+    public listToolsForChannel(
+        channelId: string,
+        filter?: string,
+        agentId?: string
+    ): Observable<ExtendedMcpToolDefinition[]> {
+        try {
+            validate.assertIsNonEmptyString(channelId, 'Channel ID must be a non-empty string');
+            if (agentId !== undefined) {
+                validate.assertIsNonEmptyString(agentId, 'Agent ID must be a non-empty string');
+            }
+
+            return this.listInternalTools().pipe(
+                map((internalTools) => {
+                    const visibleInternalTools = internalTools.filter(tool =>
+                        this.isGlobalRegistration(tool) || tool.channelId === channelId
+                    );
+
+                    const scopePriority = (tool: ExternalToolProviderEntry): number => {
+                        if (tool.scope === 'agent') return 0;
+                        if (tool.scope === 'channel') return 1;
+                        return 2;
+                    };
+                    const visibleExternalTools = this.externalToolsProvider
+                        ? [...this.externalToolsProvider()]
+                            .filter(tool =>
+                                tool.scope === 'global' ||
+                                (tool.scope === 'channel' && tool.scopeId === channelId) ||
+                                (tool.scope === 'agent' && agentId !== undefined && tool.scopeId === agentId)
+                            )
+                            .sort((a, b) =>
+                                scopePriority(a) - scopePriority(b) ||
+                                (a.externalToolName ?? a.name).localeCompare(b.externalToolName ?? b.name) ||
+                                a.source.localeCompare(b.source) ||
+                                (a.canonicalName ?? a.name).localeCompare(b.canonicalName ?? b.name)
+                            )
+                        : [];
+
+                    return this.composeExternalTools(
+                        visibleInternalTools,
+                        visibleExternalTools,
+                        filter,
+                        true
+                    );
+                }),
+                catchError((error) => {
+                    this.logger.error(`Failed to list channel tools: ${error instanceof Error ? error.message : String(error)}`);
+                    return throwError(() => error);
+                })
+            );
+        } catch (error) {
+            this.logger.error(`Failed to list channel tools: ${error instanceof Error ? error.message : String(error)}`);
+            return throwError(() => error);
+        }
+    }
+
+    /** Unregister a channel registration only for its exact provider owner. */
+    public unregisterToolForOwner(
+        name: string,
+        providerId: string,
+        channelId: string
+    ): Observable<boolean> {
+        try {
+            validate.assertIsNonEmptyString(name, 'Tool name must be a non-empty string');
+            validate.assertIsNonEmptyString(providerId, 'Provider ID must be a non-empty string');
+            validate.assertIsNonEmptyString(channelId, 'Channel ID must be a non-empty string');
+
+            if (!this.databaseLoaded) {
+                return from(this.loadToolsFromDatabase()).pipe(
+                    switchMap(() => this.unregisterToolForOwner(name, providerId, channelId))
+                );
+            }
+
+            const existingTool = this.tools.get(name);
+            if (!existingTool) {
+                return throwError(() => new Error(`Tool with name ${name} does not exist`));
+            }
+
+            // Core/global registrations are lifecycle-managed by the server and
+            // cannot be removed through an agent socket event, even if a caller
+            // manages to present reserved-looking identity strings.
+            if (this.isGlobalRegistration(existingTool)) {
+                return throwError(() => new Error(
+                    `Tool "${name}" is a core/global registration and cannot be unregistered by an agent`
+                ));
+            }
+
+            if (existingTool.providerId !== providerId || existingTool.channelId !== channelId) {
+                return throwError(() => new Error(
+                    `Tool "${name}" is not owned by agent "${providerId}" in channel "${channelId}"`
+                ));
+            }
+
+            return this.unregisterTool(name);
+        } catch (error) {
+            this.logger.error(`Failed to authorize tool unregistration: ${error instanceof Error ? error.message : String(error)}`);
+            return throwError(() => error);
+        }
+    }
+
+    /** Administrative unregistration by name; socket events must use unregisterToolForOwner(). */
     public unregisterTool(name: string): Observable<boolean> {
         try {
             // Validate input

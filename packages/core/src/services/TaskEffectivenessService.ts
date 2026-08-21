@@ -31,8 +31,7 @@ import { EventBus } from '../events/EventBus.js';
 import { Events } from '../events/EventNames.js';
 import { AgentId } from '../types/Agent.js';
 import { ChannelId } from '../types/ChannelContext.js';
-import { AgentPerformanceService } from './AgentPerformanceService.js';
-import { TaskEffectivenessModel, ITaskEffectiveness } from '../models/taskEffectiveness.js';
+import { TaskEffectivenessModel } from '../models/taskEffectiveness.js';
 import {
     TaskEffectivenessMetrics,
     TaskDefinition,
@@ -42,12 +41,42 @@ import {
     EffectivenessConfig
 } from '../types/EffectivenessTypes.js';
 
+interface PersistedEffectivenessRecord {
+    agentId: AgentId;
+    channelId: ChannelId;
+    metrics: TaskEffectivenessMetrics;
+}
+
+interface EffectivenessTrendDataPoint {
+    timestamp: number;
+    averageScore: number;
+    successRate: number;
+    avgAutonomy: number;
+    taskCount: number;
+}
+
+interface EffectivenessTrends {
+    dataPoints: EffectivenessTrendDataPoint[];
+    intervalMs: number;
+    timeRange: { start: number; end: number };
+}
+
+interface AgentEffectivenessSummary {
+    agentId: AgentId;
+    totalTasks: number;
+    successRate: number;
+    averageScore: number;
+    averageAutonomy: number;
+    taskTypeBreakdown: Array<{ type: string; count: number }>;
+    trend: 'improving' | 'stable' | 'declining';
+    timeRange: { start: number; end: number };
+}
+
 /**
  * Service for tracking and analyzing task effectiveness
  */
 export class TaskEffectivenessService {
     private readonly logger: Logger;
-    private readonly performanceService: AgentPerformanceService;
     private static instance: TaskEffectivenessService;
     
     // Active task tracking
@@ -76,7 +105,6 @@ export class TaskEffectivenessService {
 
     private constructor() {
         this.logger = new Logger('info', 'TaskEffectivenessService', 'server');
-        this.performanceService = AgentPerformanceService.getInstance();
         this.setupEventListeners();
     }
 
@@ -87,78 +115,103 @@ export class TaskEffectivenessService {
         return TaskEffectivenessService.instance;
     }
 
+    private getTaskKey(taskId: string, agentId: AgentId, channelId: ChannelId): string {
+        return JSON.stringify([agentId, channelId, taskId]);
+    }
+
+    private requireTenantIdentity(agentId: AgentId, channelId: ChannelId): void {
+        if (!agentId?.trim() || !channelId?.trim() ||
+            agentId !== agentId.trim() || channelId !== channelId.trim()) {
+            throw new Error('Agent ID and channel ID are required');
+        }
+    }
+
+    private requireTaskIdentity(taskId: string): void {
+        if (!taskId?.trim() || taskId !== taskId.trim()) {
+            throw new Error('A canonical task ID is required');
+        }
+    }
+
     /**
      * Start tracking a new task
      */
     public startTask(definition: TaskDefinition): string {
         try {
-            if (!definition.channelId || !definition.taskType || !definition.description) {
+            if (!definition.agentId || !definition.channelId || !definition.taskType || !definition.description) {
                 throw new Error('Missing required task definition fields');
             }
+            this.requireTenantIdentity(definition.agentId, definition.channelId);
             
             const taskId = definition.taskId || uuidv4();
-        
-        const metrics: TaskEffectivenessMetrics = {
-            taskId,
-            metadata: {
-                type: definition.taskType,
-                description: definition.description,
-                startTime: Date.now(),
-                status: 'in_progress'
-            },
-            performance: {
-                stepCount: 0,
-                toolsUsed: 0,
-                uniqueTools: [],
-                agentInteractions: 0,
-                humanInterventions: 0,
-                autonomyScore: 1.0 // Starts at 100%, decreases with interventions
-            },
-            quality: {
-                goalAchieved: false,
-                completenessScore: 0,
-                iterationCount: 0,
-                errorCount: 0,
-                customMetrics: {}
-            },
-            resources: {
-                totalComputeTime: 0,
-                peakConcurrentAgents: 0,
-                memoryOperations: 0
-            },
-            collaboration: {
-                participatingAgents: [],
-                messageCount: 0,
-                coordinationCount: 0,
-                knowledgeTransfers: 0,
-                collaborationScore: 0
+            this.requireTaskIdentity(taskId);
+            const taskKey = this.getTaskKey(taskId, definition.agentId, definition.channelId);
+            if (this.activeTasks.has(taskKey)) {
+                throw new Error(`Task ${taskId} is already being tracked for this agent and channel`);
             }
-        };
         
-        this.activeTasks.set(taskId, metrics);
-        this.taskDefinitions.set(taskId, definition);
-        this.taskEvents.set(taskId, []);
-        
-        // Emit task started event
-        this.recordEvent({
-            eventId: uuidv4(),
-            taskId,
-            timestamp: Date.now(),
-            type: 'start',
-            details: { definition }
-        });
-        
-        EventBus.server.emit(Events.Analytics.TASK_STARTED, createBaseEventPayload(
-            Events.Analytics.TASK_STARTED,
-            'system',
-            definition.channelId,
-            {
+            const metrics: TaskEffectivenessMetrics = {
                 taskId,
+                metadata: {
+                    type: definition.taskType,
+                    description: definition.description,
+                    startTime: Date.now(),
+                    status: 'in_progress'
+                },
+                performance: {
+                    stepCount: 0,
+                    toolsUsed: 0,
+                    uniqueTools: [],
+                    agentInteractions: 0,
+                    humanInterventions: 0,
+                    autonomyScore: 1.0
+                },
+                quality: {
+                    goalAchieved: false,
+                    completenessScore: 0,
+                    iterationCount: 0,
+                    errorCount: 0,
+                    customMetrics: {}
+                },
+                resources: {
+                    totalComputeTime: 0,
+                    peakConcurrentAgents: 0,
+                    memoryOperations: 0
+                },
+                collaboration: {
+                    participatingAgents: [definition.agentId],
+                    messageCount: 0,
+                    coordinationCount: 0,
+                    knowledgeTransfers: 0,
+                    collaborationScore: 0
+                }
+            };
+
+            this.activeTasks.set(taskKey, metrics);
+            this.taskDefinitions.set(taskKey, definition);
+            this.taskEvents.set(taskKey, []);
+
+            this.recordEvent({
+                eventId: uuidv4(),
+                taskId,
+                agentId: definition.agentId,
                 channelId: definition.channelId,
-                taskType: definition.taskType,
-                timestamp: new Date()
-            }
-        ));
+                timestamp: Date.now(),
+                type: 'start',
+                details: { definition }
+            });
+
+            EventBus.server.emit(Events.Analytics.TASK_STARTED, createBaseEventPayload(
+                Events.Analytics.TASK_STARTED,
+                definition.agentId,
+                definition.channelId,
+                {
+                    taskId,
+                    agentId: definition.agentId,
+                    channelId: definition.channelId,
+                    taskType: definition.taskType,
+                    timestamp: new Date()
+                }
+            ));
         
             return taskId;
         } catch (error) {
@@ -171,82 +224,85 @@ export class TaskEffectivenessService {
      * Record a task execution event
      */
     public recordEvent(event: TaskExecutionEvent): void {
-        try {
-            if (!event.taskId || !event.type) {
-                this.logger.warn('Invalid event: missing taskId or type');
-                return;
-            }
-            
-            const events = this.taskEvents.get(event.taskId);
-            if (events) {
-                events.push(event);
-            }
-            
-            // Update metrics based on event
-            const metrics = this.activeTasks.get(event.taskId);
-            if (metrics) {
-                this.updateMetricsFromEvent(metrics, event);
-            } else {
-            }
-            
-            // Emit event for analytics tracking
-            EventBus.server.emit(Events.Analytics.TASK_EFFECTIVENESS_EVENT, createBaseEventPayload(
-                Events.Analytics.TASK_EFFECTIVENESS_EVENT,
-                event.agentId || 'unknown',
-                'global',
-                {
-                    taskId: event.taskId,
-                    agentId: event.agentId || 'unknown',
-                    eventType: event.type,
-                    details: event.details,
-                    timestamp: new Date()
-                }
-            ));
-        } catch (error) {
-            this.logger.error(`Failed to record event: ${error}`);
+        if (!event.taskId || !event.type) {
+            throw new Error('Task ID and event type are required');
         }
+        this.requireTaskIdentity(event.taskId);
+        this.requireTenantIdentity(event.agentId, event.channelId);
+
+        const taskKey = this.getTaskKey(event.taskId, event.agentId, event.channelId);
+        const events = this.taskEvents.get(taskKey);
+        const metrics = this.activeTasks.get(taskKey);
+        if (!events || !metrics) {
+            throw new Error(`Active task ${event.taskId} was not found for this agent and channel`);
+        }
+
+        events.push(event);
+        this.updateMetricsFromEvent(metrics, event);
+
+        EventBus.server.emit(Events.Analytics.TASK_EFFECTIVENESS_EVENT, createBaseEventPayload(
+            Events.Analytics.TASK_EFFECTIVENESS_EVENT,
+            event.agentId,
+            event.channelId,
+            {
+                taskId: event.taskId,
+                agentId: event.agentId,
+                channelId: event.channelId,
+                eventType: event.type,
+                details: event.details,
+                timestamp: new Date()
+            }
+        ));
     }
 
     /**
      * Update task quality metrics
      */
     public updateQuality(
-        taskId: string, 
-        updates: Partial<TaskEffectivenessMetrics['quality']>,
-        agentId?: AgentId
+        taskId: string,
+        agentId: AgentId,
+        channelId: ChannelId,
+        updates: Partial<TaskEffectivenessMetrics['quality']>
     ): void {
-        // Quality is recorded while a task is running. A completed task's metrics
-        // are already persisted and are not amended here.
-        const metrics = this.activeTasks.get(taskId);
-        if (metrics) {
-            metrics.quality = { ...metrics.quality, ...updates };
-            
-            // Emit quality update event
-            EventBus.server.emit(Events.Analytics.TASK_EFFECTIVENESS_QUALITY_UPDATE, createBaseEventPayload(
-                Events.Analytics.TASK_EFFECTIVENESS_QUALITY_UPDATE,
-                agentId || 'unknown',
-                'global',
-                {
-                    taskId,
-                    agentId: agentId || 'unknown',
-                    qualityUpdates: updates,
-                    timestamp: new Date()
-                }
-            ));
+        this.requireTenantIdentity(agentId, channelId);
+        this.requireTaskIdentity(taskId);
+        const taskKey = this.getTaskKey(taskId, agentId, channelId);
+        const metrics = this.activeTasks.get(taskKey);
+        if (!metrics) {
+            throw new Error(`Active task ${taskId} was not found for this agent and channel`);
         }
+
+        metrics.quality = { ...metrics.quality, ...updates };
+
+        EventBus.server.emit(Events.Analytics.TASK_EFFECTIVENESS_QUALITY_UPDATE, createBaseEventPayload(
+            Events.Analytics.TASK_EFFECTIVENESS_QUALITY_UPDATE,
+            agentId,
+            channelId,
+            {
+                taskId,
+                agentId,
+                channelId,
+                qualityUpdates: updates,
+                timestamp: new Date()
+            }
+        ));
     }
 
     /**
      * Complete a task and calculate final metrics
      */
     public async completeTask(
-        taskId: string, 
+        taskId: string,
+        agentId: AgentId,
+        channelId: ChannelId,
         success: boolean,
         customMetrics?: Record<string, number>
     ): Promise<TaskEffectivenessMetrics | null> {
-        const metrics = this.activeTasks.get(taskId);
+        this.requireTenantIdentity(agentId, channelId);
+        this.requireTaskIdentity(taskId);
+        const taskKey = this.getTaskKey(taskId, agentId, channelId);
+        const metrics = this.activeTasks.get(taskKey);
         if (!metrics) {
-            this.logger.warn(`Cannot complete unknown task ${taskId}`);
             return null;
         }
         
@@ -267,16 +323,18 @@ export class TaskEffectivenessService {
         
         // Persist to MongoDB, then drop from the active set. Persist first: if
         // it throws, the task stays active rather than disappearing entirely.
-        await this.persistTaskToDB(taskId, metrics);
-        this.activeTasks.delete(taskId);
+        await this.persistTaskToDB(taskId, agentId, channelId, metrics);
+        this.activeTasks.delete(taskKey);
         
         // Emit completion event
         EventBus.server.emit(Events.Analytics.TASK_COMPLETED, createBaseEventPayload(
             Events.Analytics.TASK_COMPLETED,
-            'system',
-            'global',
+            agentId,
+            channelId,
             {
                 taskId,
+                agentId,
+                channelId,
                 metrics,
                 success,
                 timestamp: new Date()
@@ -294,12 +352,19 @@ export class TaskEffectivenessService {
      *
      * @returns null when the task or its definition is unknown
      */
-    public async compareWithBaseline(taskId: string): Promise<EffectivenessComparison | null> {
-        let metrics = this.activeTasks.get(taskId);
-        let definition = this.taskDefinitions.get(taskId);
+    public async compareWithBaseline(
+        taskId: string,
+        agentId: AgentId,
+        channelId: ChannelId
+    ): Promise<EffectivenessComparison | null> {
+        this.requireTenantIdentity(agentId, channelId);
+        this.requireTaskIdentity(taskId);
+        const taskKey = this.getTaskKey(taskId, agentId, channelId);
+        let metrics = this.activeTasks.get(taskKey);
+        let definition = this.taskDefinitions.get(taskKey);
 
         if (!metrics || !definition) {
-            const taskDoc = await TaskEffectivenessModel.findOne({ taskId }).exec();
+            const taskDoc = await TaskEffectivenessModel.findOne({ taskId, agentId, channelId }).exec();
             if (taskDoc) {
                 metrics = metrics ?? (taskDoc.metrics as TaskEffectivenessMetrics);
                 definition = definition ?? (taskDoc.definition as TaskDefinition);
@@ -350,33 +415,44 @@ export class TaskEffectivenessService {
         // Generate insights
         comparison.summary.achievements = this.identifyAchievements(metrics, baseline);
         comparison.summary.improvements = this.identifyImprovements(metrics);
-        comparison.summary.recommendations = this.generateRecommendations(metrics);
+        comparison.summary.recommendations = this.generateRecommendations(metrics, taskKey);
         
         return comparison;
     }
 
-    /**
-     * Effectiveness analytics for a time period, computed from persisted tasks.
-     *
-     * Reads from MongoDB, so results cover every task ever completed — not just
-     * the ones this process happened to run.
-     *
-     * @param startTime Start of the window (epoch ms)
-     * @param endTime End of the window (epoch ms)
-     * @param channelId Optional channel filter
-     * @param taskType Optional task-type filter
-     * @throws If the query fails. Effectiveness numbers computed from an empty
-     *         result set would look like real "no activity" data.
-     */
+    /** Effectiveness analytics for one exact agent and channel. */
     public async getAnalytics(
         startTime: number,
         endTime: number,
-        channelId?: ChannelId,
+        agentId: AgentId,
+        channelId: ChannelId,
         taskType?: string
     ): Promise<EffectivenessAnalytics> {
+        this.requireTenantIdentity(agentId, channelId);
+        const tasks = await this.findCompletedTasks({
+            startTime,
+            endTime,
+            agentId,
+            channelId,
+            taskType
+        });
+
+        return this.computeAnalyticsFromRecords(tasks, startTime, endTime);
+    }
+
+    /** Channel-wide analytics intended only for the admin-authenticated REST surface. */
+    public async getAdministrativeChannelAnalytics(
+        startTime: number,
+        endTime: number,
+        channelId: ChannelId,
+        taskType?: string
+    ): Promise<EffectivenessAnalytics> {
+        if (!channelId?.trim()) {
+            throw new Error('Channel ID is required');
+        }
         const tasks = await this.findCompletedTasks({ startTime, endTime, channelId, taskType });
 
-        return this.computeAnalyticsFromMetrics(tasks, startTime, endTime);
+        return this.computeAnalyticsFromRecords(tasks, startTime, endTime);
     }
 
     /**
@@ -390,10 +466,14 @@ export class TaskEffectivenessService {
         channelId?: ChannelId;
         taskType?: string;
         agentId?: AgentId;
-    }): Promise<TaskEffectivenessMetrics[]> {
+    }): Promise<PersistedEffectivenessRecord[]> {
         const query: Record<string, unknown> = {
             'metrics.metadata.startTime': { $gte: filter.startTime, $lte: filter.endTime }
         };
+
+        if (!Number.isFinite(filter.startTime) || !Number.isFinite(filter.endTime) || filter.startTime > filter.endTime) {
+            throw new Error('A valid effectiveness analytics time range is required');
+        }
 
         if (filter.channelId) {
             query.channelId = filter.channelId;
@@ -404,12 +484,21 @@ export class TaskEffectivenessService {
         }
 
         if (filter.agentId) {
-            query.agentIds = filter.agentId;
+            query.agentId = filter.agentId;
         }
 
         try {
             const docs = await TaskEffectivenessModel.find(query).exec();
-            return docs.map(doc => doc.metrics as TaskEffectivenessMetrics);
+            return docs.map(doc => {
+                if (!doc.agentId || !doc.channelId) {
+                    throw new Error(`Task effectiveness record ${doc.taskId} has no tenant identity`);
+                }
+                return {
+                    agentId: doc.agentId as AgentId,
+                    channelId: doc.channelId as ChannelId,
+                    metrics: doc.metrics as TaskEffectivenessMetrics
+                };
+            });
         } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
             this.logger.error(`Failed to query task effectiveness data: ${message}`);
@@ -424,25 +513,33 @@ export class TaskEffectivenessService {
      *         that is not written down is history that is simply gone; the caller
      *         needs to know.
      */
-    private async persistTaskToDB(taskId: string, metrics: TaskEffectivenessMetrics): Promise<void> {
-        const definition = this.taskDefinitions.get(taskId);
+    private async persistTaskToDB(
+        taskId: string,
+        agentId: AgentId,
+        channelId: ChannelId,
+        metrics: TaskEffectivenessMetrics
+    ): Promise<void> {
+        const taskKey = this.getTaskKey(taskId, agentId, channelId);
+        const definition = this.taskDefinitions.get(taskKey);
         if (!definition) {
             throw new Error(`Cannot persist task ${taskId}: no task definition was registered for it`);
         }
 
         try {
             await TaskEffectivenessModel.findOneAndUpdate(
-                { taskId },
+                { taskId, agentId, channelId },
                 {
                     $set: {
-                        channelId: definition.channelId,
+                        agentId,
+                        channelId,
                         agentIds: metrics.collaboration.participatingAgents,
                         definition,
                         metrics,
+                        completedAt: new Date(),
                         updatedAt: new Date()
                     }
                 },
-                { upsert: true, new: true }
+                { upsert: true, new: true, runValidators: true, setDefaultsOnInsert: true }
             ).exec();
         } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
@@ -454,8 +551,8 @@ export class TaskEffectivenessService {
     /**
      * Compute analytics from metrics array
      */
-    private computeAnalyticsFromMetrics(
-        tasks: TaskEffectivenessMetrics[],
+    private computeAnalyticsFromRecords(
+        records: PersistedEffectivenessRecord[],
         startTime: number,
         endTime: number
     ): EffectivenessAnalytics {
@@ -476,8 +573,7 @@ export class TaskEffectivenessService {
             }
         };
 
-        // Aggregate by task type (reuse existing logic)
-        for (const task of tasks) {
+        for (const { metrics: task } of records) {
             const type = task.metadata.type;
             if (!analytics.byTaskType[type]) {
                 analytics.byTaskType[type] = {
@@ -508,9 +604,60 @@ export class TaskEffectivenessService {
 
         // Calculate success rates
         for (const [type, stats] of Object.entries(analytics.byTaskType)) {
-            const typeTasks = tasks.filter(t => t.metadata.type === type);
+            const typeTasks = records
+                .map(record => record.metrics)
+                .filter(task => task.metadata.type === type);
             const successful = typeTasks.filter(t => t.quality.goalAchieved).length;
             stats.successRate = typeTasks.length > 0 ? successful / typeTasks.length : 0;
+        }
+
+        const channelIds = Array.from(new Set(records.map(record => record.channelId)));
+        for (const channelId of channelIds) {
+            const channelRecords = records.filter(record => record.channelId === channelId);
+            const agentScores = new Map<AgentId, number[]>();
+            for (const record of channelRecords) {
+                const scores = agentScores.get(record.agentId) ?? [];
+                scores.push(this.calculateOverallScore(record.metrics));
+                agentScores.set(record.agentId, scores);
+            }
+
+            analytics.byChannel[channelId] = {
+                totalTasks: channelRecords.length,
+                completedTasks: channelRecords.filter(
+                    record => record.metrics.metadata.status === 'completed'
+                ).length,
+                avgEffectivenessScore: channelRecords.length === 0
+                    ? 0
+                    : channelRecords.reduce(
+                        (sum, record) => sum + this.calculateOverallScore(record.metrics),
+                        0
+                    ) / channelRecords.length,
+                topPerformingAgents: Array.from(agentScores.entries())
+                    .sort(([, left], [, right]) => {
+                        const leftAverage = left.reduce((sum, score) => sum + score, 0) / left.length;
+                        const rightAverage = right.reduce((sum, score) => sum + score, 0) / right.length;
+                        return rightAverage - leftAverage;
+                    })
+                    .map(([agentId]) => agentId)
+            };
+        }
+
+        analytics.trends.effectivenessOverTime = records
+            .map(record => ({
+                timestamp: record.metrics.metadata.startTime,
+                avgScore: this.calculateOverallScore(record.metrics),
+                taskCount: 1
+            }))
+            .sort((left, right) => left.timestamp - right.timestamp);
+
+        if (analytics.trends.effectivenessOverTime.length > 1) {
+            const first = analytics.trends.effectivenessOverTime[0].avgScore;
+            const last = analytics.trends.effectivenessOverTime.at(-1)!.avgScore;
+            if (last > first) {
+                analytics.trends.improving.push('overall_effectiveness');
+            } else if (last < first) {
+                analytics.trends.declining.push('overall_effectiveness');
+            }
         }
 
         // Identify patterns
@@ -521,6 +668,13 @@ export class TaskEffectivenessService {
         analytics.patterns.lowPerformanceTasks = Object.entries(analytics.byTaskType)
             .filter(([_, stats]) => stats.successRate < 0.5 || stats.avgAutonomyScore < 0.3)
             .map(([type]) => type);
+
+        const teamRecords = records.filter(record => record.metrics.collaboration.participatingAgents.length > 1);
+        analytics.patterns.effectiveTeams = teamRecords.map(record => ({
+            agents: [...record.metrics.collaboration.participatingAgents].sort(),
+            taskTypes: [record.metrics.metadata.type],
+            avgScore: this.calculateOverallScore(record.metrics)
+        }));
 
         return analytics;
     }
@@ -534,13 +688,14 @@ export class TaskEffectivenessService {
                 metrics.performance.stepCount++;
                 break;
                 
-            case 'tool_use':
+            case 'tool_use': {
                 metrics.performance.toolsUsed++;
                 const toolName = event.details.toolName;
                 if (toolName && !metrics.performance.uniqueTools.includes(toolName)) {
                     metrics.performance.uniqueTools.push(toolName);
                 }
                 break;
+            }
                 
             case 'agent_join':
                 if (event.agentId && !metrics.collaboration.participatingAgents.includes(event.agentId)) {
@@ -669,7 +824,7 @@ export class TaskEffectivenessService {
     /**
      * Generate optimization recommendations
      */
-    private generateRecommendations(metrics: TaskEffectivenessMetrics): string[] {
+    private generateRecommendations(metrics: TaskEffectivenessMetrics, taskKey: string): string[] {
         const recommendations: string[] = [];
         
         if (metrics.performance.humanInterventions > 0) {
@@ -681,7 +836,7 @@ export class TaskEffectivenessService {
         }
         
         if (metrics.quality.errorCount > 0) {
-            const commonErrors = this.analyzeCommonErrors(metrics.taskId);
+            const commonErrors = this.analyzeCommonErrors(taskKey);
             if (commonErrors.length > 0) {
                 recommendations.push(`Address common errors: ${commonErrors.join(', ')}`);
             }
@@ -693,8 +848,8 @@ export class TaskEffectivenessService {
     /**
      * Analyze common errors for a task
      */
-    private analyzeCommonErrors(taskId: string): string[] {
-        const events = this.taskEvents.get(taskId) || [];
+    private analyzeCommonErrors(taskKey: string): string[] {
+        const events = this.taskEvents.get(taskKey) || [];
         const errors = events.filter(e => e.type === 'error');
         
         // Group by error type
@@ -715,42 +870,54 @@ export class TaskEffectivenessService {
      * Setup event listeners
      */
     private setupEventListeners(): void {
-        // Track tool usage
-        EventBus.server.on(Events.Mcp.TOOL_CALL, (payload: any) => {
-            if (payload.taskId) {
+        EventBus.server.on(Events.Mcp.TOOL_CALL, (payload) => {
+            const taskId = payload.data?.taskId ?? payload.taskId;
+            if (taskId && payload.agentId && payload.channelId) {
+                const taskKey = this.getTaskKey(taskId, payload.agentId, payload.channelId);
+                if (!this.activeTasks.has(taskKey)) {
+                    return;
+                }
                 this.recordEvent({
                     eventId: uuidv4(),
-                    taskId: payload.taskId,
+                    taskId,
                     timestamp: Date.now(),
                     type: 'tool_use',
                     agentId: payload.agentId,
-                    details: { toolName: payload.toolName }
+                    channelId: payload.channelId,
+                    details: { toolName: payload.data?.toolName ?? payload.toolName }
                 });
             }
         });
-        
-        // Track errors
-        EventBus.server.on(Events.Mcp.TOOL_ERROR, (payload: any) => {
-            if (payload.taskId) {
+
+        EventBus.server.on(Events.Mcp.TOOL_ERROR, (payload) => {
+            const taskId = payload.data?.taskId ?? payload.taskId;
+            if (taskId && payload.agentId && payload.channelId) {
+                const taskKey = this.getTaskKey(taskId, payload.agentId, payload.channelId);
+                if (!this.activeTasks.has(taskKey)) {
+                    return;
+                }
                 this.recordEvent({
                     eventId: uuidv4(),
-                    taskId: payload.taskId,
+                    taskId,
                     timestamp: Date.now(),
                     type: 'error',
                     agentId: payload.agentId,
-                    details: { 
+                    channelId: payload.channelId,
+                    details: {
                         errorType: 'tool_error',
-                        toolName: payload.toolName,
-                        error: payload.error
+                        toolName: payload.data?.toolName ?? payload.toolName,
+                        error: payload.data?.error ?? payload.error
                     }
                 });
             }
         });
-        
-        // Track agent collaboration
-        EventBus.server.on(Events.Message.CHANNEL_MESSAGE, (payload: any) => {
-            if (payload.taskId) {
-                const metrics = this.activeTasks.get(payload.taskId);
+
+        EventBus.server.on(Events.Message.CHANNEL_MESSAGE, (payload) => {
+            const taskId = payload.data?.taskId ?? payload.taskId;
+            if (taskId && payload.agentId && payload.channelId) {
+                const metrics = this.activeTasks.get(
+                    this.getTaskKey(taskId, payload.agentId, payload.channelId)
+                );
                 if (metrics) {
                     metrics.collaboration.messageCount++;
                 }
@@ -758,18 +925,21 @@ export class TaskEffectivenessService {
         });
     }
 
-    /**
-     * Get task metrics by ID
-     */
-    public async getTaskMetrics(taskId: string): Promise<TaskEffectivenessMetrics | null> {
-        // A running task lives in memory; a finished one lives in MongoDB.
-        const activeTask = this.activeTasks.get(taskId);
+    /** Get task metrics for one exact tenant task. */
+    public async getTaskMetrics(
+        taskId: string,
+        agentId: AgentId,
+        channelId: ChannelId
+    ): Promise<TaskEffectivenessMetrics | null> {
+        this.requireTenantIdentity(agentId, channelId);
+        this.requireTaskIdentity(taskId);
+        const activeTask = this.activeTasks.get(this.getTaskKey(taskId, agentId, channelId));
         if (activeTask) {
             return activeTask;
         }
 
         try {
-            const taskDoc = await TaskEffectivenessModel.findOne({ taskId }).exec();
+            const taskDoc = await TaskEffectivenessModel.findOne({ taskId, agentId, channelId }).exec();
             return taskDoc ? (taskDoc.metrics as TaskEffectivenessMetrics) : null;
         } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
@@ -778,29 +948,52 @@ export class TaskEffectivenessService {
         }
     }
 
-    /**
-     * Get effectiveness trends over time
-     */
+    /** Get effectiveness trends for one exact agent and channel. */
     public async getEffectivenessTrends(
         startTime: number,
         endTime: number,
         intervalMs: number,
-        channelId?: ChannelId
-    ): Promise<any> {
-        const dataPoints: any[] = [];
-        const intervals = Math.floor((endTime - startTime) / intervalMs);
+        agentId: AgentId,
+        channelId: ChannelId
+    ): Promise<EffectivenessTrends> {
+        this.requireTenantIdentity(agentId, channelId);
+        const records = await this.findCompletedTasks({ startTime, endTime, agentId, channelId });
+        return this.computeEffectivenessTrends(records, startTime, endTime, intervalMs);
+    }
 
-        // One query for the whole window, then bucket in memory.
-        const tasks = await this.findCompletedTasks({ startTime, endTime, channelId });
+    /** Trend analytics intended only for the admin-authenticated REST surface. */
+    public async getAdministrativeEffectivenessTrends(
+        startTime: number,
+        endTime: number,
+        intervalMs: number,
+        channelId?: ChannelId
+    ): Promise<EffectivenessTrends> {
+        const records = await this.findCompletedTasks({ startTime, endTime, channelId });
+        return this.computeEffectivenessTrends(records, startTime, endTime, intervalMs);
+    }
+
+    private computeEffectivenessTrends(
+        records: PersistedEffectivenessRecord[],
+        startTime: number,
+        endTime: number,
+        intervalMs: number
+    ): EffectivenessTrends {
+        if (!Number.isFinite(intervalMs) || intervalMs <= 0) {
+            throw new Error('A positive trend interval is required');
+        }
+        const dataPoints: EffectivenessTrendDataPoint[] = [];
+        const intervals = Math.floor((endTime - startTime) / intervalMs);
 
         for (let i = 0; i < intervals; i++) {
             const intervalStart = startTime + (i * intervalMs);
             const intervalEnd = intervalStart + intervalMs;
 
-            const intervalTasks = tasks.filter(task =>
-                task.metadata.startTime >= intervalStart &&
-                task.metadata.startTime < intervalEnd
-            );
+            const intervalTasks = records
+                .map(record => record.metrics)
+                .filter(task =>
+                    task.metadata.startTime >= intervalStart &&
+                    task.metadata.startTime < intervalEnd
+                );
             
             if (intervalTasks.length > 0) {
                 const avgScore = intervalTasks.reduce((sum, task) => 
@@ -829,17 +1022,39 @@ export class TaskEffectivenessService {
         };
     }
 
-    /**
-     * Get agent-specific effectiveness
-     */
+    /** Get agent-specific effectiveness in one exact channel. */
     public async getAgentEffectiveness(
         agentId: AgentId,
         startTime: number,
         endTime: number,
+        channelId: ChannelId
+    ): Promise<AgentEffectivenessSummary> {
+        this.requireTenantIdentity(agentId, channelId);
+        const records = await this.findCompletedTasks({ startTime, endTime, channelId, agentId });
+        return this.computeAgentEffectiveness(agentId, records, startTime, endTime);
+    }
+
+    /** Agent analytics intended only for the admin-authenticated REST surface. */
+    public async getAdministrativeAgentEffectiveness(
+        agentId: AgentId,
+        startTime: number,
+        endTime: number,
         channelId?: ChannelId
-    ): Promise<any> {
-        // The agentIds index on the document does the channel/time/agent filtering.
-        const agentTasks = await this.findCompletedTasks({ startTime, endTime, channelId, agentId });
+    ): Promise<AgentEffectivenessSummary> {
+        if (!agentId?.trim()) {
+            throw new Error('Agent ID is required');
+        }
+        const records = await this.findCompletedTasks({ startTime, endTime, channelId, agentId });
+        return this.computeAgentEffectiveness(agentId, records, startTime, endTime);
+    }
+
+    private computeAgentEffectiveness(
+        agentId: AgentId,
+        records: PersistedEffectivenessRecord[],
+        startTime: number,
+        endTime: number
+    ): AgentEffectivenessSummary {
+        const agentTasks = records.map(record => record.metrics);
         
         const totalTasks = agentTasks.length;
         const successfulTasks = agentTasks.filter(t => t.quality.goalAchieved).length;

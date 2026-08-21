@@ -130,32 +130,27 @@ describe('MCP API Endpoints', () => {
     });
 
     // =========================================================================
-    // POST /api/mcp/tools/:name/execute - Execute MCP tool (Public)
+    // POST /api/mcp/tools/:name/execute - Execute MCP tool (agent key required)
     // =========================================================================
 
     describe('POST /api/mcp/tools/:name/execute', () => {
-        it('should execute tool with valid input', async () => {
+        it('should reject user JWTs that cannot authenticate an agent identity', async () => {
             const response = await api.post('/api/mcp/tools/tool_help/execute', {
                 toolName: 'messaging_send'
             });
 
-            // May succeed or fail depending on tool requirements
-            expect([200, 400, 500]).toContain(response.status);
-        });
-
-        it('should return error for non-existent tool', async () => {
-            const response = await api.post('/api/mcp/tools/non_existent_tool/execute', {});
-
-            // Returns 404 or 500 depending on how tool lookup fails
-            expect([404, 500]).toContain(response.status);
+            expect(response.status).toBe(403);
             expect(response.body.success).toBe(false);
         });
 
-        it('should handle missing required parameters', async () => {
-            const response = await api.post('/api/mcp/tools/tool_help/execute', {});
+        it('should reject unauthenticated execution', async () => {
+            const unauthApi = createTestAPI();
+            const response = await unauthApi.post('/api/mcp/tools/tool_help/execute', {
+                toolName: 'messaging_send'
+            });
 
-            // Should return error for missing required params
-            expect([400, 500]).toContain(response.status);
+            expect(response.status).toBe(401);
+            expect(response.body.success).toBe(false);
         });
     });
 

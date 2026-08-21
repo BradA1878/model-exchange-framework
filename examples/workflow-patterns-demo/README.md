@@ -57,7 +57,7 @@ This demo does **NOT** execute all three workflow patterns blindly. Instead:
 3. Run the demo:
    ```bash
    bun run workflow-patterns-demo.ts
-   # Or use npm script:
+   # Or use the root package script:
    bun run demo:workflow-patterns
    ```
 

@@ -560,6 +560,13 @@ export const MODEL_COST_ESTIMATES: Record<string, ParameterCostEstimate> = {
         outputCostPer1k: 0.00125,
         tier: 'budget'
     },
+    // OpenRouter `~anthropic/...-latest` aliases resolve to the newest model in
+    // each family; these rows carry the family's current rate.
+    '~anthropic/claude-haiku-latest': {
+        inputCostPer1k: 0.00100,
+        outputCostPer1k: 0.00500,
+        tier: 'budget'
+    },
 
     // Standard tier (under $5.00/1M tokens)
     'google/gemini-2.5-pro': {
@@ -582,6 +589,12 @@ export const MODEL_COST_ESTIMATES: Record<string, ParameterCostEstimate> = {
         reasoningCostPer1k: 0.01500,
         tier: 'premium'
     },
+    '~anthropic/claude-sonnet-latest': {
+        inputCostPer1k: 0.00200,
+        outputCostPer1k: 0.01000,
+        reasoningCostPer1k: 0.01000,
+        tier: 'premium'
+    },
     'openai/gpt-4.1': {
         inputCostPer1k: 0.00250,
         outputCostPer1k: 0.01000,
@@ -594,6 +607,22 @@ export const MODEL_COST_ESTIMATES: Record<string, ParameterCostEstimate> = {
         inputCostPer1k: 0.01500,
         outputCostPer1k: 0.07500,
         reasoningCostPer1k: 0.07500,
+        tier: 'ultra_premium'
+    },
+    // The `~anthropic/...-latest` alias rows carry the rates OpenRouter listed
+    // for them on 2026-08-21 (USD per 1k tokens); they move with each release.
+    '~anthropic/claude-opus-latest': {
+        inputCostPer1k: 0.00500,
+        outputCostPer1k: 0.02500,
+        reasoningCostPer1k: 0.02500,
+        tier: 'ultra_premium'
+    },
+    // Listed so a configured fable model is priced; nothing in the framework,
+    // demos, or tests selects it.
+    '~anthropic/claude-fable-latest': {
+        inputCostPer1k: 0.01000,
+        outputCostPer1k: 0.05000,
+        reasoningCostPer1k: 0.05000,
         tier: 'ultra_premium'
     }
 };

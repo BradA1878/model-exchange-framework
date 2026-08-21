@@ -294,10 +294,10 @@ Month: {{CURRENT_MONTH}}`;
 
         it('should replace {{LLM_MODEL}} when context provided', () => {
             const prompt = 'Model: {{LLM_MODEL}}';
-            const context: TemplateContext = { llmModel: 'anthropic/claude-3.5-haiku' };
+            const context: TemplateContext = { llmModel: '~anthropic/claude-haiku-latest' };
             const result = PromptTemplateReplacer.replaceTemplates(prompt, context);
 
-            expect(result).toBe('Model: anthropic/claude-3.5-haiku');
+            expect(result).toBe('Model: ~anthropic/claude-haiku-latest');
         });
 
         it('should replace {{SYSTEM_LLM_STATUS}} with Enabled', () => {

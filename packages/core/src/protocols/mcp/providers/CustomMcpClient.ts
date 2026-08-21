@@ -200,6 +200,13 @@ export class CustomMcpClient extends BaseMcpClient {
         options?: Record<string, any>
     ): Observable<McpApiResponse> {
         return new Observable<McpApiResponse>(subscriber => {
+            try {
+                this.assertExternalLlmCallAllowed();
+            } catch (error) {
+                subscriber.error(error);
+                return;
+            }
+
             this.sendWithContextImpl(context, options)
                 .then(response => {
                     subscriber.next(response);

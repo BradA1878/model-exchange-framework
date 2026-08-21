@@ -27,10 +27,10 @@
 
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
-import { requireEnv } from '@mxf-dev/core/utils/env';
 import { User, UserRole } from '@mxf-dev/core/models/user';
 import { Logger } from '@mxf-dev/core/utils/Logger';
 import { createStrictValidator } from '@mxf-dev/core/utils/validation';
+import { verifySessionToken } from '../security/jwtTokenPolicy';
 
 // Initialize logger
 const logger = new Logger('info', 'AuthMiddleware', 'server');
@@ -61,9 +61,9 @@ export const authenticateUser = async (req: Request, res: Response, next: NextFu
         // Extract token
         const token = authHeader.split(' ')[1];
         
-        // Verify token
-        const secret = requireEnv('JWT_SECRET', 'Set a strong secret in .env — it signs and verifies all user JWTs.');
-        const decoded = jwt.verify(token, secret) as any;
+        // Verify signature, algorithm, issuer, audience, and session purpose.
+        // Magic-link exchange tokens are intentionally rejected here.
+        const decoded = verifySessionToken(token);
         
         // Check if token contains userId
         if (!decoded || !decoded.userId) {
@@ -105,18 +105,18 @@ export const authenticateUser = async (req: Request, res: Response, next: NextFu
         // Continue with request
         next();
     } catch (error) {
-        if (error instanceof jwt.JsonWebTokenError) {
-            res.status(401).json({
-                success: false,
-                message: 'Invalid token'
-            });
-            return;
-        }
-        
         if (error instanceof jwt.TokenExpiredError) {
             res.status(401).json({
                 success: false,
                 message: 'Token expired'
+            });
+            return;
+        }
+        
+        if (error instanceof jwt.JsonWebTokenError) {
+            res.status(401).json({
+                success: false,
+                message: 'Invalid token'
             });
             return;
         }

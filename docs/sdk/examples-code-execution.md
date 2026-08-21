@@ -36,19 +36,19 @@ const agent = await sdk.createAgent({
     keyId: process.env.AGENT_KEY_ID!,
     secretKey: process.env.AGENT_SECRET_KEY!,
     llmProvider: 'openrouter',
-    defaultModel: 'anthropic/claude-3.5-sonnet',
+    defaultModel: '~anthropic/claude-sonnet-latest',
     apiKey: process.env.OPENROUTER_API_KEY!
 });
 await agent.connect();
 
 // Get data from search or other source
-const searchResults = await agent.callTool('memory_search_conversations', {
+const searchResults = await agent.executeTool('memory_search_conversations', {
     query: 'user feedback',
     limit: 100
 });
 
 // Process locally without model round-trips
-const result = await agent.callTool('code_execute', {
+const result = await agent.executeTool('code_execute', {
     code: `
         // Filter by relevance score
         const relevant = context.results
@@ -84,7 +84,7 @@ console.log('Top 10:', result.output.top10);
 ### Example 2: Data Aggregation
 
 ```typescript
-const result = await agent.callTool('code_execute', {
+const result = await agent.executeTool('code_execute', {
     code: `
         // Group by category
         const grouped = context.items.reduce((acc, item) => {
@@ -137,7 +137,7 @@ console.log(result.output);
 ### Example 3: Comprehensive Data Pipeline
 
 ```typescript
-const result = await agent.callTool('code_execute', {
+const result = await agent.executeTool('code_execute', {
     code: `
         console.log('Step 1: Validation');
         // Validate input data
@@ -217,7 +217,7 @@ console.log('Logs:', result.logs);
 ### Example 4: Statistical Calculations
 
 ```typescript
-const result = await agent.callTool('code_execute', {
+const result = await agent.executeTool('code_execute', {
     code: `
         const data = context.values;
 
@@ -289,7 +289,7 @@ console.log('Statistics:', result.output);
 ### Example 5: Text Analysis
 
 ```typescript
-const result = await agent.callTool('code_execute', {
+const result = await agent.executeTool('code_execute', {
     code: `
         const text = context.text;
 
@@ -350,7 +350,7 @@ console.log('Analysis:', result.output);
 ### Example 6: Complex Decision Logic
 
 ```typescript
-const result = await agent.callTool('code_execute', {
+const result = await agent.executeTool('code_execute', {
     code: `
         const metrics = context.metrics;
         let priority = 0;
@@ -434,7 +434,7 @@ console.log('Alerts:', result.output.alerts);
 ### Example 7: Batch Processing with Progress
 
 ```typescript
-const result = await agent.callTool('code_execute', {
+const result = await agent.executeTool('code_execute', {
     code: `
         const items = context.items;
         const batchSize = 10;
@@ -510,7 +510,7 @@ console.log('Logs:', result.logs);
 ### Example 8: Time Series Analysis
 
 ```typescript
-const result = await agent.callTool('code_execute', {
+const result = await agent.executeTool('code_execute', {
     code: `
         const timeSeries = context.data;
 
@@ -576,7 +576,7 @@ console.log('Time series analysis:', result.output);
 ### Example 9: Text Parsing and Extraction
 
 ```typescript
-const result = await agent.callTool('code_execute', {
+const result = await agent.executeTool('code_execute', {
     code: `
         const text = context.text;
 
@@ -647,7 +647,7 @@ console.log('Extracted data:', result.output);
 ### Example 10: Risk Assessment
 
 ```typescript
-const result = await agent.callTool('code_execute', {
+const result = await agent.executeTool('code_execute', {
     code: `
         const profile = context.profile;
         let riskScore = 0;
@@ -736,7 +736,7 @@ console.log('Risk assessment:', result.output);
 async function safeCodeExecution(agent: MxfClient, code: string, context: any) {
     try {
         // Try execution
-        const result = await agent.callTool('code_execute', {
+        const result = await agent.executeTool('code_execute', {
             code,
             context,
             timeout: 5000
@@ -758,7 +758,7 @@ async function safeCodeExecution(agent: MxfClient, code: string, context: any) {
 
                 // Retry with longer timeout
                 console.log('Retrying with 15s timeout...');
-                const retry = await agent.callTool('code_execute', {
+                const retry = await agent.executeTool('code_execute', {
                     code,
                     context,
                     timeout: 15000
@@ -824,7 +824,7 @@ async function validateAndExecute(agent: MxfClient, code: string) {
     console.log('✅ Code passed local validation');
 
     // Execute
-    const result = await agent.callTool('code_execute', { code });
+    const result = await agent.executeTool('code_execute', { code });
 
     return result.success ? result.output : null;
 }
@@ -848,7 +848,7 @@ async function processUserFeedback(agent: MxfAgent) {
 
     // Step 1: Search for feedback
     console.log('Step 1: Searching for feedback...');
-    const feedback = await agent.callTool('memory_search_conversations', {
+    const feedback = await agent.executeTool('memory_search_conversations', {
         query: 'user feedback product review',
         limit: 100
     });
@@ -856,7 +856,7 @@ async function processUserFeedback(agent: MxfAgent) {
 
     // Step 2: Process all feedback in one code execution
     console.log('\nStep 2: Processing feedback locally...');
-    const analysis = await agent.callTool('code_execute', {
+    const analysis = await agent.executeTool('code_execute', {
         code: `
             console.log('Analyzing', context.feedback.length, 'feedback items');
 
@@ -934,8 +934,7 @@ async function processUserFeedback(agent: MxfAgent) {
 
     // Step 3: Act on results
     if (analysis.output.overallSentiment === 'negative') {
-        await agent.sendMessage(
-            'dev-channel',
+        await agent.mxfService.sendMessage(
             `⚠️ Negative feedback detected: ${analysis.output.sentimentCounts.negative} negative items`
         );
     }
@@ -957,7 +956,7 @@ const agent = await sdk.createAgent({
     keyId: process.env.AGENT_KEY_ID!,
     secretKey: process.env.AGENT_SECRET_KEY!,
     llmProvider: 'openrouter',
-    defaultModel: 'anthropic/claude-3.5-sonnet',
+    defaultModel: '~anthropic/claude-sonnet-latest',
     apiKey: process.env.OPENROUTER_API_KEY!
 });
 await agent.connect();
@@ -972,15 +971,15 @@ const results = await processUserFeedback(agent);
 
 ```typescript
 // Step 1: Search
-const data = await agent.callTool('memory_search', { query: 'feedback' });
+const data = await agent.executeTool('memory_search', { query: 'feedback' });
 // Wait for model response... ~5-10s
 
 // Step 2: Filter
-const filtered = await agent.callTool('filter_data', { data, threshold: 0.8 });
+const filtered = await agent.executeTool('filter_data', { data, threshold: 0.8 });
 // Wait for model response... ~5-10s
 
 // Step 3: Sort
-const sorted = await agent.callTool('sort_data', { data: filtered });
+const sorted = await agent.executeTool('sort_data', { data: filtered });
 // Wait for model response... ~5-10s
 
 // Total: 15-30 seconds, 3 API calls
@@ -990,7 +989,7 @@ const sorted = await agent.callTool('sort_data', { data: filtered });
 
 ```typescript
 // All in one execution
-const result = await agent.callTool('code_execute', {
+const result = await agent.executeTool('code_execute', {
     code: `
         const filtered = context.data.filter(d => d.score > 0.8);
         const sorted = filtered.sort((a, b) => b.score - a.score);

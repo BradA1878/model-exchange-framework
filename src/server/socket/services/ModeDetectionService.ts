@@ -30,7 +30,8 @@
 import { Logger } from '@mxf-dev/core/utils/Logger';
 import { createStrictValidator } from '@mxf-dev/core/utils/validation';
 import { EventBus } from '@mxf-dev/core/events/EventBus';
-import { AgentEvents, MessageEvents, SystemEvents } from '@mxf-dev/core/events/EventNames';
+import { AgentEvents } from '@mxf-dev/core/events/EventNames';
+import type { Subscription } from 'rxjs';
 // ActionHistoryService removed - action history tracking moved to SDK side for proper client/server separation
 // Local interface for basic action history data structure needed for mode detection
 interface ActionHistoryEntry {
@@ -40,8 +41,8 @@ interface ActionHistoryEntry {
     timestamp: number;
     type: string;
     action: string;
-    details: any;
-    result?: any;
+    details: Record<string, unknown> & { toolName?: string };
+    result?: unknown;
     executionTimeMs?: number;
 }
 
@@ -87,6 +88,8 @@ export class ModeDetectionService {
     
     // Mode tracking per channel
     private channelModes = new Map<string, ModeContext>();
+    private eventSubscriptions: Subscription[] = [];
+    private analysisInterval?: ReturnType<typeof setInterval>;
     
     // Mode detection configuration
     private config = {
@@ -109,17 +112,17 @@ export class ModeDetectionService {
     private initializeEventListeners(): void {
         // Listen for agent activities to trigger mode reassessment
         // Note: These events would need to be added to AgentEvents if they don't exist
-        this.eventBus.on(AgentEvents.AGENT_MESSAGE, (data: any) => {
+        this.eventSubscriptions.push(this.eventBus.on(AgentEvents.AGENT_MESSAGE, data => {
             this.triggerModeReassessment(data.channelId);
-        });
+        }));
 
-        this.eventBus.on(AgentEvents.TOOL_CALL, (data: any) => {
+        this.eventSubscriptions.push(this.eventBus.on(AgentEvents.TOOL_CALL, data => {
             this.triggerModeReassessment(data.channelId);
-        });
+        }));
 
-        this.eventBus.on(AgentEvents.CONTEXT_UPDATE, (data: any) => {
+        this.eventSubscriptions.push(this.eventBus.on(AgentEvents.CONTEXT_UPDATE, data => {
             this.triggerModeReassessment(data.channelId);
-        });
+        }));
     }
 
     /**
@@ -204,7 +207,7 @@ export class ModeDetectionService {
     /**
      * Adapt SystemLLM interpretation strategy based on detected mode
      */
-    adaptInterpretationStrategy(mode: OperatingMode, response: string): InterpretationStrategy {
+    adaptInterpretationStrategy(mode: OperatingMode, _response: string): InterpretationStrategy {
         const baseStrategies: Record<OperatingMode, InterpretationStrategy> = {
             [OperatingMode.TASK_EXECUTION]: {
                 preferNaturalLanguage: false,
@@ -415,7 +418,7 @@ export class ModeDetectionService {
     /**
      * Helper methods
      */
-    private async getChannelActivity(channelId: string): Promise<ActionHistoryEntry[]> {
+    private async getChannelActivity(_channelId: string): Promise<ActionHistoryEntry[]> {
         // In a real implementation, this would query the action history service
         // For now, return empty array as placeholder
         return [];
@@ -429,9 +432,26 @@ export class ModeDetectionService {
     }
 
     private startPeriodicModeAnalysis(): void {
-        setInterval(() => {
-            this.performPeriodicModeAnalysis();
+        this.analysisInterval = setInterval(() => {
+            void this.performPeriodicModeAnalysis();
         }, this.config.adaptationUpdateInterval);
+        this.analysisInterval.unref();
+    }
+
+    /** Release every resource owned by this singleton. */
+    public shutdown(): void {
+        if (this.analysisInterval) {
+            clearInterval(this.analysisInterval);
+            this.analysisInterval = undefined;
+        }
+        for (const subscription of this.eventSubscriptions) {
+            subscription.unsubscribe();
+        }
+        this.eventSubscriptions = [];
+        this.channelModes.clear();
+        if (ModeDetectionService.instance === this) {
+            ModeDetectionService.instance = null;
+        }
     }
 
     private async performPeriodicModeAnalysis(): Promise<void> {

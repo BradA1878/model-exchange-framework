@@ -132,7 +132,7 @@ bun run docker:logs mxf-server
 
 1. **Verify tool exists:**
    ```typescript
-   const tools = await agent.getAvailableTools();
+   const tools = await agent.listTools();
    console.log(tools.find(t => t.name === 'your_tool'));
    ```
 
@@ -163,8 +163,8 @@ bun run docker:logs mxf-server
 
 1. **Use the raw tool name:**
    ```typescript
-   // The names returned in toolsDiscovered are the names agents use
-   const { toolsDiscovered } = await agent.registerChannelMcpServer(config);
+   // Process registration requires an administrator-authenticated MxfSDK.
+   const { toolsDiscovered } = await sdk.registerChannelMcpServer(channelId, config);
    // toolsDiscovered -> ['game_move', 'game_status']
 
    await agent.updateAllowedTools(['game_move', 'game_status']);
@@ -181,8 +181,8 @@ bun run docker:logs mxf-server
 
 3. **Re-register an evicted server:**
    ```typescript
-   // Also refreshes the channel's stored record (config, keepAliveMinutes, ...)
-   await agent.registerChannelMcpServer(config);
+   // The server must also have MXF_UNSAFE_STDIO_MCP_ENABLED=true.
+   await sdk.registerChannelMcpServer(channelId, config);
    ```
 
 4. **Check for a name collision:**
@@ -213,7 +213,7 @@ bun run docker:logs mxf-server
    ```typescript
    const agent = await sdk.createAgent({
        llmProvider: 'openrouter',
-       defaultModel: 'anthropic/claude-3.5-sonnet',
+       defaultModel: '~anthropic/claude-sonnet-latest',
        apiKey: process.env.OPENROUTER_API_KEY
    });
    ```
@@ -273,10 +273,14 @@ bun run docker:logs mxf-server
 2. **Check memory scope:**
    ```typescript
    // Agent memory (private)
-   await agent.setMemory('key', 'value', 'agent');
+   await agent.executeTool('agent_memory_write', {
+       key: 'key',
+       value: 'value',
+       memorySection: 'notes'
+   });
 
    // Channel memory (shared)
-   await agent.setMemory('key', 'value', 'channel');
+   await agent.mxfService.addSharedNote('key', 'value');
    ```
 
 3. **Ensure memory service is initialized:**

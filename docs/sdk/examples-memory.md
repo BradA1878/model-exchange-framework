@@ -1,289 +1,140 @@
 # Memory Operations Examples
 
-Examples demonstrating memory management patterns for both agent-scoped and channel-scoped memory.
+MXF persists agent, channel, and relationship memory as canonical documents. Public
+SDK calls resolve to the server-confirmed value or reject; they do not return a local
+success guess, silently substitute an empty document, or wait on an uncorrelated event.
 
 ## Prerequisites
 
-See [Basic Examples](examples-basic.md#prerequisites) for setup instructions.
+See [Basic Examples](examples-basic.md#prerequisites) for authentication and agent
+creation. Memory tools must be present in both the channel key grant and the agent's
+requested `allowedTools` subset.
 
-## Memory Scopes
+## Channel memory
 
-MXF supports two memory scopes:
-- **Agent Memory**: Private to the agent
-- **Channel Memory**: Shared across all agents in the channel
-
-## Example 1: Basic Memory Operations
+`agent.mxfService` exposes the supported channel-memory document API:
 
 ```typescript
-import { MxfSDK, MemoryScope } from '@mxf-dev/sdk';
-import credentials from './credentials.json';
+import type { ChannelMemory } from '@mxf-dev/sdk';
 
-const sdk = new MxfSDK({
-    serverUrl: 'http://localhost:3001',
-    domainKey: process.env.MXF_DOMAIN_KEY!,
-    accessToken: process.env.MXF_ACCESS_TOKEN!
+const saved: ChannelMemory = await agent.mxfService.updateSharedMemory({
+    notes: {
+        project: 'MXF hardening'
+    },
+    sharedState: {
+        phase: 'verification',
+        reviewer: 'agent-2'
+    }
 });
 
-await sdk.connect();
-
-const agent = await sdk.createAgent({
-    agentId: 'memory-agent',
-    name: 'Memory Agent',
-    channelId: credentials.channelId,
-    keyId: credentials.keys.agent1.keyId,
-    secretKey: credentials.keys.agent1.secretKey,
-    llmProvider: 'openrouter',
-    defaultModel: 'anthropic/claude-3.5-sonnet',
-    apiKey: process.env.OPENROUTER_API_KEY
-});
-
-await agent.connect();
-
-// Store agent-scoped memory (private)
-await agent.channelService.updateMemory(
-    MemoryScope.AGENT,
-    'user_preference',
-    { theme: 'dark', language: 'en' }
-);
-
-// Store channel-scoped memory (shared)
-await agent.channelService.updateMemory(
-    MemoryScope.CHANNEL,
-    'team_info',
-    { name: 'Dev Team', members: 5 }
-);
-
-// Retrieve agent memory
-const prefs = await agent.channelService.getMemory(
-    MemoryScope.AGENT,
-    'user_preference'
-);
-console.log('User preferences:', prefs);
-
-// Retrieve channel memory
-const teamInfo = await agent.channelService.getMemory(
-    MemoryScope.CHANNEL,
-    'team_info'
-);
-console.log('Team info:', teamInfo);
+const current: ChannelMemory = await agent.mxfService.getSharedMemory();
+console.log(current.sharedState?.phase);
 ```
 
-## Example 2: Shared Channel Memory
+The convenience methods use the same canonical persistence boundary:
 
 ```typescript
-// Create two agents in same channel
-const agent1 = await sdk.createAgent({
-    agentId: 'agent1',
-    name: 'Agent 1',
-    channelId: credentials.channelId,
-    keyId: credentials.keys.agent1.keyId,
-    secretKey: credentials.keys.agent1.secretKey,
-    llmProvider: 'openrouter',
-    defaultModel: 'anthropic/claude-3.5-sonnet',
-    apiKey: process.env.OPENROUTER_API_KEY
-});
+await agent.mxfService.addSharedNote('decision', 'Ship after the proof suite passes');
+await agent.mxfService.updateSharedState('phase', 'complete');
 
-const agent2 = await sdk.createAgent({
-    agentId: 'agent2',
-    name: 'Agent 2',
-    channelId: credentials.channelId,
-    keyId: credentials.keys.agent2.keyId,
-    secretKey: credentials.keys.agent2.secretKey,
-    llmProvider: 'openrouter',
-    defaultModel: 'anthropic/claude-3.5-sonnet',
-    apiKey: process.env.OPENROUTER_API_KEY
-});
-
-await Promise.all([agent1.connect(), agent2.connect()]);
-
-// Agent 1 stores shared data
-await agent1.channelService.updateMemory(
-    MemoryScope.CHANNEL,
-    'project_status',
-    { phase: 'development', progress: 45 }
-);
-
-// Agent 2 reads shared data
-const status = await agent2.channelService.getMemory(
-    MemoryScope.CHANNEL,
-    'project_status'
-);
-console.log('Project status (from agent2):', status);
-// Output: { phase: 'development', progress: 45 }
-```
-
-## Example 3: Memory Event Listening
-
-```typescript
-import { Events } from '@mxf-dev/sdk';
-
-// Listen to memory updates
-agent.on(Events.Memory.UPDATE_RESULT, (payload) => {
-    console.log('Memory updated:');
-    console.log('  Scope:', payload.data.scope);
-    console.log('  Key:', payload.data.key);
-    console.log('  Value:', payload.data.value);
-});
-
-// Listen to memory retrievals
-agent.on(Events.Memory.GET_RESULT, (payload) => {
-    console.log('Memory retrieved:', payload.data);
-});
-
-// Perform memory operations
-await agent.channelService.updateMemory(
-    MemoryScope.AGENT,
-    'last_action',
-    { action: 'send_message', timestamp: Date.now() }
-);
-```
-
-## Example 4: Agent Preferences Pattern
-
-```typescript
-class AgentPreferences {
-    private agent: MxfAgent;
-
-    constructor(agent: MxfAgent) {
-        this.agent = agent;
-    }
-
-    async set(key: string, value: any): Promise<void> {
-        await this.agent.channelService.updateMemory(
-            MemoryScope.AGENT,
-            `pref_${key}`,
-            value
-        );
-    }
-
-    async get(key: string): Promise<any> {
-        return await this.agent.channelService.getMemory(
-            MemoryScope.AGENT,
-            `pref_${key}`
-        );
-    }
-
-    async delete(key: string): Promise<void> {
-        await this.agent.channelService.deleteMemory(
-            MemoryScope.AGENT,
-            `pref_${key}`
-        );
-    }
-}
-
-// Usage
-const prefs = new AgentPreferences(agent);
-await prefs.set('notifications', { enabled: true, frequency: 'daily' });
-const notifSettings = await prefs.get('notifications');
-```
-
-## Example 5: Channel Context Pattern
-
-```typescript
-class ChannelContext {
-    private agent: MxfAgent;
-
-    constructor(agent: MxfAgent) {
-        this.agent = agent;
-    }
-
-    async set(key: string, value: any): Promise<void> {
-        await this.agent.channelService.updateMemory(
-            MemoryScope.CHANNEL,
-            key,
-            value
-        );
-    }
-
-    async get(key: string): Promise<any> {
-        return await this.agent.channelService.getMemory(
-            MemoryScope.CHANNEL,
-            key
-        );
-    }
-
-    async append(key: string, item: any): Promise<void> {
-        const current = await this.get(key) || [];
-        if (!Array.isArray(current)) {
-            throw new Error('Value is not an array');
-        }
-        await this.set(key, [...current, item]);
-    }
-}
-
-// Usage: Shared conversation history
-const context = new ChannelContext(agent);
-await context.set('conversation_history', []);
-await context.append('conversation_history', {
-    from: 'agent1',
-    message: 'Hello team!',
+// This append is atomic. Concurrent agents cannot overwrite one another by doing a
+// client-side read/modify/write cycle.
+const history = await agent.mxfService.addToSharedConversationHistory({
+    senderId: agent.agentId,
+    content: 'Verification complete',
     timestamp: Date.now()
 });
 ```
 
-## Example 6: Memory-Based State Machine
+Do not implement an append by reading the whole document and writing a copied array.
+Use `addToSharedConversationHistory()` so MXF performs the append atomically.
+
+## Agent-private memory
+
+Agent key/value memory is exposed through the MCP memory tools. The server derives
+the owner from the authenticated agent credential; callers cannot select another
+agent's memory.
 
 ```typescript
-enum AgentState {
-    IDLE = 'idle',
-    PROCESSING = 'processing',
-    WAITING = 'waiting',
-    ERROR = 'error'
-}
+const writer = await sdk.createAgent({
+    agentId: 'memory-agent',
+    name: 'Memory Agent',
+    channelId: credentials.channelId,
+    keyId: credentials.keys.memoryAgent.keyId,
+    secretKey: credentials.keys.memoryAgent.secretKey,
+    llmProvider: 'openrouter',
+    defaultModel: '~anthropic/claude-sonnet-latest',
+    apiKey: process.env.OPENROUTER_API_KEY,
+    allowedTools: ['agent_memory_read', 'agent_memory_write']
+});
 
-class StatefulAgent {
-    private agent: MxfAgent;
+await writer.connect();
 
-    constructor(agent: MxfAgent) {
-        this.agent = agent;
-    }
+await writer.executeTool('agent_memory_write', {
+    key: 'preferences',
+    value: { theme: 'dark', language: 'en' },
+    memorySection: 'notes',
+    overwrite: true
+});
 
-    async getState(): Promise<AgentState> {
-        const state = await this.agent.channelService.getMemory(
-            MemoryScope.AGENT,
-            'current_state'
-        );
-        return (state as AgentState) || AgentState.IDLE;
-    }
-
-    async setState(state: AgentState): Promise<void> {
-        const previousState = await this.getState();
-        await this.agent.channelService.updateMemory(
-            MemoryScope.AGENT,
-            'current_state',
-            state
-        );
-        console.log(`State transition: ${previousState} → ${state}`);
-    }
-
-    async transition(newState: AgentState): Promise<void> {
-        const currentState = await this.getState();
-        
-        // Validate transitions
-        const validTransitions: Record<AgentState, AgentState[]> = {
-            [AgentState.IDLE]: [AgentState.PROCESSING],
-            [AgentState.PROCESSING]: [AgentState.WAITING, AgentState.IDLE, AgentState.ERROR],
-            [AgentState.WAITING]: [AgentState.PROCESSING, AgentState.IDLE],
-            [AgentState.ERROR]: [AgentState.IDLE]
-        };
-
-        if (validTransitions[currentState].includes(newState)) {
-            await this.setState(newState);
-        } else {
-            throw new Error(`Invalid transition: ${currentState} → ${newState}`);
-        }
-    }
-}
-
-// Usage
-const statefulAgent = new StatefulAgent(agent);
-await statefulAgent.transition(AgentState.PROCESSING);
-await statefulAgent.transition(AgentState.IDLE);
+const result = await writer.executeTool('agent_memory_read', {
+    key: 'preferences',
+    memorySection: 'notes',
+    includeMetadata: true
+});
 ```
 
-## See Also
+An explicit `allowedTools: []` grants no tools. Omitting `allowedTools` selects the
+curated core set, which includes `agent_memory_read` but not
+`agent_memory_write`. The channel key remains the maximum grant: requesting a name
+outside that credential grant is rejected.
+
+## Channel key/value memory tools
+
+LLM-directed workflows can use the channel memory tools instead of the document API:
+
+```typescript
+await agent.executeTool('channel_memory_write', {
+    key: 'release',
+    value: { status: 'approved', commit: 'abc123' },
+    memorySection: 'sharedState'
+});
+
+const release = await agent.executeTool('channel_memory_read', {
+    key: 'release',
+    memorySection: 'sharedState',
+    includeMetadata: true
+});
+```
+
+MXF reserves internal keyed-memory fields used for atomic coordination. Attempts to
+write those reserved fields through the generic tool fail instead of corrupting the
+document.
+
+## Failure handling
+
+Memory operations reject with the authoritative persistence or authorization error.
+Handle the error at the call site; do not treat `null` or `false` as a failed write.
+
+```typescript
+try {
+    await agent.mxfService.updateSharedState('deployment', 'approved');
+} catch (error) {
+    console.error('Channel memory was not updated:', error);
+}
+```
+
+## Scope and isolation
+
+- Agent memory is exact-self for agent credentials.
+- Channel memory requires membership in that exact channel.
+- Relationship memory requires the authenticated agent to be one of the two
+  participants and, when channel-scoped, a member of that channel.
+- HTTP and socket memory surfaces use the same canonical `MemoryService`; neither
+  reads or mutates legacy embedded `Agent.memory` / `Channel.sharedMemory` fields.
+
+## See also
 
 - [Basic Examples](examples-basic.md)
 - [Event Handling Examples](examples-events.md)
 - [Task Management Examples](examples-tasks.md)
-- [Complete Working Examples](examples-complete.md)

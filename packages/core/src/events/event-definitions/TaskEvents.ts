@@ -98,7 +98,7 @@ export type TaskProgressEvent = TaskEventPayload & {
 export type TaskCompletedEvent = TaskEventPayload & {
     data: {
         task: ChannelTask;
-        result: any;
+        result: unknown;
         duration: number; // in minutes
     };
 };
@@ -172,7 +172,7 @@ export interface TaskPayloads {
     'task:fail_request': TaskEventPayload & { data: { task: ChannelTask; error: string } };
     'task:cancel_request': TaskEventPayload & { data: { task: ChannelTask; reason?: string } };
     'task:assign_request': TaskEventPayload & { data: { task: ChannelTask; agentId: AgentId } };
-    'task:update_request': TaskEventPayload & { data: { task: ChannelTask; updates: Record<string, any> } };
+    'task:update_request': TaskEventPayload;
     'task:workload_analyze_request': TaskEventPayload & { data: { channelId: ChannelId } };
     
     // Core task lifecycle events

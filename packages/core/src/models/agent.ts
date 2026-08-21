@@ -40,7 +40,6 @@ export interface IAgent extends Document {
     keyId?: string;            // API key used as lookup for this agent
     role?: string;             // Agent's role (e.g., "assistant", "specialist")
     specialization?: string;   // Agent's area of specialization
-    allowedTools?: string[];   // Tool access control - list of allowed MCP tools
     
     // Agent context (read-only)
     context?: {
@@ -122,11 +121,6 @@ const AgentSchema: Schema = new Schema(
         },
         specialization: {
             type: String
-        },
-        allowedTools: {
-            type: [String],
-            required: false,
-            default: undefined  // undefined = all tools allowed
         },
         
         // Agent context

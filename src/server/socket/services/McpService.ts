@@ -41,9 +41,16 @@ import {
     MxfToolListErrorEventData,
     BaseEventPayload 
 } from '@mxf-dev/core/schemas/EventPayloadSchema';
-import { CORE_MXF_TOOLS, getCoreToolsArray } from '@mxf-dev/core/constants/CoreTools';
+import { getCoreToolsArray } from '@mxf-dev/core/constants/CoreTools';
 import { Channel } from '@mxf-dev/core/models/channel';
 import { getHybridMcpToolRegistry } from '../../mcp/services/HybridMcpRegistryAccess';
+import {
+    getToolAuthorizationNames,
+    isAllowedByAgentPolicy,
+    isAllowedByChannelPolicy,
+    isPrivilegedHostToolEnabled,
+    isPrivilegedNetworkToolEnabled
+} from './ToolAuthorizationPolicy';
 
 /**
  * Simplified tool definition for socket communication
@@ -156,29 +163,23 @@ export class McpService {
      */
     private setupEventHandlers(): void {
         // Handle MXF_TOOL_LIST requests
-        EventBus.server.on(Events.Mcp.MXF_TOOL_LIST, async (payload: BaseEventPayload<MxfToolListEventData>) => {
+        EventBus.server.on(Events.Mcp.MXF_TOOL_LIST, async (payload: BaseEventPayload<MxfToolListEventData> & {
+            authorization?: { keyId: string; allowedTools?: string[] };
+        }) => {
             try {                
                 // Validate payload
                 this.validator.assertIsNonEmptyString(payload.agentId, 'agentId is required');
                 this.validator.assertIsNonEmptyString(payload.channelId, 'channelId is required');
 
-                // 🚨 CRITICAL: Look up agent configuration to get allowedTools from in-memory AgentService
-                let allowedTools: string[] | undefined;
-                try {
-                    // Get agent data from the in-memory AgentService (where agents register)
-                    const agentService = AgentService.getInstance();
-                    const agentData = agentService.getAgent(payload.agentId);
-                    allowedTools = agentData?.allowedTools;
-
-
-
-                    // Log the filtering strategy clearly
-                    if (!allowedTools || allowedTools.length === 0) {
-                    } else {
-                    }
-                } catch (error) {
-                    this.logger.warn(`Failed to lookup agent config for ${payload.agentId}: ${error}`);
+                const authorization = payload.authorization;
+                if (!authorization ||
+                    typeof authorization.keyId !== 'string' ||
+                    authorization.keyId.trim().length === 0 ||
+                    (authorization.allowedTools !== undefined &&
+                        !Array.isArray(authorization.allowedTools))) {
+                    throw new Error('Credential-scoped tool policy is required for discovery');
                 }
+                const allowedTools = authorization.allowedTools;
 
                 // Get tools with optional filter including channelId, allowedTools, and agentId
                 const filter = {
@@ -217,7 +218,7 @@ export class McpService {
 
                 const errorPayload = createMxfToolListErrorPayload(
                     Events.Mcp.MXF_TOOL_LIST_ERROR,
-                    'SYSTEM_AGENT',
+                    payload.agentId,
                     payload.channelId,
                     errorData
                 );
@@ -254,7 +255,7 @@ export class McpService {
             // tools reachable at all: agent allowlists and LLM function names
             // speak raw names, never the namespaced registry names.
             const hybridTools = filter?.channelId
-                ? hybridRegistry.getAgentFacingToolsForChannel(filter.channelId)
+                ? hybridRegistry.getAgentFacingToolsForChannel(filter.channelId, filter.agentId)
                 : hybridRegistry.getAllToolsSnapshot();
 
             // Convert hybrid tools to socket format, preserving scope metadata
@@ -328,12 +329,6 @@ export class McpService {
             }
         }
 
-        // A tool matches an allowlist entry by its agent-facing name or, for
-        // external tools, by the namespaced registry name — both are accepted
-        // so configs written against either naming keep working.
-        const matchesName = (tool: SocketMcpTool, name: string): boolean =>
-            tool.name === name || tool.metadata?.canonicalName === name;
-
         // 🚨 SECURITY: Apply channel-level tool restrictions FIRST
         // If channel has non-empty allowedTools, restrict to those tools only
         if (filter?.channelId) {
@@ -341,7 +336,9 @@ export class McpService {
             if (channelAllowedTools && channelAllowedTools.length > 0) {
                 // Channel has tool restrictions - filter to only allowed tools
                 const beforeChannelFilter = allTools.length;
-                allTools = allTools.filter(tool => channelAllowedTools.some(name => matchesName(tool, name)));
+                allTools = allTools.filter(tool =>
+                    isAllowedByChannelPolicy(getToolAuthorizationNames(tool), channelAllowedTools)
+                );
                 if (beforeChannelFilter !== allTools.length) {
                     this.logger.debug(`Channel ${filter.channelId} tool filter: ${beforeChannelFilter} -> ${allTools.length} tools`);
                 }
@@ -354,14 +351,13 @@ export class McpService {
             // allowedTools explicitly specified (could be empty array)
             if (filter.allowedTools.length > 0) {
                 // Specific tools requested - filter to only those that are available
-                const originalCount = allTools.length;
-
-
-                allTools = allTools.filter(tool => filter.allowedTools!.some(name => matchesName(tool, name)));
+                allTools = allTools.filter(tool =>
+                    isAllowedByAgentPolicy(getToolAuthorizationNames(tool), filter.allowedTools)
+                );
 
 
                 const missing = filter.allowedTools.filter(name =>
-                    !allTools.find(t => matchesName(t, name))
+                    !allTools.find(tool => getToolAuthorizationNames(tool).has(name))
                 );
                 if (missing.length > 0) {
                     // Separate tools that were intentionally filtered vs truly missing
@@ -381,7 +377,6 @@ export class McpService {
         } else {
             // No allowedTools specified (undefined) - use core MXF tools as default
             // NEVER give agents all 189 tools
-            const originalCount = allTools.length;
             const coreTools = getCoreToolsArray();
 
             const availableTools = allTools.map(t => t.name);
@@ -390,8 +385,15 @@ export class McpService {
                 this.logger.warn(`⚠️ Missing core tools from registry: ${missingCoreTools.join(', ')}`);
             }
 
-            allTools = allTools.filter(tool => coreTools.includes(tool.name));
+            allTools = allTools.filter(tool =>
+                isAllowedByAgentPolicy(getToolAuthorizationNames(tool), undefined)
+            );
         }
+
+        allTools = allTools.filter(tool =>
+            isPrivilegedHostToolEnabled(getToolAuthorizationNames(tool)) &&
+            isPrivilegedNetworkToolEnabled(getToolAuthorizationNames(tool))
+        );
 
         // Filter out mxpOptions from tools if MXP is not enabled for the agent
         // Check agent's mxpEnabled flag and only remove mxpOptions if MXP is disabled
@@ -485,8 +487,7 @@ export class McpService {
      * Also persists to database for write-back sync
      */
     public async setChannelAllowedTools(channelId: string, allowedTools: string[]): Promise<void> {
-        // Update in-memory cache
-        this.channelAllowedTools.set(channelId, allowedTools);
+        this.hydrateChannelAllowedTools(channelId, allowedTools);
         
         // Persist to database (write-back sync)
         try {
@@ -500,6 +501,26 @@ export class McpService {
         } catch (error) {
             this.logger.error(`Error persisting allowedTools for channel ${channelId}: ${error}`);
         }
+    }
+
+    /**
+     * Hydrate channel policy that was already read from persistence.
+     *
+     * This path is deliberately synchronous and cache-only so an authenticated
+     * socket cannot finish joining a cold-loaded channel before its persisted
+     * tool restriction is visible to the executor. An empty array retains the
+     * channel contract of imposing no additional restriction.
+     */
+    public hydrateChannelAllowedTools(channelId: string, allowedTools: string[]): void {
+        this.validator.assertIsNonEmptyString(channelId, 'Channel ID is required');
+        if (!Array.isArray(allowedTools) ||
+            allowedTools.some(toolName => (
+                typeof toolName !== 'string' || toolName.trim().length === 0
+            ))) {
+            throw new Error('Channel allowedTools must be an array of non-empty strings');
+        }
+
+        this.channelAllowedTools.set(channelId, [...allowedTools]);
     }
 
     /**

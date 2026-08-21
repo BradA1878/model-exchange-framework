@@ -39,6 +39,7 @@ import PersonalAccessToken, {
     IPersonalAccessToken,
     generatePersonalAccessToken
 } from '@mxf-dev/core/models/personalAccessToken';
+import { userSessionLifecycle } from '../../socket/services/UserSessionLifecycle';
 
 // Create module logger
 const logger = new Logger('debug', 'PersonalAccessTokenService', 'server');
@@ -74,6 +75,8 @@ export interface ValidateTokenResult {
     userId?: string;
     scopes?: string[];
     tokenId?: string;
+    /** Verified absolute expiry used to terminate an already-authenticated socket. */
+    expiresAt?: Date;
     error?: string;
 }
 
@@ -186,13 +189,54 @@ export class PersonalAccessTokenService {
             return { valid: false, error: 'Token ID and secret are required' };
         }
 
-        // Find token by ID
         const token = await PersonalAccessToken.findOne({ tokenId });
-
         if (!token) {
             logger.warn(`PAT validation failed: token ${tokenId} not found`);
             return { valid: false, error: 'Token not found' };
         }
+
+        return this.validateResolvedToken(tokenId, secret, token);
+    }
+
+    /**
+     * Validate a PAT through the authenticated token-management API.
+     *
+     * Unlike `validateToken`, which is the credential-authentication primitive,
+     * this operation is scoped to the requesting user. The ownership predicate
+     * is part of the database query so a foreign token never reaches bcrypt and
+     * never has its usage counters changed. Administrators may validate any PAT
+     * for operational debugging.
+     */
+    public async validateTokenForRequester(
+        tokenId: string,
+        secret: string,
+        requester: { userId: string; isAdmin: boolean }
+    ): Promise<ValidateTokenResult> {
+        if (!tokenId || !secret || !requester.userId) {
+            return { valid: false, error: 'Token ID, secret, and requesting user are required' };
+        }
+
+        const token = await PersonalAccessToken.findOne(
+            requester.isAdmin
+                ? { tokenId }
+                : { tokenId, userId: requester.userId }
+        );
+
+        if (!token) {
+            logger.warn(
+                `PAT management validation denied for token ${tokenId} and user ${requester.userId}`
+            );
+            return { valid: false, error: 'Token not found or access denied' };
+        }
+
+        return this.validateResolvedToken(tokenId, secret, token);
+    }
+
+    private async validateResolvedToken(
+        tokenId: string,
+        secret: string,
+        token: IPersonalAccessToken
+    ): Promise<ValidateTokenResult> {
 
         // Check if active
         if (!token.isActive) {
@@ -268,6 +312,7 @@ export class PersonalAccessTokenService {
             userId: token.userId.toString(),
             scopes: token.scopes,
             tokenId: token.tokenId,
+            ...(token.expiresAt ? { expiresAt: new Date(token.expiresAt) } : {})
         };
     }
 
@@ -284,30 +329,37 @@ export class PersonalAccessTokenService {
             throw new Error('Token ID and user ID are required');
         }
 
-        const token = await PersonalAccessToken.findOne({ tokenId });
+        return userSessionLifecycle.runUserAuthorizationMutation(userId, async () => {
+            const token = await PersonalAccessToken.findOne({ tokenId });
 
-        if (!token) {
-            logger.warn(`Cannot revoke PAT ${tokenId}: not found`);
-            return false;
-        }
+            if (!token) {
+                logger.warn(`Cannot revoke PAT ${tokenId}: not found`);
+                return false;
+            }
 
-        // Verify ownership
-        if (token.userId.toString() !== userId) {
-            logger.warn(`Cannot revoke PAT ${tokenId}: user ${userId} is not the owner`);
-            return false;
-        }
+            // Verify ownership
+            if (token.userId.toString() !== userId) {
+                logger.warn(`Cannot revoke PAT ${tokenId}: user ${userId} is not the owner`);
+                return false;
+            }
 
-        // Revoke the token
-        token.isActive = false;
-        token.revokedAt = new Date();
-        token.revokedReason = reason?.trim();
-        token.updatedAt = new Date();
+            // Revoke the token
+            token.isActive = false;
+            token.revokedAt = new Date();
+            token.revokedReason = reason?.trim();
+            token.updatedAt = new Date();
 
-        await token.save();
+            await token.save();
 
-        logger.info(`PAT ${tokenId} revoked by user ${userId}`);
+            // Revocation is not complete while a socket authenticated with this
+            // exact bearer credential can continue using its existing handlers.
+            // The bridge throws when realtime lifecycle is unavailable or eviction
+            // cannot be confirmed; callers must not report success in that case.
+            await userSessionLifecycle.disconnectTokenSessions(tokenId);
 
-        return true;
+            logger.info(`PAT ${tokenId} revoked by user ${userId}`);
+            return true;
+        });
     }
 
     /**

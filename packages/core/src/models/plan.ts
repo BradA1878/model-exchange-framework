@@ -41,9 +41,9 @@ export interface IPlan extends Document {
     planId: string;
     title: string;
     createdBy: string;
-    channelId?: string;
+    channelId: string;
     items: IPlanItem[];
-    metadata?: Record<string, any>;
+    metadata?: Record<string, unknown>;
     createdAt: Date;
     updatedAt: Date;
 }
@@ -110,7 +110,7 @@ const PlanSchema: Schema = new Schema(
         },
         channelId: {
             type: String,
-            required: false,
+            required: true,
             index: true
         },
         items: {

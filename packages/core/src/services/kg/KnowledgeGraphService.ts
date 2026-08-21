@@ -176,12 +176,12 @@ export class KnowledgeGraphService {
     /**
      * Get entity by ID
      */
-    public async getEntity(entityId: string): Promise<Entity | null> {
+    public async getEntity(entityId: string, channelId?: ChannelId): Promise<Entity | null> {
         if (!this.enabled) {
             return null;
         }
 
-        return this.repository.getEntity(entityId);
+        return this.repository.getEntity(entityId, channelId);
     }
 
     /**
@@ -219,6 +219,7 @@ export class KnowledgeGraphService {
      */
     public async updateEntity(
         entityId: string,
+        channelId: ChannelId,
         updates: Partial<Entity>,
         updatedBy?: AgentId
     ): Promise<Entity | null> {
@@ -226,12 +227,12 @@ export class KnowledgeGraphService {
             return null;
         }
 
-        const original = await this.repository.getEntity(entityId);
+        const original = await this.repository.getEntity(entityId, channelId);
         if (!original) {
             return null;
         }
 
-        const updated = await this.repository.updateEntity(entityId, updates);
+        const updated = await this.repository.updateEntity(entityId, channelId, updates);
 
         if (updated) {
             // Build changes object
@@ -261,6 +262,7 @@ export class KnowledgeGraphService {
      */
     public async deleteEntity(
         entityId: string,
+        channelId: ChannelId,
         deletedBy?: AgentId,
         reason?: string
     ): Promise<boolean> {
@@ -268,12 +270,12 @@ export class KnowledgeGraphService {
             return false;
         }
 
-        const entity = await this.repository.getEntity(entityId);
+        const entity = await this.repository.getEntity(entityId, channelId);
         if (!entity) {
             return false;
         }
 
-        const deleted = await this.repository.deleteEntity(entityId);
+        const deleted = await this.repository.deleteEntity(entityId, channelId);
 
         if (deleted) {
             this.emitEvent(KnowledgeGraphEvents.ENTITY_DELETED, entity.channelId, deletedBy || 'system', {
@@ -293,13 +295,18 @@ export class KnowledgeGraphService {
     public async mergeEntities(
         targetEntityId: string,
         sourceEntityIds: string[],
-        mergedBy?: AgentId
+        mergedBy?: AgentId,
+        channelId?: ChannelId
     ): Promise<EntityMergeResult> {
         if (!this.enabled) {
             return { success: false, sourceEntityIds, error: 'Knowledge Graph not enabled' };
         }
 
-        const result = await this.repository.mergeEntities(targetEntityId, sourceEntityIds);
+        const result = await this.repository.mergeEntities(
+            targetEntityId,
+            sourceEntityIds,
+            channelId
+        );
 
         if (result.success && result.mergedEntity) {
             this.emitEvent(
@@ -399,6 +406,7 @@ export class KnowledgeGraphService {
      */
     public async updateRelationship(
         relationshipId: string,
+        channelId: ChannelId,
         updates: Partial<Relationship>,
         updatedBy?: AgentId
     ): Promise<Relationship | null> {
@@ -407,11 +415,11 @@ export class KnowledgeGraphService {
         }
 
         const original = await this.repository.getRelationship(relationshipId);
-        if (!original) {
+        if (!original || original.channelId !== channelId) {
             return null;
         }
 
-        const updated = await this.repository.updateRelationship(relationshipId, updates);
+        const updated = await this.repository.updateRelationship(relationshipId, channelId, updates);
 
         if (updated) {
             const changes: Record<string, { old: any; new: any }> = {};
@@ -445,6 +453,7 @@ export class KnowledgeGraphService {
      */
     public async deleteRelationship(
         relationshipId: string,
+        channelId: ChannelId,
         deletedBy?: AgentId,
         reason?: string
     ): Promise<boolean> {
@@ -453,11 +462,11 @@ export class KnowledgeGraphService {
         }
 
         const relationship = await this.repository.getRelationship(relationshipId);
-        if (!relationship) {
+        if (!relationship || relationship.channelId !== channelId) {
             return false;
         }
 
-        const deleted = await this.repository.deleteRelationship(relationshipId);
+        const deleted = await this.repository.deleteRelationship(relationshipId, channelId);
 
         if (deleted) {
             this.emitEvent(
@@ -518,13 +527,14 @@ export class KnowledgeGraphService {
             entityType?: EntityType | EntityType[];
             maxDepth?: number;
             limit?: number;
-        }
+        },
+        channelId?: ChannelId
     ): Promise<{ entities: Entity[]; relationships: Relationship[] }> {
         if (!this.enabled) {
             return { entities: [], relationships: [] };
         }
 
-        return this.repository.getNeighbors(entityId, options);
+        return this.repository.getNeighbors(entityId, options, channelId);
     }
 
     /**
@@ -533,13 +543,14 @@ export class KnowledgeGraphService {
     public async findPath(
         fromEntityId: string,
         toEntityId: string,
-        maxHops?: number
+        maxHops?: number,
+        channelId?: ChannelId
     ): Promise<GraphPath | null> {
         if (!this.enabled) {
             return null;
         }
 
-        return this.repository.findPath(fromEntityId, toEntityId, maxHops);
+        return this.repository.findPath(fromEntityId, toEntityId, maxHops, channelId);
     }
 
     /**
@@ -547,13 +558,14 @@ export class KnowledgeGraphService {
      */
     public async getEntityContext(
         entityId: string,
-        depth?: number
+        depth?: number,
+        channelId?: ChannelId
     ): Promise<{ entities: Entity[]; relationships: Relationship[] }> {
         if (!this.enabled) {
             return { entities: [], relationships: [] };
         }
 
-        return this.repository.getSubgraph(entityId, depth);
+        return this.repository.getSubgraph(entityId, depth, undefined, channelId);
     }
 
     /**
@@ -599,6 +611,7 @@ export class KnowledgeGraphService {
      * Uses batch queries to avoid N+1 database calls.
      */
     public async findConnections(
+        channelId: ChannelId,
         entityIds: string[],
         maxHops?: number
     ): Promise<{ entities: Entity[]; relationships: Relationship[]; paths: GraphPath[] }> {
@@ -616,7 +629,8 @@ export class KnowledgeGraphService {
                     entityIds[i],
                     entityIds[j],
                     maxHops ?? 3,
-                    5
+                    5,
+                    channelId
                 );
                 allPaths.push(...paths);
 
@@ -630,10 +644,10 @@ export class KnowledgeGraphService {
         }
 
         // Batch fetch all entities in one query instead of N individual calls
-        const entities = await this.repository.getEntitiesByIds(Array.from(entitySet));
+        const entities = await this.repository.getEntitiesByIds(channelId, Array.from(entitySet));
 
         // Batch fetch all relationships involving these entities in one query
-        const allRels = await this.repository.getRelationshipsByEntityIds(Array.from(entitySet));
+        const allRels = await this.repository.getRelationshipsByEntityIds(channelId, Array.from(entitySet));
 
         // Filter to only relationships where both endpoints are in our entity set
         const seenRelIds = new Set<string>();
@@ -665,6 +679,7 @@ export class KnowledgeGraphService {
      */
     public async updateEntityQValue(
         entityId: string,
+        channelId: ChannelId,
         reward: number,
         reason: string
     ): Promise<Entity | null> {
@@ -672,7 +687,7 @@ export class KnowledgeGraphService {
             return null;
         }
 
-        const entity = await this.repository.getEntity(entityId);
+        const entity = await this.repository.getEntity(entityId, channelId);
         if (!entity) {
             return null;
         }
@@ -682,7 +697,7 @@ export class KnowledgeGraphService {
         const oldQValue = entity.utility.qValue;
         const newQValue = oldQValue + alpha * (reward - oldQValue);
 
-        const updated = await this.repository.updateEntityQValue(entityId, newQValue, reason);
+        const updated = await this.repository.updateEntityQValue(entityId, channelId, newQValue, reason);
 
         if (updated) {
             this.emitEvent(
@@ -706,6 +721,7 @@ export class KnowledgeGraphService {
      * Propagate reward to entities involved in a task
      */
     public async propagateReward(
+        channelId: ChannelId,
         entityIds: string[],
         reward: number,
         taskId?: string
@@ -716,13 +732,10 @@ export class KnowledgeGraphService {
 
         const updates: Array<{ entityId: string; qValue: number; reason: string }> = [];
         const alpha = getQValueLearningRate();
-        let channelId: ChannelId | null = null;
 
         for (const entityId of entityIds) {
-            const entity = await this.repository.getEntity(entityId);
+            const entity = await this.repository.getEntity(entityId, channelId);
             if (entity) {
-                if (!channelId) channelId = entity.channelId;
-
                 const newQValue = entity.utility.qValue + alpha * (reward - entity.utility.qValue);
                 updates.push({
                     entityId,
@@ -733,32 +746,27 @@ export class KnowledgeGraphService {
         }
 
         if (updates.length > 0) {
-            await this.repository.batchUpdateQValues(updates);
+            await this.repository.batchUpdateQValues(channelId, updates);
 
             // Record outcome
-            await this.repository.recordOutcome(entityIds, reward > 0.5);
+            await this.repository.recordOutcome(channelId, entityIds, reward > 0.5);
 
             // Emit batch update event
-            if (channelId) {
-                this.emitEvent(
-                    KnowledgeGraphEvents.ENTITY_QVALUE_BATCH_UPDATED,
+            this.emitEvent(
+                KnowledgeGraphEvents.ENTITY_QVALUE_BATCH_UPDATED,
+                channelId,
+                'system',
+                {
                     channelId,
-                    'system',
-                    {
-                        channelId,
-                        updates: updates.map((u) => {
-                            const entity = entityIds.find((id) => id === u.entityId);
-                            return {
-                                entityId: u.entityId,
-                                oldQValue: 0, // We don't track old values in batch
-                                newQValue: u.qValue,
-                            };
-                        }),
-                        reason: taskId ? `Task ${taskId} outcome` : 'Reward propagation',
-                        taskId,
-                    }
-                );
-            }
+                    updates: updates.map((u) => ({
+                        entityId: u.entityId,
+                        oldQValue: 0, // We don't track old values in batch
+                        newQValue: u.qValue,
+                    })),
+                    reason: taskId ? `Task ${taskId} outcome` : 'Reward propagation',
+                    taskId,
+                }
+            );
         }
     }
 

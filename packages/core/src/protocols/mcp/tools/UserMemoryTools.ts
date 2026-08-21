@@ -45,12 +45,17 @@ const logger = new Logger('info', 'UserMemoryTools', 'server');
 /** Valid memory types — used for input validation across all tools */
 const VALID_TYPES: UserMemoryType[] = ['user', 'feedback', 'project', 'reference'];
 
-/**
- * Resolves the userId from context. Prefers channelId (session-scoped) over
- * agentId, falling back to 'anonymous' if neither is set.
- */
-function getUserId(context: McpToolHandlerContext): string {
-    return context.channelId || context.agentId || 'anonymous';
+/** Derive a collision-safe persistent scope from authenticated identity only. */
+export function getUserMemoryScopeKey(context: McpToolHandlerContext): string {
+    if (typeof context.agentId !== 'string' || context.agentId.trim().length === 0 ||
+        typeof context.channelId !== 'string' || context.channelId.trim().length === 0) {
+        throw new Error('User memory requires exact authenticated agent and channel identity');
+    }
+    if (context.agentId !== context.agentId.trim() ||
+        context.channelId !== context.channelId.trim()) {
+        throw new Error('User memory identity must not contain surrounding whitespace');
+    }
+    return JSON.stringify([context.agentId, context.channelId]);
 }
 
 // ─── Tool: user_memory_save ───────────────────────────────────────────────────
@@ -99,27 +104,22 @@ export const userMemorySaveTool: McpToolDefinition = {
 
         // Validate type is a recognised value
         if (!VALID_TYPES.includes(type)) {
-            return {
-                content: {
-                    type: 'text',
-                    data: `Invalid type "${type}". Must be one of: ${VALID_TYPES.join(', ')}.`
-                }
-            };
+            throw new Error(`Invalid type "${type}". Must be one of: ${VALID_TYPES.join(', ')}.`);
         }
 
         // Validate required string fields are non-empty
         if (!title?.trim()) {
-            return { content: { type: 'text', data: 'title must not be empty.' } };
+            throw new Error('title must not be empty.');
         }
         if (!description?.trim()) {
-            return { content: { type: 'text', data: 'description must not be empty.' } };
+            throw new Error('description must not be empty.');
         }
         if (!content?.trim()) {
-            return { content: { type: 'text', data: 'content must not be empty.' } };
+            throw new Error('content must not be empty.');
         }
 
         try {
-            const userId = getUserId(context);
+            const userId = getUserMemoryScopeKey(context);
             const service = UserMemoryService.getInstance();
             await service.save(userId, { type, title, description, content });
             logger.info(`Saved user memory "${title}" (${type}) for userId=${userId}`);
@@ -132,12 +132,7 @@ export const userMemorySaveTool: McpToolDefinition = {
         } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
             logger.error('user_memory_save failed', err);
-            return {
-                content: {
-                    type: 'text',
-                    data: `Failed to save memory: ${message}`
-                }
-            };
+            throw new Error(`Failed to save memory: ${message}`);
         }
     }
 };
@@ -184,24 +179,19 @@ export const userMemoryRecallTool: McpToolDefinition = {
 
         // Validate query is non-empty
         if (!query?.trim()) {
-            return { content: { type: 'text', data: 'query must not be empty.' } };
+            throw new Error('query must not be empty.');
         }
 
         // Validate optional type
         if (type !== undefined && !VALID_TYPES.includes(type)) {
-            return {
-                content: {
-                    type: 'text',
-                    data: `Invalid type "${type}". Must be one of: ${VALID_TYPES.join(', ')}.`
-                }
-            };
+            throw new Error(`Invalid type "${type}". Must be one of: ${VALID_TYPES.join(', ')}.`);
         }
 
         // Clamp limit to 1–50
         const resolvedLimit = limit !== undefined ? Math.min(50, Math.max(1, limit)) : 5;
 
         try {
-            const userId = getUserId(context);
+            const userId = getUserMemoryScopeKey(context);
             const service = UserMemoryService.getInstance();
             const results = await service.recall(userId, query, { type, limit: resolvedLimit });
 
@@ -227,12 +217,7 @@ export const userMemoryRecallTool: McpToolDefinition = {
         } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
             logger.error('user_memory_recall failed', err);
-            return {
-                content: {
-                    type: 'text',
-                    data: `Failed to recall memories: ${message}`
-                }
-            };
+            throw new Error(`Failed to recall memories: ${message}`);
         }
     }
 };
@@ -269,16 +254,11 @@ export const userMemoryForgetTool: McpToolDefinition = {
 
         // Require at least one deletion target
         if (!memoryId?.trim() && !searchTerm?.trim()) {
-            return {
-                content: {
-                    type: 'text',
-                    data: 'At least one of memoryId or searchTerm must be provided.'
-                }
-            };
+            throw new Error('At least one of memoryId or searchTerm must be provided.');
         }
 
         try {
-            const userId = getUserId(context);
+            const userId = getUserMemoryScopeKey(context);
             const service = UserMemoryService.getInstance();
             const { deleted } = await service.forget(userId, {
                 memoryId: memoryId?.trim() || undefined,
@@ -300,12 +280,7 @@ export const userMemoryForgetTool: McpToolDefinition = {
         } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
             logger.error('user_memory_forget failed', err);
-            return {
-                content: {
-                    type: 'text',
-                    data: `Failed to delete memory: ${message}`
-                }
-            };
+            throw new Error(`Failed to delete memory: ${message}`);
         }
     }
 };
@@ -338,16 +313,11 @@ export const userMemoryShakeTool: McpToolDefinition = {
 
         // Validate thresholdDays if provided
         if (thresholdDays !== undefined && (typeof thresholdDays !== 'number' || thresholdDays < 1)) {
-            return {
-                content: {
-                    type: 'text',
-                    data: 'thresholdDays must be a number >= 1.'
-                }
-            };
+            throw new Error('thresholdDays must be a number >= 1.');
         }
 
         try {
-            const userId = getUserId(context);
+            const userId = getUserMemoryScopeKey(context);
             const service = UserMemoryService.getInstance();
             const stale = await service.shake(userId, thresholdDays);
 
@@ -376,12 +346,7 @@ export const userMemoryShakeTool: McpToolDefinition = {
         } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
             logger.error('user_memory_shake failed', err);
-            return {
-                content: {
-                    type: 'text',
-                    data: `Failed to shake memories: ${message}`
-                }
-            };
+            throw new Error(`Failed to shake memories: ${message}`);
         }
     }
 };

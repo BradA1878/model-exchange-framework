@@ -101,9 +101,24 @@ describe('InferenceParameterTools', () => {
         });
 
         it('should include reasoning token cost when applicable', () => {
-            const costWithoutReasoning = estimateCost('anthropic/claude-sonnet-4-5', 1000, 500, 0);
-            const costWithReasoning = estimateCost('anthropic/claude-sonnet-4-5', 1000, 500, 2000);
+            const costWithoutReasoning = estimateCost('~anthropic/claude-sonnet-latest', 1000, 500, 0);
+            const costWithReasoning = estimateCost('~anthropic/claude-sonnet-latest', 1000, 500, 2000);
             expect(costWithReasoning).toBeGreaterThan(costWithoutReasoning);
+        });
+
+        it('prices the OpenRouter latest aliases by family instead of the flat default', () => {
+            const fable = estimateCost('~anthropic/claude-fable-latest', 1000, 1000, 0);
+            const opus = estimateCost('~anthropic/claude-opus-latest', 1000, 1000, 0);
+            const sonnet = estimateCost('~anthropic/claude-sonnet-latest', 1000, 1000, 0);
+            const haiku = estimateCost('~anthropic/claude-haiku-latest', 1000, 1000, 0);
+            const flatDefault = estimateCost('unknown/model', 1000, 1000, 0);
+
+            expect(fable).toBeGreaterThan(opus);
+            expect(opus).toBeGreaterThan(flatDefault);
+            expect(haiku).toBeLessThan(flatDefault);
+            expect(sonnet).toBeGreaterThan(haiku);
+            expect(estimateCost('~anthropic/claude-sonnet-latest', 1000, 500, 2000))
+                .toBeGreaterThan(estimateCost('~anthropic/claude-sonnet-latest', 1000, 500, 0));
         });
 
         it('should return default cost for unknown model', () => {
@@ -150,7 +165,7 @@ describe('InferenceParameterTools', () => {
 
             const governance = {
                 ...DEFAULT_GOVERNANCE_CONFIG,
-                allowedModels: ['google/gemini-2.5-flash', 'anthropic/claude-sonnet-4-5']
+                allowedModels: ['google/gemini-2.5-flash', '~anthropic/claude-sonnet-latest']
             };
 
             const result = validateProfileAgainstGovernance(profile, governance);

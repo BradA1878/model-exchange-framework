@@ -90,7 +90,7 @@ const agent = await sdk.createAgent({
     keyId: credentials.keys.agent1.keyId,
     secretKey: credentials.keys.agent1.secretKey,
     llmProvider: 'openrouter',
-    defaultModel: 'anthropic/claude-3.5-sonnet',
+    defaultModel: '~anthropic/claude-sonnet-latest',
     apiKey: process.env.OPENROUTER_API_KEY
 });
 
@@ -124,7 +124,7 @@ const assistant = await sdk.createAgent({
     
     // LLM Configuration
     llmProvider: 'openrouter',
-    defaultModel: 'anthropic/claude-3.5-sonnet',
+    defaultModel: '~anthropic/claude-sonnet-latest',
     apiKey: process.env.OPENROUTER_API_KEY,
     temperature: 0.7,
     maxTokens: 100000,
@@ -142,11 +142,11 @@ await assistant.connect();
 // Listen for messages
 assistant.on(Events.Message.AGENT_MESSAGE, (payload) => {
     console.log(`Message from ${payload.data.senderId}:`);
-    console.log(payload.data.content);
+    console.log(payload.data.content.data);
 });
 
 // Send a message
-await assistant.channelService.sendMessage('Hello! I am ready to help.');
+await assistant.mxfService.sendMessage('Hello! I am ready to help.');
 ```
 
 ### Example 2: Restricted Agent (Principle of Least Privilege)
@@ -160,7 +160,7 @@ const restrictedAgent = await sdk.createAgent({
     keyId: credentials.keys.agent2.keyId,
     secretKey: credentials.keys.agent2.secretKey,
     llmProvider: 'openrouter',
-    defaultModel: 'anthropic/claude-3.5-sonnet',
+    defaultModel: '~anthropic/claude-sonnet-latest',
     apiKey: process.env.OPENROUTER_API_KEY,
     
     // Restrict to specific tools only
@@ -201,7 +201,7 @@ const agent = await sdk.createAgent({
     keyId: credentials.keys.agent1.keyId,
     secretKey: credentials.keys.agent1.secretKey,
     llmProvider: 'openrouter',
-    defaultModel: 'anthropic/claude-3.5-sonnet',
+    defaultModel: '~anthropic/claude-sonnet-latest',
     apiKey: process.env.OPENROUTER_API_KEY
 });
 
@@ -256,7 +256,7 @@ const coordinator = await sdk.createAgent({
     keyId: credentials.keys.agent1.keyId,
     secretKey: credentials.keys.agent1.secretKey,
     llmProvider: 'openrouter',
-    defaultModel: 'anthropic/claude-3.5-sonnet',
+    defaultModel: '~anthropic/claude-sonnet-latest',
     apiKey: process.env.OPENROUTER_API_KEY,
     agentConfigPrompt: 'You coordinate tasks between team members.'
 });
@@ -268,7 +268,7 @@ const analyst = await sdk.createAgent({
     keyId: credentials.keys.agent2.keyId,
     secretKey: credentials.keys.agent2.secretKey,
     llmProvider: 'openrouter',
-    defaultModel: 'anthropic/claude-3.5-sonnet',
+    defaultModel: '~anthropic/claude-sonnet-latest',
     apiKey: process.env.OPENROUTER_API_KEY,
     agentConfigPrompt: 'You analyze data and provide insights.',
     allowedTools: ['filesystem_read', 'memory_store', 'memory_retrieve']
@@ -281,7 +281,7 @@ const executor = await sdk.createAgent({
     keyId: credentials.keys.agent3.keyId,
     secretKey: credentials.keys.agent3.secretKey,
     llmProvider: 'openrouter',
-    defaultModel: 'anthropic/claude-3.5-sonnet',
+    defaultModel: '~anthropic/claude-sonnet-latest',
     apiKey: process.env.OPENROUTER_API_KEY,
     agentConfigPrompt: 'You execute tasks assigned to you.',
     allowedTools: ['task_complete', 'messaging_send']

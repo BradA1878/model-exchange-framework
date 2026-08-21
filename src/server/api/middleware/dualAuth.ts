@@ -28,11 +28,11 @@
 
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
-import { requireEnv } from '@mxf-dev/core/utils/env';
 import { User, UserRole } from '@mxf-dev/core/models/user';
 import { Logger } from '@mxf-dev/core/utils/Logger';
 import { createStrictValidator } from '@mxf-dev/core/utils/validation';
 import KeyAuthHelper from '../../utils/keyAuthHelper';
+import { verifySessionToken } from '../security/jwtTokenPolicy';
 
 // Initialize logger
 const logger = new Logger('info', 'DualAuthMiddleware', 'server');
@@ -104,9 +104,9 @@ const tryJwtAuthentication = async (req: Request): Promise<{ success: boolean; u
         // Extract token
         const token = authHeader.split(' ')[1];
         
-        // Verify token
-        const secret = requireEnv('JWT_SECRET', 'Set a strong secret in .env — it signs and verifies all user JWTs.');
-        const decoded = jwt.verify(token, secret) as any;
+        // Verify signature, algorithm, issuer, audience, and session purpose.
+        // A magic-link token is only valid at its exchange endpoint.
+        const decoded = verifySessionToken(token);
         
         // Check if token contains userId
         if (!decoded || !decoded.userId) {
@@ -137,12 +137,12 @@ const tryJwtAuthentication = async (req: Request): Promise<{ success: boolean; u
         };
         
     } catch (error) {
-        if (error instanceof jwt.JsonWebTokenError) {
-            return { success: false, error: 'Invalid JWT token' };
-        }
-        
         if (error instanceof jwt.TokenExpiredError) {
             return { success: false, error: 'JWT token expired' };
+        }
+
+        if (error instanceof jwt.JsonWebTokenError) {
+            return { success: false, error: 'Invalid JWT token' };
         }
         
         return { success: false, error: `JWT validation error: ${error instanceof Error ? error.message : String(error)}` };
@@ -157,40 +157,24 @@ const tryJwtAuthentication = async (req: Request): Promise<{ success: boolean; u
  */
 const tryKeyAuthentication = async (req: Request): Promise<{ success: boolean; agent?: any; error?: string }> => {
     try {
-        // Try to get key credentials from multiple sources
-        let keyId: string | undefined;
-        let secretKey: string | undefined;
-        
-        // Method 1: From headers (preferred for API calls)
-        if (req.headers['x-key-id'] && req.headers['x-secret-key']) {
-            keyId = req.headers['x-key-id'] as string;
-            secretKey = req.headers['x-secret-key'] as string;
+        // Credentials are accepted only in headers. Query-string secrets are
+        // routinely retained by reverse-proxy/access logs and browser history;
+        // body/URL fallbacks also make authentication depend on the endpoint's
+        // payload shape. The SDK and CLI already use these two headers.
+        const keyIdHeader = req.headers['x-key-id'];
+        const secretKeyHeader = req.headers['x-secret-key'];
+        if (
+            typeof keyIdHeader !== 'string' || keyIdHeader.trim().length === 0 ||
+            typeof secretKeyHeader !== 'string' || secretKeyHeader.length === 0
+        ) {
+            return {
+                success: false,
+                error: 'Key credentials require non-empty x-key-id and x-secret-key headers'
+            };
         }
-        // Method 2: From query parameters (fallback)
-        else if (req.query.keyId && req.query.secretKey) {
-            keyId = req.query.keyId as string;
-            secretKey = req.query.secretKey as string;
-        }
-        // Method 3: From request body (for POST/PATCH requests)
-        else if (req.body && req.body.keyId && req.body.secretKey) {
-            keyId = req.body.keyId;
-            secretKey = req.body.secretKey;
-        }
-        // Method 4: Extract from URL parameter if route uses :keyId (for backward compatibility)
-        else if (req.params.keyId) {
-            // For routes like /agents/context/:keyId, we need both keyId and secretKey
-            // The secretKey should be in headers or query for security
-            keyId = req.params.keyId;
-            if (req.headers['x-secret-key']) {
-                secretKey = req.headers['x-secret-key'] as string;
-            } else if (req.query.secretKey) {
-                secretKey = req.query.secretKey as string;
-            }
-        }
-        
-        if (!keyId || !secretKey) {
-            return { success: false, error: 'Missing keyId or secretKey' };
-        }
+
+        const keyId = keyIdHeader.trim();
+        const secretKey = secretKeyHeader;
         
         // Validate key credentials
         const validation = await KeyAuthHelper.getInstance().validateKey(keyId, secretKey);
@@ -205,7 +189,10 @@ const tryKeyAuthentication = async (req: Request): Promise<{ success: boolean; a
             agent: {
                 agentId: validation.agentId,
                 channelId: validation.channelId,
-                keyId: keyId
+                keyId: keyId,
+                allowedTools: validation.allowedTools === undefined
+                    ? undefined
+                    : [...validation.allowedTools]
             }
         };
         

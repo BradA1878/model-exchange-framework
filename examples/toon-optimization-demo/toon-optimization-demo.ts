@@ -6,21 +6,16 @@
  * in an optimized header + CSV-style row format.
  *
  * @prerequisites
- * - MXF server running (`npm run dev`)
+ * - MXF server running (`bun run dev`)
  * - Environment variables configured
  *
  * @example
  * ```bash
- * cd examples/toon-optimization-demo
- * cp .env.example .env
- * # Edit .env with your API keys
- * npx ts-node toon-optimization-demo.ts
+ * bun run demo:toon-optimization
  * ```
- *
- * Run with: npm run demo:toon-optimization
  */
 
-import { MxfSDK } from '@mxf-dev/sdk/MxfSDK';
+import { MxfSDK } from '@mxf-dev/sdk';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -252,7 +247,7 @@ Bob,25,LA`,
       allowedTools: ['code_execute'],
       llmProvider: 'openrouter' as any,
       apiKey: process.env.OPENROUTER_API_KEY || '',
-      defaultModel: 'anthropic/claude-3.5-haiku'
+      defaultModel: '~anthropic/claude-haiku-latest'
     });
 
     await agent.connect();

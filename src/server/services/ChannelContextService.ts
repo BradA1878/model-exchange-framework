@@ -54,11 +54,8 @@ import { Events, ChannelActionTypes } from '@mxf-dev/core/events/EventNames';
 import { 
     createChannelEventPayload, 
     ChannelEventData,
-    ChannelEventPayload,
-    createMemoryDeleteEventPayload, 
-    MemoryDeleteEventData 
+    ChannelEventPayload
 } from '@mxf-dev/core/schemas/EventPayloadSchema';
-import { MemoryScope } from '@mxf-dev/core/types/MemoryTypes';
 
 /**
  * Implementation of the Channel Context Service
@@ -189,8 +186,6 @@ export class ChannelContextService implements IChannelContextService {
         // Check cache first
         if (this.contextCache.has(channelId)) {
             const cachedContext = this.contextCache.get(channelId)!;
-            if (cachedContext) {
-            }
             return of(cachedContext);
         }
         
@@ -231,7 +226,7 @@ export class ChannelContextService implements IChannelContextService {
                     return throwError(() => new Error(`Channel context not found for ID: ${channelId} during updateContext`));
                 }
 
-                const timestamp = Date.now();
+                const timestamp = Math.max(Date.now(), existingContext.updatedAt + 1);
                 
                 // Merge updates with existing context
                 const updatedContext: ChannelContextType = {
@@ -252,7 +247,12 @@ export class ChannelContextService implements IChannelContextService {
                 };
                 
                 // Store in memory
-                return this.saveContextToMemory(channelId, updatedContext, historyEntry).pipe(
+                return this.saveContextToMemory(
+                    channelId,
+                    updatedContext,
+                    historyEntry,
+                    existingContext.updatedAt
+                ).pipe(
                     tap(savedContext => {
                         // Emit context change event
                         const eventData: ChannelEventData = {
@@ -298,7 +298,7 @@ export class ChannelContextService implements IChannelContextService {
                     return of(existingContext); // Return existing context if agent already present
                 }
                 
-                const timestamp = Date.now();
+                const timestamp = Math.max(Date.now(), existingContext.updatedAt + 1);
                 
                 // Add agent to participants list
                 const updatedParticipants = [...existingContext.participants, agentId];
@@ -319,7 +319,12 @@ export class ChannelContextService implements IChannelContextService {
                 };
                 
                 // Save updated context
-                return this.saveContextToMemory(channelId, updatedContext, historyEntry).pipe(
+                return this.saveContextToMemory(
+                    channelId,
+                    updatedContext,
+                    historyEntry,
+                    existingContext.updatedAt
+                ).pipe(
                     tap(savedContext => {
                         // Emit context update event
                         const contextUpdateEventData: ChannelEventData = {
@@ -378,7 +383,7 @@ export class ChannelContextService implements IChannelContextService {
                     return of(existingContext); // Return existing context if agent not present
                 }
                 
-                const timestamp = Date.now();
+                const timestamp = Math.max(Date.now(), existingContext.updatedAt + 1);
                 
                 // Remove agent from participants list
                 const updatedParticipants = existingContext.participants.filter(p => p !== agentId);
@@ -399,7 +404,12 @@ export class ChannelContextService implements IChannelContextService {
                 };
                 
                 // Save updated context
-                return this.saveContextToMemory(channelId, updatedContext, historyEntry).pipe(
+                return this.saveContextToMemory(
+                    channelId,
+                    updatedContext,
+                    historyEntry,
+                    existingContext.updatedAt
+                ).pipe(
                     tap(savedContext => {
                         // Emit context update event
                         const contextUpdateEventData: ChannelEventData = {
@@ -442,7 +452,7 @@ export class ChannelContextService implements IChannelContextService {
     public setMetadata = (
         channelId: ChannelId,
         key: string,
-        value: any,
+        value: unknown,
         agentId: AgentId
     ): Observable<ChannelContextType> => {
         
@@ -457,7 +467,7 @@ export class ChannelContextService implements IChannelContextService {
                     return throwError(() => new Error(`Channel context not found for ID: ${channelId} during setMetadata`));
                 }
 
-                const timestamp = Date.now();
+                const timestamp = Math.max(Date.now(), existingContext.updatedAt + 1);
                 
                 // Update metadata
                 const updatedMetadata = { ...existingContext.metadata, [key]: value };
@@ -479,7 +489,12 @@ export class ChannelContextService implements IChannelContextService {
                 };
                 
                 // Save updated context
-                return this.saveContextToMemory(channelId, updatedContext, historyEntry).pipe(
+                return this.saveContextToMemory(
+                    channelId,
+                    updatedContext,
+                    historyEntry,
+                    existingContext.updatedAt
+                ).pipe(
                     tap(savedContext => {
                         // Emit context change event
                         const eventData: ChannelEventData = {
@@ -507,7 +522,7 @@ export class ChannelContextService implements IChannelContextService {
     public getMetadata = (
         channelId: ChannelId,
         key?: string
-    ): Observable<Record<string, any> | any> => {
+    ): Observable<unknown> => {
         
         return this.getContext(channelId).pipe(
             map(context => { // context here is ChannelContextType | null
@@ -557,44 +572,32 @@ export class ChannelContextService implements IChannelContextService {
      * @param channelId - Channel ID
      */
     public deleteContext = (channelId: ChannelId): Observable<boolean> => {
-        
-        // Validate input
         if (!channelId) return throwError(() => new Error('Channel ID is required'));
-        
-        // Remove from cache
-        this.contextCache.delete(channelId);
-        
-        // Emit memory delete event
-        const systemAgentIdForDelete: AgentId = 'system-service' as AgentId; // Or a more appropriate system ID
 
-        const memoryDeleteData: MemoryDeleteEventData = {
-            operationId: uuidv4(),
-            scope: MemoryScope.CHANNEL, // Corrected from CHANNEL_CONTEXT
-            id: channelId, // Corrected: 'id' is the property, not 'ids', and channelId is a string
-        };
-        
-        const memoryDeletePayload = createMemoryDeleteEventPayload(
-            Events.Memory.DELETE,    // Corrected from DELETED
-            systemAgentIdForDelete, 
-            channelId,             
-            memoryDeleteData
+        return this.memoryOps.deleteContextFromMemory(channelId).pipe(
+            map(success => {
+                if (!success) {
+                    return false;
+                }
+
+                this.contextCache.delete(channelId);
+                const systemAgentIdForDelete: AgentId = 'system-service' as AgentId;
+                const channelContextDeletedEventData: ChannelEventData = {
+                    action: ChannelActionTypes.DELETE,
+                    metadata: { message: `Context for channel ${channelId} has been removed.` }
+                };
+                EventBus.server.emit(
+                    Events.Channel.CONTEXT.UPDATED,
+                    createChannelEventPayload(
+                        Events.Channel.CONTEXT.UPDATED,
+                        systemAgentIdForDelete,
+                        channelId,
+                        channelContextDeletedEventData
+                    )
+                );
+                return true;
+            })
         );
-        EventBus.server.emit(Events.Memory.DELETE, memoryDeletePayload);
-        
-        // Notify that channel context has been 'updated' to a deleted state
-        const channelContextDeletedEventData: ChannelEventData = {
-            action: ChannelActionTypes.DELETE, // Signifies the nature of the 'update'
-            metadata: { message: `Context for channel ${channelId} has been removed.` }
-        };
-        const channelContextDeletedPayload = createChannelEventPayload(
-            Events.Channel.CONTEXT.UPDATED, // Using CONTEXT.UPDATED to signify change in context state
-            systemAgentIdForDelete,       // Agent performing/reporting the deletion
-            channelId,                    // The channelId whose context was affected
-            channelContextDeletedEventData
-        );
-        EventBus.server.emit(Events.Channel.CONTEXT.UPDATED, channelContextDeletedPayload); // Emit CONTEXT.UPDATED
-        
-        return of(true); // Deletion is signaled by event, return true for observable completion
     };
     
     /**
@@ -720,7 +723,9 @@ export class ChannelContextService implements IChannelContextService {
             }),
             map(result => {
                 // Extract the summary string from ConversationSummaryResult
-                return (result as any).summary || result.toString();
+                return typeof result === 'string'
+                    ? result
+                    : result.summary || result.toString();
             })
         );
     }
@@ -730,16 +735,21 @@ export class ChannelContextService implements IChannelContextService {
      * @param channelId - Channel ID
      * @param context - Channel context to save
      * @param historyEntry - Optional history entry to record with this update
+     * @param expectedContextUpdatedAt - Persisted revision required for an update
      */
     public saveContextToMemory = (
         channelId: ChannelId,
         context: ChannelContextType,
-        historyEntry?: ChannelContextHistoryEntry
+        historyEntry?: ChannelContextHistoryEntry,
+        expectedContextUpdatedAt?: number
     ): Observable<ChannelContextType> => {
-        return this.memoryOps.saveContextToMemory(channelId, context, historyEntry).pipe(
+        return this.memoryOps.saveContextToMemory(
+            channelId,
+            context,
+            historyEntry,
+            expectedContextUpdatedAt
+        ).pipe(
             tap(savedContext => {
-                if (savedContext) {
-                }
                 this.contextCache.set(channelId, savedContext);
             })
         );

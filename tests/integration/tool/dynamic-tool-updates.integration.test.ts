@@ -49,19 +49,18 @@ describe('Dynamic Tool Updates', () => {
             expect(Array.isArray(tools)).toBe(true);
         });
 
-        it('should update tools to empty array (unrestricted)', async () => {
+        it('should update tools to an empty deny-all array', async () => {
             const agent = await testSdk.createAndConnectAgent(channelId, {
-                name: 'Unrestricted Agent',
+                name: 'Deny All Agent',
                 allowedTools: ['tool_help'],
-                agentConfigPrompt: 'Test agent for unrestricted access'
+                agentConfigPrompt: 'Test agent for deny-all access'
             });
 
-            // Update to empty array (allows all tools)
             await agent.updateAllowedTools([]);
 
-            // Verify by executing a tool that wasn't initially allowed
-            const result = await agent.executeTool('tool_quick_reference', {});
-            expect(result).toBeDefined();
+            await expect(agent.executeTool('tool_help', {
+                toolName: 'messaging_send'
+            })).rejects.toThrow();
         });
 
         it('should allow execution of newly added tools', async () => {
@@ -247,11 +246,10 @@ describe('Dynamic Tool Updates', () => {
         it('should execute tools after adding them dynamically', async () => {
             const agent = await testSdk.createAndConnectAgent(channelId, {
                 name: 'Execute After Add Agent',
-                allowedTools: [], // Start with no restrictions
                 agentConfigPrompt: 'Test agent for execution after add'
             });
 
-            // First verify tool_help works
+            // Omitted policy uses the curated core default; tool_help is core.
             const result1 = await agent.executeTool('tool_help', {
                 toolName: 'messaging_send'
             });

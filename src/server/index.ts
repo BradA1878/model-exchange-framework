@@ -18,36 +18,41 @@
  * @documentation https://mxf-dev.github.io/mxf/
  */
 
+// Load environment configuration before any imported route module evaluates
+// its mount-time feature gates.
+import 'dotenv/config';
 import cors from 'cors';
 import express from 'express';
 import http from 'http';
 import { Server as socketIo } from 'socket.io';
-import dotenv from 'dotenv';
 import OpenAI from 'openai';
 import { requireEnv } from '@mxf-dev/core/utils/env';
 import { stopAllActiveDemos } from './api/controllers/demoController';
-dotenv.config();
-import { connectToDatabase } from './socket/services/DatabaseService';
+import {
+    closeDatabase,
+    connectToDatabase,
+    isDatabaseConnected
+} from './socket/services/DatabaseService';
 import { SocketService } from './socket/services/SocketService';
 import { ChannelService } from './socket/services/ChannelService';
 import { AgentService } from './socket/services/AgentService';
-import { ControlLoopService } from './socket/services/ControlLoopService';
 import { ChannelContextService } from './services/ChannelContextService';
 import { ServerReflectionService } from './socket/services/ServerReflectionService';
 import { MemoryService } from '@mxf-dev/core/services/MemoryService';
 import { MemoryPersistenceService } from './api/services/MemoryPersistenceService';
 import { Logger, enableServerLogging } from '@mxf-dev/core/utils/Logger';
 import apiRoutes from './api/routes';
-import { DEFAULT_SERVER_CONFIG } from '@mxf-dev/core/config/ServerConfig';
 import { authenticateDual } from './api/middleware/dualAuth';
 import { captureRawBody } from './api/middleware/webhookAuth';
 import { McpSocketExecutor } from './socket/services/McpSocketExecutor'; // Import McpSocketExecutor
 import { ServerHybridMcpService } from './api/services/ServerHybridMcpService';
 import { EphemeralEventPatternService } from './socket/services/EphemeralEventPatternService';
 import { TaskService } from './socket/services/TaskService';
+import { initializeTaskHandlers, shutdownTaskHandlers } from './socket/handlers/taskHandlers';
 import { McpService } from './socket/services/McpService';
 import { ModeDetectionService } from './socket/services/ModeDetectionService';
-import { SystemLlmServiceManager } from './socket/services/SystemLlmServiceManager';
+import { InferenceParameterService } from './socket/services/InferenceParameterService';
+import { SystemLlmServiceManager, assertSystemLlmConfigured } from './socket/services/SystemLlmServiceManager';
 import { allMxfMcpTools } from './mcp/tools/index'; // Import MXF tools
 import { McpToolRegistry } from './api/services/McpToolRegistry'; // Import McpToolRegistry
 import { firstValueFrom } from 'rxjs';
@@ -65,6 +70,33 @@ import { RetentionGateService } from '@mxf-dev/core/services/RetentionGateServic
 import { getMemoryStrataConfig, isMemoryStrataEnabled } from '@mxf-dev/core/config/memory-strata.config';
 import { MxfMLService } from '@mxf-dev/core/services/MxfMLService';
 import { PredictiveAnalyticsService } from '@mxf-dev/core/services/PredictiveAnalyticsService';
+import { ValidationPerformanceService } from '@mxf-dev/core/services/ValidationPerformanceService';
+import { AgentPerformanceService } from '@mxf-dev/core/services/AgentPerformanceService';
+import { PatternLearningService } from '@mxf-dev/core/services/PatternLearningService';
+import { AutoCorrectionService } from '@mxf-dev/core/services/AutoCorrectionService';
+import { ToolExecutionInterceptor } from '@mxf-dev/core/services/ToolExecutionInterceptor';
+import { ProactiveValidationService } from '@mxf-dev/core/services/ProactiveValidationService';
+import { ValidationCacheService } from '@mxf-dev/core/services/ValidationCacheService';
+import { ValidationMiddleware } from '@mxf-dev/core/services/ValidationMiddleware';
+import { ValidationAnalyticsService } from '@mxf-dev/core/services/ValidationAnalyticsService';
+import { PerformanceOptimizationService } from '@mxf-dev/core/services/PerformanceOptimizationService';
+import { EventBus } from '@mxf-dev/core/events/EventBus';
+import { BackgroundTaskManager } from '@mxf-dev/core/services/BackgroundTaskManager';
+import { ServerShutdownCoordinator } from './services/ServerShutdownCoordinator';
+import { readAppVersion } from '../shared/appVersion';
+import { UserInputRequestManager } from '@mxf-dev/core/services/UserInputRequestManager';
+import { assertJwtSecretConfigured } from './api/security/jwtTokenPolicy';
+import {
+    registerServerHealthRoutes,
+    ServerRuntimeState
+} from './services/ServerRuntimeState';
+import { listenForHttpServer } from './services/HttpServerLifecycle';
+import { assertExternalLlmCallAllowed } from '@mxf-dev/core/protocols/mcp/LlmTestEnvironmentGuard';
+import {
+    getAllowedCorsOrigins,
+    getSocketMaxHttpBufferSize
+} from './config/TransportSecurityConfig';
+import { getServerPort } from './config/ServerStartupConfig';
 
 /**
  * Initialize logger with appropriate context
@@ -76,29 +108,15 @@ enableServerLogging(process.env.LOG_LEVEL || 'info');
 
 const logger = new Logger('debug', 'Server', 'server');
 
-// Fail fast on fatal process-level errors — never limp along with corrupted state.
-process.on('uncaughtException', (error: Error) => {
-    logger.error('Uncaught exception — shutting down', error);
-    process.exit(1);
-});
-process.on('unhandledRejection', (reason: unknown) => {
-    logger.error(`Unhandled promise rejection — shutting down: ${reason instanceof Error ? reason.stack : String(reason)}`);
-    process.exit(1);
-});
-
-// Demo child processes must never outlive the server.
-process.on('SIGINT', () => {
-    stopAllActiveDemos();
-    process.exit(0);
-});
-process.on('SIGTERM', () => {
-    stopAllActiveDemos();
-    process.exit(0);
-});
-
 // Startup configuration validation: fail before any service initializes.
-requireEnv('JWT_SECRET', 'Set a strong secret in .env — it signs and verifies all user JWTs.');
+assertJwtSecretConfigured();
 requireEnv('MONGODB_URI', 'Set the MongoDB connection string in .env.');
+// SystemLLM has no built-in model: when it is on, its provider credentials and
+// SYSTEMLLM_DEFAULT_MODEL must be set, or the server does not start.
+assertSystemLlmConfigured();
+const allowedCorsOrigins = getAllowedCorsOrigins();
+const socketMaxHttpBufferSize = getSocketMaxHttpBufferSize();
+const serverPort = getServerPort();
 
 /**
  * Public API endpoints that don't require authentication
@@ -109,8 +127,6 @@ const PUBLIC_ENDPOINTS = [
     '/users/magic-link',
     '/users/magic-link/verify',
     '/health',
-    '/demo/interview/start',
-    '/demo/status',
     // Webhook routes are not "public" — they carry their own HMAC signature auth
     // (api/middleware/webhookAuth.ts) and are only mounted when MXF_WEBHOOK_ENABLED=true.
     // They skip dualAuth because they authenticate with a signature rather than a JWT or
@@ -123,17 +139,17 @@ const PUBLIC_ENDPOINTS = [
  * Check if endpoint requires authentication
  */
 const isPublicEndpoint = (path: string): boolean => {
-    return PUBLIC_ENDPOINTS.some(endpoint => path.startsWith(endpoint)) || 
-           !!path.match(/^\/demo\/[^\/]+\/stop$/); // Allow demo stop endpoints
+    return PUBLIC_ENDPOINTS.some(endpoint => path.startsWith(endpoint));
 };
 
 // Create Express application
 const app = express();
 const server = http.createServer(app);
+const runtimeState = new ServerRuntimeState();
 
 // Configure middleware
 app.use(cors({
-    origin: ['http://localhost:8080', 'http://127.0.0.1:8080', 'http://localhost:8088', 'http://localhost:3002'],
+    origin: allowedCorsOrigins,
     credentials: true
 }));
 // The verify hook keeps the raw request bytes so webhook HMAC signatures can be checked
@@ -144,8 +160,8 @@ app.use(express.urlencoded({ extended: true }));
 // Initialize Socket.IO server first
 const io = new socketIo(server, {
     cors: {
-        origin: '*', // Allow all origins for development
-        methods: ['GET', 'POST', 'PUT', 'DELETE'],
+        origin: allowedCorsOrigins,
+        methods: ['GET', 'POST'],
         credentials: true
     },
     transports: ['websocket', 'polling'], // Use both WebSocket and HTTP long-polling
@@ -154,25 +170,212 @@ const io = new socketIo(server, {
     pingInterval: 60000,  // 1 minute - send ping interval (increased from 25s default)
     // Additional connection settings for stability during LLM processing
     connectTimeout: 60000, // 1 minute - connection timeout
-    maxHttpBufferSize: 1e8 // 100MB - for large LLM responses
+    maxHttpBufferSize: socketMaxHttpBufferSize
 });
 
 // Make Socket.IO instance available to controllers
 app.locals.io = io;
 
 // Declare service variables (will be initialized in proper order)
-let socketService: SocketService;
+let socketService: SocketService | undefined;
 let memoryService: MemoryService;
-let channelContextService: ChannelContextService;
-let controlLoopService: ControlLoopService;
-let serverReflectionService: ServerReflectionService;
-let mcpSocketExecutor: McpSocketExecutor;
 let mcpToolRegistry: McpToolRegistry;
-let ephemeralEventPatternService: EphemeralEventPatternService;
-let taskService: TaskService;
-let modeDetectionService: ModeDetectionService;
-let agentService: AgentService;
-let channelService: ChannelService;
+let ephemeralEventPatternService: EphemeralEventPatternService | undefined;
+let modeDetectionService: ModeDetectionService | undefined;
+let taskService: TaskService | undefined;
+let codeExecutionSandboxService: CodeExecutionSandboxService | undefined;
+let systemLlmServiceManager: SystemLlmServiceManager | undefined;
+let hybridMcpService: ServerHybridMcpService | undefined;
+let rewardSignalProcessor: RewardSignalProcessor | undefined;
+let machineLearningService: MxfMLService | undefined;
+let predictiveAnalyticsService: PredictiveAnalyticsService | undefined;
+let patternLearningService: PatternLearningService | undefined;
+let autoCorrectionService: AutoCorrectionService | undefined;
+let toolExecutionInterceptor: ToolExecutionInterceptor | undefined;
+let proactiveValidationService: ProactiveValidationService | undefined;
+let validationCacheService: ValidationCacheService | undefined;
+let validationMiddleware: ValidationMiddleware | undefined;
+let validationAnalyticsService: ValidationAnalyticsService | undefined;
+let performanceOptimizationService: PerformanceOptimizationService | undefined;
+let validationPerformanceService: ValidationPerformanceService | undefined;
+let agentPerformanceService: AgentPerformanceService | undefined;
+let orparMemoryCoordinator: OrparMemoryCoordinator | undefined;
+let loadedToolCount = 0;
+
+registerServerHealthRoutes(
+    app,
+    runtimeState,
+    () => ({
+        api: server.listening,
+        socket: socketService?.isRunning() ?? false,
+        database: isDatabaseConnected()
+    }),
+    {
+        environment: process.env.NODE_ENV || 'development',
+        version: readAppVersion(),
+        port: serverPort
+    }
+);
+
+const closeHttpServer = async (): Promise<void> => {
+    if (!server.listening) {
+        return;
+    }
+
+    await new Promise<void>((resolve, reject) => {
+        server.close(error => {
+            if (error) {
+                reject(error);
+                return;
+            }
+            resolve();
+        });
+    });
+};
+
+const shutdownCoordinator = new ServerShutdownCoordinator([
+    {
+        name: 'socket-ingress',
+        run: async (): Promise<void> => { await socketService?.shutdown(); }
+    },
+    { name: 'http-ingress', run: closeHttpServer },
+    { name: 'demo-processes', run: (): Promise<void> => stopAllActiveDemos() },
+    {
+        name: 'background-processes',
+        run: async (): Promise<void> => { await BackgroundTaskManager.shutdownExisting(); }
+    },
+    // Timer-driven producers stop before the drain, so the drain only waits for
+    // work that was already in flight instead of work a tick starts during it
+    // (the coordination sweep and completion monitoring both go through SystemLLM).
+    { name: 'periodic-producers', run: (): void => { taskService?.stopPeriodicWork(); } },
+    { name: 'accepted-event-work', run: (): Promise<void> => EventBus.drain() },
+    { name: 'task-handlers', run: shutdownTaskHandlers },
+    { name: 'user-input-requests', run: (): void => { UserInputRequestManager.shutdownExisting(); } },
+    { name: 'task-orchestration', run: (): void => { taskService?.shutdown(); } },
+    { name: 'orpar-memory', run: (): void => { orparMemoryCoordinator?.shutdown(); } },
+    { name: 'ephemeral-patterns', run: (): void => { ephemeralEventPatternService?.shutdown(); } },
+    { name: 'mode-detection', run: (): void => { modeDetectionService?.shutdown(); } },
+    {
+        name: 'inference-parameters',
+        run: (): void => { InferenceParameterService.shutdownExisting(); }
+    },
+    { name: 'system-llm', run: (): void => { systemLlmServiceManager?.shutdown(); } },
+    {
+        name: 'hybrid-mcp',
+        run: async (): Promise<void> => { await hybridMcpService?.shutdown(); }
+    },
+    {
+        name: 'code-execution',
+        run: async (): Promise<void> => { await codeExecutionSandboxService?.shutdown(); }
+    },
+    { name: 'reward-signals', run: (): void => { rewardSignalProcessor?.shutdown(); } },
+    {
+        name: 'validation-performance-optimization',
+        run: (): void => { performanceOptimizationService?.shutdown(); }
+    },
+    {
+        name: 'validation-performance',
+        run: (): void => { validationPerformanceService?.shutdown(); }
+    },
+    {
+        name: 'agent-performance',
+        run: (): void => { agentPerformanceService?.shutdown(); }
+    },
+    {
+        name: 'predictive-analytics',
+        run: (): void => { predictiveAnalyticsService?.cleanup(); }
+    },
+    {
+        name: 'validation-analytics',
+        run: (): void => { validationAnalyticsService?.shutdown(); }
+    },
+    {
+        name: 'validation-middleware',
+        run: (): void => { validationMiddleware?.shutdown(); }
+    },
+    {
+        name: 'tool-execution-interceptor',
+        run: (): void => { toolExecutionInterceptor?.shutdown(); }
+    },
+    {
+        name: 'auto-correction',
+        run: (): void => { autoCorrectionService?.shutdown(); }
+    },
+    {
+        name: 'validation-cache',
+        run: (): void => { validationCacheService?.shutdown(); }
+    },
+    {
+        name: 'proactive-validation',
+        run: (): void => { proactiveValidationService?.shutdown(); }
+    },
+    {
+        name: 'pattern-learning',
+        run: (): void => { patternLearningService?.shutdown(); }
+    },
+    {
+        name: 'machine-learning',
+        run: async (): Promise<void> => { await machineLearningService?.dispose(); }
+    },
+    { name: 'shutdown-event-work', run: (): Promise<void> => EventBus.drain() },
+    { name: 'event-bus', run: (): void => { EventBus.server.cleanup(); } },
+    { name: 'database', run: closeDatabase }
+], [
+    { before: 'socket-ingress', after: 'accepted-event-work' },
+    { before: 'http-ingress', after: 'accepted-event-work' },
+    { before: 'http-ingress', after: 'demo-processes' },
+    { before: 'demo-processes', after: 'accepted-event-work' },
+    { before: 'background-processes', after: 'accepted-event-work' },
+    { before: 'socket-ingress', after: 'periodic-producers' },
+    { before: 'periodic-producers', after: 'accepted-event-work' },
+    { before: 'accepted-event-work', after: 'task-handlers' },
+    { before: 'accepted-event-work', after: 'user-input-requests' },
+    { before: 'accepted-event-work', after: 'task-orchestration' },
+    { before: 'accepted-event-work', after: 'orpar-memory' },
+    { before: 'accepted-event-work', after: 'system-llm' },
+    { before: 'accepted-event-work', after: 'hybrid-mcp' },
+    { before: 'accepted-event-work', after: 'code-execution' },
+    { before: 'accepted-event-work', after: 'validation-performance-optimization' },
+    { before: 'accepted-event-work', after: 'validation-performance' },
+    { before: 'validation-performance', after: 'agent-performance' },
+    { before: 'accepted-event-work', after: 'machine-learning' },
+    { before: 'machine-learning', after: 'shutdown-event-work' },
+    { before: 'shutdown-event-work', after: 'event-bus' },
+    { before: 'event-bus', after: 'database' }
+]);
+
+const handleShutdownSignal = (signal: NodeJS.Signals): void => {
+    runtimeState.markStopping();
+    void shutdownCoordinator.shutdown(signal)
+        .then((): void => {
+            runtimeState.markStopped();
+            // Not a literal 0: if this signal arrived while an initialization
+            // failure was already shutting down, that failure owns the exit code.
+            process.exitCode = runtimeState.getExitCode();
+        })
+        .catch((error: unknown): void => {
+            runtimeState.markFailed();
+            logger.error('Graceful server shutdown failed', error);
+            process.exitCode = runtimeState.getExitCode();
+        });
+};
+
+process.once('SIGINT', handleShutdownSignal);
+process.once('SIGTERM', handleShutdownSignal);
+
+const handleFatalProcessError = (reason: unknown): void => {
+    runtimeState.markFailed();
+    logger.error(
+        `Fatal process error — shutting down: ${reason instanceof Error ? reason.stack : String(reason)}`
+    );
+    process.exitCode = 1;
+    void shutdownCoordinator.shutdown('fatal process error').catch((error: unknown): void => {
+        logger.error('Cleanup after fatal process error did not complete', error);
+    });
+};
+
+process.once('uncaughtException', handleFatalProcessError);
+process.once('unhandledRejection', handleFatalProcessError);
 
 /**
  * Initialize all services and then mount API routes
@@ -210,6 +413,7 @@ const initializeServer = async () => {
                 // Create embedding generator function (OpenRouter/OpenAI/Anthropic)
                 const embeddingGenerator: EmbeddingGenerator = async (text, options) => {
                     const providerStr = (process.env.MEILISEARCH_EMBEDDING_PROVIDER || 'openai').toLowerCase();
+                    assertExternalLlmCallAllowed(`${providerStr} Meilisearch embeddings`);
                     const model = options?.model || process.env.MEILISEARCH_EMBEDDING_MODEL || 'text-embedding-3-small';
 
                     // OpenRouter - proxies OpenAI embedding models
@@ -317,15 +521,16 @@ const initializeServer = async () => {
                 await meilisearch.initialize();
             } catch (error) {
                 logger.error(`❌ Failed to initialize Meilisearch: ${error instanceof Error ? error.message : String(error)}`);
-                logger.warn('⚠️  Continuing without Meilisearch - search features will be unavailable');
+                throw error;
             }
         } else {
+            logger.info('Meilisearch disabled (ENABLE_MEILISEARCH not set)');
         }
 
         // Step 1.6: Initialize Code Execution Sandbox (Docker-based)
         try {
-            const codeExecService = CodeExecutionSandboxService.getInstance();
-            const dockerAvailable = await codeExecService.initialize();
+            codeExecutionSandboxService = CodeExecutionSandboxService.getInstance();
+            const dockerAvailable = await codeExecutionSandboxService.initialize();
             if (dockerAvailable) {
                 logger.info('Code execution sandbox initialized with Docker');
             } else {
@@ -333,7 +538,7 @@ const initializeServer = async () => {
             }
         } catch (error) {
             logger.error(`Failed to initialize code execution sandbox: ${error instanceof Error ? error.message : String(error)}`);
-            logger.warn('Continuing without code execution capability');
+            throw error;
         }
 
         // Step 2: Initialize core services in proper order
@@ -341,18 +546,34 @@ const initializeServer = async () => {
         // Initialize service instances
         socketService = new SocketService(io);
         memoryService = MemoryService.getInstance(); // Already initialized with persistence at Step 0
-        channelContextService = ChannelContextService.getInstance();
-        mcpSocketExecutor = McpSocketExecutor.getInstance();
+        ChannelContextService.getInstance();
+
+        // Validation/analytics services own background workers and must be explicitly
+        // bootstrapped so the shutdown coordinator always has their exact instances.
+        validationPerformanceService = ValidationPerformanceService.getInstance();
+        agentPerformanceService = AgentPerformanceService.getInstance();
+        patternLearningService = PatternLearningService.getInstance();
+        autoCorrectionService = AutoCorrectionService.getInstance();
+        toolExecutionInterceptor = ToolExecutionInterceptor.getInstance();
+        proactiveValidationService = ProactiveValidationService.getInstance();
+        validationCacheService = ValidationCacheService.getInstance();
+        validationMiddleware = ValidationMiddleware.getInstance();
+        validationAnalyticsService = ValidationAnalyticsService.getInstance();
+        performanceOptimizationService = PerformanceOptimizationService.getInstance();
+        predictiveAnalyticsService = PredictiveAnalyticsService.getInstance();
+
+        McpSocketExecutor.getInstance();
         mcpToolRegistry = McpToolRegistry.getInstance();
         ephemeralEventPatternService = EphemeralEventPatternService.getInstance();
         taskService = TaskService.getInstance();
+        initializeTaskHandlers();
         modeDetectionService = ModeDetectionService.getInstance();
-        serverReflectionService = new ServerReflectionService();
-        channelService = ChannelService.getInstance(io);
-        agentService = AgentService.getInstance(); // Initialize last to ensure all dependencies are ready
+        new ServerReflectionService();
+        ChannelService.getInstance(io);
+        AgentService.getInstance(); // Initialize last to ensure all dependencies are ready
         
         // Initialize SystemLlmServiceManager to load env vars and show configuration at startup
-        SystemLlmServiceManager.getInstance();
+        systemLlmServiceManager = SystemLlmServiceManager.getInstance();
 
         // Initialize EphemeralEventPatternService
         await ephemeralEventPatternService.initialize();
@@ -362,13 +583,14 @@ const initializeServer = async () => {
             try {
                 // Initialize all MULS services - this sets enabled=true based on env config
                 QValueManager.getInstance().initialize();
-                RewardSignalProcessor.getInstance().initialize();
+                rewardSignalProcessor = RewardSignalProcessor.getInstance();
+                rewardSignalProcessor.initialize();
                 UtilityScorerService.getInstance().initialize();
 
                 logger.info('MULS services initialized (Memory Utility Learning System)');
             } catch (error) {
                 logger.error(`Failed to initialize MULS services: ${error instanceof Error ? error.message : String(error)}`);
-                logger.warn('Continuing without MULS - memory utility learning disabled');
+                throw error;
             }
         }
 
@@ -401,33 +623,34 @@ const initializeServer = async () => {
         // operator asked for the integration, and continuing without it means the server
         // silently runs with learning switched off while reporting that it started.
         if (process.env.ORPAR_MEMORY_INTEGRATION_ENABLED === 'true') {
-            OrparMemoryCoordinator.getInstance().initialize();
+            orparMemoryCoordinator = OrparMemoryCoordinator.getInstance();
+            orparMemoryCoordinator.initialize();
             logger.info('ORPAR-Memory integration initialized');
         }
 
         // Step 2.8: Initialize TensorFlow.js integration if enabled
         if (process.env.TENSORFLOW_ENABLED === 'true') {
             try {
-                await MxfMLService.getInstance().initialize();
+                machineLearningService = MxfMLService.getInstance();
+                await machineLearningService.initialize();
                 logger.info('TensorFlow.js integration initialized');
 
-                // Step 2.9: Initialize TF.js models in PredictiveAnalyticsService.
-                // PredictiveAnalyticsService is instantiated at module load time
-                // (before Step 2.8), so TF model registration is deferred to here.
-                await PredictiveAnalyticsService.getInstance().initializeTensorFlowModels();
+                // Step 2.9: Initialize TF.js models in the already-owned analytics service.
+                await predictiveAnalyticsService.initializeTensorFlowModels();
                 logger.info('PredictiveAnalyticsService TF.js models initialized');
             } catch (error) {
                 logger.error(`Failed to initialize TensorFlow.js: ${error instanceof Error ? error.message : String(error)}`);
-                logger.warn('Continuing without TensorFlow.js - ML models disabled');
+                throw error;
             }
         }
 
         // Step 3: Initialize Hybrid MCP Service
         try {
-            await ServerHybridMcpService.getInstance().initialize();
+            hybridMcpService = ServerHybridMcpService.getInstance();
+            await hybridMcpService.initialize();
         } catch (error) {
             logger.error(`❌ Failed to initialize Hybrid MCP Service: ${error instanceof Error ? error.message : String(error)}`);
-            // Don't exit - let the server continue without hybrid MCP if it fails
+            throw error;
         }
 
         // Step 3.5: Initialize Tool Execution Persistence Service
@@ -437,7 +660,7 @@ const initializeServer = async () => {
             logger.info('Tool execution persistence service initialized');
         } catch (error) {
             logger.error(`❌ Failed to initialize Tool Execution Persistence Service: ${error instanceof Error ? error.message : String(error)}`);
-            // Non-fatal: continue without persistence if it fails
+            throw error;
         }
 
         // Step 4: Load existing MCP tools from database and register new ones
@@ -453,27 +676,26 @@ const initializeServer = async () => {
             // Tool descriptions are the prompt text an agent reads to decide how to call a
             // tool, so that drift was silent prompt rot. This upserts description, schema
             // and metadata for every tool, and prunes rows whose handler no longer exists.
-            await mcpToolRegistry.reconcileTools(allMxfMcpTools as any, 'mxf-server', 'system');
+            await mcpToolRegistry.reconcileTools(
+                allMxfMcpTools as unknown as Parameters<McpToolRegistry['reconcileTools']>[0],
+                'mxf-server',
+                'system'
+            );
 
             // Final count
             const finalTools = await firstValueFrom(mcpToolRegistry.listTools());
-            const toolCount = finalTools.length;
-
-            // Store tool count for server startup message
-            (server as any)._mxfToolCount = toolCount;
+            loadedToolCount = finalTools.length;
 
             // Refresh the hybrid registry so it sees newly registered tools
             // (Step 3 took an initial snapshot before these tools were registered)
-            try {
-                ServerHybridMcpService.getInstance().getHybridRegistry().refreshInternalTools();
-            } catch (error) {
-                // Non-fatal: hybrid registry will still work with its initial snapshot
+            if (!hybridMcpService) {
+                throw new Error('Hybrid MCP service was not initialized');
             }
+            hybridMcpService.getHybridRegistry().refreshInternalTools();
 
         } catch (error) {
             logger.error(`❌ Failed to initialize MXF MCP tools: ${error}`);
-            // Store 0 if tool loading failed
-            (server as any)._mxfToolCount = 0;
+            throw error;
         }
 
         // Step 5: Initialize McpService for socket-based tool communication
@@ -482,65 +704,45 @@ const initializeServer = async () => {
             await McpService.getInstance().initialize();
         } catch (error) {
             logger.error(`❌ Failed to initialize McpService: ${error}`);
+            throw error;
         }
 
-        // Step 6: Verify all services are ready
-        if (serverReflectionService) {
-        }
-
-        // Step 7: Mount API routes AFTER all services are initialized (including tool registration)
+        // Step 6: Mount API routes AFTER all services are initialized (including tool registration)
         setupApiRoutes();
 
         // Step 8: Start the server
-        const PORT = process.env.MXF_PORT || DEFAULT_SERVER_CONFIG.port;
-        const toolCount = (server as any)._mxfToolCount || 0;
+        const PORT = serverPort;
+        const toolCount = loadedToolCount;
 
-        server.listen(PORT, () => {
-            logger.info('╔════════════════════════════════════════════════════════════════╗');
-            logger.info('║              MXF Server Ready                                  ║');
-            logger.info('╠════════════════════════════════════════════════════════════════╣');
-            logger.info(`║  Port:           ${PORT}`.padEnd(66) + '║');
-            logger.info(`║  Tools Loaded:   ${toolCount}`.padEnd(66) + '║');
-            logger.info(`║  Environment:    ${process.env.NODE_ENV || 'development'}`.padEnd(66) + '║');
-            logger.info('╚════════════════════════════════════════════════════════════════╝');
-        });
+        await listenForHttpServer(server, PORT);
+        runtimeState.markReady();
+        logger.info('╔════════════════════════════════════════════════════════════════╗');
+        logger.info('║              MXF Server Ready                                  ║');
+        logger.info('╠════════════════════════════════════════════════════════════════╣');
+        logger.info(`║  Port:           ${PORT}`.padEnd(66) + '║');
+        logger.info(`║  Tools Loaded:   ${toolCount}`.padEnd(66) + '║');
+        logger.info(`║  Environment:    ${process.env.NODE_ENV || 'development'}`.padEnd(66) + '║');
+        logger.info('╚════════════════════════════════════════════════════════════════╝');
         
     } catch (error) {
+        runtimeState.markFailed();
         logger.error('❌ Server initialization failed:', error);
-        process.exit(1);
+        try {
+            await shutdownCoordinator.shutdown('initialization failure');
+        } catch (shutdownError) {
+            logger.error('Cleanup after server initialization failure did not complete', shutdownError);
+        }
+        process.exitCode = 1;
     }
 };
 
 /**
  * Setup API routes after all services are initialized
  */
-const setupApiRoutes = () => {
-    // Health check endpoint (available before full initialization)
-    app.get('/health', (req, res) => {
-        // Log health check request
-        
-        // Check Socket.IO server status
-        const socketServerRunning = socketService.isRunning();
-        
-        // Respond with 200 OK and comprehensive server information
-        res.status(200).json({
-            status: 'ok',
-            timestamp: new Date().toISOString(),
-            uptime: process.uptime(),
-            environment: process.env.NODE_ENV || 'development',
-            version: process.env.npm_package_version || '0.1.0',
-            servers: {
-                api: {
-                    status: 'running',
-                    port: process.env.MXF_PORT || DEFAULT_SERVER_CONFIG.port
-                },
-                socket: {
-                    status: socketServerRunning ? 'running' : 'not_running',
-                    port: process.env.MXF_PORT || DEFAULT_SERVER_CONFIG.port
-                }
-            }
-        });
-    });
+const setupApiRoutes = (): void => {
+    if (!socketService) {
+        throw new Error('Socket service must be initialized before API routes are mounted');
+    }
 
     // API routes with dual authentication (JWT for users, key-based for agents)
     app.use('/api', (req, res, next) => {

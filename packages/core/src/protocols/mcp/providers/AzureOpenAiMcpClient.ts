@@ -489,6 +489,7 @@ export class AzureOpenAiMcpClient extends BaseMcpClient {
         context: AgentContext,
         options?: Record<string, any>
     ): Promise<McpApiResponse> {
+        this.assertExternalLlmCallAllowed();
         
         // Structure messages for Azure based on context
         const azureMessages = this.structureMessagesFromContext(context);

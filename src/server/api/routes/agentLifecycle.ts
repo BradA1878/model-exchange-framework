@@ -35,6 +35,7 @@ import {
 } from '../controllers/agentLifecycleController';
 import { authenticateUser } from '../middleware/auth';
 import { authenticateDual } from '../middleware/dualAuth';
+import { requireResourceOwner } from '../middleware/resourceOwnership';
 
 const router = Router();
 
@@ -44,7 +45,12 @@ const router = Router();
  * @body reason - Optional reason for restart
  * @access Private (JWT required)
  */
-router.post('/:agentId/restart', authenticateUser, restartAgent);
+router.post(
+    '/:agentId/restart',
+    authenticateUser,
+    requireResourceOwner('agent', req => req.params.agentId),
+    restartAgent
+);
 
 /**
  * @route POST /api/agents/:agentId/shutdown
@@ -52,7 +58,12 @@ router.post('/:agentId/restart', authenticateUser, restartAgent);
  * @body reason - Optional reason for shutdown
  * @access Private (JWT required)
  */
-router.post('/:agentId/shutdown', authenticateUser, shutdownAgent);
+router.post(
+    '/:agentId/shutdown',
+    authenticateUser,
+    requireResourceOwner('agent', req => req.params.agentId),
+    shutdownAgent
+);
 
 /**
  * @route POST /api/agents/:agentId/pause
@@ -60,7 +71,12 @@ router.post('/:agentId/shutdown', authenticateUser, shutdownAgent);
  * @body reason - Optional reason for pause
  * @access Private (JWT required)
  */
-router.post('/:agentId/pause', authenticateUser, pauseAgent);
+router.post(
+    '/:agentId/pause',
+    authenticateUser,
+    requireResourceOwner('agent', req => req.params.agentId),
+    pauseAgent
+);
 
 /**
  * @route POST /api/agents/:agentId/resume
@@ -68,20 +84,35 @@ router.post('/:agentId/pause', authenticateUser, pauseAgent);
  * @body reason - Optional reason for resume
  * @access Private (JWT required)
  */
-router.post('/:agentId/resume', authenticateUser, resumeAgent);
+router.post(
+    '/:agentId/resume',
+    authenticateUser,
+    requireResourceOwner('agent', req => req.params.agentId),
+    resumeAgent
+);
 
 /**
  * @route GET /api/agents/:agentId/metrics
  * @desc Get agent performance metrics
  * @access Private (JWT required)
  */
-router.get('/:agentId/metrics', authenticateUser, getAgentMetrics);
+router.get(
+    '/:agentId/metrics',
+    authenticateUser,
+    requireResourceOwner('agent', req => req.params.agentId),
+    getAgentMetrics
+);
 
 /**
  * @route DELETE /api/agents/:agentId/memory
  * @desc Delete all persistent memory for an agent
  * @access Private (JWT or API key required)
  */
-router.delete('/:agentId/memory', authenticateDual, deleteAgentMemory);
+router.delete(
+    '/:agentId/memory',
+    authenticateDual,
+    requireResourceOwner('agent', req => req.params.agentId),
+    deleteAgentMemory
+);
 
 export default router;

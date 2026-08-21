@@ -9,17 +9,13 @@
  * Instead, the agent receives a task and autonomously decides which tools to use.
  *
  * @prerequisites
- * - MXF server running (`npm run dev`)
+ * - MXF server running (`bun run dev`)
  * - Environment variables configured
  *
  * @example
  * ```bash
- * cd examples/lsp-code-intelligence-demo
- * cp .env.example .env
- * npx ts-node lsp-code-intelligence-demo.ts
+ * bun run demo:lsp-code-intelligence
  * ```
- *
- * Run with: npm run demo:lsp-code-intelligence
  */
 
 import { MxfSDK, Events, LlmProviderType } from '@mxf-dev/sdk';
@@ -221,7 +217,7 @@ const createCodeIntelligenceAgent = async (
         // LLM configuration
         llmProvider: LlmProviderType.OPENROUTER,
         apiKey: process.env.OPENROUTER_API_KEY!,
-        defaultModel: 'anthropic/claude-3.5-sonnet',
+        defaultModel: '~anthropic/claude-sonnet-latest',
         temperature: 0.3,
         maxTokens: 8000,
 

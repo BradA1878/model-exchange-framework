@@ -310,20 +310,6 @@ export class GraphSurpriseCalculator {
     }
 
     /**
-     * Update surprise score for a relationship after analysis
-     */
-    public async updateRelationshipSurprise(
-        relationshipId: string,
-        surpriseScore: number
-    ): Promise<void> {
-        if (!this.enabled) {
-            return;
-        }
-
-        await this.repository.updateRelationship(relationshipId, { surpriseScore });
-    }
-
-    /**
      * Emit high surprise relationship event
      */
     private emitHighSurpriseEvent(analysis: SurpriseAnalysis, channelId: ChannelId): void {

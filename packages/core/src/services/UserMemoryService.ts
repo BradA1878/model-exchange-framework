@@ -45,6 +45,11 @@ const MEILISEARCH_INDEX = 'mxf-user-memories';
 
 const logger = new Logger('info', 'UserMemoryService', 'server');
 
+/** Escape one string literal embedded in a Meilisearch filter expression. */
+export const escapeUserMemoryFilterLiteral = (value: string): string => (
+    value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+);
+
 // ─── Exported Interfaces ─────────────────────────────────────────────────────
 
 /** Result shape returned by recall and getSessionContext */
@@ -405,7 +410,7 @@ export class UserMemoryService {
         try {
             const client = service.getClient();
             await client.index(MEILISEARCH_INDEX).deleteDocuments({
-                filter: `userId = "${userId}"`
+                filter: `userId = "${escapeUserMemoryFilterLiteral(userId)}"`
             });
         } catch (err) {
             logger.warn('clearUserFromMeilisearch failed', err);
@@ -430,8 +435,12 @@ export class UserMemoryService {
             const client = service.getClient();
 
             // Build filter expression: always filter by userId, optionally by type
-            const filters = [`userId = "${userId}"`];
-            if (type) filters.push(`type = "${type}"`);
+            const filters = [
+                `userId = "${escapeUserMemoryFilterLiteral(userId)}"`
+            ];
+            if (type) {
+                filters.push(`type = "${escapeUserMemoryFilterLiteral(type)}"`);
+            }
             const filter = filters.join(' AND ');
 
             const result = await client.index(MEILISEARCH_INDEX).search<UserMemoryMeilisearchDoc>(

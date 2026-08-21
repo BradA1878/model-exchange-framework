@@ -31,17 +31,25 @@ import { createStrictValidator } from '@mxf-dev/core/utils/validation';
 import { Logger } from '@mxf-dev/core/utils/Logger';
 import { checkResultSize } from '@mxf-dev/core/utils/ToolPaginationUtils';
 import { McpToolHandlerContext, McpToolHandlerResult } from '@mxf-dev/core/protocols/mcp/McpServerTypes';
+import { McpToolInput } from '@mxf-dev/core/protocols/mcp/IMcpClient';
 import { Events } from '@mxf-dev/core/events/EventNames';
 import { EventBus } from '@mxf-dev/core/events/EventBus';
 import { validateToolInput, formatValidationError } from '@mxf-dev/core/protocols/mcp/McpToolSchema';
-import { createBaseEventPayload, createMcpToolCallPayload, createMcpToolErrorPayload, createMcpToolResultPayload, createMcpToolRegisterPayload } from '@mxf-dev/core/schemas/EventPayloadSchema';
-import { McpToolRegistry, ExtendedMcpToolDefinition } from '../../api/services/McpToolRegistry';
+import { createMcpToolErrorPayload, createMcpToolResultPayload } from '@mxf-dev/core/schemas/EventPayloadSchema';
+import { McpToolRegistry } from '../../api/services/McpToolRegistry';
 import { getHybridMcpToolRegistry } from '../../mcp/services/HybridMcpRegistryAccess';
-import { v4 as uuidv4 } from 'uuid';
 import { AutoCorrectionService } from '@mxf-dev/core/services/AutoCorrectionService';
-import { AgentService } from './AgentService';
-import { getCoreToolsArray } from '@mxf-dev/core/constants/CoreTools';
 import { normalizeOrparParameters } from '@mxf-dev/core/utils/ParameterNormalizer';
+import { McpService } from './McpService';
+import {
+    isAllowedByAgentPolicy,
+    isAllowedByChannelPolicy,
+    isPrivilegedHostToolEnabled,
+    isPrivilegedNetworkToolEnabled,
+    UNSAFE_HOST_TOOLS_ENV,
+    UNSAFE_NETWORK_TOOLS_ENV,
+    ToolAuthorizationError
+} from './ToolAuthorizationPolicy';
 
 // Create validator for socket executor
 const validator = createStrictValidator('McpSocketExecutor');
@@ -81,6 +89,8 @@ export class McpSocketExecutor {
         inputSchema: Record<string, any>;
         handler: (input: any, context: McpToolHandlerContext) => Promise<McpToolHandlerResult>;
         enabled: boolean;
+        providerId: string;
+        channelId: string;
     }> = new Map();
     
     // Map of ongoing tool executions by request ID
@@ -121,194 +131,83 @@ export class McpSocketExecutor {
      * Set up event handlers for socket executor events
      */
     private setupEventHandlers(): void {
-        // Handle tool registration
+        // McpToolRegistry is the sole authority for TOOL_UNREGISTER requests.
+        // This executor only mirrors a successful authoritative result; handling
+        // the request here as well used to let this independent map acknowledge
+        // or delete a tool before registry ownership was checked.
         EventBus.server.on(
-            Events.Mcp.TOOL_REGISTER,
+            Events.Mcp.TOOL_UNREGISTERED,
             (payload) => {
-                validateMcpEventPayload(payload, Events.Mcp.TOOL_REGISTER);
-                
-                // Check if the tool already exists in the registry
-                const existingTool = this.tools.get(payload.data.toolName);
-                if (existingTool) {
-                    // Tool already exists - just acknowledge agent's capability to use it
-                    
-                    // Emit success event
-                    EventBus.server.emit(Events.Mcp.TOOL_REGISTERED, createBaseEventPayload(
-                        Events.Mcp.TOOL_REGISTERED,
-                        payload.agentId,
-                        payload.channelId,
-                        {
-                            name: payload.data.toolName,
-                            success: true
-                        }
-                    ));
+                validateMcpEventPayload(payload, Events.Mcp.TOOL_UNREGISTERED);
+                if (!payload.data?.success || !payload.data?.toolName) {
                     return;
                 }
 
-                // Tool doesn't exist - register it with the implementation provided
-                this.registerTool(
-                    payload.data.toolName,
-                    payload.data.description,
-                    payload.data.inputSchema,
-                    async (input, context) => {
-                        // This tool handler should directly execute functionality
-                        // NOT emit TOOL_CALL events to avoid infinite loops
-                        
-                        
-                        // For registered tools, we need to delegate to the actual MCP tool execution
-                        // This should be handled by looking up and executing the actual tool implementation
-                        throw new Error(`Tool '${payload.data.toolName}' was registered but has no implementation. This tool should be handled by MCP tool providers.`);
-                    }
-                ).subscribe({
-                    next: (success) => {
-                        EventBus.server.emit(Events.Mcp.TOOL_REGISTERED, createBaseEventPayload(
-                            Events.Mcp.TOOL_REGISTERED,
-                            payload.agentId,
-                            payload.channelId,
-                            {
-                                name: payload.data.toolName,
-                                success
-                            }
-                        ));
-                    },
-                    error: (error) => {
-                        this.logger.error(`Failed to register tool ${payload.data.toolName}: ${error}`);
-                        EventBus.server.emit(Events.Mcp.TOOL_REGISTERED, createBaseEventPayload(
-                            Events.Mcp.TOOL_REGISTERED,
-                            payload.agentId,
-                            payload.channelId,
-                            {
-                                name: payload.data.toolName,
-                                success: false
-                            }
-                        ));
-                    }
-                });
-            }
-        );
-        
-        // Handle tool unregistration
-        EventBus.server.on(
-            Events.Mcp.TOOL_UNREGISTER,
-            (payload) => {
-                validateMcpEventPayload(payload, Events.Mcp.TOOL_UNREGISTER);
-                
-                this.unregisterTool(payload.data.toolName).subscribe({
-                    next: (success) => {
-                        EventBus.server.emit(Events.Mcp.TOOL_UNREGISTERED, createBaseEventPayload(
-                            Events.Mcp.TOOL_UNREGISTERED,
-                            payload.agentId,
-                            payload.channelId,
-                            {
-                                name: payload.data.toolName,
-                                success
-                            }
-                        ));
-                    },
-                    error: (error) => {
-                        this.logger.error(`Failed to unregister tool ${payload.data.toolName}: ${error}`);
-                        EventBus.server.emit(Events.Mcp.TOOL_UNREGISTERED, createBaseEventPayload(
-                            Events.Mcp.TOOL_UNREGISTERED,
-                            payload.agentId,
-                            payload.channelId,
-                            {
-                                name: payload.data.toolName,
-                                success: false
-                            }
-                        ));
-                    }
-                });
+                const mirroredTool = this.tools.get(payload.data.toolName);
+                if (!mirroredTool) {
+                    return;
+                }
+                if (mirroredTool.providerId !== payload.agentId ||
+                    mirroredTool.channelId !== payload.channelId) {
+                    this.logger.error(
+                        `Ignoring TOOL_UNREGISTERED mirror cleanup for ${payload.data.toolName}: ` +
+                        `event owner does not match the executor mirror owner`
+                    );
+                    return;
+                }
+
+                this.tools.delete(payload.data.toolName);
             }
         );
         
         // Handle tool execution requests
         EventBus.server.on(
             Events.Mcp.TOOL_CALL,
-            (payload) => {
+            async (payload): Promise<void> => {
                 validateMcpEventPayload(payload, Events.Mcp.TOOL_CALL);
-                
-                
-                // Only handle executions from the socket context
-                if (!this.tools.has(payload.data.toolName)) {
-                    return;
-                }
-                
                 // Create context
                 const context: McpToolHandlerContext = {
                     requestId: payload.data.callId,
                     agentId: payload.agentId,
                     channelId: payload.channelId,
+                    authorization: payload.authorization,
                     data: {}
                 };
-                
-                // Execute the tool
-                this.executeTool(payload.data.toolName, payload.data.arguments, context).subscribe({
-                    next: (result) => {
-                        EventBus.server.emit(Events.Mcp.TOOL_RESULT, createMcpToolResultPayload(
-                            Events.Mcp.TOOL_RESULT,
-                            payload.agentId,
-                            payload.channelId,
-                            {
-                                toolName: payload.data.toolName,
-                                callId: payload.data.callId,
-                                result: result.content
-                            }
-                        ));
-                    },
-                    error: (error) => {
-                        const errorMessage = error instanceof Error ? error.message : String(error);
-                        this.logger.error(`Tool execution error for ${payload.name}: ${errorMessage}`);
-                        
-                        EventBus.server.emit(Events.Mcp.TOOL_ERROR, createMcpToolErrorPayload(
-                            Events.Mcp.TOOL_ERROR,
-                            payload.agentId,
-                            payload.channelId,
-                            {
-                                toolName: payload.data.toolName,
-                                callId: payload.data.callId,
-                                error: errorMessage
-                            }
-                        ));
-                    }
-                });
+
+                try {
+                    // Return one Promise covering the observable so EventBus.drain()
+                    // owns the tool and its terminal event through shutdown.
+                    const result = await firstValueFrom(
+                        this.executeTool(payload.data.toolName, payload.data.arguments, context)
+                    );
+                    EventBus.server.emit(Events.Mcp.TOOL_RESULT, createMcpToolResultPayload(
+                        Events.Mcp.TOOL_RESULT,
+                        payload.agentId,
+                        payload.channelId,
+                        {
+                            toolName: payload.data.toolName,
+                            callId: payload.data.callId,
+                            result: result.content
+                        }
+                    ));
+                } catch (error) {
+                    const errorMessage = error instanceof Error ? error.message : String(error);
+                    this.logger.error(`Tool execution error for ${payload.data.toolName}: ${errorMessage}`);
+
+                    EventBus.server.emit(Events.Mcp.TOOL_ERROR, createMcpToolErrorPayload(
+                        Events.Mcp.TOOL_ERROR,
+                        payload.agentId,
+                        payload.channelId,
+                        {
+                            toolName: payload.data.toolName,
+                            callId: payload.data.callId,
+                            error: errorMessage
+                        }
+                    ));
+                }
             }
         );
         
-        // Handle tool list requests
-        EventBus.server.on(
-            Events.Mcp.TOOL_LIST,
-            (payload) => {
-                validateMcpEventPayload(payload, Events.Mcp.TOOL_LIST);
-                
-                this.listTools(payload.data?.filter).subscribe({
-                    next: (tools) => {
-                        EventBus.server.emit(Events.Mcp.TOOL_LIST_RESULT, createBaseEventPayload(
-                            Events.Mcp.TOOL_LIST_RESULT,
-                            payload.agentId,
-                            payload.channelId,
-                            {
-                                tools: tools.map(tool => ({
-                                    name: tool.name,
-                                    description: tool.description,
-                                    inputSchema: tool.inputSchema
-                                }))
-                            }
-                        ));
-                    },
-                    error: (error) => {
-                        this.logger.error(`Failed to list tools: ${error}`);
-                        EventBus.server.emit(Events.Mcp.TOOL_LIST_RESULT, createBaseEventPayload(
-                            Events.Mcp.TOOL_LIST_RESULT,
-                            payload.agentId,
-                            payload.channelId,
-                            {
-                                tools: []
-                            }
-                        ));
-                    }
-                });
-            }
-        );
     }
     
     /**
@@ -322,8 +221,10 @@ export class McpSocketExecutor {
     public registerTool(
         name: string,
         description: string,
-        inputSchema: Record<string, any>,
-        handler: (input: any, context: McpToolHandlerContext) => Promise<McpToolHandlerResult>
+        inputSchema: Record<string, unknown>,
+        handler: (input: McpToolInput, context: McpToolHandlerContext) => Promise<McpToolHandlerResult>,
+        providerId: string,
+        channelId: string
     ): Observable<boolean> {
         try {
             // Validate inputs
@@ -331,10 +232,16 @@ export class McpSocketExecutor {
             validator.assertIsNonEmptyString(description);
             validator.assertIsObject(inputSchema);
             validator.assertIsFunction(handler);
+            validator.assertIsNonEmptyString(providerId);
+            validator.assertIsNonEmptyString(channelId);
             
             // Check if tool already exists
             if (this.tools.has(name)) {
-                return throwError(() => new Error(`Tool with name ${name} already exists`));
+                const existingTool = this.tools.get(name)!;
+                if (existingTool.providerId === providerId && existingTool.channelId === channelId) {
+                    return throwError(() => new Error(`Tool with name ${name} already exists for this owner`));
+                }
+                return throwError(() => new Error(`Tool with name ${name} is registered by another owner`));
             }
             
             // Register the tool
@@ -343,7 +250,9 @@ export class McpSocketExecutor {
                 description,
                 inputSchema,
                 handler,
-                enabled: true
+                enabled: true,
+                providerId,
+                channelId
             });
             
             
@@ -359,14 +268,23 @@ export class McpSocketExecutor {
      * @param name Tool name
      * @returns Observable that emits true if the tool was unregistered successfully
      */
-    public unregisterTool(name: string): Observable<boolean> {
+    public unregisterTool(name: string, providerId: string, channelId: string): Observable<boolean> {
         try {
             // Validate input
             validator.assertIsNonEmptyString(name);
+            validator.assertIsNonEmptyString(providerId);
+            validator.assertIsNonEmptyString(channelId);
             
             // Check if tool exists
             if (!this.tools.has(name)) {
                 return throwError(() => new Error(`Tool with name ${name} does not exist`));
+            }
+
+            const existingTool = this.tools.get(name)!;
+            if (existingTool.providerId !== providerId || existingTool.channelId !== channelId) {
+                return throwError(() => new Error(
+                    `Tool with name ${name} is not owned by this agent in this channel`
+                ));
             }
             
             // Unregister the tool
@@ -406,7 +324,11 @@ export class McpSocketExecutor {
             // allowlists and LLM function lists carry); the registry stores them
             // under the namespaced canonical name. Both must authorize and execute.
             const hybridRegistry = getHybridMcpToolRegistry();
-            const resolvedExternal = hybridRegistry?.resolveToolForChannel(toolName, context.channelId as string);
+            const resolvedExternal = hybridRegistry?.resolveToolForChannel(
+                toolName,
+                context.channelId as string,
+                context.agentId as string
+            );
             const acceptedNames = new Set<string>([toolName]);
             if (resolvedExternal) {
                 acceptedNames.add(resolvedExternal.name);
@@ -415,35 +337,61 @@ export class McpSocketExecutor {
                 }
             }
 
-            // Check tool authorization for this agent
-            // agentId is guaranteed to be a string after validation above
-            const agentService = AgentService.getInstance();
-            const agent = agentService.getAgent(context.agentId as string);
-            if (agent) {
-                const allowedTools = agent.allowedTools;
+            // Authorization is scoped to the exact validated credential that
+            // initiated this request. AgentService is keyed only by agentId and
+            // therefore cannot safely carry policy when the same logical agent
+            // has keys in multiple channels.
+            const credentialPolicy = context.authorization;
+            if (!credentialPolicy ||
+                typeof credentialPolicy.keyId !== 'string' ||
+                credentialPolicy.keyId.trim().length === 0 ||
+                (credentialPolicy.allowedTools !== undefined &&
+                    !Array.isArray(credentialPolicy.allowedTools))) {
+                return throwError(() => new ToolAuthorizationError(
+                    'A validated credential-scoped tool policy is required for execution'
+                ));
+            }
 
-                // Empty array = unrestricted (allow all tools)
-                if (allowedTools !== undefined && allowedTools.length > 0) {
-                    // Specific tools listed - check if tool is in list under any accepted name
-                    if (!allowedTools.some(name => acceptedNames.has(name))) {
-                        return throwError(() => new Error(
-                            `Tool '${toolName}' is not authorized for agent '${context.agentId}'. Allowed tools: ${allowedTools.join(', ')}`
-                        ));
-                    }
-                } else if (allowedTools === undefined) {
-                    // Undefined = use core tools
-                    const coreTools = getCoreToolsArray();
-                    if (!coreTools.includes(toolName)) {
-                        return throwError(() => new Error(
-                            `Tool '${toolName}' is not authorized for agent '${context.agentId}'. Agent is restricted to core MXF tools.`
-                        ));
-                    }
-                }
-                // allowedTools.length === 0 means unrestricted, so no check needed
+            if (!isAllowedByAgentPolicy(acceptedNames, credentialPolicy.allowedTools)) {
+                return throwError(() => new ToolAuthorizationError(
+                    `Tool '${toolName}' is not authorized for agent '${context.agentId}'`
+                ));
+            }
+
+            if (!isPrivilegedHostToolEnabled(acceptedNames)) {
+                return throwError(() => new ToolAuthorizationError(
+                    `Tool '${toolName}' is a privileged host capability and requires ` +
+                    `${UNSAFE_HOST_TOOLS_ENV}=true`
+                ));
+            }
+
+            if (!isPrivilegedNetworkToolEnabled(acceptedNames)) {
+                return throwError(() => new ToolAuthorizationError(
+                    `Tool '${toolName}' is a privileged network capability and requires ` +
+                    `${UNSAFE_NETWORK_TOOLS_ENV}=true`
+                ));
+            }
+
+            const channelAllowedTools = McpService.getInstance().getChannelAllowedTools(
+                context.channelId as string
+            );
+            if (channelAllowedTools === undefined) {
+                return throwError(() => new ToolAuthorizationError(
+                    `Tool policy for channel '${context.channelId}' has not been loaded`
+                ));
+            }
+            if (!isAllowedByChannelPolicy(acceptedNames, channelAllowedTools)) {
+                return throwError(() => new ToolAuthorizationError(
+                    `Tool '${toolName}' is not authorized in channel '${context.channelId}'`
+                ));
             }
 
             // Get the tool from the registry
-            const toolObservable = McpToolRegistry.getInstance().listTools();
+            const toolObservable = McpToolRegistry.getInstance().listToolsForChannel(
+                context.channelId as string,
+                undefined,
+                context.agentId as string
+            );
 
             // Check if tool exists
             return toolObservable.pipe(
@@ -615,18 +563,26 @@ export class McpSocketExecutor {
     }
     
     /**
-     * List all registered MCP tools
+     * List MCP tools visible to an authenticated agent/channel context.
+     * @param channelId Channel in which the tools will be used
+     * @param agentId Authenticated requesting agent
      * @param filter Optional filter pattern for tool names
-     * @returns Observable that emits the list of tools
+     * @returns Observable that emits the list of visible tools
      */
-    public listTools(filter?: string): Observable<Array<{
+    public listTools(channelId: string, agentId: string, filter?: string): Observable<Array<{
         name: string;
         description: string;
         inputSchema: Record<string, any>;
     }>> {
         try {
-            // Get all tools
-            const allToolsObservable = McpToolRegistry.getInstance().listTools();
+            validator.assertIsNonEmptyString(channelId);
+            validator.assertIsNonEmptyString(agentId);
+
+            const allToolsObservable = McpToolRegistry.getInstance().listToolsForChannel(
+                channelId,
+                undefined,
+                agentId
+            );
             
             // Apply filter if provided
             return allToolsObservable.pipe(

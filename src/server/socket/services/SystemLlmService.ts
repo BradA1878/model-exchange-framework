@@ -33,7 +33,7 @@
  * - Unified prompt management and error handling
  */
 
-import { BehaviorSubject, Observable, catchError, map, of, lastValueFrom } from 'rxjs';
+import { Observable, Subscription, catchError, map, of, lastValueFrom } from 'rxjs';
 import { EventBus } from '@mxf-dev/core/events/EventBus';
 import { Events } from '@mxf-dev/core/events/EventNames';
 import { Logger } from '@mxf-dev/core/utils/Logger';
@@ -66,8 +66,16 @@ import { createBaseEventPayload, createLlmInstructionStartedPayload,
     validateSystemEventPayload
 } from '@mxf-dev/core/schemas/EventPayloadSchema';
 import { LlmProviderFactory } from '@mxf-dev/core/protocols/mcp/LlmProviderFactory';
+import { assertExternalLlmCallAllowed } from '@mxf-dev/core/protocols/mcp/LlmTestEnvironmentGuard';
 import { SystemLlmBudgetService } from './SystemLlmBudgetService';
-import { McpMessage, McpRole, McpTextContent, McpContentType, IMcpClient } from '@mxf-dev/core/protocols/mcp/IMcpClient';
+import {
+    McpApiResponse,
+    McpMessage,
+    McpRole,
+    McpTextContent,
+    McpContentType,
+    IMcpClient
+} from '@mxf-dev/core/protocols/mcp/IMcpClient';
 import { ChannelMessage, AgentId, ChannelId } from '@mxf-dev/core/types/ChannelContext';
 import { ConversationTopic } from '@mxf-dev/core/types/ChannelContext';
 import { 
@@ -117,89 +125,6 @@ export interface OrparModelConfig {
     planning: string;       // Strategic thinking, scenario planning
     reflection: string;     // Meta-cognitive evaluation, learning
 }
-
-/**
- * Default ORPAR model configurations by provider
- */
-const ORPAR_MODEL_CONFIGS: Record<LlmProviderType, OrparModelConfig> = {
-    [LlmProviderType.OPENROUTER]: {
-        observation: 'google/gemini-2.5-flash',                    // Fast, efficient observation processing
-        reasoning: 'anthropic/claude-opus-4.5',                    // Advanced reasoning capabilities (Claude 4 series)
-        action: 'anthropic/claude-haiku-4.5',                               // Reliable tool execution (GPT-5 series)
-        planning: 'google/gemini-2.5-pro-preview-06-05',          // Strategic planning with large context
-        reflection: 'anthropic/claude-opus-4.5'                    // Meta-cognitive analysis (Claude 4 series)
-    },
-    [LlmProviderType.GEMINI]: {
-        observation: 'gemini-2.5-flash',
-        reasoning: 'gemini-2.5-pro',
-        action: 'gemini-2.5-flash',
-        planning: 'gemini-2.5-pro',
-        reflection: 'gemini-2.5-pro'
-    },
-    [LlmProviderType.OPENAI]: {
-        observation: 'gpt-5-nano',
-        reasoning: 'gpt-5.2',
-        action: 'gpt-5-mini',
-        planning: 'gpt-5.2',
-        reflection: 'gpt-5.2'
-    },
-    [LlmProviderType.ANTHROPIC]: {
-        observation: 'claude-haiku-4.5',
-        reasoning: 'claude-sonnet-4.5',
-        action: 'claude-haiku-4.5',
-        planning: 'claude-sonnet-4.5',
-        reflection: 'claude-sonnet-4.5'
-    },
-    [LlmProviderType.AZURE_OPENAI]: {
-        observation: 'gpt-5-nano',
-        reasoning: 'gpt-5.2',
-        action: 'gpt-5-mini',
-        planning: 'gpt-5.2',
-        reflection: 'gpt-5.2'
-    },
-    [LlmProviderType.XAI]: {
-        observation: 'grok-2-1212',
-        reasoning: 'grok-2-1212',
-        action: 'grok-2-1212',
-        planning: 'grok-2-1212',
-        reflection: 'grok-2-1212'
-    },
-    [LlmProviderType.OLLAMA]: {
-        observation: 'llama3.2:3b',           // Fast, lightweight model
-        reasoning: 'llama3.1:8b',            // Larger model for complex reasoning
-        action: 'llama3.2:3b',               // Fast for tool execution
-        planning: 'llama3.1:8b',             // Strategic thinking
-        reflection: 'llama3.1:8b'            // Meta-cognitive evaluation
-    },
-    [LlmProviderType.CUSTOM]: {
-        observation: 'custom-fast-model',
-        reasoning: 'custom-reasoning-model',
-        action: 'custom-action-model',
-        planning: 'custom-planning-model',
-        reflection: 'custom-reflection-model'
-    },
-    [LlmProviderType.PROVIDER_TYPE_1]: {
-        observation: 'provider-1-fast',
-        reasoning: 'provider-1-reasoning',
-        action: 'provider-1-action',
-        planning: 'provider-1-planning',
-        reflection: 'provider-1-reflection'
-    },
-    [LlmProviderType.PROVIDER_TYPE_2]: {
-        observation: 'provider-2-fast',
-        reasoning: 'provider-2-reasoning',
-        action: 'provider-2-action',
-        planning: 'provider-2-planning',
-        reflection: 'provider-2-reflection'
-    },
-    [LlmProviderType.PROVIDER_TYPE_3]: {
-        observation: 'provider-3-fast',
-        reasoning: 'provider-3-reasoning',
-        action: 'provider-3-action',
-        planning: 'provider-3-planning',
-        reflection: 'provider-3-reflection'
-    }
-};
 
 /**
  * ORPAR operation types for model selection
@@ -318,82 +243,156 @@ export interface OrparContext {
 /**
  * Configuration interface for SystemLlmService
  */
+/** Upgrade targets for one configured model. */
+export interface ModelUpgradePath {
+    moderate: string;
+    complex: string;
+}
+
+/**
+ * Complexity-based upgrade table, applied only when
+ * SYSTEMLLM_DYNAMIC_MODEL_SELECTION=true. Keys are models an operator may
+ * configure; values are what moderate and complex work upgrade to. A
+ * configured model with no entry is used as configured.
+ *
+ * OpenRouter targets are only the `~anthropic/claude-*-latest` aliases, so a
+ * new release is picked up at every tier without editing this table:
+ *   - cheap non-Claude models step up to haiku, then sonnet
+ *   - mid-tier non-Claude models step up to sonnet, then opus
+ *   - Claude families step up within the family
+ * The fable alias is never a target. Direct-API providers (OpenAI, Azure,
+ * Anthropic) have no latest-resolution aliases and keep release ids; the
+ * remaining providers have no upgrade paths.
+ */
+export const MODEL_UPGRADES: Partial<Record<LlmProviderType, Record<string, ModelUpgradePath>>> = {
+    [LlmProviderType.OPENROUTER]: {
+        // Claude families
+        '~anthropic/claude-haiku-latest': {
+            moderate: '~anthropic/claude-sonnet-latest',
+            complex: '~anthropic/claude-opus-latest'
+        },
+        '~anthropic/claude-sonnet-latest': {
+            moderate: '~anthropic/claude-opus-latest',
+            complex: '~anthropic/claude-opus-latest'
+        },
+        '~anthropic/claude-opus-latest': {
+            moderate: '~anthropic/claude-opus-latest',
+            complex: '~anthropic/claude-opus-latest'
+        },
+        'anthropic/claude-haiku-4': {
+            moderate: '~anthropic/claude-sonnet-latest',
+            complex: '~anthropic/claude-opus-latest'
+        },
+        'anthropic/claude-haiku-4.5': {
+            moderate: '~anthropic/claude-sonnet-latest',
+            complex: '~anthropic/claude-opus-latest'
+        },
+        'anthropic/claude-sonnet-4': {
+            moderate: '~anthropic/claude-sonnet-latest',
+            complex: '~anthropic/claude-opus-latest'
+        },
+        'anthropic/claude-sonnet-4.5': {
+            moderate: '~anthropic/claude-sonnet-latest',
+            complex: '~anthropic/claude-opus-latest'
+        },
+        'anthropic/claude-opus-4.5': {
+            moderate: '~anthropic/claude-opus-latest',
+            complex: '~anthropic/claude-opus-latest'
+        },
+        // Cheap non-Claude models
+        'google/gemini-2.5-flash': {
+            moderate: '~anthropic/claude-haiku-latest',
+            complex: '~anthropic/claude-sonnet-latest'
+        },
+        'openai/gpt-5-nano': {
+            moderate: '~anthropic/claude-haiku-latest',
+            complex: '~anthropic/claude-sonnet-latest'
+        },
+        'openai/gpt-5-mini': {
+            moderate: '~anthropic/claude-haiku-latest',
+            complex: '~anthropic/claude-sonnet-latest'
+        },
+        'meta-llama/llama-3.2-3b-instruct': {
+            moderate: '~anthropic/claude-haiku-latest',
+            complex: '~anthropic/claude-sonnet-latest'
+        },
+        'microsoft/phi-4': {
+            moderate: '~anthropic/claude-haiku-latest',
+            complex: '~anthropic/claude-sonnet-latest'
+        },
+        'qwen/qwen-3-8b': {
+            moderate: '~anthropic/claude-haiku-latest',
+            complex: '~anthropic/claude-sonnet-latest'
+        },
+        // Mid-tier non-Claude models
+        'openai/gpt-5.2': {
+            moderate: '~anthropic/claude-sonnet-latest',
+            complex: '~anthropic/claude-opus-latest'
+        },
+        'google/gemini-2.5-pro': {
+            moderate: '~anthropic/claude-sonnet-latest',
+            complex: '~anthropic/claude-opus-latest'
+        },
+        'google/gemini-2.5-pro-preview-06-05': {
+            moderate: '~anthropic/claude-sonnet-latest',
+            complex: '~anthropic/claude-opus-latest'
+        },
+        'meta-llama/llama-3.3-70b-instruct': {
+            moderate: '~anthropic/claude-sonnet-latest',
+            complex: '~anthropic/claude-opus-latest'
+        },
+        'qwen/qwen-3-32b': {
+            moderate: '~anthropic/claude-sonnet-latest',
+            complex: '~anthropic/claude-opus-latest'
+        },
+        'x-ai/grok-3': {
+            moderate: '~anthropic/claude-sonnet-latest',
+            complex: '~anthropic/claude-opus-latest'
+        },
+        'mistralai/mistral-large-2': {
+            moderate: '~anthropic/claude-sonnet-latest',
+            complex: '~anthropic/claude-opus-latest'
+        },
+        'deepseek/deepseek-v3': {
+            moderate: '~anthropic/claude-sonnet-latest',
+            complex: '~anthropic/claude-opus-latest'
+        },
+        'deepseek/deepseek-r1': {
+            moderate: '~anthropic/claude-sonnet-latest',
+            complex: '~anthropic/claude-opus-latest'
+        }
+    },
+    [LlmProviderType.OPENAI]: {
+        'gpt-5-nano': { moderate: 'gpt-5-mini', complex: 'gpt-5.2' },
+        'gpt-5-mini': { moderate: 'gpt-5.2', complex: 'gpt-5.2' },
+        'gpt-5.2': { moderate: 'gpt-5.2', complex: 'gpt-5.2' }
+    },
+    [LlmProviderType.ANTHROPIC]: {
+        'claude-haiku-4': { moderate: 'claude-sonnet-4', complex: 'claude-sonnet-4.5' },
+        'claude-sonnet-4': { moderate: 'claude-sonnet-4.5', complex: 'claude-opus-4' },
+        'claude-sonnet-4.5': { moderate: 'claude-opus-4', complex: 'claude-opus-4' }
+    },
+    [LlmProviderType.AZURE_OPENAI]: {
+        'gpt-5-nano': { moderate: 'gpt-5-mini', complex: 'gpt-5.2' },
+        'gpt-5-mini': { moderate: 'gpt-5.2', complex: 'gpt-5.2' },
+        'gpt-5.2': { moderate: 'gpt-5.2', complex: 'gpt-5.2' }
+    }
+};
+
 export interface SystemLlmServiceConfig {
     providerType?: LlmProviderType;
-    defaultModel?: string;
+    /** Model for every ORPAR operation that has no entry in orparModels. Required: there is no built-in model. */
+    defaultModel: string;
     defaultTemperature?: number;
     defaultMaxTokens?: number;
-    orparModels?: Partial<OrparModelConfig>; // Allow custom ORPAR model overrides
+    orparModels?: Partial<OrparModelConfig>; // Per-operation models; unset operations use defaultModel
     enableRealTimeCoordination?: boolean; // Allow disabling real-time coordination
     enableDynamicModelSelection?: boolean; // Enable complexity-based model switching (recommended for OpenRouter only)
 }
 
-/**
- * Default models for each provider type
- */
-const DEFAULT_MODELS: Record<LlmProviderType, string> = {
-    [LlmProviderType.OPENROUTER]: 'google/gemini-2.5-flash',  // Fast, efficient default
-    [LlmProviderType.GEMINI]: 'gemini-2.5-flash',
-    [LlmProviderType.OPENAI]: 'gpt-5-mini',
-    [LlmProviderType.ANTHROPIC]: 'claude-haiku-4',
-    [LlmProviderType.AZURE_OPENAI]: 'gpt-5-mini',
-    [LlmProviderType.XAI]: 'grok-3',
-    [LlmProviderType.OLLAMA]: 'llama3.2:3b',
-    [LlmProviderType.CUSTOM]: 'custom-model',
-    [LlmProviderType.PROVIDER_TYPE_1]: 'provider-1-model',
-    [LlmProviderType.PROVIDER_TYPE_2]: 'provider-2-model',
-    [LlmProviderType.PROVIDER_TYPE_3]: 'provider-3-model'
-};
-
-/**
- * Cost-performance tiers for OpenRouter models
- */
-export const OPENROUTER_MODEL_TIERS = {
-    // Ultra-cheap (under $0.10/1M tokens)
-    ULTRA_CHEAP: [
-        'openai/gpt-5-nano',
-        'google/gemini-2.5-flash',
-        'meta-llama/llama-3.2-3b-instruct',
-        'microsoft/phi-4',
-        'qwen/qwen-3-8b'
-    ],
-    
-    // Budget (under $1.00/1M tokens)  
-    BUDGET: [
-        'openai/gpt-5-mini',
-        'anthropic/claude-haiku-4',
-        'google/gemini-2.5-flash',
-        'meta-llama/llama-3.3-70b-instruct',
-        'qwen/qwen-3-32b'
-    ],
-    
-    // Standard (under $5.00/1M tokens)
-    STANDARD: [
-        'anthropic/claude-sonnet-4',
-        'openai/gpt-5.2',
-        'google/gemini-2.5-pro-preview-06-05',
-        'meta-llama/llama-3.3-70b-instruct',
-        'deepseek/deepseek-v3'
-    ],
-    
-    // Premium (under $15.00/1M tokens)
-    PREMIUM: [
-        'anthropic/claude-sonnet-4.5',
-        'anthropic/claude-opus-4.5',
-        'google/gemini-2.5-pro-preview-06-05',
-        'openai/gpt-5.2',
-        'mistralai/mistral-large-2'
-    ],
-    
-    // Ultra-premium (most capable models)
-    ULTRA_PREMIUM: [
-        'anthropic/claude-opus-4.5',
-        'anthropic/claude-sonnet-4.5',
-        'openai/gpt-5.2',
-        'deepseek/deepseek-r1',
-        'google/gemini-2.5-pro-preview-06-05'
-    ]
-} as const;
+interface SystemLlmConfigChangePayload {
+    data?: ChannelSystemLlmChangeEvent;
+}
 
 /**
  * Centralized System LLM Service for server-side AI operations
@@ -401,9 +400,12 @@ export const OPENROUTER_MODEL_TIERS = {
  * and works with any configured LLM provider (OpenRouter, Gemini, OpenAI, etc.)
  */
 export class SystemLlmService {
+    /** Channel this service instance exclusively owns. */
+    public readonly ownerChannelId: ChannelId;
+
     private logger = logger;
     private providerType: LlmProviderType;
-    private config: Required<SystemLlmServiceConfig>;
+    private config: Required<Omit<SystemLlmServiceConfig, 'orparModels'>> & { orparModels: OrparModelConfig };
     private clientInstance: IMcpClient | null = null;
     private eventBus = EventBus.server;
     private configManager = ConfigManager.getInstance();
@@ -412,10 +414,15 @@ export class SystemLlmService {
     private coordinationInitialized = false;
     private coordinationEnabled = true; // Runtime coordination enabled flag
     private isShuttingDown = false;
+    private lifecycleGeneration = 0;
     
     // Store bound function references for proper cleanup
-    private boundHandleChannelMessageForCoordination: any;
-    private boundHandleOrparEventForCoordination: any;
+    private boundHandleChannelMessageForCoordination?: (payload: unknown) => Promise<void>;
+    private boundHandleOrparEventForCoordination?: (payload: unknown) => Promise<void>;
+    private boundHandleConfigChange?: (payload: SystemLlmConfigChangePayload) => void;
+    private configEventSubscription?: Subscription;
+    private coordinationEventSubscriptions: Subscription[] = [];
+    private providerRequestCancellations = new Map<Subscription, (error: Error) => void>();
     private channelActivities = new Map<ChannelId, {
         messageCount: number;
         lastMessage: number;
@@ -486,25 +493,51 @@ export class SystemLlmService {
     
     private cleanupTimer?: NodeJS.Timeout;
     private coordinationCleanupTimer?: NodeJS.Timeout;
+    private coordinationLockReleaseTimers = new Set<NodeJS.Timeout>();
+    private coordinationTimeoutCancellations = new Map<
+        NodeJS.Timeout,
+        (error?: Error) => void
+    >();
 
-    constructor(config: SystemLlmServiceConfig = {}) {
+    constructor(ownerChannelId: ChannelId, config: SystemLlmServiceConfig) {
+        if (typeof ownerChannelId !== 'string' || ownerChannelId.length === 0) {
+            throw new Error('SystemLlmService requires a non-empty owner channel ID');
+        }
+
+        this.ownerChannelId = ownerChannelId;
         
         const providerType = config.providerType || LlmProviderType.OPENROUTER;
         
         
-        // Determine if dynamic model selection should be enabled
-        // Default: true for OpenRouter, false for other providers (unless explicitly set)
-        const enableDynamicModelSelection = config.enableDynamicModelSelection !== undefined 
+        // Complexity-based upgrades are off unless the operator turns them on:
+        // an upgrade changes which model spends the money. (They used to be on
+        // by default for OpenRouter.)
+        const enableDynamicModelSelection = config.enableDynamicModelSelection !== undefined
             ? config.enableDynamicModelSelection
-            : (process.env.SYSTEMLLM_DYNAMIC_MODEL_SELECTION === 'true' 
-                || (process.env.SYSTEMLLM_DYNAMIC_MODEL_SELECTION === undefined && providerType === LlmProviderType.OPENROUTER));
+            : process.env.SYSTEMLLM_DYNAMIC_MODEL_SELECTION === 'true';
         
+        // No built-in model ids: the operator names the default model, and may
+        // name a model per operation. Anything else is a configuration error.
+        const defaultModel = typeof config.defaultModel === 'string' ? config.defaultModel.trim() : '';
+        if (defaultModel.length === 0) {
+            throw new Error(
+                'SystemLlmService requires config.defaultModel (set SYSTEMLLM_DEFAULT_MODEL when SystemLLM is on)'
+            );
+        }
+        const orparModels: OrparModelConfig = {
+            observation: config.orparModels?.observation ?? defaultModel,
+            reasoning: config.orparModels?.reasoning ?? defaultModel,
+            action: config.orparModels?.action ?? defaultModel,
+            planning: config.orparModels?.planning ?? defaultModel,
+            reflection: config.orparModels?.reflection ?? defaultModel
+        };
+
         this.config = {
             providerType,
-            defaultModel: config.defaultModel || DEFAULT_MODELS[providerType],
+            defaultModel,
             defaultTemperature: config.defaultTemperature || 0.3,
             defaultMaxTokens: config.defaultMaxTokens || 2000,
-            orparModels: config.orparModels || ORPAR_MODEL_CONFIGS[providerType],
+            orparModels,
             enableRealTimeCoordination: config.enableRealTimeCoordination !== false, // Default to true unless explicitly disabled
             enableDynamicModelSelection
         };
@@ -516,14 +549,104 @@ export class SystemLlmService {
         this.setupConfigEventListener();
 
         // Initialize real-time coordination if enabled by config
-        const coordEnabled = this.configManager.isChannelSystemLlmEnabled(undefined, 'coordination');
-        if (coordEnabled && this.config.enableRealTimeCoordination) {
+        const coordEnabled = this.configManager.isChannelSystemLlmEnabled(this.ownerChannelId, 'coordination');
+        this.coordinationEnabled = coordEnabled && this.config.enableRealTimeCoordination;
+        if (this.coordinationEnabled) {
             this.initializeRealTimeCoordination();
-        } else {
         }
 
         // Initialize cleanup mechanisms
         this.initializeCleanupMechanisms();
+    }
+
+    /** Enforce the manager's one-service-per-channel ownership invariant. */
+    private assertOwnerChannel(channelId: ChannelId): void {
+        if (channelId !== this.ownerChannelId) {
+            throw new Error(
+                `SystemLlmService for channel ${this.ownerChannelId} cannot operate on channel ${channelId}`
+            );
+        }
+    }
+
+    private assertServiceActive(): void {
+        if (this.isShuttingDown) {
+            throw new Error('SystemLlmService is shutting down');
+        }
+    }
+
+    private isLifecycleActive(generation: number): boolean {
+        return !this.isShuttingDown && generation === this.lifecycleGeneration;
+    }
+
+    private assertLifecycleActive(generation: number): void {
+        if (!this.isLifecycleActive(generation)) {
+            throw new Error('SystemLlmService is shutting down');
+        }
+    }
+
+    private scheduleCoordinationLockRelease(
+        channelId: ChannelId,
+        generation: number
+    ): void {
+        if (!this.isLifecycleActive(generation) || !this.coordinationInitialized) {
+            return;
+        }
+
+        const timer = setTimeout(() => {
+            this.coordinationLockReleaseTimers.delete(timer);
+            if (this.isLifecycleActive(generation)) {
+                this.channelCoordinationLocks.delete(channelId);
+            }
+        }, 3000);
+        this.coordinationLockReleaseTimers.add(timer);
+    }
+
+    private createCoordinationTimeout(
+        generation: number
+    ): { promise: Promise<never>; cancel: (error?: Error) => void } {
+        let timer!: NodeJS.Timeout;
+        let rejectPromise: (reason?: unknown) => void = () => undefined;
+        let settled = false;
+
+        const promise = new Promise<never>((_resolve, reject) => {
+            rejectPromise = reject;
+            timer = setTimeout(() => {
+                settled = true;
+                this.coordinationTimeoutCancellations.delete(timer);
+                reject(new Error(
+                    this.isLifecycleActive(generation)
+                        ? 'Coordination suggestion timeout'
+                        : 'SystemLlmService is shutting down'
+                ));
+            }, 30000);
+        });
+
+        const cancel = (error?: Error): void => {
+            if (settled) {
+                return;
+            }
+
+            settled = true;
+            clearTimeout(timer);
+            this.coordinationTimeoutCancellations.delete(timer);
+            if (error) {
+                rejectPromise(error);
+            }
+        };
+
+        this.coordinationTimeoutCancellations.set(timer, cancel);
+        return { promise, cancel };
+    }
+
+    private cancelCoordinationTimers(reason: Error): void {
+        for (const timer of this.coordinationLockReleaseTimers) {
+            clearTimeout(timer);
+        }
+        this.coordinationLockReleaseTimers.clear();
+
+        const cancellations = Array.from(this.coordinationTimeoutCancellations.values());
+        this.coordinationTimeoutCancellations.clear();
+        cancellations.forEach(cancel => cancel(reason));
     }
 
     /**
@@ -531,37 +654,45 @@ export class SystemLlmService {
      */
     private setupConfigEventListener(): void {
         // Listen on server bus for config changes (events propagate from client bus via shared subject)
-        this.eventBus.on(ConfigEvents.CHANNEL_SYSTEM_LLM_CHANGED, (payload: any) => {
-            this.handleConfigChange(payload);
-        });
+        this.boundHandleConfigChange = this.handleConfigChange.bind(this);
+        this.configEventSubscription = this.eventBus.on(
+            ConfigEvents.CHANNEL_SYSTEM_LLM_CHANGED,
+            this.boundHandleConfigChange
+        );
 
     }
 
     /**
      * Handle configuration change events
      */
-    private handleConfigChange(payload: any): void {
+    private handleConfigChange(payload: SystemLlmConfigChangePayload): void {
         try {
-            const data = payload.data as ChannelSystemLlmChangeEvent;
-            const channelId = data.channelId;
-
-            // Log state transition
-            const scope = channelId ? `channel ${channelId}` : 'global';
-            if (data.enabled !== this.coordinationEnabled) {
+            const data = payload.data;
+            if (!data || typeof data.enabled !== 'boolean') {
+                return;
             }
 
-            // Check if coordination operation is specifically affected
-            const coordEnabled = this.configManager.isChannelSystemLlmEnabled(channelId, 'coordination');
+            // A channel-specific change belongs only to that channel's service.
+            // Global changes (no channelId) are intentionally evaluated by every
+            // service against its own effective channel configuration.
+            if (data.channelId && data.channelId !== this.ownerChannelId) {
+                return;
+            }
+
+            const coordEnabled = this.configManager.isChannelSystemLlmEnabled(
+                this.ownerChannelId,
+                'coordination'
+            ) && this.config.enableRealTimeCoordination;
 
             if (!coordEnabled && this.coordinationInitialized) {
                 // Coordination was enabled, now disabled
                 this.disableCoordination();
-                this.coordinationEnabled = false;
-            } else if (coordEnabled && !this.coordinationInitialized && this.config.enableRealTimeCoordination) {
+            } else if (coordEnabled && !this.coordinationInitialized) {
                 // Coordination was disabled, now enabled
                 this.initializeRealTimeCoordination();
-                this.coordinationEnabled = true;
             }
+
+            this.coordinationEnabled = coordEnabled;
 
         } catch (error) {
             this.logger.error(`❌ Failed to handle config change: ${error}`);
@@ -576,24 +707,34 @@ export class SystemLlmService {
         // Remove event listeners
         if (this.boundHandleChannelMessageForCoordination) {
             this.eventBus.off(Events.Message.AGENT_MESSAGE_DELIVERED, this.boundHandleChannelMessageForCoordination);
+            this.boundHandleChannelMessageForCoordination = undefined;
         }
         if (this.boundHandleOrparEventForCoordination) {
             this.eventBus.off(Events.ControlLoop.REASONING, this.boundHandleOrparEventForCoordination);
             this.eventBus.off(Events.ControlLoop.PLAN, this.boundHandleOrparEventForCoordination);
             this.eventBus.off(Events.ControlLoop.ACTION, this.boundHandleOrparEventForCoordination);
+            this.boundHandleOrparEventForCoordination = undefined;
         }
+        for (const subscription of this.coordinationEventSubscriptions) {
+            if (!subscription.closed) {
+                subscription.unsubscribe();
+            }
+        }
+        this.coordinationEventSubscriptions = [];
 
         // Clear timers
         if (this.coordinationCleanupTimer) {
             clearInterval(this.coordinationCleanupTimer);
             this.coordinationCleanupTimer = undefined;
         }
+        this.cancelCoordinationTimers(new Error('SystemLLM coordination disabled'));
 
         // Clear coordination state
         this.channelCoordinationLocks.clear();
         this.processedMessages.clear();
         this.coordinationInProgress.clear();
         this.recentCoordinationContent.clear();
+        this.channelActivities.clear();
 
         this.coordinationInitialized = false;
     }
@@ -642,14 +783,7 @@ export class SystemLlmService {
      * Get the appropriate model for a specific ORPAR operation
      */
     public getModelForOperation(operation: OrparOperationType): string {
-        const defaultModelConfig = ORPAR_MODEL_CONFIGS[this.providerType];
-        const customModelConfig = this.config.orparModels || {};
-        
-        // Use custom model if provided, otherwise use default for operation
-        const selectedModel = customModelConfig[operation] || defaultModelConfig[operation];
-        
-        
-        return selectedModel;
+        return this.config.orparModels[operation];
     }
 
     /**
@@ -814,177 +948,19 @@ export class SystemLlmService {
         operation: OrparOperationType, 
         complexity: 'simple' | 'moderate' | 'complex'
     ): string {
-        const defaultModelConfig = ORPAR_MODEL_CONFIGS[this.providerType];
-        const baseModel = defaultModelConfig[operation];
+        // The configured model for the operation, not the built-in default:
+        // a custom orparModels entry is the base of the upgrade path.
+        const baseModel = this.getModelForOperation(operation);
         
         // If dynamic model selection is disabled, always use base model
         if (!this.config.enableDynamicModelSelection) {
             return baseModel;
         }
         
-        // Model upgrade mappings based on provider with comprehensive OpenRouter catalog
-        const modelUpgrades: Record<LlmProviderType, Record<string, { moderate: string; complex: string }>> = {
-            [LlmProviderType.OPENROUTER]: {
-                // === FAST/CHEAP MODELS (Simple Tasks) ===
-                'google/gemini-2.5-flash': {
-                    moderate: 'openai/gpt-5-mini',
-                    complex: 'anthropic/claude-sonnet-4'
-                },
-                'openai/gpt-5-nano': {
-                    moderate: 'openai/gpt-5-mini',
-                    complex: 'openai/gpt-5.2'
-                },
-                'meta-llama/llama-3.2-3b-instruct': {
-                    moderate: 'meta-llama/llama-3.3-70b-instruct',
-                    complex: 'meta-llama/llama-3.3-70b-instruct'
-                },
-                'microsoft/phi-4': {
-                    moderate: 'openai/gpt-5-mini',
-                    complex: 'anthropic/claude-sonnet-4'
-                },
-                
-                // === REASONING MODELS (Observation/Analysis) ===
-                'anthropic/claude-sonnet-4': {
-                    moderate: 'anthropic/claude-sonnet-4.5',
-                    complex: 'anthropic/claude-opus-4.5'
-                },
-                'openai/gpt-5.2': {
-                    moderate: 'anthropic/claude-sonnet-4.5',
-                    complex: 'anthropic/claude-opus-4.5'
-                },
-                'google/gemini-2.5-pro-preview-06-05': {
-                    moderate: 'anthropic/claude-sonnet-4.5',
-                    complex: 'anthropic/claude-opus-4.5'
-                },
-                
-                // === PLANNING MODELS (Strategic Thinking) ===
-                'anthropic/claude-sonnet-4.5': {
-                    moderate: 'anthropic/claude-opus-4.5',
-                    complex: 'anthropic/claude-opus-4.5'
-                },
-                'meta-llama/llama-3.3-70b-instruct': {
-                    moderate: 'anthropic/claude-sonnet-4',
-                    complex: 'anthropic/claude-sonnet-4.5'
-                },
-                'qwen/qwen-3-32b': {
-                    moderate: 'anthropic/claude-sonnet-4',
-                    complex: 'anthropic/claude-sonnet-4.5'
-                },
-                
-                // === ACTION MODELS (Tool Calling/Execution) ===
-                'openai/gpt-5-mini': {
-                    moderate: 'openai/gpt-5.2',
-                    complex: 'anthropic/claude-sonnet-4'
-                },
-                'anthropic/claude-haiku-4': {
-                    moderate: 'anthropic/claude-sonnet-4',
-                    complex: 'anthropic/claude-sonnet-4.5'
-                },
-                'anthropic/claude-haiku-4.5': {
-                    moderate: 'anthropic/claude-sonnet-4',
-                    complex: 'anthropic/claude-sonnet-4.5'
-                },
-                
-                // === REFLECTION MODELS (Meta-cognitive Analysis) ===
-                'anthropic/claude-opus-4.5': {
-                    moderate: 'anthropic/claude-opus-4.5',
-                    complex: 'anthropic/claude-opus-4.5'
-                },
-                'deepseek/deepseek-r1': {
-                    moderate: 'anthropic/claude-sonnet-4.5',
-                    complex: 'anthropic/claude-opus-4.5'
-                },
-                
-                // === SPECIALIZED MODELS ===
-                'deepseek/deepseek-v3': {
-                    moderate: 'deepseek/deepseek-r1',
-                    complex: 'anthropic/claude-opus-4.5'
-                },
-                'x-ai/grok-3': {
-                    moderate: 'anthropic/claude-sonnet-4',
-                    complex: 'anthropic/claude-opus-4.5'
-                },
-                'mistralai/mistral-large-2': {
-                    moderate: 'anthropic/claude-sonnet-4',
-                    complex: 'anthropic/claude-sonnet-4.5'
-                },
-                
-                // === OPEN SOURCE HIGH-PERFORMANCE ===
-                'qwen/qwen-3-8b': {
-                    moderate: 'qwen/qwen-3-32b',
-                    complex: 'anthropic/claude-sonnet-4'
-                }
-            },
-            [LlmProviderType.OPENAI]: {
-                'gpt-5-nano': {
-                    moderate: 'gpt-5-mini',
-                    complex: 'gpt-5.2'
-                },
-                'gpt-5-mini': {
-                    moderate: 'gpt-5.2',
-                    complex: 'gpt-5.2'
-                },
-                'gpt-5.2': {
-                    moderate: 'gpt-5.2',
-                    complex: 'gpt-5.2'
-                }
-            },
-            [LlmProviderType.ANTHROPIC]: {
-                'claude-haiku-4': {
-                    moderate: 'claude-sonnet-4',
-                    complex: 'claude-sonnet-4.5'
-                },
-                'claude-sonnet-4': {
-                    moderate: 'claude-sonnet-4.5',
-                    complex: 'claude-opus-4'
-                },
-                'claude-sonnet-4.5': {
-                    moderate: 'claude-opus-4',
-                    complex: 'claude-opus-4'
-                }
-            },
-            [LlmProviderType.AZURE_OPENAI]: {
-                'gpt-5-nano': {
-                    moderate: 'gpt-5-mini',
-                    complex: 'gpt-5.2'
-                },
-                'gpt-5-mini': {
-                    moderate: 'gpt-5.2',
-                    complex: 'gpt-5.2'
-                },
-                'gpt-5.2': {
-                    moderate: 'gpt-5.2',
-                    complex: 'gpt-5.2'
-                }
-            },
-            // Default mappings for other providers  
-            [LlmProviderType.GEMINI]: { 
-                [baseModel]: { moderate: baseModel, complex: baseModel }
-            },
-            [LlmProviderType.XAI]: { 
-                [baseModel]: { moderate: baseModel, complex: baseModel }
-            },
-            [LlmProviderType.OLLAMA]: { 
-                [baseModel]: { moderate: baseModel, complex: baseModel }
-            },
-            [LlmProviderType.CUSTOM]: { 
-                [baseModel]: { moderate: baseModel, complex: baseModel }
-            },
-            [LlmProviderType.PROVIDER_TYPE_1]: { 
-                [baseModel]: { moderate: baseModel, complex: baseModel }
-            },
-            [LlmProviderType.PROVIDER_TYPE_2]: { 
-                [baseModel]: { moderate: baseModel, complex: baseModel }
-            },
-            [LlmProviderType.PROVIDER_TYPE_3]: { 
-                [baseModel]: { moderate: baseModel, complex: baseModel }
-            }
-        };
-        
-        // Get upgrade path for current provider and base model
-        const upgrades = modelUpgrades[this.providerType]?.[baseModel];
+        // No entry for the provider or the configured model: use it as configured.
+        const upgrades = MODEL_UPGRADES[this.providerType]?.[baseModel];
         if (!upgrades) {
-            return baseModel; // No upgrade available
+            return baseModel;
         }
         
         let selectedModel = baseModel;
@@ -1001,197 +977,6 @@ export class SystemLlmService {
         }
         
         
-        return selectedModel;
-    }
-
-    /**
-     * Get cost-aware model recommendation based on budget constraints
-     */
-    public getCostAwareModel(
-        operation: OrparOperationType,
-        context?: OrparContext,
-        budgetTier: keyof typeof OPENROUTER_MODEL_TIERS = 'STANDARD'
-    ): string {
-        if (this.providerType !== LlmProviderType.OPENROUTER) {
-            return this.getModelForOperationWithComplexity(operation, context);
-        }
-
-        const complexity = context ? this.assessContextComplexity(context) : 'simple';
-        const tierModels = OPENROUTER_MODEL_TIERS[budgetTier] as readonly string[];
-        
-        // Select model based on operation type and complexity within budget tier
-        const operationModelPreferences = {
-            observation: [
-                'google/gemini-2.5-flash',
-                'openai/gpt-5-nano',
-                'anthropic/claude-haiku-4',
-                'openai/gpt-5-mini'
-            ],
-            reasoning: [
-                'anthropic/claude-sonnet-4',
-                'openai/gpt-5.2',
-                'google/gemini-2.5-pro-preview-06-05',
-                'anthropic/claude-sonnet-4.5'
-            ],
-            action: [
-                'openai/gpt-5-mini',
-                'openai/gpt-5.2',
-                'anthropic/claude-sonnet-4',
-                'google/gemini-2.5-pro-preview-06-05'
-            ],
-            planning: [
-                'google/gemini-2.5-pro-preview-06-05',
-                'anthropic/claude-opus-4.5',
-                'anthropic/claude-sonnet-4.5',
-                'openai/gpt-5.2'
-            ],
-            reflection: [
-                'anthropic/claude-sonnet-4',
-                'anthropic/claude-sonnet-4.5',
-                'anthropic/claude-opus-4.5',
-                'deepseek/deepseek-r1'
-            ]
-        };
-
-        // Find intersection of preferred models and budget tier
-        const preferredModels = operationModelPreferences[operation];
-        const availableInTier = preferredModels.filter(model => tierModels.includes(model));
-        
-        if (availableInTier.length === 0) {
-            // Fallback to first model in tier if no preferences match
-            return tierModels[0];
-        }
-
-        // Select based on complexity
-        const complexityIndex = complexity === 'simple' ? 0 : 
-                              complexity === 'moderate' ? Math.min(1, availableInTier.length - 1) :
-                              Math.min(2, availableInTier.length - 1);
-        
-        const selectedModel = availableInTier[complexityIndex];
-        
-
-        return selectedModel;
-    }
-
-    /**
-     * Get model recommendation with load balancing across providers
-     */
-    public getLoadBalancedModel(
-        operation: OrparOperationType,
-        context?: OrparContext,
-        preferredProviders: string[] = ['anthropic', 'openai', 'google']
-    ): string {
-        if (this.providerType !== LlmProviderType.OPENROUTER) {
-            return this.getModelForOperationWithComplexity(operation, context);
-        }
-
-        const complexity = context ? this.assessContextComplexity(context) : 'simple';
-        
-        // Load balancing logic - rotate through providers based on current load
-        const currentHour = new Date().getHours();
-        const providerIndex = currentHour % preferredProviders.length;
-        const selectedProvider = preferredProviders[providerIndex];
-
-        const providerModels = {
-            anthropic: {
-                simple: 'anthropic/claude-haiku-4',
-                moderate: 'anthropic/claude-sonnet-4',
-                complex: 'anthropic/claude-opus-4.5'
-            },
-            openai: {
-                simple: 'openai/gpt-5-nano',
-                moderate: 'openai/gpt-5-mini',
-                complex: 'openai/gpt-5.2'
-            },
-            google: {
-                simple: 'google/gemini-2.5-flash',
-                moderate: 'google/gemini-2.5-flash',
-                complex: 'google/gemini-2.5-pro-preview-06-05'
-            },
-            meta: {
-                simple: 'meta-llama/llama-3.2-3b-instruct',
-                moderate: 'meta-llama/llama-3.3-70b-instruct', 
-                complex: 'meta-llama/llama-3.3-70b-instruct'
-            },
-            deepseek: {
-                simple: 'deepseek/deepseek-v3',
-                moderate: 'deepseek/deepseek-r1',
-                complex: 'deepseek/deepseek-r1'
-            }
-        };
-
-        const models = providerModels[selectedProvider as keyof typeof providerModels];
-        const selectedModel = models ? models[complexity] || this.getModelForOperation(operation) : this.getModelForOperation(operation);
-
-
-        return selectedModel;
-    }
-
-    /**
-     * Get optimized model for coordination suggestions - prioritizes speed and cost efficiency
-     * Uses simple, fast models instead of complex load balancing to reduce overhead
-     */
-    private getOptimizedCoordinationModel(): string {
-        if (this.providerType !== LlmProviderType.OPENROUTER) {
-            return this.getModelForOperation('reasoning');
-        }
-
-        // For coordination suggestions, always use the fastest, cheapest models
-        // Since coordination suggestions are simple, short tasks (max 80 words)
-        // Priority: Speed > Cost > Quality (simple tasks don't need premium models)
-        return 'anthropic/claude-haiku-4.5'; // Fast, cheap, reliable for simple coordination tasks
-    }
-
-    /**
-     * Get specialized model for specific use cases
-     */
-    public getSpecializedModel(
-        operation: OrparOperationType,
-        specialization: 'reasoning' | 'coding' | 'analysis' | 'creative' | 'multilingual' | 'speed',
-        context?: OrparContext
-    ): string {
-        if (this.providerType !== LlmProviderType.OPENROUTER) {
-            return this.getModelForOperationWithComplexity(operation, context);
-        }
-
-        const complexity = context ? this.assessContextComplexity(context) : 'moderate';
-        
-        const specializationModels = {
-            reasoning: {
-                simple: 'anthropic/claude-sonnet-4',
-                moderate: 'anthropic/claude-sonnet-4.5',
-                complex: 'deepseek/deepseek-r1'
-            },
-            coding: {
-                simple: 'anthropic/claude-haiku-4.5',
-                moderate: 'anthropic/claude-sonnet-4.5',
-                complex: 'deepseek/deepseek-r1'
-            },
-            analysis: {
-                simple: 'anthropic/claude-haiku-4',
-                moderate: 'anthropic/claude-sonnet-4',
-                complex: 'anthropic/claude-opus-4.5'
-            },
-            creative: {
-                simple: 'google/gemini-2.5-flash',
-                moderate: 'google/gemini-2.5-pro-preview-06-05',
-                complex: 'anthropic/claude-opus-4.5'
-            },
-            multilingual: {
-                simple: 'qwen/qwen-3-8b',
-                moderate: 'qwen/qwen-3-32b',
-                complex: 'google/gemini-2.5-pro-preview-06-05'
-            },
-            speed: {
-                simple: 'google/gemini-2.5-flash',
-                moderate: 'openai/gpt-5-nano',
-                complex: 'openai/gpt-5-mini'
-            }
-        };
-
-        const selectedModel = specializationModels[specialization][complexity];
-        
-
         return selectedModel;
     }
 
@@ -1806,6 +1591,9 @@ export class SystemLlmService {
         result?: any,
         sharedContext?: Partial<OrparContext['sharedContext']>
     ): OrparContext {
+        this.assertOwnerChannel(channelId);
+        this.assertServiceActive();
+
         const contextId = `${agentId}-${cycleId}`;
         const existingContext = this.activeContexts.get(contextId);
         
@@ -2001,32 +1789,46 @@ export class SystemLlmService {
      * Cleanup all data (useful for shutdown or testing)
      */
     public cleanupAll(): void {
+        // Set this first so an already-dispatched async handler cannot start
+        // more work while subscriptions and timers are being removed.
+        if (!this.isShuttingDown) {
+            this.lifecycleGeneration++;
+        }
+        this.isShuttingDown = true;
+
+        const providerCancellations = Array.from(this.providerRequestCancellations.values());
+        this.providerRequestCancellations.clear();
+        providerCancellations.forEach(cancel => cancel(
+            new Error('SystemLlmService is shutting down')
+        ));
+
+        // off() removes the EventBus bookkeeping/reference; unsubscribe() is
+        // retained as a defensive guarantee for any alternate bus implementation.
+        if (this.boundHandleConfigChange) {
+            this.eventBus.off(
+                ConfigEvents.CHANNEL_SYSTEM_LLM_CHANGED,
+                this.boundHandleConfigChange
+            );
+            this.boundHandleConfigChange = undefined;
+        }
+        if (this.configEventSubscription && !this.configEventSubscription.closed) {
+            this.configEventSubscription.unsubscribe();
+        }
+        this.configEventSubscription = undefined;
+
         if (this.cleanupTimer) {
             clearInterval(this.cleanupTimer);
             this.cleanupTimer = undefined;
         }
-        
-        if (this.coordinationCleanupTimer) {
-            clearInterval(this.coordinationCleanupTimer);
-            this.coordinationCleanupTimer = undefined;
-        }
-        
-        // Remove all event listeners to prevent further processing
-        if (this.boundHandleChannelMessageForCoordination) {
-            this.eventBus.off(Events.Message.AGENT_MESSAGE_DELIVERED, this.boundHandleChannelMessageForCoordination);
-        }
-        if (this.boundHandleOrparEventForCoordination) {
-            this.eventBus.off(Events.ControlLoop.REASONING, this.boundHandleOrparEventForCoordination);
-            this.eventBus.off(Events.ControlLoop.PLAN, this.boundHandleOrparEventForCoordination);
-            this.eventBus.off(Events.ControlLoop.ACTION, this.boundHandleOrparEventForCoordination);
-        }
+
+        this.disableCoordination();
         
         this.channelActivities.clear();
         this.activeContexts.clear();
         this.coordinationInProgress.clear();
         this.channelCoordinationLocks.clear();
-        this.coordinationInitialized = false;
-        this.isShuttingDown = true;
+        this.processedMessages.clear();
+        this.recentCoordinationContent.clear();
         
     }
 
@@ -2193,16 +1995,16 @@ export class SystemLlmService {
         schema?: any,
         options: any = {}
     ): Promise<string> {
-        // Abort if service is shutting down
-        if (this.isShuttingDown) {
-            throw new Error('Service is shutting down');
-        }
+        const lifecycleGeneration = this.lifecycleGeneration;
+        this.assertLifecycleActive(lifecycleGeneration);
 
         const startTime = Date.now();
         const operation = options.operation as OrparOperationType || 'observation';
 
         try {
             const client = await this.initClient();
+            this.assertLifecycleActive(lifecycleGeneration);
+
             const model = options.model || this.defaultModel;
             const temperature = options.temperature || this.defaultTemperature;
             const maxTokens = options.maxTokens || this.defaultMaxTokens;
@@ -2241,89 +2043,98 @@ export class SystemLlmService {
             }
 
             return new Promise((resolve, reject) => {
-                client.sendMessage(messages, [], requestOptions).subscribe({
-                    next: (response: any) => {
-                        // Check if service is shutting down before processing response
-                        if (this.isShuttingDown) {
-                            reject(new Error('Service is shutting down'));
-                            return;
-                        }
-                        
-                        // Extract response text
-                        let responseText = '';
-                        if (response && response.content) {
-                            if (Array.isArray(response.content)) {
-                                responseText = response.content
-                                    .filter((content: any) => content.type === McpContentType.TEXT)
-                                    .map((content: any) => content.text)
-                                    .join(' ');
-                            } else if (typeof response.content === 'string') {
-                                responseText = response.content;
-                            } else if (response.content.text) {
-                                responseText = response.content.text;
-                            }
-                        } else if (typeof response === 'string') {
-                            responseText = response;
-                        } else if (response?.text) {
-                            responseText = response.text;
-                        } else if (response?.message?.content) {
-                            responseText = response.message.content;
-                        } else {
-                            this.logger.error(`Failed to extract text from LLM response. Response structure:`, JSON.stringify(response, null, 2));
-                            responseText = '';
-                        }
-                        
-                        // Validate that we got a non-empty response
-                        if (!responseText || responseText.trim() === '') {
-                            const errorMsg = `Empty or invalid LLM response. Model: ${model}`;
-                            this.logger.error(errorMsg);
-                            reject(new Error(errorMsg));
-                            return;
-                        }
+                const providerSubscription = new Subscription();
+                let settled = false;
 
-                        
-                        // Check if service is shutting down before processing response
-                        if (this.isShuttingDown) {
-                            reject(new Error('Service shutting down'));
-                            return;
-                        }
-                        
-                        // Track successful metrics
-                        const responseTime = Date.now() - startTime;
-                        this.trackMetrics(operation, responseTime, model);
-
-                        // Charge the call against the daily budget using the token counts
-                        // the provider billed, not an estimate. A response without usage
-                        // means the provider told us nothing to charge — recorded as zero
-                        // and logged, rather than guessed at.
-                        const usage = response?.usage;
-                        if (usage && typeof usage.input_tokens === 'number' && typeof usage.output_tokens === 'number') {
-                            SystemLlmBudgetService.getInstance().recordUsage(model, {
-                                inputTokens: usage.input_tokens,
-                                outputTokens: usage.output_tokens
-                            });
-                        } else {
-                            this.logger.warn(
-                                `[SystemLLM] ${model} returned no token usage — this call is not counted ` +
-                                'against the daily budget'
-                            );
-                        }
-
-                        this.logger.debug(`[SystemLLM:Internal] LLM call completed - model: ${model}, time: ${responseTime}ms, response: ${responseText.length} chars`);
-
-                        resolve(responseText);
-                    },
-                    error: (error: any) => {
-                        const errorMsg = `LLM request failed for model ${model}: ${error}`;
-                        this.logger.error(errorMsg);
-                        
-                        // Track error metrics
-                        const responseTime = Date.now() - startTime;
-                        this.trackMetrics(operation, responseTime, model, error);
-                        
-                        reject(new Error(errorMsg));
+                const settle = (complete: () => void): void => {
+                    if (settled) {
+                        return;
                     }
-                });
+
+                    settled = true;
+                    this.providerRequestCancellations.delete(providerSubscription);
+                    providerSubscription.unsubscribe();
+                    complete();
+                };
+                const cancel = (error: Error): void => settle(() => reject(error));
+                this.providerRequestCancellations.set(providerSubscription, cancel);
+
+                try {
+                    // This is deliberately adjacent to the provider call: cleanup
+                    // may have advanced the lifecycle while client initialization
+                    // was pending, and no paid request may begin afterward.
+                    this.assertLifecycleActive(lifecycleGeneration);
+                    const responseSubscription = client.sendMessage(messages, [], requestOptions).subscribe({
+                        next: (response: McpApiResponse) => {
+                            if (!this.isLifecycleActive(lifecycleGeneration)) {
+                                cancel(new Error('SystemLlmService is shutting down'));
+                                return;
+                            }
+
+                            const responseText = response.content
+                                .filter((content): content is McpTextContent => (
+                                    content.type === McpContentType.TEXT
+                                ))
+                                .map(content => content.text)
+                                .join(' ');
+
+                            // Validate that we got a non-empty response
+                            if (!responseText || responseText.trim() === '') {
+                                const errorMsg = `Empty or invalid LLM response. Model: ${model}`;
+                                this.logger.error(errorMsg);
+                                cancel(new Error(errorMsg));
+                                return;
+                            }
+
+                        
+                            if (!this.isLifecycleActive(lifecycleGeneration)) {
+                                cancel(new Error('SystemLlmService is shutting down'));
+                                return;
+                            }
+                        
+                            // Track successful metrics
+                            const responseTime = Date.now() - startTime;
+                            this.trackMetrics(operation, responseTime, model);
+
+                            // Charge the call against the daily budget using the token counts
+                            // the provider billed, not an estimate. A response without usage
+                            // means the provider told us nothing to charge — recorded as zero
+                            // and logged, rather than guessed at.
+                            const usage = response?.usage;
+                            if (usage && typeof usage.input_tokens === 'number' && typeof usage.output_tokens === 'number') {
+                                SystemLlmBudgetService.getInstance().recordUsage(model, {
+                                    inputTokens: usage.input_tokens,
+                                    outputTokens: usage.output_tokens
+                                });
+                            } else {
+                                this.logger.warn(
+                                    `[SystemLLM] ${model} returned no token usage — this call is not counted ` +
+                                    'against the daily budget'
+                                );
+                            }
+
+                            this.logger.debug(`[SystemLLM:Internal] LLM call completed - model: ${model}, time: ${responseTime}ms, response: ${responseText.length} chars`);
+
+                            settle(() => resolve(responseText));
+                        },
+                        error: (error: unknown) => {
+                            const requestError = error instanceof Error
+                                ? error
+                                : new Error(String(error));
+                            const errorMsg = `LLM request failed for model ${model}: ${requestError.message}`;
+                            this.logger.error(errorMsg);
+                        
+                            // Track error metrics
+                            const responseTime = Date.now() - startTime;
+                            this.trackMetrics(operation, responseTime, model, requestError);
+                        
+                            cancel(new Error(errorMsg));
+                        }
+                    });
+                    providerSubscription.add(responseSubscription);
+                } catch (error) {
+                    cancel(error instanceof Error ? error : new Error(String(error)));
+                }
             });
         } catch (error) {
             const errorMsg = `LLM request setup failed: ${error}`;
@@ -2346,6 +2157,16 @@ export class SystemLlmService {
         schema?: any,
         options: any = {}
     ): Promise<string> {
+        const operationType = typeof options?.operationType === 'string'
+            ? options.operationType
+            : undefined;
+        if (!this.configManager.isChannelSystemLlmEnabled(
+            this.ownerChannelId,
+            operationType
+        )) {
+            throw new Error(`SystemLLM is disabled for channel ${this.ownerChannelId}`);
+        }
+
         return this.sendLlmRequestWithRecovery(prompt, schema, options);
     }
     
@@ -2471,6 +2292,9 @@ export class SystemLlmService {
         response: string, 
         channelId: string
     ): Promise<InterpretedAction> {
+        this.assertOwnerChannel(channelId);
+        this.assertServiceActive();
+
         try {
             const startTime = Date.now();
             
@@ -3405,6 +3229,9 @@ ${JSON.stringify(TOOL_RECOMMENDATION_SCHEMA, null, 2)}`;
         injectionType: 'coordination_hint' | 'context_reminder' | 'activity_alert' | 'tool_suggestion' | 'pattern_insight',
         agentId?: AgentId
     ): Promise<SystemEphemeralEventPayload> {
+        this.assertOwnerChannel(channelId);
+        this.assertServiceActive();
+
         try {
 
             // Step 1: Get rich temporal context via existing Time MCP server
@@ -3496,6 +3323,9 @@ ${JSON.stringify(TOOL_RECOMMENDATION_SCHEMA, null, 2)}`;
      * @returns Promise resolving to coordination analysis
      */
     public async analyzeChannelForCoordination(channelId: ChannelId): Promise<CoordinationAnalysis> {
+        this.assertOwnerChannel(channelId);
+        this.assertServiceActive();
+
         // Guard: Check if coordination is enabled for this channel
         if (!this.configManager.isChannelSystemLlmEnabled(channelId, 'coordination')) {
             return this.createEmptyCoordinationAnalysis(channelId);
@@ -3961,6 +3791,9 @@ Create a helpful, contextual hint that provides value without being intrusive. K
         channelId: ChannelId,
         messages: ChannelMessage[]
     ): Promise<any> {
+        this.assertOwnerChannel(channelId);
+        this.assertServiceActive();
+
         try {
             // Use LLM to analyze conversation patterns intelligently
             const conversationContext = messages.slice(-20).map(msg => ({
@@ -4111,12 +3944,19 @@ Create a helpful, contextual hint that provides value without being intrusive. K
         this.boundHandleOrparEventForCoordination = this.handleOrparEventForCoordination.bind(this);
 
         // Listen to all channel messages for coordination analysis (only one event type to avoid duplicates)
-        this.eventBus.on(Events.Message.AGENT_MESSAGE_DELIVERED, this.boundHandleChannelMessageForCoordination);
+        this.coordinationEventSubscriptions.push(
+            this.eventBus.on(
+                Events.Message.AGENT_MESSAGE_DELIVERED,
+                this.boundHandleChannelMessageForCoordination
+            )
+        );
         
         // Listen to ORPAR events for context injection
-        this.eventBus.on(Events.ControlLoop.REASONING, this.boundHandleOrparEventForCoordination);
-        this.eventBus.on(Events.ControlLoop.PLAN, this.boundHandleOrparEventForCoordination);
-        this.eventBus.on(Events.ControlLoop.ACTION, this.boundHandleOrparEventForCoordination);
+        this.coordinationEventSubscriptions.push(
+            this.eventBus.on(Events.ControlLoop.REASONING, this.boundHandleOrparEventForCoordination),
+            this.eventBus.on(Events.ControlLoop.PLAN, this.boundHandleOrparEventForCoordination),
+            this.eventBus.on(Events.ControlLoop.ACTION, this.boundHandleOrparEventForCoordination)
+        );
 
         // Clean up old activity data every 10 minutes
         this.coordinationCleanupTimer = setInterval(() => this.cleanupOldCoordinationActivity(), 600000);
@@ -4129,22 +3969,29 @@ Create a helpful, contextual hint that provides value without being intrusive. K
      */
     private async handleChannelMessageForCoordination(payload: any): Promise<void> {
         try {
+            const lifecycleGeneration = this.lifecycleGeneration;
+
             // Check if service is shutting down
-            if (this.isShuttingDown) {
+            if (!this.isLifecycleActive(lifecycleGeneration)) {
                 return;
             }
 
-            // Handle different message event formats and extract channelId
-            let channelId: string | undefined;
+            // Resolve and reject the channel before touching coordination state,
+            // configuration, or any LLM-facing work. Every managed instance sees
+            // the shared bus, but only the owner is allowed to process this event.
+            const channelId = payload?.channelId || payload?.data?.channelId;
+            if (channelId !== this.ownerChannelId) {
+                return;
+            }
+
+            // Handle different message event formats and extract the message.
             let message: any;
             
             if (payload.data) {
                 // CHANNEL_MESSAGE_DELIVERED format
-                channelId = payload.channelId || payload.data.channelId;
                 message = payload.data.message || payload.data;
             } else {
                 // AGENT_MESSAGE format
-                channelId = payload.channelId;
                 message = {
                     senderId: payload.data?.senderId || payload.agentId,
                     receiverId: payload.data?.receiverId,
@@ -4153,7 +4000,7 @@ Create a helpful, contextual hint that provides value without being intrusive. K
                 };
             }
             
-            if (!channelId || !message) {
+            if (!message) {
                 return;
             }
 
@@ -4185,9 +4032,15 @@ Create a helpful, contextual hint that provides value without being intrusive. K
 
             // Update channel activity tracking
             await this.updateChannelActivity(channelId, message);
+            if (!this.isLifecycleActive(lifecycleGeneration)) {
+                return;
+            }
 
             // Check for coordination triggers
             const triggerType = await this.detectCoordinationTrigger(channelId);
+            if (!this.isLifecycleActive(lifecycleGeneration)) {
+                return;
+            }
             
             if (triggerType) {
                 // Immediate channel lock to prevent concurrent coordination checks
@@ -4219,14 +4072,18 @@ Create a helpful, contextual hint that provides value without being intrusive. K
      */
     private async handleOrparEventForCoordination(payload: any): Promise<void> {
         try {
+            const lifecycleGeneration = this.lifecycleGeneration;
+
             // Check if service is shutting down
-            if (this.isShuttingDown) {
+            if (!this.isLifecycleActive(lifecycleGeneration)) {
                 return;
             }
 
             const { agentId, channelId } = payload;
 
-            if (!channelId) return;
+            // All service instances subscribe to the shared ORPAR events. Reject
+            // non-owner events before consulting config or generating context.
+            if (channelId !== this.ownerChannelId) return;
 
             // Guard: Check if coordination is enabled for this channel
             if (!this.configManager.isChannelSystemLlmEnabled(channelId, 'coordination')) {
@@ -4342,8 +4199,10 @@ Create a helpful, contextual hint that provides value without being intrusive. K
         triggerMessage: ChannelMessage | null,
         _targetAgentId?: AgentId
     ): Promise<void> {
+        const lifecycleGeneration = this.lifecycleGeneration;
+
         // Abort if service is shutting down
-        if (this.isShuttingDown) {
+        if (!this.isLifecycleActive(lifecycleGeneration)) {
             return;
         }
 
@@ -4378,14 +4237,22 @@ Create a helpful, contextual hint that provides value without being intrusive. K
 
             // Analyze channel for coordination opportunities
             const coordinationAnalysis = await this.analyzeChannelForCoordination(channelId);
+            if (!this.isLifecycleActive(lifecycleGeneration)) {
+                return;
+            }
 
             // Generate contextual coordination suggestion
             const suggestionContent = await this.generateCoordinationSuggestionContent(
                 triggerType, 
                 coordinationAnalysis, 
                 activity,
-                triggerMessage
+                triggerMessage,
+                lifecycleGeneration
             );
+
+            if (!this.isLifecycleActive(lifecycleGeneration)) {
+                return;
+            }
 
             if (suggestionContent) {
                 await this.injectSystemCoordinationMessage(channelId, suggestionContent, triggerType);
@@ -4400,9 +4267,7 @@ Create a helpful, contextual hint that provides value without being intrusive. K
             const coordinationKey = `${channelId}:${triggerType}`;
             this.coordinationInProgress.delete(coordinationKey);
             // Clean up the channel-level lock after a delay to ensure no rapid duplicate coordination
-            setTimeout(() => {
-                this.channelCoordinationLocks.delete(channelId);
-            }, 3000); // Keep lock for 3 seconds
+            this.scheduleCoordinationLockRelease(channelId, lifecycleGeneration);
         }
     }
 
@@ -4413,10 +4278,11 @@ Create a helpful, contextual hint that provides value without being intrusive. K
         triggerType: string,
         coordinationAnalysis: any,
         activity: any,
-        _triggerMessage: ChannelMessage | null
+        _triggerMessage: ChannelMessage | null,
+        lifecycleGeneration: number
     ): Promise<string | null> {
         // Abort if service is shutting down
-        if (this.isShuttingDown) {
+        if (!this.isLifecycleActive(lifecycleGeneration)) {
             return null;
         }
         
@@ -4447,29 +4313,30 @@ Generate a concise, actionable coordination suggestion (max 80 words) that:
 
 Start with "💡 System coordination insight:" followed by your suggestion.`;
 
-        // Use optimized model selection for coordination suggestions (simple, fast models)
-        const model = this.getOptimizedCoordinationModel();
-        
-        // Alternative options for even more variety:
-        // const model = this.getSpecializedModel('reasoning', 'analysis'); // Specialized for analysis tasks
-        // const model = this.getCostAwareModel('reasoning', 'balanced'); // Cost-optimized selection
+        // Coordination suggestions are short; they use the observation model,
+        // the operation configured for fast, light work. This used to be a
+        // hard-coded model id regardless of configuration.
+        const model = this.getModelForOperation('observation');
             
-        // Add timeout protection
-        const timeoutPromise = new Promise<never>((_, reject) => {
-            setTimeout(() => reject(new Error('Coordination suggestion timeout')), 30000);
-        });
-        
-        const response = await Promise.race([
-                this.sendLlmRequestWithRecovery(prompt, null, { 
-                    model, 
-                    temperature: 0.7,
-                    maxTokens: 200 
-                }),
-                timeoutPromise
-            ]) as string;
+        // Add timeout protection and keep a cancellation handle owned by this
+        // service so cleanup can release the pending coordination continuation.
+        const timeout = this.createCoordinationTimeout(lifecycleGeneration);
+        let response: string;
+        try {
+            response = await Promise.race([
+                    this.sendLlmRequestWithRecovery(prompt, null, {
+                        model,
+                        temperature: 0.7,
+                        maxTokens: 200
+                    }),
+                    timeout.promise
+                ]) as string;
+        } finally {
+            timeout.cancel();
+        }
 
             // Check if service is shutting down before processing response
-            if (this.isShuttingDown) {
+            if (!this.isLifecycleActive(lifecycleGeneration)) {
                 return null;
             }
 
@@ -4480,6 +4347,10 @@ Start with "💡 System coordination insight:" followed by your suggestion.`;
             return trimmedResponse;
 
         } catch (error) {
+            if (!this.isLifecycleActive(lifecycleGeneration)) {
+                return null;
+            }
+
             this.logger.warn(`LLM coordination suggestion failed, using fallback: ${error}`);
             const fallback = this.getFallbackCoordinationSuggestion(triggerType, activity);
             this.logger.debug(`[SystemLLM:Coordination] Using fallback for ${triggerType}:\n${fallback}`);
@@ -4662,6 +4533,9 @@ Start with "💡 System coordination insight:" followed by your suggestion.`;
         compressionRatio: number;
         strategy: string;
     }> {
+        this.assertOwnerChannel(channelId);
+        this.assertServiceActive();
+
         const startTime = Date.now();
         
         try {
@@ -4941,6 +4815,10 @@ Start with "💡 System coordination insight:" followed by your suggestion.`;
         }
     ): Promise<number[]> {
         try {
+            this.assertServiceActive();
+            const lifecycleGeneration = this.lifecycleGeneration;
+            assertExternalLlmCallAllowed(`${this.providerType} embeddings`);
+
             // Determine embedding model based on provider
             const embeddingModel = options?.model || this.getDefaultEmbeddingModel();
             const dimensions = options?.dimensions || 1536;
@@ -5010,6 +4888,9 @@ Start with "💡 System coordination insight:" followed by your suggestion.`;
             }
 
             await client.initialize(initConfig);
+            if (!this.isLifecycleActive(lifecycleGeneration)) {
+                throw new Error('SystemLlmService stopped during embedding client initialization');
+            }
 
             // Import OpenAI dynamically to access embeddings API
             const OpenAI = require('openai').default;
@@ -5024,6 +4905,9 @@ Start with "💡 System coordination insight:" followed by your suggestion.`;
                 input: text,
                 dimensions
             });
+            if (!this.isLifecycleActive(lifecycleGeneration)) {
+                throw new Error('SystemLlmService stopped during embedding generation');
+            }
 
             const embedding = response.data[0].embedding;
 

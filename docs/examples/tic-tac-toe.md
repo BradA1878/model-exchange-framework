@@ -13,18 +13,30 @@ Watch two AI personalities battle it out:
 
 ### 1. Channel-Scoped MCP Server
 
-The game registers a channel-specific MCP server so tools are isolated to the game:
+The administrator SDK creates the channel with a channel-specific MCP process, so
+the game tools are isolated to that channel. The MXF server operator must set
+`MXF_UNSAFE_STDIO_MCP_ENABLED=true` because this starts a process on the MXF host:
 
 ```typescript
-const mcpResult = await adminAgent.registerChannelMcpServer({
-    id: 'tic-tac-toe-mcp-server',
-    name: 'Tic-Tac-Toe Game Server',
-    transport: 'http',
-    url: `http://localhost:${GAME_PORT}/mcp`,
-    autoStart: true,
-    keepAliveMinutes: 30
+const channel = await sdk.createChannel('tic-tac-toe-game', {
+    name: 'Tic-Tac-Toe Arena',
+    mcpServers: [{
+        id: 'tic-tac-toe-mcp-server',
+        name: 'Tic-Tac-Toe Game Tools',
+        transport: 'stdio',
+        command: 'bun',
+        args: ['run', './examples/tic-tac-toe/server/mcp/TicTacToeMcpServer.ts'],
+        autoStart: true,
+        keepAliveMinutes: 10,
+        environmentVariables: {
+            GAME_SERVER_URL: `http://localhost:${GAME_PORT}`
+        }
+    }]
 });
 ```
+
+The child process speaks MCP over `stdio`. `GAME_SERVER_URL` is the separate game
+API that the child calls; it is not an HTTP MCP transport URL.
 
 ### 2. Simple Turn-Based Game Loop
 
@@ -53,14 +65,19 @@ while (!gameOver) {
 ### 4. Agent Personality via System Prompts
 
 ```typescript
+import { LlmProviderType } from '@mxf-dev/sdk';
+
 const playerX = await sdk.createAgent({
     agentId: 'professor-x',
     name: 'Professor X',
-    personality: `You are Professor X, a supremely confident AI player.
+    channelId: 'tic-tac-toe-game',
+    keyId: process.env.PROFESSOR_X_KEY_ID!,
+    secretKey: process.env.PROFESSOR_X_SECRET_KEY!,
+    llmProvider: LlmProviderType.OPENROUTER,
+    defaultModel: '~anthropic/claude-haiku-latest',
+    agentConfigPrompt: `You are Professor X, a supremely confident AI player.
     You love to taunt your opponent and celebrate your moves.
-    You play X and always aim for the win.`,
-    provider: 'openrouter',
-    model: 'anthropic/claude-haiku-4.5'
+    You play X and always aim for the win.`
 });
 ```
 
@@ -76,18 +93,14 @@ const playerX = await sdk.createAgent({
 2. Install dependencies:
    ```bash
    cd examples/tic-tac-toe
-   npm install
-   cd client && npm install && cd ..
+   bun install
+   cd client && bun install && cd ..
    ```
 
 ### Start the Game
 
 ```bash
-# Terminal 1: Start game server
-bun run server
-
-# Terminal 2: Connect agents and play
-bun run agents
+bun run game
 ```
 
 ## Game Flow

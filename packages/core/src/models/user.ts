@@ -73,6 +73,10 @@ export interface IUser extends Document {
     avatar?: string;
     isActive: boolean;
     lastLogin?: Date;
+    /** SHA-256 digest of the only currently valid magic-link nonce. */
+    magicLinkNonceHash?: string;
+    /** Server-side expiry used with the nonce for atomic one-time consumption. */
+    magicLinkExpiresAt?: Date;
     createdAt: Date;
     updatedAt: Date;
     
@@ -130,6 +134,14 @@ const UserSchema = new Schema<IUser>({
     },
     lastLogin: { 
         type: Date
+    },
+    magicLinkNonceHash: {
+        type: String,
+        select: false
+    },
+    magicLinkExpiresAt: {
+        type: Date,
+        select: false
     },
     createdAt: { 
         type: Date, 

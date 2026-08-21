@@ -123,6 +123,9 @@ Detailed reference for all `/tasks` endpoints.
 **POST** `/tasks/:taskId/assign-intelligent`
 - **Auth:** JWT
 - **Params:** `taskId` (string)
+- Only a `pending` task can be assigned. Every assignment scope (single, multiple,
+  channel-wide) writes through one status-checked update, so a request that
+  arrives after the task has moved on fails instead of resetting it to `assigned`.
 
 - **Response (200):**
 

@@ -7,6 +7,32 @@
 
 import { Request, Response } from 'express';
 
+interface AuthenticatedTestRequest extends Partial<Request> {
+    user?: {
+        id: string;
+        role?: string;
+    };
+}
+
+const mockDeactivateAgentKeys = jest.fn();
+const mockClaimAgentIdentity = jest.fn();
+
+jest.mock('../../../src/server/security/AgentIdentityOwnershipService', () => ({
+    __esModule: true,
+    default: { claimOrValidate: mockClaimAgentIdentity },
+    AgentIdentityOwnershipError: class AgentIdentityOwnershipError extends Error {
+        public readonly code: string;
+        public readonly statusCode: number;
+
+        constructor(code: string, message: string, statusCode: number = 409) {
+            super(message);
+            this.name = 'AgentIdentityOwnershipError';
+            this.code = code;
+            this.statusCode = statusCode;
+        }
+    }
+}));
+
 // Mock dependencies before importing controller
 jest.mock('@mxf-dev/core/models/agent', () => ({
     Agent: {
@@ -22,6 +48,11 @@ jest.mock('@mxf-dev/core/models/memory', () => ({
     AgentMemory: {
         deleteMany: jest.fn()
     }
+}));
+
+jest.mock('../../../src/server/socket/services/ChannelKeyService', () => ({
+    __esModule: true,
+    default: { deactivateAgentKeys: mockDeactivateAgentKeys }
 }));
 
 jest.mock('@mxf-dev/core/utils/Logger', () => ({
@@ -54,6 +85,7 @@ jest.mock('@mxf-dev/core/events/EventBus', () => ({
 
 import { Agent } from '@mxf-dev/core/models/agent';
 import { AgentMemory } from '@mxf-dev/core/models/memory';
+import { AgentIdentityOwnershipError } from '../../../src/server/security/AgentIdentityOwnershipService';
 import {
     getAgents,
     getAgentById,
@@ -62,13 +94,11 @@ import {
     deleteAgent,
     getAgentsByService,
     getAgentContext,
-    getOrCreateAgentMemory,
-    updateAgentMemory,
     updateAgentContext
 } from '../../../src/server/api/controllers/agentController';
 
 describe('AgentController', () => {
-    let mockReq: Partial<Request>;
+    let mockReq: AuthenticatedTestRequest;
     let mockRes: Partial<Response>;
     let jsonMock: jest.Mock;
     let statusMock: jest.Mock;
@@ -85,10 +115,13 @@ describe('AgentController', () => {
             params: {},
             body: {},
             query: {}
-        } as Partial<Request>;
+        } as AuthenticatedTestRequest;
 
         // Add user to the request (authentication middleware adds this)
-        (mockReq as any).user = { id: 'test-user-id' };
+        mockReq.user = { id: 'test-user-id' };
+
+        mockDeactivateAgentKeys.mockResolvedValue(1);
+        mockClaimAgentIdentity.mockResolvedValue(undefined);
 
         mockRes = {
             status: statusMock,
@@ -236,6 +269,9 @@ describe('AgentController', () => {
             await createAgent(mockReq as Request, mockRes as Response);
 
             expect(statusMock).toHaveBeenCalledWith(201);
+            expect(mockClaimAgentIdentity).toHaveBeenCalledWith('new-agent', 'test-user-id');
+            expect(mockClaimAgentIdentity.mock.invocationCallOrder[0])
+                .toBeLessThan((Agent.create as jest.Mock).mock.invocationCallOrder[0]);
             expect(jsonMock).toHaveBeenCalledWith(
                 expect.objectContaining({ success: true })
             );
@@ -301,25 +337,18 @@ describe('AgentController', () => {
             expect(statusMock).toHaveBeenCalledWith(404);
         });
 
-        it('should update allowedTools', async () => {
+        it('does not mutate credential-owned allowedTools through the agent profile', async () => {
             mockReq.params = { agentId: 'agent-1' };
             mockReq.body = { allowedTools: ['tool_help', 'messaging_send'] };
 
-            const updatedAgent = {
-                agentId: 'agent-1',
-                allowedTools: ['tool_help', 'messaging_send']
-            };
-            (Agent.findOneAndUpdate as jest.Mock).mockResolvedValue(updatedAgent);
-
             await updateAgent(mockReq as Request, mockRes as Response);
 
-            expect(Agent.findOneAndUpdate).toHaveBeenCalledWith(
-                expect.anything(),
-                expect.objectContaining({
-                    allowedTools: ['tool_help', 'messaging_send']
-                }),
-                expect.anything()
-            );
+            expect(statusMock).toHaveBeenCalledWith(400);
+            expect(jsonMock).toHaveBeenCalledWith(expect.objectContaining({
+                success: false,
+                message: expect.stringContaining('channel keys')
+            }));
+            expect(Agent.findOneAndUpdate).not.toHaveBeenCalled();
         });
     });
 
@@ -331,11 +360,38 @@ describe('AgentController', () => {
         it('should return 200 when agent deleted', async () => {
             mockReq.params = { agentId: 'agent-1' };
 
-            (Agent.findOneAndDelete as jest.Mock).mockResolvedValue({ agentId: 'agent-1' });
+            const persistedAgent = {
+                _id: 'persisted-agent-id',
+                agentId: 'agent-1',
+                createdBy: 'test-user-id'
+            };
+            (Agent.findOne as jest.Mock).mockResolvedValue(persistedAgent);
+            (Agent.findOneAndDelete as jest.Mock).mockResolvedValue(persistedAgent);
             (AgentMemory.deleteMany as jest.Mock).mockResolvedValue({ deletedCount: 1 });
 
             await deleteAgent(mockReq as Request, mockRes as Response);
 
+            expect(mockClaimAgentIdentity).toHaveBeenCalledWith(
+                'agent-1',
+                'test-user-id'
+            );
+            expect(mockDeactivateAgentKeys).toHaveBeenCalledWith(
+                'agent-1',
+                'test-user-id'
+            );
+            expect(Agent.findOneAndDelete).toHaveBeenCalledWith({
+                _id: 'persisted-agent-id',
+                agentId: 'agent-1',
+                createdBy: 'test-user-id'
+            });
+            expect(mockDeactivateAgentKeys.mock.invocationCallOrder[0])
+                .toBeLessThan((Agent.findOneAndDelete as jest.Mock).mock.invocationCallOrder[0]);
+            expect(mockClaimAgentIdentity.mock.invocationCallOrder[0])
+                .toBeLessThan(mockDeactivateAgentKeys.mock.invocationCallOrder[0]);
+            expect(mockDeactivateAgentKeys.mock.invocationCallOrder[0])
+                .toBeLessThan((AgentMemory.deleteMany as jest.Mock).mock.invocationCallOrder[0]);
+            expect((AgentMemory.deleteMany as jest.Mock).mock.invocationCallOrder[0])
+                .toBeLessThan((Agent.findOneAndDelete as jest.Mock).mock.invocationCallOrder[0]);
             expect(statusMock).toHaveBeenCalledWith(200);
             expect(jsonMock).toHaveBeenCalledWith(
                 expect.objectContaining({
@@ -348,17 +404,25 @@ describe('AgentController', () => {
         it('should return 404 when agent not found', async () => {
             mockReq.params = { agentId: 'non-existent' };
 
-            (Agent.findOneAndDelete as jest.Mock).mockResolvedValue(null);
+            (Agent.findOne as jest.Mock).mockResolvedValue(null);
 
             await deleteAgent(mockReq as Request, mockRes as Response);
 
             expect(statusMock).toHaveBeenCalledWith(404);
+            expect(mockDeactivateAgentKeys).not.toHaveBeenCalled();
+            expect(Agent.findOneAndDelete).not.toHaveBeenCalled();
         });
 
         it('should clean up agent memory on delete', async () => {
             mockReq.params = { agentId: 'agent-1' };
 
-            (Agent.findOneAndDelete as jest.Mock).mockResolvedValue({ agentId: 'agent-1' });
+            const persistedAgent = {
+                _id: 'persisted-agent-id',
+                agentId: 'agent-1',
+                createdBy: 'test-user-id'
+            };
+            (Agent.findOne as jest.Mock).mockResolvedValue(persistedAgent);
+            (Agent.findOneAndDelete as jest.Mock).mockResolvedValue(persistedAgent);
             (AgentMemory.deleteMany as jest.Mock).mockResolvedValue({ deletedCount: 5 });
 
             await deleteAgent(mockReq as Request, mockRes as Response);
@@ -366,14 +430,83 @@ describe('AgentController', () => {
             expect(AgentMemory.deleteMany).toHaveBeenCalledWith({ agentId: 'agent-1' });
         });
 
-        it('should succeed even if memory cleanup fails', async () => {
+        it('fails honestly and leaves the Agent retryable when memory cleanup fails', async () => {
             mockReq.params = { agentId: 'agent-1' };
 
-            (Agent.findOneAndDelete as jest.Mock).mockResolvedValue({ agentId: 'agent-1' });
+            const persistedAgent = {
+                _id: 'persisted-agent-id',
+                agentId: 'agent-1',
+                createdBy: 'test-user-id'
+            };
+            (Agent.findOne as jest.Mock).mockResolvedValue(persistedAgent);
+            (Agent.findOneAndDelete as jest.Mock).mockResolvedValue(persistedAgent);
             (AgentMemory.deleteMany as jest.Mock).mockRejectedValue(new Error('Memory error'));
 
             await deleteAgent(mockReq as Request, mockRes as Response);
 
+            expect(statusMock).toHaveBeenCalledWith(500);
+            expect(Agent.findOneAndDelete).not.toHaveBeenCalled();
+        });
+
+        it('fails closed before deletion when credential revocation fails', async () => {
+            mockReq.params = { agentId: 'agent-1' };
+            (Agent.findOne as jest.Mock).mockResolvedValue({
+                _id: 'persisted-agent-id',
+                agentId: 'agent-1',
+                createdBy: 'test-user-id'
+            });
+            mockDeactivateAgentKeys.mockRejectedValue(new Error('key database unavailable'));
+
+            await deleteAgent(mockReq as Request, mockRes as Response);
+
+            expect(statusMock).toHaveBeenCalledWith(500);
+            expect(Agent.findOneAndDelete).not.toHaveBeenCalled();
+            expect(AgentMemory.deleteMany).not.toHaveBeenCalled();
+        });
+
+        it('returns the actionable ownership status and performs no deletion on reservation conflict', async () => {
+            mockReq.params = { agentId: 'agent-1' };
+            (Agent.findOne as jest.Mock).mockResolvedValue({
+                _id: 'persisted-agent-id',
+                agentId: 'agent-1',
+                createdBy: 'test-user-id'
+            });
+            mockClaimAgentIdentity.mockRejectedValue(
+                new AgentIdentityOwnershipError(
+                    'LEGACY_OWNERSHIP_CONFLICT',
+                    'legacy ownership conflict',
+                    409
+                )
+            );
+
+            await deleteAgent(mockReq as Request, mockRes as Response);
+
+            expect(statusMock).toHaveBeenCalledWith(409);
+            expect(jsonMock).toHaveBeenCalledWith(expect.objectContaining({
+                success: false,
+                message: 'legacy ownership conflict'
+            }));
+            expect(mockDeactivateAgentKeys).not.toHaveBeenCalled();
+            expect(AgentMemory.deleteMany).not.toHaveBeenCalled();
+            expect(Agent.findOneAndDelete).not.toHaveBeenCalled();
+        });
+
+        it('uses the persisted owner when an administrator deletes another owner\'s agent', async () => {
+            mockReq.user = { id: 'admin-id', role: 'admin' };
+            mockReq.params = { agentId: 'agent-1' };
+            const persistedAgent = {
+                _id: 'persisted-agent-id',
+                agentId: 'agent-1',
+                createdBy: 'owner-id'
+            };
+            (Agent.findOne as jest.Mock).mockResolvedValue(persistedAgent);
+            (Agent.findOneAndDelete as jest.Mock).mockResolvedValue(persistedAgent);
+            (AgentMemory.deleteMany as jest.Mock).mockResolvedValue({ deletedCount: 0 });
+
+            await deleteAgent(mockReq as Request, mockRes as Response);
+
+            expect(Agent.findOne).toHaveBeenCalledWith({ agentId: 'agent-1' });
+            expect(mockDeactivateAgentKeys).toHaveBeenCalledWith('agent-1', 'owner-id');
             expect(statusMock).toHaveBeenCalledWith(200);
         });
     });
@@ -387,13 +520,31 @@ describe('AgentController', () => {
             mockReq.params = { serviceType: 'testing' };
 
             const mockAgents = [{ agentId: 'agent-1', serviceTypes: ['testing'] }];
+            const sort = jest.fn().mockResolvedValue(mockAgents);
             (Agent.find as jest.Mock).mockReturnValue({
-                sort: jest.fn().mockResolvedValue(mockAgents)
+                select: jest.fn().mockReturnValue({ sort })
             });
 
             await getAgentsByService(mockReq as Request, mockRes as Response);
 
             expect(statusMock).toHaveBeenCalledWith(200);
+            expect(Agent.find).toHaveBeenCalledWith({
+                serviceTypes: 'testing',
+                status: 'ACTIVE',
+                createdBy: 'test-user-id'
+            });
+        });
+
+        it('allows an administrator to query active agents across owners', async () => {
+            mockReq.user = { id: 'admin-user-id', role: 'admin' };
+            mockReq.params = { serviceType: 'testing' };
+            const sort = jest.fn().mockResolvedValue([]);
+            (Agent.find as jest.Mock).mockReturnValue({
+                select: jest.fn().mockReturnValue({ sort })
+            });
+
+            await getAgentsByService(mockReq as Request, mockRes as Response);
+
             expect(Agent.find).toHaveBeenCalledWith({
                 serviceTypes: 'testing',
                 status: 'ACTIVE'
@@ -403,8 +554,9 @@ describe('AgentController', () => {
         it('should return empty array for unknown service type', async () => {
             mockReq.params = { serviceType: 'unknown' };
 
+            const sort = jest.fn().mockResolvedValue([]);
             (Agent.find as jest.Mock).mockReturnValue({
-                sort: jest.fn().mockResolvedValue([])
+                select: jest.fn().mockReturnValue({ sort })
             });
 
             await getAgentsByService(mockReq as Request, mockRes as Response);
@@ -463,122 +615,6 @@ describe('AgentController', () => {
     });
 
     // =========================================================================
-    // getOrCreateAgentMemory
-    // =========================================================================
-
-    describe('getOrCreateAgentMemory', () => {
-        it('should return existing memory', async () => {
-            mockReq.params = { keyId: 'key-123' };
-
-            const mockAgent = {
-                keyId: 'key-123',
-                memory: {
-                    notes: { key: 'value' },
-                    conversationHistory: [],
-                    customData: {},
-                    updatedAt: new Date()
-                }
-            };
-            (Agent.findOne as jest.Mock).mockResolvedValue(mockAgent);
-
-            await getOrCreateAgentMemory(mockReq as Request, mockRes as Response);
-
-            expect(statusMock).toHaveBeenCalledWith(200);
-            expect(jsonMock).toHaveBeenCalledWith(
-                expect.objectContaining({
-                    success: true,
-                    data: expect.objectContaining({
-                        keyId: 'key-123',
-                        notes: { key: 'value' }
-                    })
-                })
-            );
-        });
-
-        it('should create agent with memory if not exists', async () => {
-            mockReq.params = { keyId: 'new-key' };
-
-            // When agent doesn't exist, controller creates new one
-            // This test verifies the 200 response when findOne returns null
-            // and new agent is created (constructor called internally)
-            (Agent.findOne as jest.Mock).mockResolvedValue(null);
-
-            // The controller will try to create a new Agent and save it
-            // Since we can't easily mock the constructor, we'll just verify
-            // that findOne was called with the right params
-            await getOrCreateAgentMemory(mockReq as Request, mockRes as Response);
-
-            expect(Agent.findOne).toHaveBeenCalledWith({ keyId: 'new-key' });
-            // Response depends on whether constructor was successful
-            // In mocked environment, this may fail gracefully
-        });
-    });
-
-    // =========================================================================
-    // updateAgentMemory
-    // =========================================================================
-
-    describe('updateAgentMemory', () => {
-        it('should update memory notes', async () => {
-            mockReq.params = { keyId: 'key-123' };
-            mockReq.body = { notes: { newNote: 'value' } };
-
-            const mockAgent = {
-                keyId: 'key-123',
-                memory: {
-                    notes: { existingNote: 'old' },
-                    conversationHistory: [],
-                    customData: {}
-                },
-                save: jest.fn().mockResolvedValue(true)
-            };
-            (Agent.findOne as jest.Mock).mockResolvedValue(mockAgent);
-
-            await updateAgentMemory(mockReq as Request, mockRes as Response);
-
-            expect(statusMock).toHaveBeenCalledWith(200);
-            expect(mockAgent.memory.notes).toEqual({
-                existingNote: 'old',
-                newNote: 'value'
-            });
-        });
-
-        it('should append to conversation history', async () => {
-            mockReq.params = { keyId: 'key-123' };
-            mockReq.body = {
-                conversationHistory: [{ role: 'user', content: 'Hello' }]
-            };
-
-            const mockAgent = {
-                keyId: 'key-123',
-                memory: {
-                    notes: {},
-                    conversationHistory: [],
-                    customData: {}
-                },
-                save: jest.fn().mockResolvedValue(true)
-            };
-            (Agent.findOne as jest.Mock).mockResolvedValue(mockAgent);
-
-            await updateAgentMemory(mockReq as Request, mockRes as Response);
-
-            expect(statusMock).toHaveBeenCalledWith(200);
-            expect(mockAgent.memory.conversationHistory).toHaveLength(1);
-        });
-
-        it('should return 404 for non-existent keyId', async () => {
-            mockReq.params = { keyId: 'non-existent' };
-            mockReq.body = { notes: { key: 'value' } };
-
-            (Agent.findOne as jest.Mock).mockResolvedValue(null);
-
-            await updateAgentMemory(mockReq as Request, mockRes as Response);
-
-            expect(statusMock).toHaveBeenCalledWith(404);
-        });
-    });
-
-    // =========================================================================
     // updateAgentContext
     // =========================================================================
 
@@ -592,7 +628,7 @@ describe('AgentController', () => {
 
             const mockAgent = {
                 keyId: 'key-123',
-                context: {},
+                context: {} as { identity?: string },
                 role: 'worker',
                 save: jest.fn().mockResolvedValue(true)
             };
@@ -601,7 +637,7 @@ describe('AgentController', () => {
             await updateAgentContext(mockReq as Request, mockRes as Response);
 
             expect(statusMock).toHaveBeenCalledWith(200);
-            expect((mockAgent.context as any).identity).toBe('New identity');
+            expect(mockAgent.context.identity).toBe('New identity');
             expect(mockAgent.role).toBe('coordinator');
         });
 
@@ -614,7 +650,7 @@ describe('AgentController', () => {
 
             const mockAgent = {
                 keyId: 'key-123',
-                context: {},
+                context: {} as { constraints?: string[]; examples?: string[] },
                 save: jest.fn().mockResolvedValue(true)
             };
             (Agent.findOne as jest.Mock).mockResolvedValue(mockAgent);
@@ -622,8 +658,8 @@ describe('AgentController', () => {
             await updateAgentContext(mockReq as Request, mockRes as Response);
 
             expect(statusMock).toHaveBeenCalledWith(200);
-            expect((mockAgent.context as any).constraints).toEqual(['No external calls']);
-            expect((mockAgent.context as any).examples).toEqual(['Example 1']);
+            expect(mockAgent.context.constraints).toEqual(['No external calls']);
+            expect(mockAgent.context.examples).toEqual(['Example 1']);
         });
 
         it('should return 404 for non-existent keyId', async () => {

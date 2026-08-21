@@ -152,8 +152,8 @@ Twenty Questions is the perfect game to demonstrate these features because:
 
 ```bash
 cd examples/twenty-questions
-npm install
-cd client && npm install && cd ..
+bun install
+cd client && bun install && cd ..
 bun run game
 ```
 
@@ -163,7 +163,7 @@ This starts both the game agents and the Vue.js dashboard at http://localhost:30
 
 ```bash
 cd examples/twenty-questions
-npm install
+bun install
 bun run connect-agents
 ```
 
@@ -254,25 +254,17 @@ const PHASE_TOOLS = {
 
 ### Event Tracking
 
-The orchestration script listens for events from multiple MXF subsystems:
+The channel monitor accepts only events in the SDK public-event whitelist:
 
 ```typescript
 // ORPAR events
 channel.on(Events.Orpar.OBSERVE, ...)
 channel.on(Events.Orpar.REASON, ...)
-
-// Knowledge Graph events
-channel.on(Events.KnowledgeGraph.ENTITY_CREATED, ...)
-channel.on(Events.KnowledgeGraph.RELATIONSHIP_CREATED, ...)
-
-// MULS events
-channel.on(Events.MemoryUtility.REWARD_ATTRIBUTED, ...)
-channel.on(Events.MemoryUtility.QVALUE_UPDATED, ...)
-
-// TensorFlow events
-channel.on(Events.TensorFlow.INFERENCE_COMPLETED, ...)
-channel.on(Events.TensorFlow.INFERENCE_FALLBACK, ...)
 ```
+
+Knowledge Graph, MULS, and TensorFlow lifecycle events remain on the internal server
+event bus. The public SDK observes their effects through tool results and the public
+ORPAR events rather than subscribing to those internal event names.
 
 ### ORPAR-Memory Integration
 

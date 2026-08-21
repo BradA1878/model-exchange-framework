@@ -20,23 +20,144 @@
 
 import { Request, Response } from 'express';
 import { spawn, ChildProcess } from 'child_process';
+import { randomUUID } from 'crypto';
 import path from 'path';
 import fs from 'fs';
-import { Server as SocketIOServer } from 'socket.io';
 import { Logger } from '@mxf-dev/core/utils/Logger';
 
 // Create logger instance for demo controller
 const logger = new Logger('info', 'DemoController', 'server');
 
-// Store active demo processes
-const activeDemos = new Map<string, ChildProcess>();
+interface ActiveDemo {
+    process: ChildProcess;
+    startedAt: number;
+    terminationPromise?: Promise<void>;
+    forceKillTimer?: ReturnType<typeof setTimeout>;
+}
+
+// A demo can make multiple paid LLM calls. Single-flight is intentional: the
+// endpoint is for an operator-driven presentation, not a process queue.
+export const MAX_ACTIVE_DEMOS = 1;
+
+/**
+ * How long a demo gets to exit after SIGTERM before it is sent SIGKILL. The
+ * same escalation BackgroundTaskManager uses for shell tasks: without it, a
+ * child that traps SIGTERM would block the stop endpoint and every server
+ * shutdown step after 'demo-processes'.
+ */
+export const DEMO_FORCE_KILL_GRACE_MS = 5000;
+const activeDemos = new Map<string, ActiveDemo>();
+
+const finalizeActiveDemo = (demoId: string, demo: ActiveDemo): void => {
+    if (activeDemos.get(demoId) === demo) {
+        activeDemos.delete(demoId);
+    }
+};
+
+/**
+ * Signal one demo exactly once and keep it owned until its child reaches a
+ * terminal event. Concurrent stop requests share the same terminal promise.
+ */
+const terminateActiveDemo = (demoId: string, demo: ActiveDemo): Promise<void> => {
+    if (demo.terminationPromise) {
+        return demo.terminationPromise;
+    }
+
+    let resolveTermination!: () => void;
+    let rejectTermination!: (cause: unknown) => void;
+    const terminationPromise = new Promise<void>((resolve, reject) => {
+        resolveTermination = resolve;
+        rejectTermination = reject;
+    });
+    demo.terminationPromise = terminationPromise;
+
+    const clearForceKill = (): void => {
+        if (demo.forceKillTimer) {
+            clearTimeout(demo.forceKillTimer);
+            demo.forceKillTimer = undefined;
+        }
+    };
+
+    const handleTerminalEvent = (): void => {
+        clearForceKill();
+        demo.process.off('close', handleTerminalEvent);
+        demo.process.off('error', handleProcessError);
+        finalizeActiveDemo(demoId, demo);
+        resolveTermination();
+    };
+
+    // Node can emit error before close for a process that was spawned. Only a
+    // spawn failure (no pid) is terminal without waiting for close.
+    const handleProcessError = (): void => {
+        if (demo.process.pid === undefined) {
+            handleTerminalEvent();
+        }
+    };
+
+    demo.process.once('close', handleTerminalEvent);
+    demo.process.once('error', handleProcessError);
+
+    try {
+        demo.process.kill('SIGTERM');
+        demo.forceKillTimer = setTimeout(() => {
+            demo.forceKillTimer = undefined;
+            logger.warn(`Demo ${demoId} did not exit within ${DEMO_FORCE_KILL_GRACE_MS}ms of SIGTERM; sending SIGKILL`);
+            demo.process.kill('SIGKILL');
+        }, DEMO_FORCE_KILL_GRACE_MS);
+        demo.forceKillTimer.unref?.();
+    } catch (cause) {
+        clearForceKill();
+        demo.process.off('close', handleTerminalEvent);
+        demo.process.off('error', handleProcessError);
+        demo.terminationPromise = undefined;
+        rejectTermination(cause);
+    }
+
+    return terminationPromise;
+};
+
+/**
+ * Build the minimal environment the interview demo actually consumes.
+ * The child runs with the demo directory as cwd so its dotenv.config() call
+ * cannot reload the server's root .env and undo this allowlist.
+ */
+const buildDemoEnvironment = (): Record<string, string> => {
+    const allowedNames = [
+        'PATH',
+        'HOME',
+        'TMPDIR',
+        'NODE_ENV',
+        'MXF_DOMAIN_KEY',
+        'MXF_DEMO_ACCESS_TOKEN',
+        'MXF_API_URL',
+        'OPENROUTER_API_KEY'
+    ];
+    const environment: Record<string, string> = {};
+
+    for (const name of allowedNames) {
+        const value = process.env[name];
+        if (value !== undefined) {
+            environment[name] = value;
+        }
+    }
+
+    return environment;
+};
 
 /**
  * Start the real interview scheduling demo
  */
 export const startInterviewDemo = async (req: Request, res: Response): Promise<void> => {
     try {
-        const demoId = `demo-${Date.now()}`;
+        if (activeDemos.size >= MAX_ACTIVE_DEMOS) {
+            res.status(429).json({
+                success: false,
+                error: 'A demo is already running. Stop it or wait for it to finish before starting another.'
+            });
+            return;
+        }
+
+        const demoId = `demo-${randomUUID()}`;
         
         // Path to the actual interview demo TypeScript file
         // From src/server/api/controllers/ go up 4 levels to project root
@@ -49,67 +170,38 @@ export const startInterviewDemo = async (req: Request, res: Response): Promise<v
         }
         
         
-        // Use ts-node to execute the TypeScript file directly
-        // Least privilege: demos get process basics, MXF agent credentials,
-        // and LLM provider keys — never JWT_SECRET, MONGODB_URI, or the
-        // Meilisearch master key.
-        const DEMO_ENV_ALLOWLIST = /^(PATH|HOME|TMPDIR|NODE_ENV|PORT)$|^(MXF_|OPENROUTER_|OPENAI_|ANTHROPIC_|GOOGLE_|GEMINI_|XAI_|AZURE_)/;
-        const demoEnv: Record<string, string> = {};
-        for (const [name, value] of Object.entries(process.env)) {
-            if (value !== undefined && DEMO_ENV_ALLOWLIST.test(name)) {
-                demoEnv[name] = value;
-            }
-        }
-        const demoProcess = spawn('npx', ['ts-node', demoPath], {
-            cwd: projectRoot, // Set working directory to project root
-            env: demoEnv,
+        // Use the framework runtime directly. This avoids `npx` downloading or
+        // resolving an unexpected ts-node package at request time.
+        const demoProcess = spawn(process.execPath, [demoPath], {
+            cwd: path.dirname(demoPath),
+            env: buildDemoEnvironment(),
             stdio: ['pipe', 'pipe', 'pipe']
         });
         
         // Store the process for cleanup
-        activeDemos.set(demoId, demoProcess);
+        const activeDemo: ActiveDemo = {
+            process: demoProcess,
+            startedAt: Date.now()
+        };
+        activeDemos.set(demoId, activeDemo);
         
-        // Get Socket.IO instance from app locals
-        const io: SocketIOServer = req.app.locals.io;
-        
-        // Stream stdout to presentation clients
-        demoProcess.stdout?.on('data', (data: Buffer) => {
-            const output = data.toString();
-            io.emit('demo_output', {
-                type: 'stdout',
-                data: output,
-                timestamp: Date.now()
-            });
-        });
-        
-        // Stream stderr to presentation clients
-        demoProcess.stderr?.on('data', (data: Buffer) => {
-            const output = data.toString();
-            io.emit('demo_output', {
-                type: 'stderr', 
-                data: output,
-                timestamp: Date.now()
-            });
-        });
+        // Drain both streams so the child cannot block on full pipe buffers.
+        // Output is deliberately not broadcast to the global Socket.IO namespace.
+        demoProcess.stdout?.on('data', () => undefined);
+        demoProcess.stderr?.on('data', () => undefined);
         
         // Handle process completion
         demoProcess.on('close', (code: number) => {
-            activeDemos.delete(demoId);
-            io.emit('demo_output', {
-                type: 'complete',
-                data: `Demo completed with code ${code}`,
-                timestamp: Date.now()
-            });
+            finalizeActiveDemo(demoId, activeDemo);
+            logger.info(`Demo ${demoId} completed with code ${code}`);
         });
         
         // Handle process errors
         demoProcess.on('error', (error: Error) => {
-            activeDemos.delete(demoId);
-            io.emit('demo_output', {
-                type: 'error',
-                data: `Demo error: ${error.message}`,
-                timestamp: Date.now()
-            });
+            if (demoProcess.pid === undefined) {
+                finalizeActiveDemo(demoId, activeDemo);
+            }
+            logger.error(`Demo ${demoId} failed: ${error.message}`);
         });
         
         res.json({
@@ -135,8 +227,8 @@ export const stopDemo = async (req: Request, res: Response): Promise<void> => {
     try {
         const { demoId } = req.params;
         
-        const demoProcess = activeDemos.get(demoId);
-        if (!demoProcess) {
+        const activeDemo = activeDemos.get(demoId);
+        if (!activeDemo) {
             res.status(404).json({
                 success: false,
                 error: 'Demo not found'
@@ -144,17 +236,7 @@ export const stopDemo = async (req: Request, res: Response): Promise<void> => {
             return;
         }
         
-        // Kill the process
-        demoProcess.kill('SIGTERM');
-        activeDemos.delete(demoId);
-        
-        // Notify clients
-        const io: SocketIOServer = req.app.locals.io;
-        io.emit('demo_output', {
-            type: 'stopped',
-            data: 'Demo stopped by user',
-            timestamp: Date.now()
-        });
+        await terminateActiveDemo(demoId, activeDemo);
         
         res.json({
             success: true,
@@ -176,7 +258,10 @@ export const stopDemo = async (req: Request, res: Response): Promise<void> => {
  */
 export const getDemoStatus = async (req: Request, res: Response): Promise<void> => {
     try {
-        const runningDemos = Array.from(activeDemos.keys());
+        const runningDemos = Array.from(activeDemos.entries()).map(([demoId, demo]) => ({
+            demoId,
+            startedAt: demo.startedAt
+        }));
         
         res.json({
             success: true,
@@ -200,9 +285,7 @@ export const getDemoStatus = async (req: Request, res: Response): Promise<void> 
  * Terminates every demo child process. Wired into server shutdown so demo
  * subprocesses never outlive the server.
  */
-export const stopAllActiveDemos = (): void => {
-    for (const [demoId, demoProcess] of activeDemos) {
-        demoProcess.kill('SIGTERM');
-        activeDemos.delete(demoId);
-    }
+export const stopAllActiveDemos = async (): Promise<void> => {
+    const demos = Array.from(activeDemos.entries());
+    await Promise.all(demos.map(([demoId, demo]) => terminateActiveDemo(demoId, demo)));
 };

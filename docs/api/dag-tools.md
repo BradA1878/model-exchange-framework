@@ -33,7 +33,7 @@ Get tasks that have all dependencies satisfied and are ready to execute.
 **Example:**
 
 ```typescript
-const result = await agent.callTool('dag_get_ready_tasks', {
+const result = await agent.executeTool('dag_get_ready_tasks', {
     limit: 5
 });
 // { success: true, readyTasks: ['task-1', 'task-3'], count: 2, message: 'Found 2 tasks ready to execute' }
@@ -68,7 +68,7 @@ Check if adding a dependency between two tasks would create a cycle.
 
 ```typescript
 // Check if task-B can depend on task-A
-const result = await agent.callTool('dag_validate_dependency', {
+const result = await agent.executeTool('dag_validate_dependency', {
     dependentTaskId: 'task-B',
     dependencyTaskId: 'task-A'
 });
@@ -108,7 +108,7 @@ Get tasks in topologically sorted execution order.
 **Example:**
 
 ```typescript
-const result = await agent.callTool('dag_get_execution_order', {
+const result = await agent.executeTool('dag_get_execution_order', {
     includeCompleted: false
 });
 // { success: true, executionOrder: ['task-1', 'task-2', 'task-3', 'task-4'], count: 4, ... }
@@ -144,7 +144,7 @@ Get the list of incomplete dependencies blocking a specific task.
 **Example:**
 
 ```typescript
-const result = await agent.callTool('dag_get_blocking_tasks', {
+const result = await agent.executeTool('dag_get_blocking_tasks', {
     taskId: 'task-5'
 });
 
@@ -181,7 +181,7 @@ Get groups of tasks that can be executed in parallel.
 **Example:**
 
 ```typescript
-const result = await agent.callTool('dag_get_parallel_groups', {});
+const result = await agent.executeTool('dag_get_parallel_groups', {});
 // {
 //     success: true,
 //     parallelGroups: [
@@ -222,7 +222,7 @@ Get the critical path (longest dependency chain) in the DAG.
 **Example:**
 
 ```typescript
-const result = await agent.callTool('dag_get_critical_path', {});
+const result = await agent.executeTool('dag_get_critical_path', {});
 // {
 //     success: true,
 //     criticalPath: ['task-1', 'task-3', 'task-5', 'task-7'],
@@ -277,7 +277,7 @@ Get statistics about the task DAG.
 **Example:**
 
 ```typescript
-const result = await agent.callTool('dag_get_stats', {});
+const result = await agent.executeTool('dag_get_stats', {});
 // {
 //     success: true,
 //     stats: {
@@ -317,7 +317,7 @@ All tools return a consistent error structure when something goes wrong:
 
 1. **Always validate before adding dependencies**
    ```typescript
-   const validation = await agent.callTool('dag_validate_dependency', {...});
+   const validation = await agent.executeTool('dag_validate_dependency', {...});
    if (validation.isValid) {
        // Safe to add dependency
    }
@@ -325,7 +325,7 @@ All tools return a consistent error structure when something goes wrong:
 
 2. **Use parallel groups for efficient execution**
    ```typescript
-   const groups = await agent.callTool('dag_get_parallel_groups', {});
+   const groups = await agent.executeTool('dag_get_parallel_groups', {});
    for (const group of groups.parallelGroups) {
        // Execute tasks in this group in parallel
        await Promise.all(group.map(taskId => executeTask(taskId)));
@@ -334,12 +334,12 @@ All tools return a consistent error structure when something goes wrong:
 
 3. **Monitor critical path for bottlenecks**
    ```typescript
-   const path = await agent.callTool('dag_get_critical_path', {});
+   const path = await agent.executeTool('dag_get_critical_path', {});
    // Focus optimization efforts on critical path tasks
    ```
 
 4. **Check ready tasks before starting work**
    ```typescript
-   const ready = await agent.callTool('dag_get_ready_tasks', {});
+   const ready = await agent.executeTool('dag_get_ready_tasks', {});
    // Only attempt to work on ready tasks
    ```

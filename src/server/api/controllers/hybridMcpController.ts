@@ -27,14 +27,76 @@
 
 import { Request, Response } from 'express';
 import { createStrictValidator } from '@mxf-dev/core/utils/validation';
+import { assertUnsafeStdioMcpEnabled } from '@mxf-dev/core/protocols/mcp/security/ExternalMcpRegistrationPolicy';
 import { Logger } from '@mxf-dev/core/utils/Logger';
+import { UserRole } from '@mxf-dev/core/models/user';
+import { firstValueFrom } from 'rxjs';
 import { ServerHybridMcpService } from '../services/ServerHybridMcpService';
+import { McpToolRegistry } from '../services/McpToolRegistry';
+import { authorizationService } from '../services/AuthorizationService';
 
 // Create validator for Hybrid MCP controller
 const validate = createStrictValidator('HybridMcpController');
 
 // Initialize logger
 const logger = new Logger('info', 'HybridMcpController', 'server');
+
+type HybridReadScope =
+    | { kind: 'global' }
+    | { kind: 'channel'; channelId: string; agentId?: string };
+
+/**
+ * Defense-in-depth scope resolution for hybrid topology reads.
+ * Routes apply the same policy first; direct controller invocation must not
+ * become a way around it.
+ */
+const authorizeHybridRead = async (
+    req: Request,
+    res: Response
+): Promise<HybridReadScope | null> => {
+    const principal = authorizationService.readPrincipal(req);
+    const channelId = typeof req.params.channelId === 'string'
+        ? req.params.channelId.trim()
+        : '';
+
+    if (channelId) {
+        const preauthorizedChannel = (req as Request & {
+            channel?: { channelId?: unknown };
+        }).channel;
+        if (String(preauthorizedChannel?.channelId ?? '') !== channelId) {
+            const decision = await authorizationService.authorize(
+                'access',
+                'channel',
+                channelId,
+                principal
+            );
+            if (!decision.allowed) {
+                res.status(decision.status).json({
+                    success: false,
+                    message: decision.reason
+                });
+                return null;
+            }
+        }
+
+        return {
+            kind: 'channel',
+            channelId,
+            agentId: principal.kind === 'agent' ? principal.agentId : undefined
+        };
+    }
+
+    if (principal.kind === 'unauthenticated') {
+        res.status(401).json({ success: false, message: 'Authentication required' });
+        return null;
+    }
+    if (principal.kind !== 'user' || principal.role !== UserRole.ADMIN) {
+        res.status(403).json({ success: false, message: 'Admin access required' });
+        return null;
+    }
+
+    return { kind: 'global' };
+};
 
 /**
  * Get Hybrid MCP service status
@@ -43,6 +105,9 @@ const logger = new Logger('info', 'HybridMcpController', 'server');
  */
 export const getHybridStatus = async (req: Request, res: Response): Promise<void> => {
     try {
+        if (!await authorizeHybridRead(req, res)) {
+            return;
+        }
         const serverHybridMcpService = ServerHybridMcpService.getInstance();
         const status = serverHybridMcpService.getStatus();
         
@@ -67,6 +132,9 @@ export const getHybridStatus = async (req: Request, res: Response): Promise<void
  */
 export const getHybridStats = async (req: Request, res: Response): Promise<void> => {
     try {
+        if (!await authorizeHybridRead(req, res)) {
+            return;
+        }
         const serverHybridMcpService = ServerHybridMcpService.getInstance();
         const stats = serverHybridMcpService.getServiceStats();
         
@@ -91,18 +159,41 @@ export const getHybridStats = async (req: Request, res: Response): Promise<void>
  */
 export const getAllTools = async (req: Request, res: Response): Promise<void> => {
     try {
-        const serverHybridMcpService = ServerHybridMcpService.getInstance();
-        const internalTools = await serverHybridMcpService.getInternalTools();
+        const scope = await authorizeHybridRead(req, res);
+        if (!scope) {
+            return;
+        }
 
-        // Get external tools from running MCP servers
-        const externalServerManager = serverHybridMcpService.getExternalServerManager();
-        const externalTools = externalServerManager.getAllExternalTools().map(tool => ({
-            name: tool.name,
-            description: tool.description,
-            inputSchema: tool.inputSchema,
-            source: 'external' as const,
-            serverId: tool.serverId
-        }));
+        // Constructing the hybrid service binds the external provider into the
+        // registry. The registry is then the single composition policy for both
+        // REST and socket discovery.
+        ServerHybridMcpService.getInstance();
+        const registry = McpToolRegistry.getInstance();
+        const visibleTools = await firstValueFrom(
+            scope.kind === 'channel'
+                ? registry.listToolsForChannel(scope.channelId, undefined, scope.agentId)
+                : registry.listTools()
+        );
+        const internalTools = visibleTools
+            .filter(tool => !tool.providerId?.startsWith('external-mcp:'))
+            .map(tool => ({
+                name: tool.name,
+                description: tool.description,
+                inputSchema: tool.inputSchema,
+                source: 'internal' as const,
+                enabled: tool.enabled
+            }));
+        const externalTools = visibleTools
+            .filter(tool => tool.providerId?.startsWith('external-mcp:'))
+            .map(tool => ({
+                name: tool.name,
+                canonicalName: tool.metadata?.canonicalName ?? tool.name,
+                description: tool.description,
+                inputSchema: tool.inputSchema,
+                source: 'external' as const,
+                serverId: tool.metadata?.externalSource,
+                scope: tool.metadata?.externalScope
+            }));
         
         const allTools = [...internalTools, ...externalTools];
         
@@ -132,8 +223,22 @@ export const getAllTools = async (req: Request, res: Response): Promise<void> =>
  */
 export const getExternalServers = async (req: Request, res: Response): Promise<void> => {
     try {
+        const scope = await authorizeHybridRead(req, res);
+        if (!scope) {
+            return;
+        }
+
         const serverHybridMcpService = ServerHybridMcpService.getInstance();
-        const serverStatuses = serverHybridMcpService.getExternalServerStatuses();
+        const externalServerManager = serverHybridMcpService.getExternalServerManager();
+        const serverStatuses = scope.kind === 'global'
+            ? serverHybridMcpService.getExternalServerStatuses()
+            : Object.fromEntries([
+                ...externalServerManager.getServersByScope('global'),
+                ...externalServerManager.getServersByScope('channel', scope.channelId),
+                ...(scope.agentId
+                    ? externalServerManager.getServersByScope('agent', scope.agentId)
+                    : [])
+            ].map(status => [status.id, status]));
         
         res.status(200).json({
             success: true,
@@ -235,11 +340,20 @@ export const registerExternalServer = async (req: Request, res: Response): Promi
         // Transport-specific validation
         const transport = req.body.transport || 'stdio';
 
+        // The route applies the same gate after proving administrator status.
+        // Keep this assertion at the execution boundary so direct controller
+        // invocation cannot accidentally re-open host process execution.
+        assertUnsafeStdioMcpEnabled(transport);
+
         if (transport === 'stdio') {
             validate.assertIsNonEmptyString(req.body.command, 'Command is required for stdio transport');
             validate.assertIsArray(req.body.args, 'Args must be an array for stdio transport');
         } else if (transport === 'http') {
-            validate.assertIsNonEmptyString(req.body.url, 'URL is required for HTTP transport');
+            res.status(501).json({
+                success: false,
+                error: 'HTTP transport registration is not implemented by this MXF server'
+            });
+            return;
         } else {
             res.status(400).json({
                 success: false,
@@ -304,35 +418,23 @@ export const unregisterExternalServer = async (req: Request, res: Response): Pro
         validate.assertIsNonEmptyString(serverId, 'Server ID is required');
 
         const serverHybridMcpService = ServerHybridMcpService.getInstance();
-
-        // Stop and remove the server
-        const stopped = await serverHybridMcpService.stopExternalServer(serverId);
-
-        if (!stopped) {
-            res.status(404).json({
-                success: false,
-                error: `Server ${serverId} not found or already stopped`
-            });
-            return;
-        }
-
-        // Remove the server from the registry after stopping
         const externalServerManager = serverHybridMcpService.getExternalServerManager();
-        const serverStatuses = externalServerManager.getServerStatuses();
-        const removed = serverId in serverStatuses || stopped;
-
-        if (removed) {
-
-            res.json({
-                success: true,
-                message: `External MCP server "${serverId}" unregistered successfully`
-            });
-        } else {
+        if (!externalServerManager.getServerStatusById(serverId)) {
             res.status(404).json({
                 success: false,
                 error: `Server ${serverId} not found`
             });
+            return;
         }
+
+        // This is the authoritative removal path: it stops the child and deletes
+        // the server record, scope entry, timers, and therefore its provider tools.
+        await externalServerManager.unregisterServer(serverId);
+
+        res.json({
+            success: true,
+            message: `External MCP server "${serverId}" unregistered successfully`
+        });
 
     } catch (error) {
         logger.error('Error unregistering external MCP server:', error);
@@ -350,14 +452,27 @@ export const unregisterExternalServer = async (req: Request, res: Response): Pro
  */
 export const getServerStatus = async (req: Request, res: Response): Promise<void> => {
     try {
+        const scope = await authorizeHybridRead(req, res);
+        if (!scope) {
+            return;
+        }
+
         const { serverId } = req.params;
         validate.assertIsNonEmptyString(serverId, 'Server ID is required');
 
         const serverHybridMcpService = ServerHybridMcpService.getInstance();
+        const externalServerManager = serverHybridMcpService.getExternalServerManager();
 
-        // Get server statuses and find the requested one
-        const allStatuses = serverHybridMcpService.getExternalServerStatuses();
-        const status = allStatuses[serverId];
+        const isVisible = scope.kind === 'global' || [
+            ...externalServerManager.getServersByScope('global'),
+            ...externalServerManager.getServersByScope('channel', scope.channelId),
+            ...(scope.agentId
+                ? externalServerManager.getServersByScope('agent', scope.agentId)
+                : [])
+        ].some(candidate => candidate.id === serverId);
+        const status = isVisible
+            ? externalServerManager.getServerStatusById(serverId)
+            : undefined;
 
         if (!status) {
             res.status(404).json({

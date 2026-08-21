@@ -468,6 +468,8 @@ export class AnthropicMcpClient extends BaseMcpClient {
         context: AgentContext,
         options?: Record<string, any>
     ): Promise<McpApiResponse> {
+        this.assertExternalLlmCallAllowed();
+
         // Structure messages for Anthropic based on context
         const { systemPrompt, messages } = this.structureMessagesFromContext(context);
 

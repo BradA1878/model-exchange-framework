@@ -176,7 +176,11 @@ export class InteractiveSessionManager {
         const provider = llmProvider || this.mapLlmProvider(this.config.llmProvider);
 
         // Generate per-agent keys
-        const keys = await this.sdk.generateKey(this.channelId);
+        const keys = await this.sdk.generateKey(
+            this.channelId,
+            definition.agentId,
+            `Key for ${definition.agentId}`
+        );
         const credentials = { keyId: keys.keyId, secretKey: keys.secretKey };
 
         // Inject dynamic team rosters for agents that delegate work.

@@ -2,7 +2,7 @@
  * Unit tests for ExternalMcpServerManager channel-server lifecycle.
  *
  * Covers the silent-eviction defects from the 2026-08-04 Sentinel production
- * incident (HANDOFF-channel-server-tool-eviction.md):
+ * incident (channel-server tools silently evicted after a child restart):
  *   - a child that dies unexpectedly is restarted with tools re-discovered,
  *     loudly, regardless of exit code
  *   - a server whose restart budget is exhausted is unregistered loudly,
@@ -166,9 +166,29 @@ describe('ExternalMcpServerManager channel-server lifecycle', () => {
             const tools = manager.getAllExternalTools();
             expect(tools.map(t => t.name)).toContain('alpha_tool');
             expect(tools[0].serverId).toBe(`${CHANNEL_ID}:fake-tools`);
+            expect(tools[0]).toEqual(expect.objectContaining({
+                scope: 'channel',
+                scopeId: CHANNEL_ID
+            }));
+            expect(manager.getServersByScope('channel', CHANNEL_ID).map(server => server.id))
+                .toEqual([`${CHANNEL_ID}:fake-tools`]);
+            expect(manager.getServersByScope('channel', 'chan-other')).toEqual([]);
 
             const status = manager.getServerStatusById(`${CHANNEL_ID}:fake-tools`);
             expect(status?.status).toBe('running');
+        });
+
+        it('treats legacy unscoped registrations as global in scoped reads', async () => {
+            const manager = track(makeManager());
+            await manager.registerServer({
+                ...makeConfig(),
+                id: 'global-fake-tools',
+                autoStart: false
+            });
+
+            expect(manager.getServersByScope('global').map(server => server.id))
+                .toEqual(['global-fake-tools']);
+            expect(manager.getServersByScope('channel', CHANNEL_ID)).toEqual([]);
         });
     });
 
@@ -342,6 +362,28 @@ describe('ExternalMcpServerManager channel-server lifecycle', () => {
     });
 
     describe('unregistration', () => {
+        it('unregisterServer removes global status, scope enumeration, and provider tools', async () => {
+            const manager = track(makeManager());
+            await manager.registerServer({
+                ...makeConfig(),
+                id: 'global-fake-tools'
+            });
+
+            expect(manager.getServerStatusById('global-fake-tools')).toBeDefined();
+            expect(manager.getServersByScope('global').map(server => server.id))
+                .toContain('global-fake-tools');
+            expect(manager.getAllExternalTools().map(tool => tool.serverId))
+                .toContain('global-fake-tools');
+
+            await manager.unregisterServer('global-fake-tools');
+
+            expect(manager.getServerStatusById('global-fake-tools')).toBeUndefined();
+            expect(manager.getServersByScope('global').map(server => server.id))
+                .not.toContain('global-fake-tools');
+            expect(manager.getAllExternalTools().map(tool => tool.serverId))
+                .not.toContain('global-fake-tools');
+        });
+
         it('unregisterChannelServer removes record, scope, and keepAlive timer', async () => {
             const manager = track(makeManager());
             await manager.registerChannelServer(CHANNEL_ID, makeConfig({ keepAliveMinutes: 60 } as any));
@@ -380,6 +422,26 @@ describe('ExternalMcpServerManager channel-server lifecycle', () => {
             // And the scope really is gone
             await manager.onAgentJoinChannel('agent-1', CHANNEL_ID);
             expect(loggedLines(logSpies.info)).not.toContain('connected to channel server');
+        });
+
+        it('permanently retires every runtime for a deleted channel', async () => {
+            const manager = track(makeManager());
+            await manager.registerChannelServer(
+                CHANNEL_ID,
+                makeConfig({ autoStart: false })
+            );
+            const serverId = `${CHANNEL_ID}:fake-tools`;
+
+            await manager.retireChannel(CHANNEL_ID);
+
+            expect(manager.getServerStatusById(serverId)).toBeUndefined();
+            expect(manager.getServersByScope('channel', CHANNEL_ID)).toEqual([]);
+            await expect(
+                manager.registerChannelServer(
+                    CHANNEL_ID,
+                    makeConfig({ autoStart: false })
+                )
+            ).rejects.toThrow(/deleted/i);
         });
     });
 

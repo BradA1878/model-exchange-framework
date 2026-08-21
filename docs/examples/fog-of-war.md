@@ -37,22 +37,32 @@ This demo showcases:
 
 ### 1. Channel-Scoped MCP Server Registration
 
-The game uses channel-scoped MCP servers so all game tools are available only within the game channel:
+The administrator SDK registers a channel-scoped MCP process so all game tools are
+available only within the game channel. The user session must have the
+`administrator` role, and the MXF server operator must set
+`MXF_UNSAFE_STDIO_MCP_ENABLED=true`:
 
 ```typescript
-const mcpResult = await adminAgent.registerChannelMcpServer({
+const mcpResult = await sdk.registerChannelMcpServer('fog-of-war-game', {
     id: 'fog-of-war-game-server',
-    name: 'Fog of War Game Server',
-    transport: 'http',
-    url: 'http://localhost:3002/mcp',
+    name: 'Fog of War Game Tools',
+    transport: 'stdio',
+    command: 'bun',
+    args: ['run', './examples/fog-of-war-game/server/mcp/FogOfWarMcpServerHttp.ts'],
     autoStart: true,
-    keepAliveMinutes: 60
+    keepAliveMinutes: 10,
+    environmentVariables: {
+        GAME_SERVER_URL: 'http://localhost:3002'
+    }
 });
 
 console.log('Tools discovered:', mcpResult.toolsDiscovered);
 // ['game_getState', 'game_scanPerimeter', 'game_moveUnit',
 //  'game_attack', 'game_gather', 'game_commitTurn']
 ```
+
+The registered child process speaks MCP over `stdio`. It acts as an adapter to the
+game's HTTP API; MXF does not register that API as an HTTP MCP transport.
 
 ### 2. Custom MCP Tools
 
@@ -83,11 +93,10 @@ await Promise.all(commanders.map(commander =>
 Each turn is managed as a task, allowing proper lifecycle tracking:
 
 ```typescript
-const turnTask = await sdk.createTask({
+const turnTaskId = await commander.mxfService.createTask({
     title: `Turn ${turnNumber} - ${commander.name}`,
     description: 'Make your strategic decisions',
-    channelId: gameChannelId,
-    assignedAgentId: commander.agentId
+    assignedAgentIds: [commander.agentId]
 });
 ```
 
@@ -103,24 +112,17 @@ const turnTask = await sdk.createTask({
 2. Install dependencies:
    ```bash
    cd examples/fog-of-war-game
-   npm install
-   cd client && npm install && cd ..
+   bun install
+   cd client && bun install && cd ..
    ```
 
 ### Start the Game
 
 ```bash
-# Terminal 1: Start game server
-bun run server
-
-# Terminal 2: Start dashboard (optional)
-bun run dashboard
-
-# Terminal 3: Connect agents
-bun run agents
+bun run game
 ```
 
-Or use the npm script from root:
+Or use the root package script:
 
 ```bash
 bun run demo:fog-of-war
@@ -154,7 +156,7 @@ Each commander can only see:
 This demo showcases:
 
 1. **Channel-scoped MCP server registration** for game-specific tools
-2. **HTTP-based MCP transport** for external server integration
+2. **A stdio MCP adapter** that calls the game's HTTP API
 3. **Parallel agent execution** within turn-based constraints
 4. **Task lifecycle management** for turn coordination
 5. **Real-time WebSocket updates** for live visualization

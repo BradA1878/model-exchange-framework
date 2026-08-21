@@ -43,7 +43,7 @@ import { loadPromptCompactionConfig } from '@mxf-dev/core/config/PromptCompactio
 
 export interface PromptManagerCallbacks {
     getConversationHistory: () => ConversationMessage[];
-    updateConversationMessage: (index: number, message: ConversationMessage) => void;
+    updateConversationMessage: (index: number, message: ConversationMessage) => Promise<void>;
     getCachedTools: () => any[];
     getChannelContext?: () => ChannelContext;
     getMemoryEntries?: () => MemoryEntry[];
@@ -207,11 +207,11 @@ export class MxfSystemPromptManager {
                 completePrompt = `${completePrompt}\n\n${agentIdentityPrompt}`;
             }
             
-            this.updateSystemMessage(completePrompt);
+            await this.updateSystemMessage(completePrompt);
             
         } catch (error) {
-            this.logger.warn(`Could not load complete system prompt: ${error}`);
-            // Continue with minimal prompt - not critical for operation
+            this.logger.error(`Could not load complete system prompt: ${error}`);
+            throw error;
         }
     }
 
@@ -256,34 +256,19 @@ export class MxfSystemPromptManager {
                 enhancedPrompt = `${enhancedPrompt}\n\n${taskGuidance}`;
             }
             
-            this.updateSystemMessage(enhancedPrompt);
+            await this.updateSystemMessage(enhancedPrompt);
             
         } catch (error) {
-            this.logger.warn(`Could not update system prompt for task: ${error}`);
+            this.logger.error(`Could not update system prompt for task: ${error}`);
+            throw error;
         }
     }
 
     /**
      * Set a new agent config prompt, replacing any existing one
      */
-    public setAgentConfigPrompt(agentConfigPrompt: string): void {
-        
-        // Remove existing system messages from conversation history
-        const conversationHistory = this.callbacks.getConversationHistory();
-        const filteredHistory = conversationHistory.filter(msg => msg.role !== 'system');
-        
-        // Add new system message
-        const newSystemMessage: ConversationMessage = {
-            id: uuidv4(),
-            role: 'system',
-            content: agentConfigPrompt,
-            timestamp: Date.now()
-        };
-        
-        // Update conversation history (this would need to be implemented by the callback)
-        // For now, we update the first system message if it exists
-        this.updateSystemMessage(agentConfigPrompt);
-        
+    public async setAgentConfigPrompt(agentConfigPrompt: string): Promise<void> {
+        await this.updateSystemMessage(agentConfigPrompt);
         // Update agent config
         this.agentConfig.agentConfigPrompt = agentConfigPrompt;
     }
@@ -338,7 +323,7 @@ export class MxfSystemPromptManager {
     /**
      * Update the system message in conversation history
      */
-    private updateSystemMessage(content: string): void {
+    private async updateSystemMessage(content: string): Promise<void> {
         const conversationHistory = this.callbacks.getConversationHistory();
         const systemMessageIndex = conversationHistory.findIndex(msg => msg.role === 'system');
         
@@ -351,7 +336,7 @@ export class MxfSystemPromptManager {
                 timestamp: Date.now()
             };
             
-            this.callbacks.updateConversationMessage(systemMessageIndex, updatedMessage);
+            await this.callbacks.updateConversationMessage(systemMessageIndex, updatedMessage);
         } else {
             this.logger.warn('No system message found in conversation history to update');
         }

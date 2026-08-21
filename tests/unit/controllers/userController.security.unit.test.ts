@@ -26,6 +26,11 @@ jest.mock('@mxf-dev/core/models/user', () => {
 
     /** Stand-in for the Mongoose model: records what the controller tried to save. */
     class MockUser {
+        public static findOne = jest.fn();
+        public static findById = jest.fn();
+        public static findOneAndUpdate = jest.fn();
+        public static updateOne = jest.fn().mockResolvedValue({ modifiedCount: 1 });
+
         public _id = 'user-id-1';
         public username: string;
         public email: string;
@@ -56,9 +61,6 @@ jest.mock('@mxf-dev/core/models/user', () => {
         }
     }
 
-    (MockUser as any).findOne = jest.fn();
-    (MockUser as any).findById = jest.fn();
-
     return { User: MockUser, UserRole };
 });
 
@@ -72,7 +74,7 @@ jest.mock('@mxf-dev/core/utils/Logger', () => ({
 }));
 
 jest.mock('@mxf-dev/core/utils/env', () => ({
-    requireEnv: jest.fn().mockReturnValue('test-jwt-secret')
+    requireEnv: jest.fn().mockReturnValue('test-jwt-secret-0123456789abcdefghij')
 }));
 
 import { User, UserRole } from '@mxf-dev/core/models/user';
@@ -84,7 +86,9 @@ import {
     MagicLinkSender
 } from '../../../src/server/api/services/MagicLinkSender';
 
-const mockFindOne = (User as any).findOne as jest.Mock;
+const mockFindOne = User.findOne as jest.Mock;
+const mockFindOneAndUpdate = User.findOneAndUpdate as jest.Mock;
+const mockUpdateOne = User.updateOne as jest.Mock;
 
 /** Capture deliveries instead of sending them. */
 class RecordingSender implements MagicLinkSender {
@@ -356,6 +360,13 @@ describe('userController security', () => {
 
             expect(res.status).toHaveBeenCalledWith(500);
             expect(jsonBody(res).success).toBe(false);
+            expect(mockUpdateOne).toHaveBeenLastCalledWith(
+                expect.objectContaining({
+                    _id: 'user-id-1',
+                    magicLinkNonceHash: expect.any(String)
+                }),
+                { $unset: { magicLinkNonceHash: '', magicLinkExpiresAt: '' } }
+            );
         });
 
         it('rejects a malformed address', async () => {
@@ -378,6 +389,58 @@ describe('userController security', () => {
 
             expect(res.status).toHaveBeenCalledWith(400);
             expect(mockFindOne).not.toHaveBeenCalled();
+        });
+    });
+
+    describe('verifyMagicLink — one-time exchange', () => {
+        it('atomically consumes the nonce so a replay cannot mint a second session', async () => {
+            mockFindOne.mockResolvedValue({
+                _id: 'user-id-1',
+                username: 'victim',
+                email: 'victim@example.com',
+                role: UserRole.CONSUMER
+            });
+
+            await userController.requestMagicLink(
+                { body: { email: 'victim@example.com' } } as Request,
+                buildRes()
+            );
+
+            const issuedToken = sender.sent[0].token;
+            const persistedNonceHash = mockUpdateOne.mock.calls[0][1].$set.magicLinkNonceHash;
+            const authenticatedUser = {
+                _id: 'user-id-1',
+                username: 'victim',
+                email: 'victim@example.com',
+                role: UserRole.CONSUMER,
+                isActive: true
+            };
+            mockFindOneAndUpdate
+                .mockResolvedValueOnce(authenticatedUser)
+                .mockResolvedValueOnce(null);
+
+            const firstResponse = buildRes();
+            await userController.verifyMagicLink(
+                { body: { token: issuedToken } } as Request,
+                firstResponse
+            );
+            const replayResponse = buildRes();
+            await userController.verifyMagicLink(
+                { body: { token: issuedToken } } as Request,
+                replayResponse
+            );
+
+            expect(firstResponse.status).toHaveBeenCalledWith(200);
+            expect(jsonBody(firstResponse).token).toEqual(expect.any(String));
+            expect(replayResponse.status).toHaveBeenCalledWith(401);
+            expect(mockFindOneAndUpdate).toHaveBeenCalledTimes(2);
+            expect(mockFindOneAndUpdate.mock.calls[0][0]).toEqual(expect.objectContaining({
+                _id: 'user-id-1',
+                email: 'victim@example.com',
+                isActive: true,
+                magicLinkNonceHash: persistedNonceHash,
+                magicLinkExpiresAt: { $gt: expect.any(Date) }
+            }));
         });
     });
 });

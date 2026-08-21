@@ -28,18 +28,50 @@
 
 import { v4 as uuidv4 } from 'uuid';
 import { createAgentMessage } from '@mxf-dev/core/schemas/MessageSchemas';
-import { AgentId, ChannelId } from '@mxf-dev/core/types/ChannelContext';
 import { Logger } from '@mxf-dev/core/utils/Logger';
 import { EventBus } from '@mxf-dev/core/events/EventBus';
 import { Events } from '@mxf-dev/core/events/EventNames';
 import { createAgentMessageEventPayload } from '@mxf-dev/core/schemas/EventPayloadSchema';
-import { AgentService } from '../../socket/services/AgentService';
 import { McpToolHandlerContext, McpToolHandlerResult, McpToolResultContent } from '@mxf-dev/core/protocols/mcp/McpServerTypes';
-import CoordinationModel, { CoordinationState, CoordinationType } from '@mxf-dev/core/models/coordination';
+import type { FilterQuery } from 'mongoose';
+import CoordinationModel, {
+    CoordinationState,
+    CoordinationType,
+    ICoordination
+} from '@mxf-dev/core/models/coordination';
+import {
+    requireChannelParticipants,
+    requireCurrentChannelParticipant,
+    requireExactToolTenantContext
+} from './helpers/toolTenantContext';
 
 const logger = new Logger('info', 'CoordinationTools', 'server');
 
 // MongoDB persistence is now used for all coordination tracking
+
+async function finalizeResponseState(
+    coordination: ICoordination,
+    channelId: string
+): Promise<ICoordination> {
+    const totalResponses = coordination.acceptedAgents.length + coordination.rejectedAgents.length;
+    if (totalResponses !== coordination.targetAgents.length) {
+        return coordination;
+    }
+
+    const nextState = coordination.acceptedAgents.length > 0
+        ? CoordinationState.ACCEPTED
+        : CoordinationState.REJECTED;
+
+    return (await CoordinationModel.findOneAndUpdate(
+        {
+            _id: coordination._id,
+            channelId,
+            state: { $in: [CoordinationState.REQUESTED, CoordinationState.ACCEPTED] }
+        },
+        { $set: { state: nextState } },
+        { new: true, runValidators: true }
+    )) || coordination;
+}
 
 /**
  * MCP Tool: coordination_request
@@ -107,6 +139,9 @@ export const coordinationRequestTool = {
         metadata?: Record<string, any>;
     }, context: McpToolHandlerContext): Promise<McpToolHandlerResult> => {
         try {
+            const { agentId, channelId } = requireExactToolTenantContext(context);
+            requireCurrentChannelParticipant(channelId, agentId);
+            const targetAgents = requireChannelParticipants(channelId, input.targetAgents);
             const coordinationId = `coord_${input.coordinationType}_${uuidv4()}`;
 
             // Save coordination request to MongoDB
@@ -114,20 +149,20 @@ export const coordinationRequestTool = {
                 coordinationId,
                 type: input.coordinationType,
                 state: CoordinationState.REQUESTED,
-                requestingAgent: context.agentId!,
-                targetAgents: input.targetAgents,
+                requestingAgent: agentId,
+                targetAgents,
                 acceptedAgents: [],
                 rejectedAgents: [],
                 taskDescription: input.taskDescription,
                 requirements: input.requirements,
                 deadline: input.deadline ? new Date(input.deadline) : undefined,
-                channelId: context.channelId
+                channelId
             });
 
             await coordinationDoc.save();
 
             // Send coordination requests to target agents
-            for (const targetAgentId of input.targetAgents) {
+            for (const targetAgentId of targetAgents) {
                 const coordinationMessage = {
                     format: 'json',
                     data: {
@@ -137,13 +172,13 @@ export const coordinationRequestTool = {
                         taskDescription: input.taskDescription,
                         requirements: input.requirements,
                         deadline: input.deadline,
-                        requestingAgent: context.agentId,
+                        requestingAgent: agentId,
                         metadata: input.metadata
                     }
                 };
 
                 const agentMessage = createAgentMessage(
-                    context.agentId!,
+                    agentId,
                     targetAgentId,
                     coordinationMessage,
                     {
@@ -161,8 +196,8 @@ export const coordinationRequestTool = {
 
                 const payload = createAgentMessageEventPayload(
                     Events.Message.AGENT_MESSAGE,
-                    context.agentId!,
-                    context.channelId!,
+                    agentId,
+                    channelId,
                     agentMessage
                 );
 
@@ -174,8 +209,8 @@ export const coordinationRequestTool = {
                 type: 'application/json',
                 data: {
                     coordinationId,
-                    status: 'created',
-                    targetAgents: input.targetAgents,
+                    status: 'requested',
+                    targetAgents,
                     deadline: input.deadline
                 }
             };
@@ -241,32 +276,35 @@ export const coordinationAcceptTool = {
         metadata?: Record<string, any>;
     }, context: McpToolHandlerContext): Promise<McpToolHandlerResult> => {
         try {
-            // Fetch coordination from MongoDB
-            const coordinationDoc = await CoordinationModel.findOne({ coordinationId: input.coordinationId });
-            if (!coordinationDoc) {
+            const { agentId, channelId } = requireExactToolTenantContext(context);
+            requireCurrentChannelParticipant(channelId, agentId);
+
+            const existingCoordination = await CoordinationModel.findOne({
+                coordinationId: input.coordinationId,
+                channelId,
+                targetAgents: agentId,
+                state: CoordinationState.REQUESTED
+            });
+            if (!existingCoordination) {
                 throw new Error(`Coordination ${input.coordinationId} not found`);
             }
 
-            if (!coordinationDoc.targetAgents.includes(context.agentId!)) {
-                throw new Error(`Agent ${context.agentId} is not a target of this coordination`);
+            const acceptedCoordination = await CoordinationModel.findOneAndUpdate(
+                {
+                    coordinationId: input.coordinationId,
+                    channelId,
+                    targetAgents: agentId,
+                    acceptedAgents: { $ne: agentId },
+                    'rejectedAgents.agentId': { $ne: agentId },
+                    state: CoordinationState.REQUESTED
+                },
+                { $addToSet: { acceptedAgents: agentId } },
+                { new: true, runValidators: true }
+            );
+            if (!acceptedCoordination) {
+                throw new Error('Coordination response was already recorded or is no longer available');
             }
-
-            if (coordinationDoc.acceptedAgents.includes(context.agentId!)) {
-                throw new Error(`Agent ${context.agentId} has already accepted this coordination`);
-            }
-
-            // Update coordination state
-            coordinationDoc.acceptedAgents.push(context.agentId!);
-
-            // If all agents have responded, update state
-            const totalResponses = coordinationDoc.acceptedAgents.length + coordinationDoc.rejectedAgents.length;
-            if (totalResponses === coordinationDoc.targetAgents.length) {
-                coordinationDoc.state = coordinationDoc.acceptedAgents.length > 0
-                    ? CoordinationState.ACCEPTED
-                    : CoordinationState.REJECTED;
-            }
-
-            await coordinationDoc.save();
+            const coordinationDoc = await finalizeResponseState(acceptedCoordination, channelId);
 
             // Notify requesting agent
             const acceptanceMessage = {
@@ -274,14 +312,14 @@ export const coordinationAcceptTool = {
                 data: {
                     type: 'coordination_acceptance',
                     coordinationId: input.coordinationId,
-                    acceptingAgent: context.agentId,
+                    acceptingAgent: agentId,
                     commitments: input.commitments,
                     metadata: input.metadata
                 }
             };
 
             const agentMessage = createAgentMessage(
-                context.agentId!,
+                agentId,
                 coordinationDoc.requestingAgent,
                 acceptanceMessage,
                 {
@@ -297,8 +335,8 @@ export const coordinationAcceptTool = {
 
             const payload = createAgentMessageEventPayload(
                 Events.Message.AGENT_MESSAGE,
-                context.agentId!,
-                context.channelId!,
+                agentId,
+                channelId,
                 agentMessage
             );
 
@@ -361,31 +399,42 @@ export const coordinationRejectTool = {
         alternatives?: string[];
     }, context: McpToolHandlerContext): Promise<McpToolHandlerResult> => {
         try {
-            // Fetch coordination from MongoDB
-            const coordinationDoc = await CoordinationModel.findOne({ coordinationId: input.coordinationId });
-            if (!coordinationDoc) {
+            const { agentId, channelId } = requireExactToolTenantContext(context);
+            requireCurrentChannelParticipant(channelId, agentId);
+
+            const existingCoordination = await CoordinationModel.findOne({
+                coordinationId: input.coordinationId,
+                channelId,
+                targetAgents: agentId,
+                state: CoordinationState.REQUESTED
+            });
+            if (!existingCoordination) {
                 throw new Error(`Coordination ${input.coordinationId} not found`);
             }
 
-            if (!coordinationDoc.targetAgents.includes(context.agentId!)) {
-                throw new Error(`Agent ${context.agentId} is not a target of this coordination`);
+            const rejectedCoordination = await CoordinationModel.findOneAndUpdate(
+                {
+                    coordinationId: input.coordinationId,
+                    channelId,
+                    targetAgents: agentId,
+                    acceptedAgents: { $ne: agentId },
+                    'rejectedAgents.agentId': { $ne: agentId },
+                    state: CoordinationState.REQUESTED
+                },
+                {
+                    $push: {
+                        rejectedAgents: {
+                            agentId,
+                            reason: input.reason
+                        }
+                    }
+                },
+                { new: true, runValidators: true }
+            );
+            if (!rejectedCoordination) {
+                throw new Error('Coordination response was already recorded or is no longer available');
             }
-
-            // Update coordination state
-            coordinationDoc.rejectedAgents.push({
-                agentId: context.agentId!,
-                reason: input.reason
-            });
-
-            // If all agents have responded, update state
-            const totalResponses = coordinationDoc.acceptedAgents.length + coordinationDoc.rejectedAgents.length;
-            if (totalResponses === coordinationDoc.targetAgents.length) {
-                coordinationDoc.state = coordinationDoc.acceptedAgents.length > 0
-                    ? CoordinationState.ACCEPTED
-                    : CoordinationState.REJECTED;
-            }
-
-            await coordinationDoc.save();
+            const coordinationDoc = await finalizeResponseState(rejectedCoordination, channelId);
 
             // Notify requesting agent
             const rejectionMessage = {
@@ -393,14 +442,14 @@ export const coordinationRejectTool = {
                 data: {
                     type: 'coordination_rejection',
                     coordinationId: input.coordinationId,
-                    rejectingAgent: context.agentId,
+                    rejectingAgent: agentId,
                     reason: input.reason,
                     alternatives: input.alternatives
                 }
             };
 
             const agentMessage = createAgentMessage(
-                context.agentId!,
+                agentId,
                 coordinationDoc.requestingAgent,
                 rejectionMessage,
                 {
@@ -416,8 +465,8 @@ export const coordinationRejectTool = {
 
             const payload = createAgentMessageEventPayload(
                 Events.Message.AGENT_MESSAGE,
-                context.agentId!,
-                context.channelId!,
+                agentId,
+                channelId,
                 agentMessage
             );
 
@@ -468,24 +517,25 @@ export const coordinationStatusTool = {
         coordinationId: string;
     }, context: McpToolHandlerContext): Promise<McpToolHandlerResult> => {
         try {
-            // Fetch coordination from MongoDB
-            const coordinationDoc = await CoordinationModel.findOne({ coordinationId: input.coordinationId });
+            const { agentId, channelId } = requireExactToolTenantContext(context);
+            requireCurrentChannelParticipant(channelId, agentId);
+
+            const coordinationDoc = await CoordinationModel.findOne({
+                coordinationId: input.coordinationId,
+                channelId,
+                $or: [
+                    { requestingAgent: agentId },
+                    { targetAgents: agentId }
+                ]
+            });
             if (!coordinationDoc) {
                 throw new Error(`Coordination ${input.coordinationId} not found`);
-            }
-
-            // Check if agent has permission to view this coordination
-            const isParticipant = coordinationDoc.requestingAgent === context.agentId ||
-                                 coordinationDoc.targetAgents.includes(context.agentId!);
-            
-            if (!isParticipant) {
-                throw new Error(`Agent ${context.agentId} is not a participant in coordination ${input.coordinationId}`);
             }
 
             const content: McpToolResultContent = {
                 type: 'application/json',
                 data: {
-                    coordinationId: coordinationDoc.id,
+                    coordinationId: coordinationDoc.coordinationId,
                     state: coordinationDoc.state,
                     type: coordinationDoc.type,
                     requestingAgent: coordinationDoc.requestingAgent,
@@ -568,40 +618,57 @@ export const coordinationUpdateTool = {
         results?: Record<string, any>;
     }, context: McpToolHandlerContext): Promise<McpToolHandlerResult> => {
         try {
-            // Fetch coordination from MongoDB
-            const coordinationDoc = await CoordinationModel.findOne({ coordinationId: input.coordinationId });
-            if (!coordinationDoc) {
+            const { agentId, channelId } = requireExactToolTenantContext(context);
+            requireCurrentChannelParticipant(channelId, agentId);
+
+            const existingCoordination = await CoordinationModel.findOne({
+                coordinationId: input.coordinationId,
+                channelId,
+                $or: [
+                    { requestingAgent: agentId },
+                    { acceptedAgents: agentId }
+                ]
+            });
+            if (!existingCoordination) {
                 throw new Error(`Coordination ${input.coordinationId} not found`);
             }
 
-            // Check if agent has permission to update this coordination
-            const isParticipant = coordinationDoc.requestingAgent === context.agentId ||
-                                 coordinationDoc.acceptedAgents.includes(context.agentId!);
-            
-            if (!isParticipant) {
-                throw new Error(`Agent ${context.agentId} is not an active participant in coordination ${input.coordinationId}`);
-            }
-
-            // Update coordination
+            const updateFields: Record<string, unknown> = {};
             if (input.state) {
-                coordinationDoc.state = input.state;
+                updateFields.state = input.state;
                 if (input.state === CoordinationState.COMPLETED) {
-                    coordinationDoc.completedAt = new Date();
+                    updateFields.completedAt = new Date();
                 }
             }
 
             if (input.results) {
-                coordinationDoc.results = {
-                    ...coordinationDoc.results,
+                updateFields.results = {
+                    ...(existingCoordination.results || {}),
                     ...input.results
                 };
             }
 
-            await coordinationDoc.save();
+            const coordinationDoc = Object.keys(updateFields).length > 0
+                ? await CoordinationModel.findOneAndUpdate(
+                    {
+                        coordinationId: input.coordinationId,
+                        channelId,
+                        $or: [
+                            { requestingAgent: agentId },
+                            { acceptedAgents: agentId }
+                        ]
+                    },
+                    { $set: updateFields },
+                    { new: true, runValidators: true }
+                )
+                : existingCoordination;
+            if (!coordinationDoc) {
+                throw new Error('Coordination is no longer available in the authenticated channel');
+            }
 
             // Notify all participants of the update
             const participants = [coordinationDoc.requestingAgent, ...coordinationDoc.acceptedAgents]
-                .filter(id => id !== context.agentId);
+                .filter(id => id !== agentId);
 
             for (const participantId of participants) {
                 const updateMessage = {
@@ -609,7 +676,7 @@ export const coordinationUpdateTool = {
                     data: {
                         type: 'coordination_update',
                         coordinationId: input.coordinationId,
-                        updatingAgent: context.agentId,
+                        updatingAgent: agentId,
                         state: coordinationDoc.state,
                         progress: input.progress,
                         results: input.results
@@ -617,7 +684,7 @@ export const coordinationUpdateTool = {
                 };
 
                 const agentMessage = createAgentMessage(
-                    context.agentId!,
+                    agentId,
                     participantId,
                     updateMessage,
                     {
@@ -633,8 +700,8 @@ export const coordinationUpdateTool = {
 
                 const payload = createAgentMessageEventPayload(
                     Events.Message.AGENT_MESSAGE,
-                    context.agentId!,
-                    context.channelId!,
+                    agentId,
+                    channelId,
                     agentMessage
                 );
 
@@ -647,7 +714,8 @@ export const coordinationUpdateTool = {
                 data: {
                     coordinationId: input.coordinationId,
                     state: coordinationDoc.state,
-                    updated: true
+                    persisted: Object.keys(updateFields).length > 0,
+                    notificationsEmitted: participants.length
                 }
             };
             return { content };
@@ -714,32 +782,50 @@ export const coordinationCompleteTool = {
         feedback?: string;
     }, context: McpToolHandlerContext): Promise<McpToolHandlerResult> => {
         try {
-            // Fetch coordination from MongoDB
-            const coordinationDoc = await CoordinationModel.findOne({ coordinationId: input.coordinationId });
-            if (!coordinationDoc) {
+            const { agentId, channelId } = requireExactToolTenantContext(context);
+            requireCurrentChannelParticipant(channelId, agentId);
+
+            const existingCoordination = await CoordinationModel.findOne({
+                coordinationId: input.coordinationId,
+                channelId,
+                $or: [
+                    { requestingAgent: agentId },
+                    { acceptedAgents: agentId }
+                ]
+            });
+            if (!existingCoordination) {
                 throw new Error(`Coordination ${input.coordinationId} not found`);
             }
 
-            // Only requesting agent or accepted agents can complete
-            const canComplete = coordinationDoc.requestingAgent === context.agentId ||
-                               coordinationDoc.acceptedAgents.includes(context.agentId!);
-            
-            if (!canComplete) {
-                throw new Error(`Agent ${context.agentId} cannot complete coordination ${input.coordinationId}`);
-            }
-
             const now = new Date();
-            coordinationDoc.state = CoordinationState.COMPLETED;
-            coordinationDoc.completedAt = now;
-            coordinationDoc.results = input.results;
-
-            await coordinationDoc.save();
+            const coordinationDoc = await CoordinationModel.findOneAndUpdate(
+                {
+                    coordinationId: input.coordinationId,
+                    channelId,
+                    state: { $ne: CoordinationState.COMPLETED },
+                    $or: [
+                        { requestingAgent: agentId },
+                        { acceptedAgents: agentId }
+                    ]
+                },
+                {
+                    $set: {
+                        state: CoordinationState.COMPLETED,
+                        completedAt: now,
+                        results: input.results
+                    }
+                },
+                { new: true, runValidators: true }
+            );
+            if (!coordinationDoc) {
+                throw new Error('Coordination is already complete or no longer available');
+            }
 
             const duration = now.getTime() - coordinationDoc.createdAt.getTime();
 
             // Notify all participants
             const participants = [coordinationDoc.requestingAgent, ...coordinationDoc.acceptedAgents]
-                .filter(id => id !== context.agentId);
+                .filter(id => id !== agentId);
 
             for (const participantId of participants) {
                 const completionMessage = {
@@ -747,7 +833,7 @@ export const coordinationCompleteTool = {
                     data: {
                         type: 'coordination_complete',
                         coordinationId: input.coordinationId,
-                        completingAgent: context.agentId,
+                        completingAgent: agentId,
                         results: input.results,
                         feedback: input.feedback,
                         duration
@@ -755,7 +841,7 @@ export const coordinationCompleteTool = {
                 };
 
                 const agentMessage = createAgentMessage(
-                    context.agentId!,
+                    agentId,
                     participantId,
                     completionMessage,
                     {
@@ -771,8 +857,8 @@ export const coordinationCompleteTool = {
 
                 const payload = createAgentMessageEventPayload(
                     Events.Message.AGENT_MESSAGE,
-                    context.agentId!,
-                    context.channelId!,
+                    agentId,
+                    channelId,
                     agentMessage
                 );
 
@@ -786,7 +872,8 @@ export const coordinationCompleteTool = {
                     coordinationId: input.coordinationId,
                     status: 'completed',
                     duration,
-                    results: input.results
+                    results: input.results,
+                    notificationsEmitted: participants.length
                 }
             };
             return { content };
@@ -838,25 +925,27 @@ export const coordinationListTool = {
         limit?: number;
     }, context: McpToolHandlerContext): Promise<McpToolHandlerResult> => {
         try {
+            const { agentId, channelId } = requireExactToolTenantContext(context);
+            requireCurrentChannelParticipant(channelId, agentId);
             const role = input.role || 'all';
-            const limit = input.limit || 50;
+            const limit = Math.max(1, Math.min(input.limit || 50, 100));
 
             // Build MongoDB query
-            const query: any = {};
+            const query: FilterQuery<ICoordination> = { channelId };
 
             // Filter by role
             if (role === 'requester') {
-                query.requestingAgent = context.agentId;
+                query.requestingAgent = agentId;
             } else if (role === 'participant') {
                 query.$or = [
-                    { targetAgents: context.agentId },
-                    { acceptedAgents: context.agentId }
+                    { targetAgents: agentId },
+                    { acceptedAgents: agentId }
                 ];
             } else { // 'all'
                 query.$or = [
-                    { requestingAgent: context.agentId },
-                    { targetAgents: context.agentId },
-                    { acceptedAgents: context.agentId }
+                    { requestingAgent: agentId },
+                    { targetAgents: agentId },
+                    { acceptedAgents: agentId }
                 ];
             }
 
@@ -871,7 +960,7 @@ export const coordinationListTool = {
                 .limit(limit);
 
             const coordinations = coordinationDocs.map(coord => {
-                const isRequester = coord.requestingAgent === context.agentId;
+                const isRequester = coord.requestingAgent === agentId;
                 return {
                     coordinationId: coord.coordinationId,
                     type: coord.type,

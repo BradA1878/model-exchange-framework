@@ -85,6 +85,7 @@
 - [ORPAR Control Loop](mxf/orpar.md): Observation, Reasoning, Planning, Action, Reflection cycle
 - [Memory Utility Learning (MULS)](mxf/memory-utility-learning.md): Q-value weighted retrieval with phase-specific lambdas
 - [ORPAR-Memory Integration](mxf/orpar-memory-integration.md): Phase-to-strata routing, surprise-driven re-observation
+- [User Memory](mxf/user-memory.md): Cross-session memory about the user as four MCP tools
 - [Nested Learning](mxf/nested-learning.md): Multi-timescale memory consolidation
 - [Meilisearch Integration](meilisearch-integration.md): Semantic search setup and configuration
 

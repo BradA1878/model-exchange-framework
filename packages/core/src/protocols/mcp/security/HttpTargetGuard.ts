@@ -118,6 +118,75 @@ function ipv4InCidr(address: string, cidr: string): boolean {
 }
 
 /**
+ * Decode an IPv6 literal into its eight 16-bit words.
+ *
+ * Node's `isIP()` tells us that a value is IPv6, but it does not expose the
+ * embedded IPv4 address from mapped forms. Browsers and operating systems
+ * accept both dotted (`::ffff:127.0.0.1`) and hexadecimal
+ * (`::ffff:7f00:1`) spellings, so matching only the dotted text leaves a
+ * loopback/metadata bypass.
+ */
+function parseIpv6Words(address: string): number[] | null {
+    let normalized = address.toLowerCase();
+    const embeddedIpv4 = normalized.match(/^(.*:)(\d{1,3}(?:\.\d{1,3}){3})$/);
+    if (embeddedIpv4) {
+        const ipv4 = ipv4ToInt(embeddedIpv4[2]);
+        if (ipv4 === null) {
+            return null;
+        }
+        normalized = `${embeddedIpv4[1]}${(ipv4 >>> 16).toString(16)}:${(ipv4 & 0xffff).toString(16)}`;
+    }
+
+    const compressedParts = normalized.split('::');
+    if (compressedParts.length > 2) {
+        return null;
+    }
+
+    const parseSide = (side: string): number[] | null => {
+        if (side.length === 0) {
+            return [];
+        }
+        const words = side.split(':');
+        if (words.some(word => !/^[0-9a-f]{1,4}$/.test(word))) {
+            return null;
+        }
+        return words.map(word => Number.parseInt(word, 16));
+    };
+
+    const left = parseSide(compressedParts[0]);
+    const right = parseSide(compressedParts[1] ?? '');
+    if (!left || !right) {
+        return null;
+    }
+
+    if (compressedParts.length === 1) {
+        return left.length === 8 ? left : null;
+    }
+
+    const omittedWordCount = 8 - left.length - right.length;
+    if (omittedWordCount < 1) {
+        return null;
+    }
+    return [...left, ...Array<number>(omittedWordCount).fill(0), ...right];
+}
+
+/** Return the dotted IPv4 address carried by an IPv4-mapped IPv6 literal. */
+function mappedIpv4Address(address: string): string | null {
+    const words = parseIpv6Words(address);
+    if (!words || words.length !== 8 ||
+        words.slice(0, 5).some(word => word !== 0) || words[5] !== 0xffff) {
+        return null;
+    }
+
+    return [
+        words[6] >>> 8,
+        words[6] & 0xff,
+        words[7] >>> 8,
+        words[7] & 0xff
+    ].join('.');
+}
+
+/**
  * Is this address one the server must not be steered into?
  *
  * @returns the name of the matched range, or null when the address is fine
@@ -137,6 +206,14 @@ function matchBlockedRange(address: string): string | null {
     if (version === 6) {
         const normalized = address.toLowerCase();
 
+        // IPv4-mapped addresses have multiple equivalent textual forms. Decode
+        // the address instead of applying a dotted-quad-only regex, then run the
+        // embedded address through the complete IPv4 policy.
+        const mappedIpv4 = mappedIpv4Address(normalized);
+        if (mappedIpv4) {
+            return matchBlockedRange(mappedIpv4);
+        }
+
         // IPv6 loopback
         if (normalized === '::1' || normalized === '0:0:0:0:0:0:0:1') {
             return 'IPv6 loopback';
@@ -152,12 +229,6 @@ function matchBlockedRange(address: string): string | null {
         // Link-local, fe80::/10
         if (/^fe[89ab][0-9a-f]:/.test(normalized)) {
             return 'IPv6 link-local address';
-        }
-        // IPv4-mapped (::ffff:127.0.0.1) — re-check the embedded IPv4 address,
-        // otherwise ::ffff:169.254.169.254 would walk straight past this guard.
-        const mapped = normalized.match(/^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/);
-        if (mapped) {
-            return matchBlockedRange(mapped[1]);
         }
         return null;
     }

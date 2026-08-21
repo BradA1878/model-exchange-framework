@@ -20,11 +20,15 @@
 
 import { Request, Response } from 'express';
 import crypto from 'crypto';
-import jwt from 'jsonwebtoken';
 import { User, UserRole } from '@mxf-dev/core/models/user';
 import { Logger } from '@mxf-dev/core/utils/Logger';
-import { requireEnv } from '@mxf-dev/core/utils/env';
 import { getMagicLinkSender, buildMagicLinkUrl } from '../services/MagicLinkSender';
+import {
+    signMagicLinkToken,
+    signSessionToken,
+    verifyMagicLinkToken
+} from '../security/jwtTokenPolicy';
+import { userSessionLifecycle } from '../../socket/services/UserSessionLifecycle';
 
 /**
  * User controller for handling user-related operations
@@ -34,21 +38,16 @@ const logger = new Logger('info', 'UserController', 'server');
 /** Magic-link token lifetime, in minutes. */
 const MAGIC_LINK_EXPIRY_MINUTES = 15;
 
+const hashMagicLinkNonce = (nonce: string): string =>
+    crypto.createHash('sha256').update(nonce).digest('hex');
+
 /**
  * Generate JWT token for authentication
  * @param userId - User ID to include in token
- * @param type - Token type (e.g., 'user', 'admin')
  * @param role - User role
  * @returns JWT token string
  */
-const generateToken = (userId: string, type: string, role: string): string => {
-    const secret = requireEnv('JWT_SECRET', 'Set a strong secret in .env — it signs and verifies all user JWTs.');
-    return jwt.sign(
-        { userId, type, role },
-        secret,
-        { expiresIn: '24h' }
-    );
-};
+const generateToken = (userId: string, role: string): string => signSessionToken(userId, role);
 
 /**
  * Narrow a value from the request body to a plain string.
@@ -130,7 +129,7 @@ export const userController = {
             await user.save();
             
             // Generate auth token
-            const token = generateToken(user._id?.toString() || '', 'user', user.role);
+            const token = generateToken(user._id?.toString() || '', user.role);
             
             // Return user data (excluding password)
             const userData = {
@@ -207,7 +206,7 @@ export const userController = {
             await user.save();
             
             // Generate auth token for the user
-            const token = generateToken(user._id?.toString() || '', 'user', user.role);
+            const token = generateToken(user._id?.toString() || '', user.role);
             
             // Return user data (excluding password)
             const userData = {
@@ -430,17 +429,38 @@ export const userController = {
                 return;
             }
             
-            const { userId, role } = req.body;
+            const { role } = req.body;
+            const targetUserId = asIdentifier(req.body?.userId);
             
-            if (!Object.values(UserRole).includes(role as UserRole)) {
+            if (!targetUserId || !Object.values(UserRole).includes(role as UserRole)) {
                 res.status(400).json({
                     success: false,
-                    message: 'Invalid role specified'
+                    message: 'A valid userId and role are required'
                 });
                 return;
             }
-            
-            const userData = await User.findById(userId);
+
+            const userData = await userSessionLifecycle.runUserAuthorizationMutation(
+                targetUserId,
+                async () => {
+                    const currentUser = await User.findById(targetUserId);
+                    if (!currentUser) {
+                        return null;
+                    }
+
+                    const roleChanged = currentUser.role !== role;
+                    currentUser.role = role as UserRole;
+                    await currentUser.save();
+
+                    if (roleChanged) {
+                        // Socket handlers capture role at authentication time. Eviction
+                        // is part of the mutation: never report a successful role change
+                        // while stale JWT/password/PAT forwarding remains active.
+                        await userSessionLifecycle.disconnectUserSessions(String(currentUser._id));
+                    }
+                    return currentUser;
+                }
+            );
             
             if (!userData) {
                 res.status(404).json({
@@ -449,9 +469,6 @@ export const userController = {
                 });
                 return;
             }
-            
-            userData.role = role as UserRole;
-            await userData.save();
             
             res.status(200).json({
                 success: true,
@@ -462,6 +479,77 @@ export const userController = {
             res.status(500).json({
                 success: false,
                 message: 'Error updating user role'
+            });
+        }
+    },
+
+    /**
+     * Activate or deactivate a user account (admin only).
+     *
+     * Deactivation is an authorization mutation, not just profile metadata:
+     * every already-authenticated user socket must be evicted before success is
+     * returned so an inactive administrator cannot retain privileged handlers.
+     */
+    updateUserStatus: async (req: Request, res: Response): Promise<void> => {
+        try {
+            const requester = (req as Request & {
+                user?: { id?: string; role?: UserRole };
+            }).user;
+            if (!requester?.id || requester.role !== UserRole.ADMIN) {
+                res.status(requester?.id ? 403 : 401).json({
+                    success: false,
+                    message: requester?.id
+                        ? 'Unauthorized: Admin access required'
+                        : 'Authentication required'
+                });
+                return;
+            }
+
+            const userId = asIdentifier(req.body?.userId);
+            const isActive = req.body?.isActive;
+            if (!userId || typeof isActive !== 'boolean') {
+                res.status(400).json({
+                    success: false,
+                    message: 'userId and boolean isActive are required'
+                });
+                return;
+            }
+
+            const userData = await userSessionLifecycle.runUserAuthorizationMutation(
+                userId,
+                async () => {
+                    const currentUser = await User.findById(userId);
+                    if (!currentUser) {
+                        return null;
+                    }
+
+                    const statusChanged = currentUser.isActive !== isActive;
+                    currentUser.isActive = isActive;
+                    await currentUser.save();
+
+                    // Always sweep an inactive account, even if it was already marked
+                    // inactive, so this operation can repair a previously missed local
+                    // eviction. Activation only needs a sweep when state changes.
+                    if (!isActive || statusChanged) {
+                        await userSessionLifecycle.disconnectUserSessions(String(currentUser._id));
+                    }
+                    return currentUser;
+                }
+            );
+            if (!userData) {
+                res.status(404).json({ success: false, message: 'User not found' });
+                return;
+            }
+
+            res.status(200).json({
+                success: true,
+                message: isActive ? 'User activated successfully' : 'User deactivated successfully'
+            });
+        } catch (error) {
+            logger.error('Update user status error:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Error updating user status'
             });
         }
     },
@@ -529,23 +617,51 @@ export const userController = {
                 logger.info(`Auto-created new user '${username}' via magic link for ${email}`);
             }
 
+            // Store only a digest of a random nonce. Verification consumes it
+            // with one atomic update, making every link single-use even when
+            // two exchange requests race each other.
+            const magicLinkNonce = crypto.randomBytes(32).toString('base64url');
+            const magicLinkNonceHash = hashMagicLinkNonce(magicLinkNonce);
+            const magicLinkExpiresAt = new Date(
+                Date.now() + MAGIC_LINK_EXPIRY_MINUTES * 60 * 1000
+            );
+            await User.updateOne(
+                { _id: user._id },
+                {
+                    $set: {
+                        magicLinkNonceHash,
+                        magicLinkExpiresAt
+                    }
+                }
+            );
+
             // Generate magic link token (JWT with short expiry)
-            const secret = requireEnv('JWT_SECRET', 'Set a strong secret in .env — it signs and verifies all user JWTs.');
-            const magicToken = jwt.sign(
-                { userId: user._id?.toString(), email: user.email, type: 'magic_link' },
-                secret,
-                { expiresIn: `${MAGIC_LINK_EXPIRY_MINUTES}m` }
+            const magicToken = signMagicLinkToken(
+                user._id?.toString() || '',
+                user.email,
+                magicLinkNonce,
+                MAGIC_LINK_EXPIRY_MINUTES
             );
 
             // Deliver out of band. A delivery failure throws and surfaces as a 500 —
             // it must not be reported as success.
-            await sender.send({
-                email: user.email,
-                magicLink: buildMagicLinkUrl(magicToken),
-                token: magicToken,
-                expiresInMinutes: MAGIC_LINK_EXPIRY_MINUTES,
-                isNewUser
-            });
+            try {
+                await sender.send({
+                    email: user.email,
+                    magicLink: buildMagicLinkUrl(magicToken),
+                    token: magicToken,
+                    expiresInMinutes: MAGIC_LINK_EXPIRY_MINUTES,
+                    isNewUser
+                });
+            } catch (error) {
+                // A failed delivery must not leave a usable bearer credential.
+                // Match the digest so a newer concurrent request is not erased.
+                await User.updateOne(
+                    { _id: user._id, magicLinkNonceHash },
+                    { $unset: { magicLinkNonceHash: '', magicLinkExpiresAt: '' } }
+                );
+                throw error;
+            }
 
             // Identical response for known and unknown addresses, and no token.
             res.status(200).json({
@@ -579,11 +695,10 @@ export const userController = {
             }
             
             // Verify the magic link token
-            const secret = requireEnv('JWT_SECRET', 'Set a strong secret in .env — it signs and verifies all user JWTs.');
-            let decoded: any;
+            let decoded;
             
             try {
-                decoded = jwt.verify(token, secret);
+                decoded = verifyMagicLinkToken(token);
             } catch (jwtError) {
                 res.status(401).json({
                     success: false,
@@ -592,32 +707,34 @@ export const userController = {
                 return;
             }
             
-            // Validate token type
-            if (decoded.type !== 'magic_link') {
-                res.status(401).json({
-                    success: false,
-                    message: 'Invalid token type'
-                });
-                return;
-            }
-            
-            // Find user by ID from token
-            const user = await User.findById(decoded.userId);
+            // Atomically consume the nonce. Exactly one concurrent or replayed
+            // exchange can match; inactive users cannot mint new sessions.
+            const now = new Date();
+            const user = await User.findOneAndUpdate(
+                {
+                    _id: decoded.userId,
+                    email: decoded.email,
+                    isActive: true,
+                    magicLinkNonceHash: hashMagicLinkNonce(decoded.jti),
+                    magicLinkExpiresAt: { $gt: now }
+                },
+                {
+                    $unset: { magicLinkNonceHash: '', magicLinkExpiresAt: '' },
+                    $set: { lastLogin: now }
+                },
+                { new: true }
+            );
             
             if (!user) {
-                res.status(404).json({
+                res.status(401).json({
                     success: false,
-                    message: 'User not found'
+                    message: 'Invalid or expired magic link token'
                 });
                 return;
             }
             
-            // Update last login time
-            user.lastLogin = new Date();
-            await user.save();
-            
             // Generate new auth token for session
-            const authToken = generateToken(user._id?.toString() || '', 'user', user.role);
+            const authToken = generateToken(user._id?.toString() || '', user.role);
             
             // Return user data and auth token
             const userData = {
@@ -665,10 +782,28 @@ export const userController = {
                 return;
             }
             
-            const userId = user.id;
-            
-            // Find and delete the user
-            const userData = await User.findByIdAndDelete(userId);
+            const userId = asIdentifier(user.id);
+            if (!userId) {
+                res.status(401).json({ success: false, message: 'Authentication required' });
+                return;
+            }
+
+            const userData = await userSessionLifecycle.runUserAuthorizationMutation(
+                userId,
+                async () => {
+                    // Find and delete the user
+                    const deletedUser = await User.findByIdAndDelete(userId);
+                    if (!deletedUser) {
+                        return null;
+                    }
+
+                    // Deleted/inactive users cannot authenticate again, but already-
+                    // authenticated sockets retain installed handlers until explicitly
+                    // evicted. Treat local eviction failure as an operation failure.
+                    await userSessionLifecycle.disconnectUserSessions(String(deletedUser._id));
+                    return deletedUser;
+                }
+            );
             
             if (!userData) {
                 res.status(404).json({
@@ -677,8 +812,7 @@ export const userController = {
                 });
                 return;
             }
-            
-            
+
             res.status(200).json({
                 success: true,
                 message: 'User profile deleted successfully'

@@ -417,7 +417,7 @@ const agent = await sdk.createAgent({
     keyId: 'your-key-id',
     secretKey: 'your-secret-key',
     llmProvider: 'openrouter',
-    defaultModel: 'anthropic/claude-3.5-sonnet',
+    defaultModel: '~anthropic/claude-sonnet-latest',
     apiKey: process.env.OPENROUTER_API_KEY!,
     // Optional MXP overrides:
     mxpEnabled: true,                        // Override channel setting

@@ -23,10 +23,10 @@
  *
  * A hard daily ceiling on what SystemLLM may spend.
  *
- * SystemLLM defaults its reasoning and reflection operations to
- * anthropic/claude-opus-4.5 and runs them on channel activity. It had per-channel
- * and global cooldowns, which space calls out, but nothing that stops them: a
- * busy day cost real money with no upper bound. This puts a number on it.
+ * SystemLLM runs the operator-configured models (SYSTEMLLM_DEFAULT_MODEL and
+ * the per-operation overrides) on channel activity. It had per-channel and
+ * global cooldowns, which space calls out, but nothing that stops them: a busy
+ * day cost real money with no upper bound. This puts a number on it.
  *
  * How spend is counted:
  * - Token counts are the real ones the provider returned (`usage.input_tokens`
@@ -76,7 +76,13 @@ const DEFAULT_WARN_AT = 0.8;
  * is enforced against, and it is the thing to update when they do.
  */
 const MODEL_RATES_USD_PER_MILLION: Record<string, { input: number; output: number }> = {
-    // Anthropic
+    // Anthropic. The `-latest` rows are OpenRouter's `~anthropic/...-latest`
+    // aliases; they carry the rate OpenRouter listed for them on 2026-08-21
+    // and must move with the family when a new release changes the price.
+    'claude-fable-latest': { input: 10, output: 50 },
+    'claude-opus-latest': { input: 5, output: 25 },
+    'claude-sonnet-latest': { input: 2, output: 10 },
+    'claude-haiku-latest': { input: 1, output: 5 },
     'claude-opus-4.5': { input: 15, output: 75 },
     'claude-opus-4-5': { input: 15, output: 75 },
     'claude-sonnet-4.5': { input: 3, output: 15 },

@@ -1,6 +1,11 @@
 # External MCP Server Registration Example
 
-This directory contains a complete working example of registering custom MCP servers via the SDK.
+This directory contains a working example of registering a custom child-process MCP
+server through an administrator-authenticated SDK.
+
+Registration runs the supplied command on the MXF host. The server operator must set
+`MXF_UNSAFE_STDIO_MCP_ENABLED=true`, and the demo user must have the
+`administrator` role. Agent keys cannot manage MCP processes.
 
 ## Files
 
@@ -28,8 +33,8 @@ This directory contains a complete working example of registering custom MCP ser
 2. Environment variables set in `.env`:
    ```
    MXF_DOMAIN_KEY=your-domain-key
-   MXF_USERNAME=demo-user
-   MXF_PASSWORD=demo-password
+   MXF_USERNAME=admin-user
+   MXF_PASSWORD=admin-password
    OPENROUTER_API_KEY=your-api-key
    ```
 
@@ -87,7 +92,8 @@ SDK                          Server
  │←─ Tool result             │
 ```
 
-No HTTP API needed - works entirely over WebSocket/EventBus!
+The registration request uses EventBus, and MXF communicates with the child process
+through MCP over `stdio`. Runtime HTTP MCP registration is not implemented.
 
 ## Next Steps
 

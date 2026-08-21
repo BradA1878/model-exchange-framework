@@ -63,9 +63,9 @@
  * });
  * await sdk.connect();
  *
- * // 2. Create channel and keys
- * await sdk.createChannel({ channelId, name, description });
- * const keys = await sdk.generateKey({ channelId, name });
+ * // 2. Create channel, keep its monitor, and generate keys
+ * const monitor = await sdk.createChannel(channelId, { name, description });
+ * const keys = await sdk.generateKey(channelId, agentId, name);
  *
  * // 3. Create agents
  * const agent = await sdk.createAgent({
@@ -74,12 +74,11 @@
  *   secretKey: keys.secretKey,
  *   llmProvider: LlmProviderType.OPENROUTER,
  *   apiKey: process.env.OPENROUTER_API_KEY!,
- *   defaultModel: 'anthropic/claude-3.5-haiku',
+ *   defaultModel: '~anthropic/claude-haiku-latest',
  *   allowedTools: ['messaging_send']
  * });
  *
- * // 4. Monitor with channel monitor
- * const monitor = sdk.createChannelMonitor(channelId);
+ * // 4. Monitor public channel events
  * monitor.on(Events.Message.AGENT_MESSAGE, callback);
  * ```
  */
@@ -140,7 +139,7 @@ const agentConfigurations: { [key: string]: AgentCreationConfig } = {
         },
         llmProvider: LlmProviderType.OPENROUTER,
         apiKey: process.env.OPENROUTER_API_KEY!,
-        defaultModel: 'anthropic/claude-3.5-haiku',
+        defaultModel: '~anthropic/claude-haiku-latest',
         temperature: 0.7,
         maxTokens: MAX_TOKENS,
         reasoning: { enabled: false },
@@ -230,7 +229,7 @@ After 2-3 alien exchanges and crew assessments, call task_complete with:
         },
         llmProvider: LlmProviderType.OPENROUTER,
         apiKey: process.env.OPENROUTER_API_KEY!,
-        defaultModel: 'google/gemini-2.0-flash-exp:free',
+        defaultModel: 'google/gemini-2.5-flash',
         temperature: 0.6,
         maxTokens: MAX_TOKENS,
         reasoning: { enabled: false },
@@ -269,7 +268,7 @@ After 2-3 alien exchanges and crew assessments, call task_complete with:
         },
         llmProvider: LlmProviderType.OPENROUTER,
         apiKey: process.env.OPENROUTER_API_KEY!,
-        defaultModel: 'anthropic/claude-3.5-sonnet',
+        defaultModel: '~anthropic/claude-sonnet-latest',
         temperature: 0.8,
         maxTokens: MAX_TOKENS,
         reasoning: { enabled: false },
@@ -308,7 +307,7 @@ After 2-3 alien exchanges and crew assessments, call task_complete with:
         },
         llmProvider: LlmProviderType.OPENROUTER,
         apiKey: process.env.OPENROUTER_API_KEY!,
-        defaultModel: 'anthropic/claude-3.5-sonnet',
+        defaultModel: '~anthropic/claude-sonnet-latest',
         temperature: 0.9,
         maxTokens: MAX_TOKENS,
         reasoning: { enabled: false },
@@ -348,7 +347,7 @@ After 2-3 alien exchanges and crew assessments, call task_complete with:
         },
         llmProvider: LlmProviderType.OPENROUTER,
         apiKey: process.env.OPENROUTER_API_KEY!,
-        defaultModel: 'anthropic/claude-3.5-sonnet',
+        defaultModel: '~anthropic/claude-sonnet-latest',
         temperature: 0.8,
         maxTokens: MAX_TOKENS,
         reasoning: { enabled: false },

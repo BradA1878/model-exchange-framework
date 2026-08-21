@@ -235,17 +235,19 @@ export class McpSecurityGuard {
         const parsed = parseCommand(command);
         const effectiveCommands = extractEffectiveCommands(command);
 
-        // Subshell constructs ($() or backticks) cannot be safely parsed — the parser
-        // detects their presence but doesn't extract commands inside them. Require
-        // confirmation so agents can't bypass validation with `echo $(rm -rf /)`.
+        // Subshell constructs ($() or backticks) are run by the shell but never
+        // reach this parser, so the commands inside them are checked against
+        // neither the block rules nor the configured allowlist. `git status
+        // $(bash -c ...)` would pass on the strength of `git`. They are denied
+        // outright; an agent that needs a value from one command can run it as
+        // its own command first.
         if (parsed.hasSubshells) {
             const destructiveWarnings = getDestructiveWarnings(command);
             const warningMessages = destructiveWarnings.length > 0
                 ? destructiveWarnings.map(w => w.warning)
                 : undefined;
             return {
-                allowed: true,
-                requiresConfirmation: true,
+                allowed: false,
                 reason: 'Command contains subshell constructs ($() or backticks) that cannot be statically validated',
                 riskLevel: 'high',
                 warnings: warningMessages

@@ -83,25 +83,25 @@ export class ToolExecutionPersistenceService {
         logger.info('Initializing ToolExecutionPersistenceService...');
 
         // Listen to tool call events
-        EventBus.server.on(McpEvents.TOOL_CALL, (payload: any) => {
+        EventBus.server.on(McpEvents.TOOL_CALL, (payload): Promise<void> =>
             this.handleToolCall(payload).catch(error => {
                 logger.error('Error handling tool call event:', error);
-            });
-        });
+            })
+        );
 
         // Listen to tool result events
-        EventBus.server.on(McpEvents.TOOL_RESULT, (payload: any) => {
+        EventBus.server.on(McpEvents.TOOL_RESULT, (payload): Promise<void> =>
             this.handleToolResult(payload).catch(error => {
                 logger.error('Error handling tool result event:', error);
-            });
-        });
+            })
+        );
 
         // Listen to tool error events
-        EventBus.server.on(McpEvents.TOOL_ERROR, (payload: any) => {
+        EventBus.server.on(McpEvents.TOOL_ERROR, (payload): Promise<void> =>
             this.handleToolError(payload).catch(error => {
                 logger.error('Error handling tool error event:', error);
-            });
-        });
+            })
+        );
 
         this.initialized = true;
         logger.info('ToolExecutionPersistenceService initialized successfully');

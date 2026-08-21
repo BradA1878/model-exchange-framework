@@ -126,6 +126,7 @@ Vue 3-based web interface for:
 - **[Nested Learning](nested-learning.md)** - Multi-timescale memory architecture
 - **[Memory Utility Learning (MULS)](memory-utility-learning.md)** - Q-value based retrieval
 - **[ORPAR-Memory Integration](orpar-memory-integration.md)** - Phase-aware memory coupling
+- **[User Memory](user-memory.md)** - Cross-session memory about the user, exposed as four MCP tools
 
 ### Advanced Systems
 - **[Task DAG & Knowledge Graph](../features/dag-knowledge-graph.md)** - DAG workflows and KG operations

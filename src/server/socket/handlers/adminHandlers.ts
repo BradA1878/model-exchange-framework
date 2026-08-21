@@ -141,6 +141,7 @@ export const setupAdminEventHandlers = (): void => {
         agentId?: string;
         name?: string;
         expiresAt?: string;
+        allowedTools?: string[];
     }>) => {
         try {
             
@@ -149,7 +150,7 @@ export const setupAdminEventHandlers = (): void => {
             validator.assertIsNonEmptyString(payload.data.channelId, 'Channel ID is required');
             validator.assertIsNonEmptyString(payload.agentId, 'Agent ID is required');
 
-            const { channelId, agentId, name, expiresAt } = payload.data;
+            const { channelId, agentId, name, expiresAt, allowedTools } = payload.data;
             const createdBy = payload.agentId; // The user requesting the key creation
 
             // A key names the agent it authenticates. The caller has always been
@@ -179,7 +180,8 @@ export const setupAdminEventHandlers = (): void => {
                 createdBy,
                 keyAgentId,
                 name || `Key for ${keyAgentId}`,
-                expirationDate
+                expirationDate,
+                allowedTools
             );
 
             // Emit success event
@@ -192,6 +194,7 @@ export const setupAdminEventHandlers = (): void => {
                     secretKey: createdKey.secretKey,
                     channelId: createdKey.channelId,
                     agentId: createdKey.agentId,
+                    allowedTools: createdKey.allowedTools,
                     expiresAt: createdKey.expiresAt?.toISOString()
                 }
             );

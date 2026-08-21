@@ -34,6 +34,7 @@ import { Events, ControlLoopEvents } from '@mxf-dev/core/events/EventNames';
 import { BaseEventPayload, ControlLoopSpecificData } from '@mxf-dev/core/schemas/EventPayloadSchema';
 import { ConversationHelpers, AgentContext } from '../MxfAgentHelpers.js';
 import { ConversationMessage } from '@mxf-dev/core/interfaces/ConversationMessage';
+import type { ConversationMessageInput } from '../managers/MxfMemoryManager.js';
 import { v4 as uuidv4 } from 'uuid';
 import { MxpMiddleware } from '@mxf-dev/core/middleware/MxpMiddleware';
 import { isMxpMessage } from '@mxf-dev/core/schemas/MxpProtocolSchemas';
@@ -41,7 +42,7 @@ import { isMxpMessage } from '@mxf-dev/core/schemas/MxpProtocolSchemas';
 // to maintain proper client/server architectural boundaries
 
 export interface EventHandlerCallbacks {
-    addConversationMessage: (message: { role: string; content: string; metadata?: Record<string, any> }) => void;
+    addConversationMessage: (message: ConversationMessageInput) => Promise<void>;
     provideImmediateToolFeedback: (fromAgentId: string, toolName: string, toolData: any, toolType: string) => Promise<string>;
     generateResponse: (prompt: string, tools?: any[], taskPrompt?: string) => Promise<string>;
     getContextualTools: (conversationHistory: ConversationMessage[], availableTools: any[]) => any[];
@@ -228,6 +229,7 @@ export class MxfEventHandlerService {
 
         } catch (error) {
             this.logger.error(`Error handling event requiring response: ${error instanceof Error ? error.message : String(error)}`);
+            throw error;
         }
     }
 
@@ -354,7 +356,7 @@ export class MxfEventHandlerService {
         }
         
         // Add the clean dialogue message to conversation history
-        this.callbacks.addConversationMessage(dialogueMessage);
+        await this.callbacks.addConversationMessage(dialogueMessage);
         
         // Skip immediate feedback if agent is messaging itself (tool execution in progress)
         // This prevents race conditions where feedback is triggered before tool results are added
@@ -365,7 +367,7 @@ export class MxfEventHandlerService {
         // Provide immediate feedback
         
         try {
-            const response = await this.callbacks.provideImmediateToolFeedback(
+            await this.callbacks.provideImmediateToolFeedback(
                 senderAgentId, 
                 toolUsedForMessage, 
                 messageData, 
@@ -374,6 +376,7 @@ export class MxfEventHandlerService {
             
         } catch (error) {
             this.logger.error(`❌ IMMEDIATE FEEDBACK ERROR: Failed to process ${toolUsedForMessage} from ${senderAgentId}: ${error}`);
+            throw error;
         }
     }
     
@@ -419,7 +422,7 @@ export class MxfEventHandlerService {
             
             // Add SystemLLM message to conversation history with proper prefix
             // It will be included in context for the next real message but won't trigger immediate response
-            this.callbacks.addConversationMessage({
+            await this.callbacks.addConversationMessage({
                 role: 'user',
                 content: `SYSTEM: ${eventData.content?.data || eventData.content}\n\n[Note: This is ephemeral coordination metadata from SystemLLM. Do not respond to this directly.]`,
                 metadata: {
@@ -498,7 +501,7 @@ export class MxfEventHandlerService {
         
         const immediatePrompt = `🎯 CHANNEL NOTIFICATION: Agent "${senderAgentId}" sent a message to channel "${channelId}" using "${toolUsedForMessage}": "${messageData}". Please review this channel message and decide how to respond or proceed.`;
         
-        const messageMetadata = {
+        const messageMetadata: NonNullable<ConversationMessage['metadata']> = {
             messageType: 'channel-message-immediate',
             fromAgentId: senderAgentId,
             toolUsed: toolUsedForMessage,
@@ -516,7 +519,7 @@ export class MxfEventHandlerService {
         }
         
         // Add detailed context to conversation
-        this.callbacks.addConversationMessage({
+        await this.callbacks.addConversationMessage({
             role: 'user',
             content: immediatePrompt,
             metadata: messageMetadata
@@ -525,7 +528,7 @@ export class MxfEventHandlerService {
         // Provide immediate feedback
         
         try {
-            const response = await this.callbacks.provideImmediateToolFeedback(
+            await this.callbacks.provideImmediateToolFeedback(
                 senderAgentId, 
                 toolUsedForMessage, 
                 messageData, 
@@ -534,6 +537,7 @@ export class MxfEventHandlerService {
             
         } catch (error) {
             this.logger.error(`❌ CHANNEL FEEDBACK ERROR: Failed to process channel message from ${senderAgentId}: ${error}`);
+            throw error;
         }
     }
 
@@ -542,7 +546,7 @@ export class MxfEventHandlerService {
      */
     private async processEventResponse(messageContent: string, messageMetadata: any, eventType: string): Promise<void> {
         // Add the event to conversation history as a user message
-        this.callbacks.addConversationMessage({
+        await this.callbacks.addConversationMessage({
             role: 'user',
             content: messageContent,
             metadata: messageMetadata
@@ -573,9 +577,10 @@ export class MxfEventHandlerService {
 
         // Automatically generate a response to the event
         try {
-            const response = await this.callbacks.generateResponse(messageContent, contextualTools);
+            await this.callbacks.generateResponse(messageContent, contextualTools);
         } catch (error) {
             this.logger.error(`❌ Error generating response to ${String(eventType)}: ${error instanceof Error ? error.message : String(error)}`);
+            throw error;
         }
     }
 
@@ -956,12 +961,12 @@ export class MxfEventHandlerService {
         );
 
         // Always add to conversation history for context
-        this.callbacks.addConversationMessage(dialogueMessage);
+        await this.callbacks.addConversationMessage(dialogueMessage);
         
         // Only trigger LLM response for initial task and completion
         if (shouldTriggerResponse) {
             try {
-                const response = await this.callbacks.provideImmediateToolFeedback(
+                await this.callbacks.provideImmediateToolFeedback(
                     'TaskService',
                     'task_event',
                     taskContent,
@@ -969,6 +974,7 @@ export class MxfEventHandlerService {
                 );
             } catch (error) {
                 this.logger.error(`❌ TASK RESPONSE ERROR: Failed to process ${eventType}: ${error}`);
+                throw error;
             }
         } else {
         }
@@ -987,7 +993,7 @@ export class MxfEventHandlerService {
             this.logger.warn(`📨 MESSAGE ERROR: Received validation error: ${payload.data?.error}`);
 
             // Add error feedback to conversation history with 'system' role
-            const errorMessage = {
+            const errorMessage: ConversationMessageInput = {
                 role: 'system', 
                 content: `❌ Message Error: ${payload.data?.error || 'Unknown message validation error'}${payload.data?.guidance ? `\n\n💡 Guidance: ${payload.data.guidance}` : ''}`,
                 metadata: {
@@ -998,7 +1004,7 @@ export class MxfEventHandlerService {
                 }
             };
 
-            this.callbacks.addConversationMessage(errorMessage);
+            await this.callbacks.addConversationMessage(errorMessage);
 
             // CRITICAL: Trigger a new response so the agent can see the error and correct its behavior
             // Without this, the error just sits in conversation history but never gets sent to the LLM
@@ -1012,6 +1018,7 @@ export class MxfEventHandlerService {
 
         } catch (error) {
             this.logger.error(`Error handling MESSAGE_ERROR event: ${error}`);
+            throw error;
         }
     }
 

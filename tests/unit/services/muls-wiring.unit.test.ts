@@ -27,7 +27,10 @@ import { RewardSignalProcessor } from '@mxf-dev/core/services/RewardSignalProces
 import { UtilityScorerService } from '@mxf-dev/core/services/UtilityScorerService';
 import { MxfMeilisearchService } from '@mxf-dev/core/services/MxfMeilisearchService';
 import { memory_search_conversations } from '@mxf-dev/core/protocols/mcp/tools/MemorySearchTools';
-import { IMemoryPersistence } from '@mxf-dev/core/interfaces/IMemoryPersistence';
+import {
+    ChannelMemoryAtomicMutation,
+    IMemoryPersistence
+} from '@mxf-dev/core/interfaces/IMemoryPersistence';
 import { MemoryUtilitySubdocument, DEFAULT_REWARD_MAPPING } from '@mxf-dev/core/types/MemoryUtilityTypes';
 
 const AGENT_ID = 'muls-agent';
@@ -42,9 +45,13 @@ class FakeMemoryPersistence implements IMemoryPersistence {
     public readonly writes: Array<{ memoryId: string; utility: Partial<MemoryUtilitySubdocument> }> = [];
     private readonly stored = new Map<string, MemoryUtilitySubdocument>();
 
-    getAgentMemory(): any { throw new Error('not used in these tests'); }
-    saveAgentMemory(): any { throw new Error('not used in these tests'); }
-    saveChannelMemory(): any { throw new Error('not used in these tests'); }
+    getAgentMemory(): never { throw new Error('not used in these tests'); }
+    saveAgentMemory(): never { throw new Error('not used in these tests'); }
+    saveChannelMemory(): never { throw new Error('not used in these tests'); }
+    getChannelMemory(): never { throw new Error('not used in these tests'); }
+    mutateChannelMemory(_channelId: string, _mutation: ChannelMemoryAtomicMutation): never {
+        throw new Error('not used in these tests');
+    }
 
     async updateAgentMemoryUtility(
         memoryId: string,
@@ -71,7 +78,15 @@ class FakeMemoryPersistence implements IMemoryPersistence {
 }
 
 /** Build a Meilisearch hit in the shape ConversationDocument search returns. */
-const hit = (id: string, rankingScore: number) => ({
+const hit = (id: string, rankingScore: number): {
+    id: string;
+    agentId: string;
+    channelId: string;
+    role: 'assistant';
+    content: string;
+    timestamp: number;
+    _rankingScore: number;
+} => ({
     id,
     agentId: AGENT_ID,
     channelId: CHANNEL_ID,
@@ -82,7 +97,7 @@ const hit = (id: string, rankingScore: number) => ({
 });
 
 /** Stub the Meilisearch client so search returns a fixed candidate set. */
-const stubSearch = (hits: ReturnType<typeof hit>[]) => {
+const stubSearch = (hits: ReturnType<typeof hit>[]): void => {
     jest.spyOn(MxfMeilisearchService, 'getInstance').mockReturnValue({
         searchConversations: jest.fn().mockResolvedValue({
             hits,
@@ -95,7 +110,7 @@ const stubSearch = (hits: ReturnType<typeof hit>[]) => {
     } as unknown as MxfMeilisearchService);
 };
 
-const runSearch = () =>
+const runSearch = (): ReturnType<typeof memory_search_conversations.handler> =>
     memory_search_conversations.handler(
         { query: 'deployment rollback' },
         { requestId: 'req-1', agentId: AGENT_ID, channelId: CHANNEL_ID, data: {} }
@@ -105,7 +120,10 @@ const runSearch = () =>
  * Emit a real task-completion event in the shape the server actually forwards: the task
  * object lives at `data.task` (TaskEventData), and its status lives on that object.
  */
-const completeTask = async (taskId: string, status: 'completed' | 'failed') => {
+const completeTask = async (
+    taskId: string,
+    status: 'completed' | 'failed'
+): Promise<void> => {
     const event = status === 'completed' ? Events.Task.COMPLETED : Events.Task.FAILED;
     EventBus.server.emit(
         event,
@@ -195,8 +213,8 @@ describe('MULS wiring — learning must reach retrieval and persistence', () => 
         persistence.seed('strong', 0.95);
         stubSearch([hit('weak', 0.90), hit('strong', 0.70)]);
 
-        const result: any = await runSearch();
-        const returned = result.content.data.results.map((r: any) => r.content);
+        const result = await runSearch();
+        const returned = result.content.data.results.map((item: { content: string }) => item.content);
 
         expect(returned[0]).toBe('content of strong');
     });
@@ -217,7 +235,7 @@ describe('MULS wiring — learning must reach retrieval and persistence', () => 
         qValueManager.initialize({ enabled: false, defaultQValue: DEFAULT_Q, learningRate: 0.5 });
         stubSearch([hit('mem-x', 0.9), hit('mem-y', 0.8)]);
 
-        const result: any = await runSearch();
+        const result = await runSearch();
 
         expect(result.content.data.results).toHaveLength(2);
         expect(persistence.writes).toHaveLength(0);

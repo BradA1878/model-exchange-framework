@@ -368,7 +368,7 @@ const createProjectSetupAgent = async (
         // LLM configuration — low temperature for predictable sequence following
         llmProvider: LlmProviderType.OPENROUTER,
         apiKey: process.env.OPENROUTER_API_KEY!,
-        defaultModel: 'anthropic/claude-3.5-sonnet',
+        defaultModel: '~anthropic/claude-sonnet-latest',
         temperature: 0.2,
         maxTokens: 8000,
         maxIterations: 20,

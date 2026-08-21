@@ -15,6 +15,7 @@
 import { Command } from 'commander';
 import { execSync } from 'child_process';
 import { logError, logInfo, logSuccess, logWarning } from '../utils/output';
+import { readAppVersion } from '../../shared/appVersion';
 
 /**
  * Register the `mxf update` command with the CLI program.
@@ -39,9 +40,7 @@ export function registerUpdateCommand(program: Command): void {
                     process.exit(1);
                 }
 
-                // Get current version from package.json
-                const packageJson = require('../../../package.json');
-                const currentVersion = packageJson.version || 'unknown';
+                const currentVersion = readAppVersion();
                 logInfo(`Current version: ${currentVersion}`);
 
                 // Fetch latest from remote

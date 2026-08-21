@@ -25,7 +25,7 @@
  * Enhanced version using SystemLLM for intelligent pattern analysis
  */
 
-import { Observable, BehaviorSubject, of, throwError } from 'rxjs';
+import { Observable, BehaviorSubject, lastValueFrom, of, throwError } from 'rxjs';
 import { v4 as uuidv4 } from 'uuid';
 
 import { Logger } from '@mxf-dev/core/utils/Logger';
@@ -169,18 +169,20 @@ export class PatternMemoryService {
             // Store in cache (using existing MemoryService for basic storage)
             this.patternCache.set(patternId, pattern);
             
-            // Store in agent memory using existing MemoryService structure
-            this.memoryService.updateAgentMemory(agentId, {
-                [`pattern_${patternId}`]: JSON.stringify(pattern)
-            }).subscribe({
-                next: () => null,
-                error: (error) => this.logger.warn(`⚠️ Failed to persist pattern: ${error}`)
-            });
-            
+            // Store in agent memory using existing MemoryService structure. The
+            // write is awaited so a caller holding this promise (and the EventBus
+            // shutdown drain behind it) does not complete while it is in flight.
+            try {
+                await lastValueFrom(this.memoryService.updateAgentMemory(agentId, {
+                    [`pattern_${patternId}`]: JSON.stringify(pattern)
+                }), { defaultValue: undefined });
+            } catch (error) {
+                this.logger.warn(`⚠️ Failed to persist pattern: ${error}`);
+            }
+
             // Emit update
             this.emitPatternUpdate(channelId);
-            
-            
+
             return of(pattern);
             
         } catch (error) {

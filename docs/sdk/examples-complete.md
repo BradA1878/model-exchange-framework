@@ -11,7 +11,7 @@ See [Basic Examples](examples-basic.md#prerequisites) for setup instructions.
 Complete customer support system with multiple specialized agents.
 
 ```typescript
-import { MxfSDK, Events, MemoryScope } from '@mxf-dev/sdk';
+import { MxfSDK, Events } from '@mxf-dev/sdk';
 import * as fs from 'fs';
 
 // Load credentials
@@ -36,7 +36,7 @@ const frontDesk = await sdk.createAgent({
     keyId: credentials.keys.frontdesk.keyId,
     secretKey: credentials.keys.frontdesk.secretKey,
     llmProvider: 'openrouter',
-    defaultModel: 'anthropic/claude-3.5-sonnet',
+    defaultModel: '~anthropic/claude-sonnet-latest',
     apiKey: process.env.OPENROUTER_API_KEY,
     agentConfigPrompt: `You are a friendly front desk agent. 
     Greet customers, understand their needs, and route them to specialists.`,
@@ -50,7 +50,7 @@ const technical = await sdk.createAgent({
     keyId: credentials.keys.technical.keyId,
     secretKey: credentials.keys.technical.secretKey,
     llmProvider: 'openrouter',
-    defaultModel: 'anthropic/claude-3.5-sonnet',
+    defaultModel: '~anthropic/claude-sonnet-latest',
     apiKey: process.env.OPENROUTER_API_KEY,
     agentConfigPrompt: `You are a technical support specialist.
     Help customers with technical issues and troubleshooting.`,
@@ -64,7 +64,7 @@ const billing = await sdk.createAgent({
     keyId: credentials.keys.billing.keyId,
     secretKey: credentials.keys.billing.secretKey,
     llmProvider: 'openrouter',
-    defaultModel: 'anthropic/claude-3.5-sonnet',
+    defaultModel: '~anthropic/claude-sonnet-latest',
     apiKey: process.env.OPENROUTER_API_KEY,
     agentConfigPrompt: `You are a billing support specialist.
     Help customers with billing questions and account issues.`,
@@ -79,28 +79,34 @@ await Promise.all([
 
 // Front desk routes customers
 frontDesk.on(Events.Message.AGENT_MESSAGE, async (payload) => {
-    const message = payload.data.content.toLowerCase();
+    if (
+        payload.data.content.format !== 'text' ||
+        typeof payload.data.content.data !== 'string'
+    ) {
+        return;
+    }
+    const message = payload.data.content.data.toLowerCase();
     
     if (message.includes('technical') || message.includes('error')) {
-        await frontDesk.channelService.sendMessage(
+        await frontDesk.mxfService.sendMessage(
             'Routing you to technical support...'
         );
-        await frontDesk.channelService.createTask({
+        await frontDesk.mxfService.createTask({
             title: 'Technical Support Request',
-            description: payload.data.content,
-            assignedTo: 'technical'
+            description: payload.data.content.data,
+            assignedAgentIds: ['technical']
         });
     } else if (message.includes('billing') || message.includes('payment')) {
-        await frontDesk.channelService.sendMessage(
+        await frontDesk.mxfService.sendMessage(
             'Routing you to billing support...'
         );
-        await frontDesk.channelService.createTask({
+        await frontDesk.mxfService.createTask({
             title: 'Billing Support Request',
-            description: payload.data.content,
-            assignedTo: 'billing'
+            description: payload.data.content.data,
+            assignedAgentIds: ['billing']
         });
     } else {
-        await frontDesk.channelService.sendMessage(
+        await frontDesk.mxfService.sendMessage(
             'How can I help you today?'
         );
     }
@@ -109,9 +115,9 @@ frontDesk.on(Events.Message.AGENT_MESSAGE, async (payload) => {
 // Specialists handle their tasks
 [technical, billing].forEach(agent => {
     agent.on(Events.Task.ASSIGNED, async (payload) => {
-        console.log(`${agent.agentId} handling: ${payload.data.description}`);
-        await agent.channelService.sendMessage(
-            `I'm looking into your request: ${payload.data.description}`
+        console.log(`${agent.agentId} handling: ${payload.data.task.description}`);
+        await agent.mxfService.sendMessage(
+            `I'm looking into your request: ${payload.data.task.description}`
         );
         // Process and respond...
     });
@@ -143,7 +149,7 @@ const collector = await sdk.createAgent({
     keyId: credentials.keys.collector.keyId,
     secretKey: credentials.keys.collector.secretKey,
     llmProvider: 'openrouter',
-    defaultModel: 'anthropic/claude-3.5-sonnet',
+    defaultModel: '~anthropic/claude-sonnet-latest',
     apiKey: process.env.OPENROUTER_API_KEY,
     allowedTools: ['filesystem_read', 'memory_store']
 });
@@ -155,7 +161,7 @@ const validator = await sdk.createAgent({
     keyId: credentials.keys.validator.keyId,
     secretKey: credentials.keys.validator.secretKey,
     llmProvider: 'openrouter',
-    defaultModel: 'anthropic/claude-3.5-sonnet',
+    defaultModel: '~anthropic/claude-sonnet-latest',
     apiKey: process.env.OPENROUTER_API_KEY,
     allowedTools: ['memory_retrieve', 'memory_store']
 });
@@ -167,7 +173,7 @@ const processor = await sdk.createAgent({
     keyId: credentials.keys.processor.keyId,
     secretKey: credentials.keys.processor.secretKey,
     llmProvider: 'openrouter',
-    defaultModel: 'anthropic/claude-3.5-sonnet',
+    defaultModel: '~anthropic/claude-sonnet-latest',
     apiKey: process.env.OPENROUTER_API_KEY,
     allowedTools: ['memory_retrieve', 'memory_store']
 });
@@ -179,7 +185,7 @@ const reporter = await sdk.createAgent({
     keyId: credentials.keys.reporter.keyId,
     secretKey: credentials.keys.reporter.secretKey,
     llmProvider: 'openrouter',
-    defaultModel: 'anthropic/claude-3.5-sonnet',
+    defaultModel: '~anthropic/claude-sonnet-latest',
     apiKey: process.env.OPENROUTER_API_KEY,
     allowedTools: ['memory_retrieve', 'messaging_send']
 });
@@ -194,28 +200,28 @@ await Promise.all([
 // Set up pipeline
 collector.on(Events.Task.COMPLETED, async (payload) => {
     console.log('Collection complete, starting validation...');
-    await validator.channelService.createTask({
+    await validator.mxfService.createTask({
         title: 'Validate Data',
         description: 'Validate collected data',
-        assignedTo: 'validator'
+        assignedAgentIds: ['validator']
     });
 });
 
 validator.on(Events.Task.COMPLETED, async (payload) => {
     console.log('Validation complete, starting processing...');
-    await processor.channelService.createTask({
+    await processor.mxfService.createTask({
         title: 'Process Data',
         description: 'Process validated data',
-        assignedTo: 'processor'
+        assignedAgentIds: ['processor']
     });
 });
 
 processor.on(Events.Task.COMPLETED, async (payload) => {
     console.log('Processing complete, generating report...');
-    await reporter.channelService.createTask({
+    await reporter.mxfService.createTask({
         title: 'Generate Report',
         description: 'Create final report',
-        assignedTo: 'reporter'
+        assignedAgentIds: ['reporter']
     });
 });
 
@@ -224,10 +230,10 @@ reporter.on(Events.Task.COMPLETED, (payload) => {
 });
 
 // Start the pipeline
-await collector.channelService.createTask({
+await collector.mxfService.createTask({
     title: 'Collect Data',
     description: 'Gather data from sources',
-    assignedTo: 'collector'
+    assignedAgentIds: ['collector']
 });
 ```
 
@@ -264,7 +270,7 @@ class MonitoringDashboard {
             keyId: credentials.keys.monitor.keyId,
             secretKey: credentials.keys.monitor.secretKey,
             llmProvider: 'openrouter',
-            defaultModel: 'anthropic/claude-3.5-sonnet',
+            defaultModel: '~anthropic/claude-sonnet-latest',
             apiKey: process.env.OPENROUTER_API_KEY
         });
 
@@ -361,7 +367,7 @@ await dashboard.initialize();
 Self-organizing team that researches topics autonomously.
 
 ```typescript
-import { MxfSDK, Events, MemoryScope } from '@mxf-dev/sdk';
+import { MxfSDK, Events } from '@mxf-dev/sdk';
 
 async function createResearchTeam() {
     const sdk = new MxfSDK({
@@ -381,7 +387,7 @@ async function createResearchTeam() {
         keyId: credentials.keys.leader.keyId,
         secretKey: credentials.keys.leader.secretKey,
         llmProvider: 'openrouter',
-        defaultModel: 'anthropic/claude-3.5-sonnet',
+        defaultModel: '~anthropic/claude-sonnet-latest',
         apiKey: process.env.OPENROUTER_API_KEY,
         agentConfigPrompt: `You lead a research team.
         Break down research topics into subtasks and assign to specialists.`,
@@ -397,7 +403,7 @@ async function createResearchTeam() {
             keyId: credentials.keys.academic.keyId,
             secretKey: credentials.keys.academic.secretKey,
             llmProvider: 'openrouter',
-            defaultModel: 'anthropic/claude-3.5-sonnet',
+            defaultModel: '~anthropic/claude-sonnet-latest',
             apiKey: process.env.OPENROUTER_API_KEY,
             agentConfigPrompt: 'You research academic papers and scientific literature.'
         }),
@@ -408,7 +414,7 @@ async function createResearchTeam() {
             keyId: credentials.keys.analyst.keyId,
             secretKey: credentials.keys.analyst.secretKey,
             llmProvider: 'openrouter',
-            defaultModel: 'anthropic/claude-3.5-sonnet',
+            defaultModel: '~anthropic/claude-sonnet-latest',
             apiKey: process.env.OPENROUTER_API_KEY,
             agentConfigPrompt: 'You analyze industry trends and market data.'
         }),
@@ -419,7 +425,7 @@ async function createResearchTeam() {
             keyId: credentials.keys.synthesizer.keyId,
             secretKey: credentials.keys.synthesizer.secretKey,
             llmProvider: 'openrouter',
-            defaultModel: 'anthropic/claude-3.5-sonnet',
+            defaultModel: '~anthropic/claude-sonnet-latest',
             apiKey: process.env.OPENROUTER_API_KEY,
             agentConfigPrompt: 'You synthesize research from multiple sources into cohesive insights.'
         })
@@ -430,27 +436,30 @@ async function createResearchTeam() {
 
     // Autonomous research workflow
     leader.on(Events.Message.AGENT_MESSAGE, async (payload) => {
-        if (payload.data.content.startsWith('Research:')) {
-            const topic = payload.data.content.replace('Research:', '').trim();
+        if (
+            payload.data.content.format === 'text' &&
+            typeof payload.data.content.data === 'string' &&
+            payload.data.content.data.startsWith('Research:')
+        ) {
+            const topic = payload.data.content.data.replace('Research:', '').trim();
             
             // Store research topic
-            await leader.channelService.updateMemory(
-                MemoryScope.CHANNEL,
-                'current_research',
-                { topic, status: 'in_progress' }
-            );
-
-            // Assign subtasks
-            await leader.channelService.createTask({
-                title: 'Academic Research',
-                description: `Research academic literature on: ${topic}`,
-                assignedTo: 'academic-researcher'
+            await leader.mxfService.updateSharedState('current_research', {
+                topic,
+                status: 'in_progress'
             });
 
-            await leader.channelService.createTask({
+            // Assign subtasks
+            await leader.mxfService.createTask({
+                title: 'Academic Research',
+                description: `Research academic literature on: ${topic}`,
+                assignedAgentIds: ['academic-researcher']
+            });
+
+            await leader.mxfService.createTask({
                 title: 'Industry Analysis',
                 description: `Analyze industry trends for: ${topic}`,
-                assignedTo: 'industry-analyst'
+                assignedAgentIds: ['industry-analyst']
             });
         }
     });
@@ -461,10 +470,10 @@ async function createResearchTeam() {
         agent.on(Events.Task.COMPLETED, async (payload) => {
             completedCount++;
             if (completedCount === 2) {
-                await leader.channelService.createTask({
+                await leader.mxfService.createTask({
                     title: 'Synthesize Research',
                     description: 'Combine all research findings',
-                    assignedTo: 'synthesizer'
+                    assignedAgentIds: ['synthesizer']
                 });
                 completedCount = 0;
             }
@@ -472,12 +481,10 @@ async function createResearchTeam() {
     });
 
     specialists[2].on(Events.Task.COMPLETED, async (payload) => {
-        await leader.channelService.updateMemory(
-            MemoryScope.CHANNEL,
-            'current_research',
-            { status: 'complete' }
-        );
-        await leader.channelService.sendMessage('✓ Research complete!');
+        await leader.mxfService.updateSharedState('current_research', {
+            status: 'complete'
+        });
+        await leader.mxfService.sendMessage('✓ Research complete!');
     });
 
     return { leader, specialists };
@@ -485,7 +492,7 @@ async function createResearchTeam() {
 
 // Start research
 const team = await createResearchTeam();
-await team.leader.channelService.sendMessage('Research: Impact of AI on software development');
+await team.leader.mxfService.sendMessage('Research: Impact of AI on software development');
 ```
 
 ## See Also

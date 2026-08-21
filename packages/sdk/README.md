@@ -40,14 +40,38 @@ The official TypeScript SDK for the Model Exchange Framework (MXF), enabling dev
 ## 📦 Installation
 
 ```bash
-# The SDK is part of the MXF monorepo
-bun install
-
-# Build the framework
-bun run build
+bun add @mxf-dev/sdk
 ```
 
-**Note**: The SDK will be published as `@mxf-dev/sdk` when separated from the monorepo. MXF uses Bun for both package management and server execution.
+MXF server development uses Bun. The published SDK is ESM-only and supports Bun
+>= 1.2 or Node.js >= 20.19 for client applications.
+
+### Upgrading to 3.0
+
+3.0 tightens the public contract. What changed for code written against 2.x:
+
+- **Root import only.** Deep imports such as `@mxf-dev/sdk/services/MxfService`
+  no longer resolve; every supported export comes from `@mxf-dev/sdk`.
+- **`mxfService.sendMessage(content, options)`** no longer takes a `fromAgentId`
+  argument. The sender is always the authenticated agent.
+- **`generateKey()` requires `agentId`.** A key names the agent it authenticates;
+  the server rejects a request without one.
+- **`agent.setAgentConfigPrompt()` is async.** Await it.
+- **MCP server management moved to the SDK level.** `registerMcpServer()` and the
+  other process-management methods on `MxfClient`/`MxfAgent` throw
+  `AgentMcpProcessManagementError`; use `MxfSDK.registerExternalMcpServer()` and
+  channel creation options instead. Only the `stdio` transport is available
+  through the SDK.
+- **Memory reads fail loudly.** Memory accessors throw on failure instead of
+  returning `null`, and `addToSharedConversationHistory()` returns the updated
+  history array rather than the channel memory document.
+- **`connect()` waits for authentication.** It stays pending while Socket.IO
+  retries a boot race, and `reconnectionAttempts` defaults to unlimited. Set a
+  finite value to get the old fail-fast behavior.
+- **Reconnects are a public signal.** `sdk.onReconnected(listener)` fires after
+  the socket manager restores and re-authenticates the user connection
+  (`Events.Sdk.RECONNECTED` on the event bus). Code that reached into the private
+  `socket` field to watch for `reconnect` can stop doing so.
 
 ## 🚀 Quick Start
 
@@ -65,6 +89,11 @@ const sdk = new MxfSDK({
 
 await sdk.connect();
 ```
+
+`sdk.connect()` resolves only after the server authenticates the user session. By
+default the administrative connection keeps retrying transient transport failures;
+set `reconnectionAttempts` to a finite number when the caller needs bounded retry.
+Authentication rejection and configured retry exhaustion reject the promise.
 
 ### 2. Create an Agent
 
@@ -93,14 +122,14 @@ import { Events } from '@mxf-dev/sdk';
 
 // The handler is typed from the event name — `payload` is not `any`.
 agent.on(Events.Message.AGENT_MESSAGE, (payload) => {
-    console.log('Message:', payload.data.content);
+    console.log('Message:', payload.data.content.data);
 });
 ```
 
 ### 4. Send Messages
 
 ```typescript
-await agent.channelService.sendMessage('Hello from my agent!');
+await agent.mxfService.sendMessage('Hello from my agent!');
 ```
 
 ## 📚 Core Concepts
@@ -135,9 +164,14 @@ try {
 }
 ```
 
-This applies to `connect()`, `registerTool()` / `unregisterTool()`, all four MCP server
-register/unregister methods, and the memory operations. MCP registration failures throw
-`EventRequestError`; a server that never answers throws `EventRequestTimeoutError`.
+This applies to `connect()`, `registerTool()` / `unregisterTool()`, memory operations,
+and acknowledged task lifecycle operations. MCP server process management is
+administrative: call the four register/unregister methods on an
+administrator-authenticated `MxfSDK`. Caller-supplied `stdio` registration also
+requires the server operator to set `MXF_UNSAFE_STDIO_MCP_ENABLED=true`; it is disabled
+by default because it starts a process on the MXF host. The deprecated
+`MxfClient`/`MxfAgent` variants reject immediately with
+`AgentMcpProcessManagementError` and never emit a process-management request.
 
 ### Event Patterns
 
@@ -150,15 +184,15 @@ register/unregister methods, and the memory operations. MCP registration failure
 - `off(event, handler)` removes exactly that handler; `off(event)` removes all of them.
 
 ```typescript
-const onMessage = (payload) => console.log(payload.data.content);
+const onMessage = (payload) => console.log(payload.data.content.data);
 
 agent.on(Events.Message.AGENT_MESSAGE, onMessage);
 agent.off(Events.Message.AGENT_MESSAGE, onMessage);  // removes just this one
 agent.off(Events.Message.AGENT_MESSAGE);             // removes every handler
 ```
 
-**Channel Monitoring** (`sdk.createChannelMonitor()`):
-- Monitor ALL events from ALL agents in a channel
+**Channel Monitoring** (`sdk.createChannel()` return value):
+- Filter public channel events received by SDK/agent sockets in this process
 - Useful for orchestration, dashboards, and coordinators
 
 ## 🎯 Common Use Cases
@@ -182,10 +216,10 @@ await agent.connect();
 
 // Listen for messages
 agent.on(Events.Message.AGENT_MESSAGE, async (payload) => {
-    console.log(`${payload.data.senderId}: ${payload.data.content}`);
+    console.log(`${payload.data.senderId}: ${payload.data.content.data}`);
     
     // Respond
-    await agent.channelService.sendMessage(`Received your message!`);
+    await agent.mxfService.sendMessage(`Received your message!`);
 });
 ```
 
@@ -246,34 +280,37 @@ agent.on(Events.Task.COMPLETED, (payload) => {
 ### Memory Operations
 
 ```typescript
-// Store agent-private memory
-await agent.channelService.updateMemory('agent', 'preferences', {
-    theme: 'dark',
-    language: 'en',
-    notifications: true
+// Update canonical channel memory. The resolved value is the persisted document.
+const updated = await agent.mxfService.updateSharedMemory({
+    notes: { project: 'Q4 Sales Analysis' },
+    sharedState: { phase: 'data-collection' }
 });
 
-// Store channel-shared memory
-await agent.channelService.updateMemory('channel', 'project-context', {
-    projectName: 'Q4 Sales Analysis',
-    phase: 'data-collection',
-    deadline: '2025-12-31'
+const channelMemory = await agent.mxfService.getSharedMemory();
+
+// Agent-private key/value memory is exposed through the authorized MCP tools.
+// The channel key and requested allowedTools must grant both names.
+await agent.executeTool('agent_memory_write', {
+    key: 'preferences',
+    value: { theme: 'dark', language: 'en' },
+    memorySection: 'notes'
 });
 
-// Retrieve memory
-const preferences = await agent.channelService.getMemory('agent', 'preferences');
-const context = await agent.channelService.getMemory('channel', 'project-context');
+const preferences = await agent.executeTool('agent_memory_read', {
+    key: 'preferences',
+    memorySection: 'notes'
+});
 ```
 
 ### Channel Monitoring
 
 ```typescript
 // Create a monitor to observe all channel activity
-const monitor = sdk.createChannelMonitor('my-channel');
+const monitor = await sdk.createChannel('my-channel', { name: 'My Channel' });
 
 // Listen to all messages from all agents
 monitor.on(Events.Message.AGENT_MESSAGE, (payload) => {
-    console.log(`[${payload.agentId}] ${payload.data.content}`);
+    console.log(`[${payload.agentId}] ${payload.data.content.data}`);
 });
 
 // Monitor task events
@@ -288,10 +325,19 @@ monitor.on(Events.Task.COMPLETED, (payload) => {
 
 ## 🔌 Supported LLM Providers
 
+> **Note:** Model ids change often. The ids in these docs are a snapshot of what was
+> available when they were written; providers add, rename, and retire models all the
+> time. Check your provider's current list before relying on an id — for OpenRouter,
+> <https://openrouter.ai/models>. For Claude on OpenRouter, `~anthropic/claude-opus-latest`,
+> `~anthropic/claude-sonnet-latest`, and `~anthropic/claude-haiku-latest` resolve to the
+> newest release in each family, so they are the ids to use unless you need a specific
+> version. `~anthropic/claude-fable-latest` is the same kind of alias for the top-tier
+> family; it is priced well above the others and nothing in MXF selects it by default.
+
 ### OpenRouter
 ```typescript
 llmProvider: 'openrouter',
-defaultModel: 'anthropic/claude-opus-4.5',
+defaultModel: '~anthropic/claude-opus-latest',
 apiKey: process.env.OPENROUTER_API_KEY
 ```
 
@@ -405,8 +451,9 @@ See [SDK CLI Documentation](../../docs/sdk/cli.md) for complete details.
 1. **Domain Key**: Keep `MXF_DOMAIN_KEY` secure, never commit to version control
 2. **User Credentials**: Use environment variables for username/password or JWT tokens
 3. **Agent Keys**: Store keys in separate credentials file (e.g., `credentials.json`)
-4. **Tool Access Control**: Use `allowedTools` array to restrict tool access based on agent role
-5. **MXP Encryption**: Enable for sensitive communications in production
+4. **Tool Access Control**: Treat the channel key's grant as the maximum; an agent can narrow it but cannot expand it
+5. **Privileged Capabilities**: Host, network, and `stdio` process capabilities are disabled until the server operator explicitly enables their gates
+6. **MXP Encryption**: Enable for sensitive communications in production
 
 ## ⚙️ Configuration Options
 
@@ -435,11 +482,13 @@ interface AgentCreationConfig {
     reasoning?: { enabled: boolean };  // false explicitly disables models that reason by default (GLM, Qwen, DeepSeek)
     
     // Optional: Tool Access
+    // undefined = curated core tools; [] = no tools; non-empty = requested
+    // subset of the authenticated channel key's maximum grant
     allowedTools?: string[];
     
     // Optional: MXP Settings
     mxpEnabled?: boolean;
-    mxpPreferredFormat?: 'auto' | 'binary' | 'text';
+    mxpPreferredFormat?: 'auto' | 'mxp' | 'natural-language';
     mxpForceEncryption?: boolean;
 }
 ```
@@ -465,8 +514,7 @@ const sdk = new MxfSDK({
     serverUrl: 'http://localhost:3001',
     domainKey: process.env.MXF_DOMAIN_KEY!,
     username: process.env.MXF_USERNAME!,
-    password: process.env.MXF_PASSWORD!,
-    logLevel: 'debug'  // Enable debug logging
+    password: process.env.MXF_PASSWORD!
 });
 ```
 

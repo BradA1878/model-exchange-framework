@@ -33,12 +33,32 @@ import { ChannelId, AgentId } from '@mxf-dev/core/types/ChannelContext';
 import { ChannelContextMessageOperations } from '@mxf-dev/core/services/ChannelContextMessageOperations';
 import { Server } from 'socket.io'; 
 import { IChannel } from '@mxf-dev/core/interfaces/Channel'; 
-import { lastValueFrom } from 'rxjs';
 import { Channel } from '@mxf-dev/core/models/channel';
+import { User, UserRole } from '@mxf-dev/core/models/user';
 import { McpService } from './McpService';
+import channelKeyService from './ChannelKeyService';
+import { SystemLlmServiceManager } from './SystemLlmServiceManager';
+import { ServerHybridMcpService } from '../../api/services/ServerHybridMcpService';
 // Import shared config events (NOT from SDK - that's client-side only)
 import { ConfigEvents, ChannelSystemLlmChangeEvent } from '@mxf-dev/core/events/event-definitions/ConfigEvents';
 import { ConfigManager } from '@mxf-dev/core/config/ConfigManager';
+import { isReservedChannelId } from '@mxf-dev/core/constants/ReservedIdentities';
+
+/** A terminal channel tombstone exists, but one or more required cleanups need retry. */
+export class ChannelDeletionCleanupError extends Error {
+    public readonly channelId: ChannelId;
+    public readonly failures: string[];
+
+    constructor(channelId: ChannelId, failures: string[]) {
+        super(
+            `Channel ${channelId} is inactive but deletion cleanup is incomplete: ` +
+            failures.join(', ')
+        );
+        this.name = 'ChannelDeletionCleanupError';
+        this.channelId = channelId;
+        this.failures = [...failures];
+    }
+}
 
 /**
  * ChannelService manages channel lifecycle and interactions.
@@ -186,6 +206,19 @@ export class ChannelService extends EventEmitter {
             this.validator.assertIsNonEmptyString(channelId, 'payload.message.context.channelId is required');
             
             this.validator.assertIsNonEmptyString(channelMessage.senderId, 'payload.message.senderId is required');
+
+            // Persistence requests are generated internally from an already
+            // authenticated message envelope. Never let nested message fields
+            // retarget that request to another channel or attribute it to a
+            // different sender if a future caller reaches this bus event.
+            if (channelId !== payload.channelId || channelMessage.senderId !== payload.agentId) {
+                this.logger.warn(
+                    `Rejected message persistence identity mismatch: outer=${payload.agentId}/${payload.channelId} ` +
+                    `nested=${channelMessage.senderId}/${channelId}`
+                );
+                return;
+            }
+
             this.validator.assert(channelMessage.content?.data !== undefined, 'payload.message.content.data is required');
             this.validator.assert(!!channelMessage.metadata, 'payload.message.metadata is required');
             const messageId = channelMessage.metadata?.messageId;
@@ -291,51 +324,62 @@ export class ChannelService extends EventEmitter {
 
                 this.logger.info(`ChannelService handling CHANNEL_SERVER_REGISTER for ${serverConfig.id}`);
 
-                // Load channel from database
-                const channel = await Channel.findOne({ channelId });
-                if (!channel) {
-                    this.logger.error(`Channel ${channelId} not found for MCP server registration`);
-                    return;
-                }
-
-                // Initialize mcpServers if not exists
-                if (!channel.mcpServers) {
-                    channel.mcpServers = { servers: [], updatedAt: new Date() };
-                }
-
                 // Re-registration refreshes the stored record instead of refusing.
                 // The old warn-and-return kept stale config forever and made the
                 // database claim "already registered" for servers whose runtime
                 // record had been lost — re-registration is how clients recover
                 // from exactly that state.
-                const existingServer = channel.mcpServers.servers.find(s => s.id === serverConfig.id);
-                if (existingServer) {
-                    existingServer.config = serverConfig;
-                    existingServer.registeredBy = agentId;
-                    existingServer.registeredAt = new Date();
-                    existingServer.keepAliveMinutes = serverConfig.keepAliveMinutes || 5;
-                    channel.mcpServers.updatedAt = new Date();
-                    channel.markModified('mcpServers');
-                    await channel.save();
+                const registeredAt = new Date();
+                const refreshed = await Channel.updateOne(
+                    {
+                        channelId,
+                        active: true,
+                        'mcpServers.servers.id': serverConfig.id
+                    },
+                    {
+                        $set: {
+                            'mcpServers.servers.$.config': serverConfig,
+                            'mcpServers.servers.$.registeredBy': agentId,
+                            'mcpServers.servers.$.registeredAt': registeredAt,
+                            'mcpServers.servers.$.keepAliveMinutes': serverConfig.keepAliveMinutes || 5,
+                            'mcpServers.updatedAt': registeredAt
+                        }
+                    }
+                );
+                if (refreshed.matchedCount > 0) {
                     this.logger.info(`Server ${serverConfig.id} re-registered for channel ${channelId} — database record refreshed`);
                     return;
                 }
 
-                // Add server to channel
-                channel.mcpServers.servers.push({
-                    id: serverConfig.id,
-                    name: serverConfig.name,
-                    config: serverConfig,
-                    registeredBy: agentId,
-                    registeredAt: new Date(),
-                    status: 'stopped',
-                    keepAliveMinutes: serverConfig.keepAliveMinutes || 5
-                });
-                channel.mcpServers.updatedAt = new Date();
+                const inserted = await Channel.updateOne(
+                    {
+                        channelId,
+                        active: true,
+                        'mcpServers.servers.id': { $ne: serverConfig.id }
+                    },
+                    {
+                        $push: {
+                            'mcpServers.servers': {
+                                id: serverConfig.id,
+                                name: serverConfig.name,
+                                config: serverConfig,
+                                registeredBy: agentId,
+                                registeredAt,
+                                status: 'stopped',
+                                keepAliveMinutes: serverConfig.keepAliveMinutes || 5
+                            }
+                        },
+                        $set: { 'mcpServers.updatedAt': registeredAt }
+                    }
+                );
+                if (inserted.matchedCount === 0) {
+                    this.logger.warn(
+                        `Ignored MCP server registration for missing, inactive, or concurrently changed channel ${channelId}`
+                    );
+                    return;
+                }
 
-                this.logger.info(`Saving channel ${channelId} with MCP server ${serverConfig.id}`);
-                await channel.save();
-                this.logger.info(`Channel ${channelId} saved successfully with ${channel.mcpServers.servers.length} server(s)`);
+                this.logger.info(`Channel ${channelId} saved with MCP server ${serverConfig.id}`);
 
             } catch (error) {
                 this.logger.error(`Error persisting channel MCP server to database: ${error instanceof Error ? error.message : String(error)}`);
@@ -350,21 +394,19 @@ export class ChannelService extends EventEmitter {
 
                 this.logger.info(`ChannelService handling CHANNEL_SERVER_UNREGISTER for ${serverId}`);
 
-                // Load channel from database
-                const channel = await Channel.findOne({ channelId });
-                if (!channel || !channel.mcpServers) {
-                    this.logger.warn(`Channel ${channelId} not found or has no MCP servers`);
+                const result = await Channel.updateOne(
+                    { channelId, active: true },
+                    {
+                        $pull: { 'mcpServers.servers': { id: serverId } },
+                        $set: { 'mcpServers.updatedAt': new Date() }
+                    }
+                );
+                if (result.matchedCount === 0) {
+                    this.logger.warn(`Active channel ${channelId} not found during MCP unregistration`);
                     return;
                 }
 
-                // Remove server from channel
-                const beforeCount = channel.mcpServers.servers.length;
-                channel.mcpServers.servers = channel.mcpServers.servers.filter(s => s.id !== serverId);
-                channel.mcpServers.updatedAt = new Date();
-
-                await channel.save();
-
-                this.logger.info(`Channel ${channelId} server removed (${beforeCount} -> ${channel.mcpServers.servers.length})`);
+                this.logger.info(`Channel ${channelId} server ${serverId} removed`);
 
             } catch (error) {
                 this.logger.error(`Error removing channel MCP server from database: ${error instanceof Error ? error.message : String(error)}`);
@@ -384,7 +426,7 @@ export class ChannelService extends EventEmitter {
 
                 // Update database
                 const result = await Channel.updateOne(
-                    { channelId },
+                    { channelId, active: true },
                     { $set: { systemLlmEnabled: data.enabled } }
                 );
 
@@ -409,16 +451,37 @@ export class ChannelService extends EventEmitter {
         this.validator.assertIsNonEmptyString(channelId, 'channelId');
         this.validator.assertIsNonEmptyString(createdBy, 'createdBy');
 
+        if (isReservedChannelId(channelId)) {
+            throw new Error(
+                `Channel identity "${channelId}" is reserved for internal MXF routing; choose a different channelId.`
+            );
+        }
+
         // Check if channel already exists in memory
         if (this.channels.has(channelId)) {
             this.logger.warn(`Channel with ID ${channelId} already exists in memory.`);
-            return this.channels.get(channelId) || null;
+            const existingChannel = this.channels.get(channelId);
+            if (!existingChannel || !existingChannel.active ||
+                String(existingChannel.metadata?.createdBy ?? '') !== String(createdBy)) {
+                this.logger.warn(
+                    `Rejected inactive or foreign-owned channel ${channelId} reuse by ${createdBy}`
+                );
+                return null;
+            }
+            return existingChannel;
         }
 
         // Check if channel exists in database first
         try {
             const existingChannel = await Channel.findOne({ channelId });
             if (existingChannel) {
+                if (!existingChannel.active ||
+                    String(existingChannel.createdBy) !== String(createdBy)) {
+                    this.logger.warn(
+                        `Rejected inactive or foreign-owned persisted channel ${channelId} reuse by ${createdBy}`
+                    );
+                    return null;
+                }
                 
                 // Convert database document to IChannel interface
                 const channelObj: IChannel = {
@@ -427,7 +490,10 @@ export class ChannelService extends EventEmitter {
                     active: existingChannel.active,
                     createdAt: existingChannel.createdAt,
                     updatedAt: existingChannel.updatedAt,
-                    metadata: existingChannel.metadata || {}
+                    metadata: {
+                        ...(existingChannel.metadata || {}),
+                        createdBy: String(existingChannel.createdBy)
+                    }
                 };
                 
                 // Add to in-memory store
@@ -451,13 +517,12 @@ export class ChannelService extends EventEmitter {
                     systemLlmEnabled ? undefined : 'Channel loaded from DB with systemLlmEnabled=false'
                 );
 
-                // Cache channel allowedTools in McpService for synchronous tool filtering
-                // Note: setChannelAllowedTools is async but we don't await since DB already has the value
-                if (channelDoc.allowedTools && channelDoc.allowedTools.length > 0) {
-                    McpService.getInstance().setChannelAllowedTools(channelId, channelDoc.allowedTools).catch(err => 
-                        this.logger.error(`Failed to cache allowedTools: ${err}`)
-                    );
-                }
+                // Install persisted policy synchronously before returning this
+                // cold-loaded channel to an authenticating socket.
+                McpService.getInstance().hydrateChannelAllowedTools(
+                    channelId,
+                    Array.isArray(channelDoc.allowedTools) ? channelDoc.allowedTools : []
+                );
                 
                 return channelObj;
             }
@@ -501,13 +566,25 @@ export class ChannelService extends EventEmitter {
                 try {
                     const existingChannel = await Channel.findOne({ channelId });
                     if (existingChannel) {
+                        // Close the post-preflight race: another owner may have
+                        // won the unique insert after the caller observed 404.
+                        if (!existingChannel.active ||
+                            String(existingChannel.createdBy) !== String(createdBy)) {
+                            this.logger.warn(
+                                `Rejected inactive or foreign-owned raced channel ${channelId} reuse by ${createdBy}`
+                            );
+                            return null;
+                        }
                         const channelObj: IChannel = {
                             id: existingChannel.channelId,
                             name: existingChannel.name,
                             active: existingChannel.active,
                             createdAt: existingChannel.createdAt,
                             updatedAt: existingChannel.updatedAt,
-                            metadata: existingChannel.metadata || {}
+                            metadata: {
+                                ...(existingChannel.metadata || {}),
+                                createdBy: String(existingChannel.createdBy)
+                            }
                         };
                         
                         // Add to in-memory store
@@ -524,6 +601,13 @@ export class ChannelService extends EventEmitter {
                             existingSystemLlmEnabled,
                             channelId,
                             existingSystemLlmEnabled ? undefined : 'Channel loaded from DB (dup key recovery) with systemLlmEnabled=false'
+                        );
+
+                        McpService.getInstance().hydrateChannelAllowedTools(
+                            channelId,
+                            Array.isArray(existingChannel.allowedTools)
+                                ? existingChannel.allowedTools
+                                : []
                         );
 
                         return channelObj;
@@ -545,14 +629,12 @@ export class ChannelService extends EventEmitter {
             this.channelParticipants.set(channelId, new Set());
         }
         
-        // Cache channel allowedTools in McpService for synchronous tool filtering
-        // Note: setChannelAllowedTools persists to DB but we already saved above, so just cache
+        // Cache the already-persisted policy without writing it back.
         const channelAllowedTools = metadata?.allowedTools || [];
-        if (channelAllowedTools.length > 0) {
-            McpService.getInstance().setChannelAllowedTools(channelId, channelAllowedTools).catch(err => 
-                this.logger.error(`Failed to cache allowedTools: ${err}`)
-            );
-        }
+        McpService.getInstance().hydrateChannelAllowedTools(
+            channelId,
+            channelAllowedTools
+        );
         
         // Log systemLlmEnabled setting (stored in MongoDB channel document)
         const systemLlmEnabled = metadata?.systemLlmEnabled !== false; // Default to true
@@ -591,89 +673,291 @@ export class ChannelService extends EventEmitter {
         this.validator.assertIsNonEmptyString(channelId, 'channelId');
         this.validator.assertIsNonEmptyString(agentId, 'agentId');
 
+        // The normal entry point is owner-only even when called outside HTTP.
+        // Administrators use the explicitly verified method below.
+        return this.deleteAuthorizedChannel(
+            channelId,
+            agentId,
+            reason,
+            { createdBy: agentId }
+        );
+    }
+
+    /** Delete another owner's channel only after verifying a live admin account. */
+    public async deleteChannelAsAdministrator(
+        channelId: ChannelId,
+        administratorId: AgentId,
+        reason?: string
+    ): Promise<boolean> {
+        this.validator.assertIsNonEmptyString(channelId, 'channelId');
+        this.validator.assertIsNonEmptyString(administratorId, 'administratorId');
+
+        const administrator = await User.exists({
+            _id: administratorId,
+            role: UserRole.ADMIN,
+            isActive: true
+        });
+        if (!administrator) {
+            throw new Error('An active administrator is required to delete another owner\'s channel');
+        }
+
+        return this.deleteAuthorizedChannel(channelId, administratorId, reason, {});
+    }
+
+    /**
+     * Authoritative, retryable deletion implementation. The supplied owner
+     * predicate is either the exact caller owner or an empty filter reached
+     * only through the database-verified administrator entry point.
+     */
+    private async deleteAuthorizedChannel(
+        channelId: ChannelId,
+        agentId: AgentId,
+        reason: string | undefined,
+        ownershipFilter: { createdBy?: string }
+    ): Promise<boolean> {
+        let deactivatedChannel: unknown;
+
         try {
-            const channel = this.channels.get(channelId);
-            if (!channel) {
-                this.logger.warn(`Attempted to delete non-existent channel ${channelId}.`);
-                
-                // Emit delete failed event
-                const failedPayload = createChannelEventPayload(
-                    Events.Channel.DELETE_FAILED,
+            // Persistence is the authoritative lifecycle boundary. The unique
+            // channelId document is retained as an inactive tombstone so the id
+            // can never be recreated by another owner. Nothing else is cleaned
+            // up until this fail-closed state has committed.
+            const deletedAt = new Date();
+            const deletionFields: Record<string, unknown> = {
+                active: false,
+                systemLlmEnabled: false,
+                participants: [],
+                updatedAt: deletedAt,
+                'metadata.deletedBy': agentId,
+                'metadata.deletedAt': deletedAt.toISOString(),
+                'metadata.deletionCleanupStatus': 'pending',
+                'metadata.deletionCleanupFailures': []
+            };
+            if (reason !== undefined) {
+                deletionFields['metadata.deletionReason'] = reason;
+            }
+
+            deactivatedChannel = await Channel.findOneAndUpdate(
+                { channelId, active: true, ...ownershipFilter },
+                { $set: deletionFields },
+                { new: true }
+            );
+            if (!deactivatedChannel) {
+                // A previous attempt may already have committed the tombstone
+                // before a cleanup failed. Re-enter that exact pending state;
+                // every cleanup below is intentionally idempotent.
+                deactivatedChannel = await Channel.findOne({
+                    channelId,
+                    active: false,
+                    'metadata.deletionCleanupStatus': 'pending',
+                    ...ownershipFilter
+                });
+                if (!deactivatedChannel) {
+                    this.logger.warn(
+                        `Attempted to delete missing, unauthorized, or completed channel ${channelId}.`
+                    );
+                    this.emitChannelDeleteFailure(
+                        channelId,
+                        agentId,
+                        'Channel not found, not owned by caller, or already deleted'
+                    );
+                    return false;
+                }
+            }
+
+            const cleanupFailures: string[] = [];
+            const runCleanup = async (
+                label: string,
+                cleanup: () => void | Promise<void>
+            ): Promise<void> => {
+                try {
+                    await cleanup();
+                } catch (error) {
+                    cleanupFailures.push(label);
+                    this.logger.error(
+                        `Channel ${channelId} ${label} cleanup failed: ` +
+                        `${error instanceof Error ? error.message : String(error)}`
+                    );
+                }
+            };
+
+            // Remove synchronous authorization/runtime state immediately after
+            // persistence is inactive. These guards stay disabled because the
+            // channel id tombstone can never be reused.
+            await runCleanup('SystemLLM policy', () => {
+                ConfigManager.getInstance().setChannelSystemLlmEnabled(
+                    false,
+                    channelId,
+                    'Channel deleted'
+                );
+            });
+            await runCleanup('MCP tool policy', () => {
+                McpService.getInstance().clearChannelAllowedTools(channelId);
+            });
+            await runCleanup('SystemLLM service', () => {
+                SystemLlmServiceManager.getInstance().removeServiceForChannel(channelId);
+            });
+
+            // Clear local channel state before disconnect handlers run. Their
+            // idempotent participant cleanup must not be able to revive it.
+            this.channels.delete(channelId);
+            this.channelParticipants.delete(channelId);
+
+            await runCleanup('credential revocation', async () => {
+                await channelKeyService.deactivateChannelKeys(channelId);
+            });
+            await runCleanup('socket eviction', () => {
+                this.disconnectChannelSockets(channelId);
+            });
+            await runCleanup('MCP runtime', async () => {
+                await this.retireChannelMcpRuntime(channelId);
+            });
+
+            if (cleanupFailures.length > 0) {
+                // Keep the durable retry marker and make failure explicit to
+                // every caller. No successful lifecycle event is emitted while
+                // live credentials, sockets, or processes may remain.
+                try {
+                    await Channel.updateOne(
+                        {
+                            channelId,
+                            active: false,
+                            'metadata.deletionCleanupStatus': 'pending',
+                            ...ownershipFilter
+                        },
+                        {
+                            $set: {
+                                'metadata.deletionCleanupFailures': cleanupFailures,
+                                'metadata.deletionCleanupUpdatedAt': new Date().toISOString()
+                            }
+                        }
+                    );
+                } catch (error) {
+                    cleanupFailures.push('cleanup status persistence');
+                    this.logger.error(
+                        `Failed to persist deletion cleanup state for ${channelId}: ` +
+                        `${error instanceof Error ? error.message : String(error)}`
+                    );
+                }
+
+                const cleanupError = new ChannelDeletionCleanupError(channelId, cleanupFailures);
+                this.emitChannelDeleteFailure(channelId, agentId, cleanupError.message);
+                throw cleanupError;
+            }
+
+            // Atomically win completion before emitting. Concurrent retries can
+            // perform idempotent cleanup, but only one transitions pending to
+            // completed and therefore only one emits CHANNEL_DELETED.
+            const finalized = await Channel.findOneAndUpdate(
+                {
+                    channelId,
+                    active: false,
+                    'metadata.deletionCleanupStatus': 'pending',
+                    ...ownershipFilter
+                },
+                {
+                    $set: {
+                        'metadata.deletionCleanupStatus': 'completed',
+                        'metadata.deletionCleanupFailures': [],
+                        'metadata.deletionCleanupUpdatedAt': new Date().toISOString()
+                    }
+                },
+                { new: true }
+            );
+            if (finalized) {
+                const deletedPayload = createChannelEventPayload(
+                    Events.Channel.DELETED,
                     agentId,
                     channelId,
                     {
                         action: 'delete' as ChannelActionType,
-                        channelId,
-                        error: 'Channel not found'
+                        channelId
                     }
                 );
-                this.eventBus.emit(Events.Channel.DELETE_FAILED, failedPayload);
-                return false;
+                this.eventBus.emit(Events.Channel.DELETED, deletedPayload);
             }
 
-            // Update channel in memory
-            channel.active = false;
-            channel.updatedAt = new Date();
-            if (channel.metadata) {
-                channel.metadata.deletedBy = agentId;
-                channel.metadata.deletedAt = channel.updatedAt.toISOString();
-                if (reason) {
-                    channel.metadata.deletionReason = reason;
-                }
-            }
-
-            // Remove from in-memory store
-            this.channels.delete(channelId);
-            this.channelParticipants.delete(channelId);
-
-            // Update in database
-            try {
-                await Channel.findOneAndUpdate(
-                    { channelId },
-                    { 
-                        active: false,
-                        updatedAt: new Date(),
-                        $set: {
-                            'metadata.deletedBy': agentId,
-                            'metadata.deletedAt': new Date().toISOString(),
-                            'metadata.deletionReason': reason
-                        }
-                    }
-                );
-            } catch (dbError) {
-                this.logger.error(`Failed to update channel ${channelId} in database: ${dbError}`);
-            }
-
-
-            // Emit channel deleted event
-            const deletedPayload = createChannelEventPayload(
-                Events.Channel.DELETED,
-                agentId,
-                channelId,
-                {
-                    action: 'delete' as ChannelActionType,
-                    channelId
-                }
-            );
-            this.eventBus.emit(Events.Channel.DELETED, deletedPayload);
-            
             return true;
         } catch (error) {
+            if (error instanceof ChannelDeletionCleanupError) {
+                throw error;
+            }
             this.logger.error(`Error deleting channel ${channelId}: ${error}`);
-            
-            // Emit delete failed event
-            const failedPayload = createChannelEventPayload(
-                Events.Channel.DELETE_FAILED,
-                agentId,
+            this.emitChannelDeleteFailure(
                 channelId,
-                {
-                    action: 'delete' as ChannelActionType,
-                    channelId,
-                    error: error instanceof Error ? error.message : String(error)
-                }
+                agentId,
+                error instanceof Error ? error.message : String(error)
             );
-            this.eventBus.emit(Events.Channel.DELETE_FAILED, failedPayload);
-            return false;
+            throw error;
+        }
+    }
+
+    private emitChannelDeleteFailure(
+        channelId: ChannelId,
+        agentId: AgentId,
+        error: string
+    ): void {
+        const failedPayload = createChannelEventPayload(
+            Events.Channel.DELETE_FAILED,
+            agentId,
+            channelId,
+            {
+                action: 'delete' as ChannelActionType,
+                channelId,
+                error
+            }
+        );
+        this.eventBus.emit(Events.Channel.DELETE_FAILED, failedPayload);
+    }
+
+    /** Disconnect every socket authenticated into one exact channel. */
+    private disconnectChannelSockets(channelId: ChannelId): number {
+        const sockets = this.io.sockets?.sockets;
+        const matchingSockets = sockets
+            ? Array.from(sockets.values()).filter(socket => socket.data?.channelId === channelId)
+            : [];
+        const failures: string[] = [];
+
+        for (const socket of matchingSockets) {
+            try {
+                socket.disconnect(true);
+            } catch (error) {
+                failures.push(socket.id);
+                this.logger.error(
+                    `Failed to disconnect socket ${socket.id} from deleted channel ${channelId}: ` +
+                    `${error instanceof Error ? error.message : String(error)}`
+                );
+            }
+        }
+
+        // Also evict any room member whose legacy socket data was incomplete.
+        // The normalized room is exact, so no other channel is affected.
+        this.io.in(`channel:${channelId}`).disconnectSockets(true);
+
+        if (failures.length > 0) {
+            throw new Error(`Failed to disconnect ${failures.length} channel socket(s)`);
+        }
+        return matchingSockets.length;
+    }
+
+    /** Stop channel MCP processes and remove their persisted configuration. */
+    private async retireChannelMcpRuntime(channelId: ChannelId): Promise<void> {
+        const hybridService = ServerHybridMcpService.getExistingInstance();
+        if (hybridService) {
+            await hybridService.getExternalServerManager().retireChannel(channelId);
+        }
+
+        const result = await Channel.updateOne(
+            { channelId, active: false },
+            {
+                $set: {
+                    'mcpServers.servers': [],
+                    'mcpServers.updatedAt': new Date()
+                }
+            }
+        );
+        if (result.matchedCount !== 1) {
+            throw new Error(`Inactive channel ${channelId} disappeared during MCP cleanup`);
         }
     }
 
@@ -730,7 +1014,7 @@ export class ChannelService extends EventEmitter {
             // Update in database
             try {
                 await Channel.findOneAndUpdate(
-                    { channelId },
+                    { channelId, active: true },
                     { 
                         active: false,
                         updatedAt: new Date(),
@@ -798,7 +1082,7 @@ export class ChannelService extends EventEmitter {
         if (!channel) {
             //;
             try {
-                const channelDoc = await Channel.findOne({ channelId });
+                const channelDoc = await Channel.findOne({ channelId, active: true });
                 if (channelDoc) {
                     // Load channel into memory from database
                     channel = {
@@ -822,6 +1106,11 @@ export class ChannelService extends EventEmitter {
                         participantSystemLlmEnabled,
                         channelId,
                         participantSystemLlmEnabled ? undefined : 'Channel loaded in addParticipant with systemLlmEnabled=false'
+                    );
+
+                    McpService.getInstance().hydrateChannelAllowedTools(
+                        channelId,
+                        Array.isArray(channelDoc.allowedTools) ? channelDoc.allowedTools : []
                     );
                 } else {
                     this.logger.error(`Channel ${channelId} does not exist in database.`);
@@ -849,7 +1138,7 @@ export class ChannelService extends EventEmitter {
         try {
             // Use atomic $addToSet operation to avoid version conflicts and duplicates
             const result = await Channel.findOneAndUpdate(
-                { channelId },
+                { channelId, active: true },
                 { 
                     $addToSet: { participants: participantId },
                     $set: { lastActive: new Date() }
@@ -901,7 +1190,7 @@ export class ChannelService extends EventEmitter {
             try {
                 // Use atomic $pull operation to avoid version conflicts
                 const result = await Channel.findOneAndUpdate(
-                    { channelId },
+                    { channelId, active: true },
                     { 
                         $pull: { participants: participantId },
                         $set: { lastActive: new Date() }
@@ -953,39 +1242,35 @@ export class ChannelService extends EventEmitter {
         this.validator.assertIsNonEmptyString(channelId, 'channelId');
         this.validator.assertIsNonEmptyString(agentId, 'agentId');
 
-        // Load channel from database to update mcpServers
-        const channel = await Channel.findOne({ channelId });
-        if (!channel) {
-            throw new Error(`Channel ${channelId} not found`);
-        }
-
-        // Initialize mcpServers if not exists
-        if (!channel.mcpServers) {
-            channel.mcpServers = { servers: [], updatedAt: new Date() };
-        }
-
-        // Check if server already registered
-        const existingServer = channel.mcpServers.servers.find(s => s.id === serverConfig.id);
-        if (existingServer) {
-            throw new Error(`Server ${serverConfig.id} already registered for channel ${channelId}`);
-        }
-
-        // Add server to channel
-        channel.mcpServers.servers.push({
+        const registeredAt = new Date();
+        const serverRecord = {
             id: serverConfig.id,
             name: serverConfig.name,
             config: serverConfig,
             registeredBy: agentId,
-            registeredAt: new Date(),
+            registeredAt,
             status: 'stopped',
             keepAliveMinutes: serverConfig.keepAliveMinutes || 5
-        });
-        channel.mcpServers.updatedAt = new Date();
+        };
+        const result = await Channel.updateOne(
+            {
+                channelId,
+                active: true,
+                'mcpServers.servers.id': { $ne: serverConfig.id }
+            },
+            {
+                $push: { 'mcpServers.servers': serverRecord },
+                $set: { 'mcpServers.updatedAt': registeredAt }
+            }
+        );
 
-        this.logger.info(`Saving channel ${channelId} with MCP server ${serverConfig.id}`);
-        this.logger.debug(`Server count before save: ${channel.mcpServers.servers.length}`);
-
-        await channel.save();
+        if (result.matchedCount === 0) {
+            const activeChannel = await Channel.exists({ channelId, active: true });
+            if (!activeChannel) {
+                throw new Error(`Channel ${channelId} not found or inactive`);
+            }
+            throw new Error(`Server ${serverConfig.id} already registered for channel ${channelId}`);
+        }
 
         this.logger.info(`Channel ${channelId} saved with MCP server ${serverConfig.id}`);
 
@@ -1000,7 +1285,7 @@ export class ChannelService extends EventEmitter {
     public async getChannelMcpServers(channelId: ChannelId): Promise<any[]> {
         this.validator.assertIsNonEmptyString(channelId, 'channelId');
 
-        const channel = await Channel.findOne({ channelId });
+        const channel = await Channel.findOne({ channelId, active: true });
 
         this.logger.debug(`Getting MCP servers for channel ${channelId}`);
         this.logger.debug(`Channel found: ${!!channel}`);
@@ -1029,20 +1314,20 @@ export class ChannelService extends EventEmitter {
         this.validator.assertIsNonEmptyString(channelId, 'channelId');
         this.validator.assertIsNonEmptyString(serverId, 'serverId');
 
-        // Load channel from database
-        const channel = await Channel.findOne({ channelId });
-        if (!channel || !channel.mcpServers) {
-            throw new Error(`Channel ${channelId} not found or has no MCP servers`);
+        const result = await Channel.updateOne(
+            { channelId, active: true, 'mcpServers.servers.id': serverId },
+            {
+                $pull: { 'mcpServers.servers': { id: serverId } },
+                $set: { 'mcpServers.updatedAt': new Date() }
+            }
+        );
+        if (result.matchedCount === 0) {
+            throw new Error(
+                `Active channel ${channelId} not found or has no MCP server ${serverId}`
+            );
         }
 
-        // Remove server from channel
-        const beforeCount = channel.mcpServers.servers.length;
-        channel.mcpServers.servers = channel.mcpServers.servers.filter(s => s.id !== serverId);
-        channel.mcpServers.updatedAt = new Date();
-
-        await channel.save();
-
-        this.logger.info(`Channel ${channelId} server ${serverId} removed from database (${beforeCount} -> ${channel.mcpServers.servers.length})`);
+        this.logger.info(`Channel ${channelId} server ${serverId} removed from database`);
 
         return true;
     }
@@ -1108,7 +1393,7 @@ export class ChannelService extends EventEmitter {
         try {
             // Persist message to MongoDB using atomic operation
             await Channel.findOneAndUpdate(
-                { channelId },
+                { channelId, active: true },
                 {
                     $push: {
                         'sharedMemory.conversationHistory': {

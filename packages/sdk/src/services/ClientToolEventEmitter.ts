@@ -99,7 +99,7 @@ export class ClientToolEventEmitter implements IToolEventEmitter {
      *
      * Built with the payload helper so the envelope matches what the server emits, and
      * carries `serverId` inside `data` so a listener can tell WHICH server's tools these
-     * are. Consumers (MxfClient.registerExternalMcpServer) correlate on exactly that
+     * are. Consumers correlate registration completion on exactly that
      * field; without it, whoever happened to be waiting resolved with the first tool
      * discovery that came along, no matter which server produced it.
      *

@@ -25,8 +25,8 @@
  * This includes saving, retrieving, and updating contexts in the memory system.
  */
 
-import { Observable, throwError, of } from 'rxjs';
-import { tap } from 'rxjs/operators';
+import { Observable, of, throwError } from 'rxjs';
+import { map, mergeMap } from 'rxjs/operators';
 import { v4 as uuidv4 } from 'uuid'; // Added import for uuid
 
 import { 
@@ -39,40 +39,91 @@ import { AgentId } from '../types/Agent.js'; // Added import for AgentId
 import { Logger } from '../utils/Logger.js';
 import { createStrictValidator } from '../utils/validation.js';
 import { EventBus } from '../events/EventBus.js';
+import { EventBusBase } from '../events/EventBusBase.js';
 import { Events } from '../events/EventNames.js';
 import { MemoryScope } from '../types/MemoryTypes.js'; // MemoryGetEventData, MemoryUpdateEventData removed from here
 import { 
     createMemoryGetEventPayload, 
+    createMemoryDeleteEventPayload,
     createMemoryUpdateEventPayload, 
+    MemoryDeleteEventData,
     MemoryGetEventData, // Added import here
     MemoryUpdateEventData // Added import here
 } from '../schemas/EventPayloadSchema.js';
 
 const SYSTEM_AGENT_ID: AgentId = 'SYSTEM_AGENT'; // Define SYSTEM_AGENT_ID
 
+interface MemoryOperationResponseData {
+    operationId?: string;
+    id?: string | string[];
+    memory?: unknown;
+    success?: boolean;
+    error?: string;
+}
+
+interface MemoryOperationResponse {
+    data?: MemoryOperationResponseData;
+}
+
+type MemoryEventBus = EventBusBase & {
+    emit(event: string, payload: unknown): void;
+};
+
 /**
  * Provides memory operations for the channel context service
  */
 export class ChannelContextMemoryOperations {
     private logger: Logger;
-    private eventBus: any; // Will be either EventBus.client or this.eventBus
+    private eventBus: MemoryEventBus;
     
     constructor(isClientContext: boolean = false) {
         const target = isClientContext ? 'client' : 'server';
         this.logger = new Logger('debug', 'ChannelContextMemoryOperations', target);
-        this.eventBus = isClientContext ? EventBus.client : EventBus.server;
+        this.eventBus = (isClientContext ? EventBus.client : EventBus.server) as MemoryEventBus;
+    }
+
+    private requestMemoryResult(
+        resultEvent: string,
+        operationId: string,
+        emitRequest: () => void
+    ): Observable<MemoryOperationResponseData> {
+        return new Observable(observer => {
+            let settled = false;
+            const handler = (response: unknown): void => {
+                if (!response || typeof response !== 'object') return;
+                const data = (response as MemoryOperationResponse).data;
+                if (data?.operationId !== operationId || settled) return;
+                settled = true;
+                if (data.error) {
+                    observer.error(new Error(data.error));
+                    return;
+                }
+                observer.next(data);
+                observer.complete();
+            };
+            const subscription = this.eventBus.on(resultEvent, handler);
+            try {
+                emitRequest();
+            } catch (error) {
+                settled = true;
+                observer.error(error instanceof Error ? error : new Error(String(error)));
+            }
+            return () => subscription.unsubscribe();
+        });
     }
     /**
      * Save context to memory system with proper validation and error handling
      * @param channelId - Channel ID
      * @param context - Channel context to save
      * @param historyEntry - Optional history entry to record with this update
+     * @param expectedContextUpdatedAt - Persisted revision required for an update
      * @returns Observable of the saved context
      */
     public saveContextToMemory = (
         channelId: ChannelId,
         context: ChannelContextType,
-        historyEntry?: ChannelContextHistoryEntry
+        historyEntry?: ChannelContextHistoryEntry,
+        expectedContextUpdatedAt?: number
     ): Observable<ChannelContextType> => {
         
         try {
@@ -112,11 +163,13 @@ export class ChannelContextMemoryOperations {
             const contextMetadataForEvent = {
                 channelId: channelId,
                 updatedAt: Date.now(),
-                key: memoryKey
+                key: memoryKey,
+                expectedContextUpdatedAt
             };
 
+            const operationId = uuidv4();
             const updateData: MemoryUpdateEventData = {
-                operationId: uuidv4(),
+                operationId,
                 scope: MemoryScope.CHANNEL,
                 id: memoryKey, // Use the memory key as the id for UPDATE operations
                 data: contextDataForEvent,
@@ -128,18 +181,16 @@ export class ChannelContextMemoryOperations {
             
             
             
-            this.eventBus.emit(
-                Events.Memory.UPDATE,
-                payload
+            return this.requestMemoryResult(
+                Events.Memory.UPDATE_RESULT,
+                operationId,
+                () => this.eventBus.emit(Events.Memory.UPDATE, payload)
+            ).pipe(
+                mergeMap(() => historyEntry
+                    ? this.saveHistoryEntry(channelId, historyEntry).pipe(map(() => context))
+                    : of(context)
+                )
             );
-            
-            // Store history entry if provided
-            if (historyEntry && historyEntry !== null && historyEntry !== undefined) {
-                this.saveHistoryEntry(channelId, historyEntry as ChannelContextHistoryEntry);
-            }
-            
-            // Return the context after emitting the event
-            return of(context);
         } catch (error) {
             this.logger.error(`Error saving context to memory: ${error instanceof Error ? error.message : String(error)}`);
             return throwError(() => error instanceof Error ? error : new Error(String(error)));
@@ -153,73 +204,25 @@ export class ChannelContextMemoryOperations {
      */
     public getContextFromMemory = (channelId: ChannelId): Observable<ChannelContextType | null> => {
         
-        return new Observable(observer => {
-            const memoryKey = `channel:context:${channelId}`;
-            let handled = false;
-            let timeoutId: NodeJS.Timeout;
+        const memoryKey = `channel:context:${channelId}`;
+        const operationId = uuidv4();
+        const getData: MemoryGetEventData = {
+            operationId,
+            scope: MemoryScope.CHANNEL,
+            id: memoryKey,
+            key: memoryKey
+        };
 
-            // Define response handler
-            const memoryResponseHandler = (response: any): void => {
-                //;
-                
-                // if (handled || !response || response.key !== memoryKey) {
-                //     ;
-                //     return; // Already handled or not for us
-                // }
-                handled = true;
-                clearTimeout(timeoutId);
-                this.eventBus.off(Events.Memory.GET_RESULT, memoryResponseHandler);
-                
-                try {
-                    if (response.error) {
-            this.logger.warn(`Error getting context from memory for key ${memoryKey}: ${response.error}`);
-                        observer.next(null);
-                    } else {
-                        const contextData = response.data ? response.data[memoryKey] : null;
-                        observer.next(contextData);
-                    }
-                    observer.complete();
-                } catch (error) {
-            this.logger.error(`Error processing memory response for ${memoryKey}: ${error instanceof Error ? error.message : String(error)}`);
-                    observer.error(error instanceof Error ? error : new Error(String(error)));
-                }
-            };
-            
-            // Set timeout to prevent hanging
-            timeoutId = setTimeout(() => {
-                if (!handled) {
-                    handled = true;
-                    this.eventBus.off(Events.Memory.GET_RESULT, memoryResponseHandler);
-            this.logger.warn(`Memory get operation timed out for ${memoryKey}`);
-                    observer.next(null); // Return null instead of hanging
-                    observer.complete();
-                }
-            }, 45000); // 45 second timeout to accommodate LLM API response times
-            
-            // Listen for memory get result
-            this.eventBus.on(Events.Memory.GET_RESULT, memoryResponseHandler);
-            
-            // Request context from memory using standardized payload creator
-            const getData: MemoryGetEventData = {
-                operationId: uuidv4(),
-                scope: MemoryScope.CHANNEL,
-                id: memoryKey, // Use the memory key as the id for GET operations
-                key: memoryKey // Use the memory key for actual lookup
-            };
-            
-            this.eventBus.emit(
-                Events.Memory.GET, 
+        return this.requestMemoryResult(
+            Events.Memory.GET_RESULT,
+            operationId,
+            () => this.eventBus.emit(
+                Events.Memory.GET,
                 createMemoryGetEventPayload(Events.Memory.GET, SYSTEM_AGENT_ID, channelId, getData)
-            );
-            
-            // Handle cleanup
-            return (): void => {
-                if (!handled) {
-                    clearTimeout(timeoutId);
-                    this.eventBus.off(Events.Memory.GET_RESULT, memoryResponseHandler);
-                }
-            };
-        });
+            )
+        ).pipe(
+            map(result => (result.memory as ChannelContextType | null | undefined) ?? null)
+        );
     };
 
     /**
@@ -227,72 +230,33 @@ export class ChannelContextMemoryOperations {
      * @param channelId - Channel ID
      * @param historyEntry - History entry to save
      */
-    private saveHistoryEntry = (channelId: ChannelId, historyEntry: ChannelContextHistoryEntry): void => {
+    private saveHistoryEntry = (
+        channelId: ChannelId,
+        historyEntry: ChannelContextHistoryEntry
+    ): Observable<void> => {
         const historyKey = `channel:context:history:${channelId}`;
-        let handled = false;
-        
-        // Define handler for getting history from memory
-        const historyUpdateHandler = (response: any): void => {
-            if (handled || !response || response.key !== historyKey) {
-                return; // Already handled or not for us
-            }
-            handled = true;
-            this.eventBus.off(Events.Memory.GET_RESULT, historyUpdateHandler);
-            
-            try {
-                // Get existing history or create new array
-                const existingHistory = response.data && response.data[historyKey] && Array.isArray(response.data[historyKey]) 
-                    ? response.data[historyKey]
-                    : [];
-                
-                // Add new entry
-                existingHistory.push(historyEntry);
-                
-                // Only keep last 100 entries
-                const trimmedHistory = existingHistory.slice(-100);
-                
-                // Save updated history using standardized payload creator
-                const historyDataForEvent = { [historyKey]: trimmedHistory }; // This is the 'data' part of MemoryUpdateEventData
-                const historyMetadataForEvent = {
-                    channelId: channelId,
-                    updatedAt: Date.now(),
-                    key: historyKey
-                };
-
-                const updateData: MemoryUpdateEventData = {
-                    operationId: uuidv4(),
-                    scope: MemoryScope.CHANNEL,
-                    id: historyKey, // Use the memory key as the id for UPDATE operations
-                    data: historyDataForEvent,
-                    metadata: historyMetadataForEvent
-                };
-                
-                
-                const payload = createMemoryUpdateEventPayload(Events.Memory.UPDATE, SYSTEM_AGENT_ID, channelId, updateData);
-                
-                this.eventBus.emit(
-                    Events.Memory.UPDATE,
-                    payload
-                );
-            } catch (error) {
-            this.logger.error(`Error updating history for channel ${channelId}: ${error instanceof Error ? error.message : String(error)}`);
-            }
-        };
-        
-        // Listen for history get result
-        this.eventBus.on(Events.Memory.GET_RESULT, historyUpdateHandler);
-        
-        // Request history from memory using standardized payload creator
-        const getData: MemoryGetEventData = {
-            operationId: uuidv4(),
+        const updateOperationId = uuidv4();
+        const updateData: MemoryUpdateEventData = {
+            operationId: updateOperationId,
             scope: MemoryScope.CHANNEL,
-            id: historyKey, // Use the memory key as the id for GET operations
-            key: historyKey // Use the memory key for actual lookup
+            id: historyKey,
+            data: { [historyKey]: [historyEntry] },
+            metadata: { channelId, updatedAt: Date.now(), key: historyKey }
         };
-        this.eventBus.emit(
-            Events.Memory.GET, 
-            createMemoryGetEventPayload(Events.Memory.GET, SYSTEM_AGENT_ID, channelId, getData)
-        );
+
+        return this.requestMemoryResult(
+            Events.Memory.UPDATE_RESULT,
+            updateOperationId,
+            () => this.eventBus.emit(
+                Events.Memory.UPDATE,
+                createMemoryUpdateEventPayload(
+                    Events.Memory.UPDATE,
+                    SYSTEM_AGENT_ID,
+                    channelId,
+                    updateData
+                )
+            )
+        ).pipe(map(() => undefined));
     };
 
     /**
@@ -306,61 +270,64 @@ export class ChannelContextMemoryOperations {
         limit?: number
     ): Observable<ChannelContextHistoryEntry[]> => {
         
-        return new Observable(observer => {
-            const historyKey = `channel:context:history:${channelId}`;
-            let handled = false;
-            
-            // Define handler for getting history from memory
-            const historyGetHandler = (response: any): void => {
-                // Only process if this is the response we're waiting for
-                // Check response.data.id (not response.key) as that's what Memory.GET handler sets
-                if (handled || !response || !response.data || response.data.id !== historyKey) {
-                    return;
-                }
-                handled = true;
-                // Remove listener to avoid processing multiple times
-                this.eventBus.off(Events.Memory.GET_RESULT, historyGetHandler);
-                
-                try {
-                    // Get existing history or create new array
-                    // Memory.GET handler returns { data: { memory: data } }
-                    const historyData = response.data.memory;
-                    const history = Array.isArray(historyData) ? historyData : [];
-                    
-                    // Apply limit if specified
-                    const limitedHistory = limit && limit > 0 
-                        ? history.slice(-limit) 
-                        : history;
-                    
-                    observer.next(limitedHistory);
-                    observer.complete();
-                } catch (error) {
-            this.logger.error(`Error getting history for channel ${channelId}: ${error instanceof Error ? error.message : String(error)}`);
-                    observer.error(error instanceof Error ? error : new Error(String(error)));
-                }
-            };
-            
-            // Listen for history get result
-            this.eventBus.on(Events.Memory.GET_RESULT, historyGetHandler);
-            
-            // Request history from memory using standardized payload creator
-            const getData: MemoryGetEventData = {
-                operationId: uuidv4(),
-                scope: MemoryScope.CHANNEL,
-                id: historyKey, // Use the memory key as the id for GET operations
-                key: historyKey // Use the memory key for actual lookup
-            };
-            this.eventBus.emit(
-                Events.Memory.GET, 
-                createMemoryGetEventPayload(Events.Memory.GET, SYSTEM_AGENT_ID, channelId, getData)
-            );
-            
-            // Handle cleanup
-            return (): void => {
-                if (!handled) {
-                    this.eventBus.off(Events.Memory.GET_RESULT, historyGetHandler);
-                }
-            };
-        });
+        const historyKey = `channel:context:history:${channelId}`;
+        const operationId = uuidv4();
+        const getData: MemoryGetEventData = {
+            operationId,
+            scope: MemoryScope.CHANNEL,
+            id: historyKey,
+            key: historyKey
+        };
+        return this.requestMemoryResult(
+            Events.Memory.GET_RESULT,
+            operationId,
+            () => this.eventBus.emit(
+                Events.Memory.GET,
+                createMemoryGetEventPayload(
+                    Events.Memory.GET,
+                    SYSTEM_AGENT_ID,
+                    channelId,
+                    getData
+                )
+            )
+        ).pipe(
+            map(result => {
+                const history = Array.isArray(result.memory)
+                    ? result.memory as ChannelContextHistoryEntry[]
+                    : [];
+                return limit && limit > 0 ? history.slice(-limit) : history;
+            })
+        );
+    };
+
+    /**
+     * Delete the exact persisted context field for a channel and await the
+     * authoritative memory bridge acknowledgement.
+     */
+    public deleteContextFromMemory = (channelId: ChannelId): Observable<boolean> => {
+        if (!channelId) {
+            return throwError(() => new Error('Channel ID is required'));
+        }
+        const memoryKey = `channel:context:${channelId}`;
+        const operationId = uuidv4();
+        const deleteData: MemoryDeleteEventData = {
+            operationId,
+            scope: MemoryScope.CHANNEL,
+            id: memoryKey
+        };
+
+        return this.requestMemoryResult(
+            Events.Memory.DELETE_RESULT,
+            operationId,
+            () => this.eventBus.emit(
+                Events.Memory.DELETE,
+                createMemoryDeleteEventPayload(
+                    Events.Memory.DELETE,
+                    SYSTEM_AGENT_ID,
+                    channelId,
+                    deleteData
+                )
+            )
+        ).pipe(map(result => result.success === true));
     };
 }

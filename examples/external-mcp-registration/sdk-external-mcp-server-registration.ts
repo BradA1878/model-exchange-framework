@@ -85,7 +85,7 @@ async function testExternalMcpServerRegistration() {
         secretKey: agentKey.secretKey,
         llmProvider: LlmProviderType.OPENROUTER,
         apiKey: process.env.OPENROUTER_API_KEY!,
-        defaultModel: 'google/gemini-2.0-flash-thinking-exp-01-21',
+        defaultModel: 'google/gemini-2.5-flash',
         description: 'Agent for registering external MCP servers',
         // Specify the tools this agent can use (including custom tools from our MCP server)
         allowedTools: [
@@ -102,16 +102,16 @@ async function testExternalMcpServerRegistration() {
     console.log('✅ Agent connected (MCP event forwarding active)\n');
 
     // =========================================================================
-    // STEP 3: Register Custom MCP Server via Agent
+    // STEP 3: Register Custom MCP Server via the administrator SDK
     // =========================================================================
 
-    console.log('📦 Step 3: Registering custom MCP server via agent...\n');
+    console.log('📦 Step 3: Registering custom MCP server via administrator SDK...\n');
 
     const serverPath = join(__dirname, 'simple-custom-mcp-server.ts');
     console.log(`   Server path: ${serverPath}\n`);
 
     try {
-        const result = await adminAgent.registerExternalMcpServer({
+        const result = await sdk.registerExternalMcpServer({
             id: 'simple-custom-server',
             name: 'Simple Custom MCP Server',
             command: 'ts-node',
@@ -202,7 +202,7 @@ async function testExternalMcpServerRegistration() {
     console.log('🗑️  Step 6: Unregistering custom MCP server...\n');
 
     try {
-        await adminAgent.unregisterExternalMcpServer('simple-custom-server');
+        await sdk.unregisterExternalMcpServer('simple-custom-server');
         console.log('✅ Custom MCP server unregistered successfully!\n');
     } catch (error) {
         console.error('❌ Unregistration error:', error);

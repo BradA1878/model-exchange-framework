@@ -23,7 +23,6 @@ import { MemoryScope } from '@mxf-dev/core/types/MemoryTypes';
 
 const REQUESTER_AGENT_ID = 'echo-requester-agent';
 const REQUESTER_CHANNEL_ID = 'echo-requester-channel';
-const TARGET_AGENT_ID = 'echo-target-agent';
 const OPERATION_ID = 'op-echo-regression-123';
 
 describe('agent-scope Memory.UPDATE result routing', () => {
@@ -52,7 +51,7 @@ describe('agent-scope Memory.UPDATE result routing', () => {
                 {
                     operationId: OPERATION_ID,
                     scope: MemoryScope.AGENT,
-                    id: TARGET_AGENT_ID,
+                    id: REQUESTER_AGENT_ID, // agent-scope updates address the requester's own memory
                     data: { notes: { probe: 'echo-check' } }
                 }
             )
@@ -76,7 +75,7 @@ describe('agent-scope Memory.UPDATE result routing', () => {
         expect(echoed.agentId).toBe(REQUESTER_AGENT_ID);
         expect(echoed.channelId).toBe(REQUESTER_CHANNEL_ID);
         expect(echoed.data.scope).toBe(MemoryScope.AGENT);
-        expect(echoed.data.id).toBe(TARGET_AGENT_ID);
+        expect(echoed.data.id).toBe(REQUESTER_AGENT_ID);
         expect(echoed.data.memory).toBeTruthy();
     });
 });

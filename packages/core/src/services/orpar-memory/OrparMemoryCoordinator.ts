@@ -52,6 +52,7 @@
  */
 
 import { v4 as uuidv4 } from 'uuid';
+import type { Subscription } from 'rxjs';
 import { Logger } from '../../utils/Logger.js';
 import { EventBus } from '../../events/EventBus.js';
 import { Events, ControlLoopEvents } from '../../events/EventNames.js';
@@ -94,6 +95,8 @@ export class OrparMemoryCoordinator {
     private static instance: OrparMemoryCoordinator;
     private logger: Logger;
     private enabled: boolean = false;
+    private initialized: boolean = false;
+    private eventSubscriptions: Subscription[] = [];
 
     // Component services
     private phaseStrataRouter: PhaseStrataRouter;
@@ -112,6 +115,7 @@ export class OrparMemoryCoordinator {
         outcome: CycleOutcome;
         completedAt: number;
     }> = new Map();
+    private recentlyCompletedExpiryTimers: Map<string, NodeJS.Timeout> = new Map();
     private static readonly RECENTLY_COMPLETED_TTL_MS = 60_000;
 
     // Fix #2: Per-cycle locking to prevent race conditions
@@ -147,25 +151,36 @@ export class OrparMemoryCoordinator {
      * Initialize the coordinator and all component services
      */
     public initialize(): void {
+        if (this.initialized) {
+            return;
+        }
+
         this.enabled = isOrparMemoryIntegrationEnabled();
 
         if (this.enabled) {
-            // Initialize all component services
-            this.phaseStrataRouter.initialize();
-            this.surpriseAdapter.initialize();
-            this.phaseRewarder.initialize();
-            this.consolidationTrigger.initialize();
-            this.memoryOperations.initialize();
+            try {
+                // Initialize all component services
+                this.phaseStrataRouter.initialize();
+                this.surpriseAdapter.initialize();
+                this.phaseRewarder.initialize();
+                this.consolidationTrigger.initialize();
+                this.memoryOperations.initialize();
 
-            // Setup event listeners
-            this.setupEventListeners();
+                // Setup event listeners
+                this.setupEventListeners();
 
-            // Fix #3: Start stale cycle cleanup
-            this.startStaleCycleCleanup();
+                // Fix #3: Start stale cycle cleanup
+                this.startStaleCycleCleanup();
+                this.initialized = true;
 
-            this.logger.info('[OrparMemoryCoordinator] Initialized with ORPAR-Memory integration ENABLED');
-            this.logger.info('[OrparMemoryCoordinator] All component services initialized');
+                this.logger.info('[OrparMemoryCoordinator] Initialized with ORPAR-Memory integration ENABLED');
+                this.logger.info('[OrparMemoryCoordinator] All component services initialized');
+            } catch (error) {
+                this.shutdown();
+                throw error;
+            }
         } else {
+            this.initialized = true;
             this.logger.info(
                 '[OrparMemoryCoordinator] ORPAR-Memory integration is DISABLED. ' +
                 'Enable with ORPAR_MEMORY_INTEGRATION_ENABLED=true'
@@ -284,46 +299,58 @@ export class OrparMemoryCoordinator {
      */
     private setupEventListeners(): void {
         // Listen to control loop events to track cycle phases (server-side ControlLoop)
-        EventBus.server.on(ControlLoopEvents.OBSERVATION, (payload: any) => {
-            this.onPhaseEvent('observation', payload, 'controlLoop');
-        });
-
-        EventBus.server.on(ControlLoopEvents.REASONING, (payload: any) => {
-            this.onPhaseEvent('reasoning', payload, 'controlLoop');
-        });
-
-        EventBus.server.on(ControlLoopEvents.PLAN, (payload: any) => {
-            this.onPhaseEvent('planning', payload, 'controlLoop');
-        });
-
-        EventBus.server.on(ControlLoopEvents.EXECUTION, (payload: any) => {
-            this.onPhaseEvent('action', payload, 'controlLoop');
-        });
-
-        EventBus.server.on(ControlLoopEvents.REFLECTION, (payload: any) => {
-            this.onPhaseEvent('reflection', payload, 'controlLoop');
-        });
+        this.eventSubscriptions.push(
+            EventBus.server.on(ControlLoopEvents.OBSERVATION, payload => {
+                this.onPhaseEvent('observation', payload, 'controlLoop');
+            })
+        );
+        this.eventSubscriptions.push(
+            EventBus.server.on(ControlLoopEvents.REASONING, payload => {
+                this.onPhaseEvent('reasoning', payload, 'controlLoop');
+            })
+        );
+        this.eventSubscriptions.push(
+            EventBus.server.on(ControlLoopEvents.PLAN, payload => {
+                this.onPhaseEvent('planning', payload, 'controlLoop');
+            })
+        );
+        this.eventSubscriptions.push(
+            EventBus.server.on(ControlLoopEvents.EXECUTION, payload => {
+                this.onPhaseEvent('action', payload, 'controlLoop');
+            })
+        );
+        this.eventSubscriptions.push(
+            EventBus.server.on(ControlLoopEvents.REFLECTION, payload => {
+                this.onPhaseEvent('reflection', payload, 'controlLoop');
+            })
+        );
 
         // Listen to ORPAR tool events (agent-driven ORPAR tools)
-        EventBus.server.on(OrparEvents.OBSERVE, (payload: any) => {
-            this.onOrparToolEvent('observation', payload);
-        });
-
-        EventBus.server.on(OrparEvents.REASON, (payload: any) => {
-            this.onOrparToolEvent('reasoning', payload);
-        });
-
-        EventBus.server.on(OrparEvents.PLAN, (payload: any) => {
-            this.onOrparToolEvent('planning', payload);
-        });
-
-        EventBus.server.on(OrparEvents.ACT, (payload: any) => {
-            this.onOrparToolEvent('action', payload);
-        });
-
-        EventBus.server.on(OrparEvents.REFLECT, (payload: any) => {
-            this.onOrparToolEvent('reflection', payload);
-        });
+        this.eventSubscriptions.push(
+            EventBus.server.on(OrparEvents.OBSERVE, payload => {
+                this.onOrparToolEvent('observation', payload);
+            })
+        );
+        this.eventSubscriptions.push(
+            EventBus.server.on(OrparEvents.REASON, payload => {
+                this.onOrparToolEvent('reasoning', payload);
+            })
+        );
+        this.eventSubscriptions.push(
+            EventBus.server.on(OrparEvents.PLAN, payload => {
+                this.onOrparToolEvent('planning', payload);
+            })
+        );
+        this.eventSubscriptions.push(
+            EventBus.server.on(OrparEvents.ACT, payload => {
+                this.onOrparToolEvent('action', payload);
+            })
+        );
+        this.eventSubscriptions.push(
+            EventBus.server.on(OrparEvents.REFLECT, payload => {
+                this.onOrparToolEvent('reflection', payload);
+            })
+        );
 
         // Fill phase memory usage from actual retrievals.
         //
@@ -333,19 +360,26 @@ export class OrparMemoryCoordinator {
         // therefore always empty, so PhaseWeightedRewarder returned no rewards and cycle
         // consolidation iterated zero memories. Subscribing here is what makes
         // phase-weighted rewards real.
-        EventBus.server.on(OrparMemoryEvents.PHASE_MEMORY_RETRIEVED, (payload: any) => {
-            if (this.enabled) {
-                this.onPhaseMemoryRetrieved(payload);
-            }
-        });
+        this.eventSubscriptions.push(
+            EventBus.server.on(OrparMemoryEvents.PHASE_MEMORY_RETRIEVED, payload => {
+                if (this.enabled) {
+                    this.onPhaseMemoryRetrieved(payload);
+                }
+            })
+        );
 
         // Listen for task completion to retroactively update rewards when
         // the ORPAR cycle completed before task_complete was called
-        EventBus.server.on(Events.Task.COMPLETED, (payload: any) => {
-            if (this.enabled) {
-                this.onTaskCompleted(payload);
-            }
-        });
+        this.eventSubscriptions.push(
+            EventBus.server.on(Events.Task.COMPLETED, (payload): Promise<void> | undefined => {
+                if (this.enabled) {
+                    // Return the persistence chain so EventBus.drain() keeps the
+                    // database open until retroactive Q-value updates finish.
+                    return this.onTaskCompleted(payload);
+                }
+                return undefined;
+            })
+        );
 
         this.logger.debug('[OrparMemoryCoordinator] Event listeners registered for ControlLoop, OrparTools, PhaseMemory, and TaskEvents');
     }
@@ -688,9 +722,7 @@ export class OrparMemoryCoordinator {
                 outcome,
                 completedAt: Date.now(),
             });
-            setTimeout(() => {
-                this.recentlyCompletedCycles.delete(cacheKey);
-            }, OrparMemoryCoordinator.RECENTLY_COMPLETED_TTL_MS);
+            this.scheduleRecentlyCompletedExpiry(cacheKey);
         }
 
         // Remove from active cycles
@@ -718,7 +750,7 @@ export class OrparMemoryCoordinator {
 
         // Already successful — no recalculation needed
         if (cached.outcome.success) {
-            this.recentlyCompletedCycles.delete(cacheKey);
+            this.clearRecentlyCompletedCycle(cacheKey);
             return;
         }
 
@@ -749,7 +781,30 @@ export class OrparMemoryCoordinator {
             );
         }
 
+        this.clearRecentlyCompletedCycle(cacheKey);
+    }
+
+    private scheduleRecentlyCompletedExpiry(cacheKey: string): void {
+        const existingTimer = this.recentlyCompletedExpiryTimers.get(cacheKey);
+        if (existingTimer) {
+            clearTimeout(existingTimer);
+        }
+
+        const expiryTimer = setTimeout(() => {
+            this.recentlyCompletedCycles.delete(cacheKey);
+            this.recentlyCompletedExpiryTimers.delete(cacheKey);
+        }, OrparMemoryCoordinator.RECENTLY_COMPLETED_TTL_MS);
+        expiryTimer.unref();
+        this.recentlyCompletedExpiryTimers.set(cacheKey, expiryTimer);
+    }
+
+    private clearRecentlyCompletedCycle(cacheKey: string): void {
         this.recentlyCompletedCycles.delete(cacheKey);
+        const expiryTimer = this.recentlyCompletedExpiryTimers.get(cacheKey);
+        if (expiryTimer) {
+            clearTimeout(expiryTimer);
+            this.recentlyCompletedExpiryTimers.delete(cacheKey);
+        }
     }
 
     // =========================================================================
@@ -1050,11 +1105,21 @@ export class OrparMemoryCoordinator {
         ].join('\n');
     }
 
-    /**
-     * Reset the coordinator (useful for testing)
-     */
-    public reset(): void {
+    /** Release all coordinator-owned process resources and runtime state. */
+    public shutdown(): void {
         this.enabled = false;
+        this.initialized = false;
+
+        for (const subscription of this.eventSubscriptions) {
+            subscription.unsubscribe();
+        }
+        this.eventSubscriptions = [];
+
+        for (const expiryTimer of this.recentlyCompletedExpiryTimers.values()) {
+            clearTimeout(expiryTimer);
+        }
+        this.recentlyCompletedExpiryTimers.clear();
+
         this.activeCycles.clear();
         this.recentlyCompletedCycles.clear();
 
@@ -1070,7 +1135,13 @@ export class OrparMemoryCoordinator {
         this.phaseRewarder.reset();
         this.consolidationTrigger.reset();
         this.memoryOperations.reset();
+    }
 
+    /**
+     * Reset the coordinator and its cached configuration (useful for testing).
+     */
+    public reset(): void {
+        this.shutdown();
         // Reset config
         resetOrparMemoryConfig();
     }

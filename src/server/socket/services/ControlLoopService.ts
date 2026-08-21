@@ -133,10 +133,12 @@ export class ControlLoopService {
             return;
         }
         
+        // The dispatcher returns the promise of any work it starts (action
+        // execution) so the EventBus shutdown drain waits for it.
         Object.values(ControlLoopEvents).forEach(eventType => {
-            EventBus.server.on(eventType, (payload) => {
-                this.handleTypedControlLoopEvent(eventType, payload);
-            });
+            EventBus.server.on(eventType, (payload) =>
+                this.handleTypedControlLoopEvent(eventType, payload)
+            );
         });
         
         // Set up Phase 2 pattern tracking event listeners
@@ -149,36 +151,43 @@ export class ControlLoopService {
      * Set up Phase 2 pattern tracking event listeners
      */
     private setupPhase2EventListeners(): void {
-        // Listen for all ORPAR lifecycle events to track patterns
-        EventBus.server.on(ControlLoopEvents.OBSERVATION, (payload) => {
-            this.trackOrparPhase('observation', payload);
-        });
-        
-        EventBus.server.on(ControlLoopEvents.REASONING, (payload) => {
-            this.trackOrparPhase('reasoning', payload);
-        });
-        
-        EventBus.server.on(ControlLoopEvents.PLAN, (payload) => {
-            this.trackOrparPhase('planning', payload);
-        });
-        
-        EventBus.server.on(ControlLoopEvents.ACTION, (payload) => {
-            this.trackOrparPhase('action', payload);
-        });
-        
-        EventBus.server.on(ControlLoopEvents.REFLECTION, (payload) => {
-            this.trackOrparPhase('reflection', payload);
-        });
-        
+        // Listen for all ORPAR lifecycle events to track patterns. The tracking
+        // promise is returned so the EventBus shutdown drain waits for the
+        // pattern write a completed cycle triggers.
+        EventBus.server.on(ControlLoopEvents.OBSERVATION, (payload) =>
+            this.trackOrparPhase('observation', payload)
+        );
+
+        EventBus.server.on(ControlLoopEvents.REASONING, (payload) =>
+            this.trackOrparPhase('reasoning', payload)
+        );
+
+        EventBus.server.on(ControlLoopEvents.PLAN, (payload) =>
+            this.trackOrparPhase('planning', payload)
+        );
+
+        EventBus.server.on(ControlLoopEvents.ACTION, (payload) =>
+            this.trackOrparPhase('action', payload)
+        );
+
+        EventBus.server.on(ControlLoopEvents.REFLECTION, (payload) =>
+            this.trackOrparPhase('reflection', payload)
+        );
     }
     
     /**
-     * Track ORPAR phase for pattern analysis
+     * Track ORPAR phase for pattern analysis.
+     *
+     * @returns the pattern analysis and storage chain when this phase completes
+     *          an ORPAR cycle, so the caller can keep it inside the shutdown drain
      */
-    private trackOrparPhase(phase: string, payload: any): void {
+    private trackOrparPhase(
+        phase: string,
+        payload: { agentId?: string; channelId?: string }
+    ): Promise<void> | undefined {
         try {
             if (!payload.agentId || !payload.channelId) {
-                return; // Skip tracking if missing required fields
+                return undefined; // Skip tracking if missing required fields
             }
             
             const agentId = payload.agentId;
@@ -200,7 +209,7 @@ export class ControlLoopService {
 
                 if (hasCompleteOrpar) {
                     // Analyze complete ORPAR cycle pattern
-                    this.patternMemoryService.analyzeSequenceForPatterns(
+                    return this.patternMemoryService.analyzeSequenceForPatterns(
                         channelId,
                         agentId,
                         recentSequence,
@@ -208,7 +217,7 @@ export class ControlLoopService {
                     ).then(analysis => {
                         if (analysis.patternDetected && analysis.confidence > 0.6) {
                             // Store successful ORPAR pattern
-                            this.patternMemoryService.storePattern(
+                            return this.patternMemoryService.storePattern(
                                 channelId,
                                 agentId,
                                 {
@@ -238,19 +247,20 @@ export class ControlLoopService {
                                         confidence: analysis.confidence
                                     }
                                 }
-                            ).catch((error: Error) => {
+                            ).then((): void => undefined).catch((error: Error) => {
                                 logger.warn(`ORPAR pattern storage failed: ${error}`);
                             });
                         }
+                        return undefined;
                     }).catch((error: Error) => {
                         logger.warn(`ORPAR pattern analysis failed: ${error}`);
                     });
                 }
             }
-            
         } catch (error) {
             logger.warn(`Phase 2 pattern tracking error: ${error}`);
         }
+        return undefined;
     }
     
     /**
@@ -258,7 +268,14 @@ export class ControlLoopService {
      * @param eventType Event type
      * @param payload Event payload
      */
-    private handleTypedControlLoopEvent(eventType: string, payload: ControlLoopEventPayload): void {
+    /**
+     * @returns the promise of asynchronous work the event started, when any,
+     *          so the caller can keep it inside the shutdown drain
+     */
+    private handleTypedControlLoopEvent(
+        eventType: string,
+        payload: ControlLoopEventPayload
+    ): Promise<void> | undefined {
         try {
             // Validate the payload
             validator.assertIsObject(payload);
@@ -331,43 +348,55 @@ export class ControlLoopService {
                     // Control loop has been initialized - notification event
                     // This is a notification event, no specific handler needed
                     break;
-                    
-                case ControlLoopEvents.STARTED:
+
+                case ControlLoopEvents.START_REQUEST:
                     // Start control loop
-                    this.handleControlLoopStart(agentId, channelId);
+                    if (this.isExactControlLoopOwner(agentId, channelId, loopId)) {
+                        this.handleControlLoopStart(agentId);
+                    }
                     break;
-                    
-                case ControlLoopEvents.STOPPED:
+
+                case ControlLoopEvents.STOP_REQUEST:
                     // Stop control loop
-                    this.handleControlLoopStop(agentId, channelId);
+                    if (this.isExactControlLoopOwner(agentId, channelId, loopId)) {
+                        this.handleControlLoopStop(agentId);
+                    }
                     break;
-                    
-                case ControlLoopEvents.OBSERVATION:
+
+                case ControlLoopEvents.STARTED:
+                case ControlLoopEvents.STOPPED:
+                    // Authoritative lifecycle outcomes emitted by ControlLoop.
+                    break;
+
+                case ControlLoopEvents.OBSERVATION_SUBMIT:
                     // Process observation according to schema
                     const observation = data.observation;
-                    if (observation) {
-                        // Get loopOwnerId from context as per ControlLoopSpecificData schema
-                        const loopOwnerId = data.context?.loopOwnerId;
-                        if (loopOwnerId) {
-                            // Cross-agent observation: Use the control loop owner's ID instead of the observer's ID
-                            this.handleControlLoopObserve(loopOwnerId, channelId, loopId, observation);
-                        } else {
-                            // Self-observation: Agent submitting to its own control loop
-                            this.handleControlLoopObserve(agentId, channelId, loopId, observation);
-                        }
+                    if (observation && this.isExactControlLoopOwner(agentId, channelId, loopId)) {
+                        // Nested context.loopOwnerId is never authority. The
+                        // authenticated outer agent must own this exact loop in
+                        // this exact channel.
+                        this.handleControlLoopObserve(agentId, channelId, loopId, observation);
                     } else {
-                        logger.warn(`Missing observation data in ${eventType} event from ${agentId}`);
+                        logger.warn(`Rejected observation for a missing or foreign loop from ${agentId}`);
                     }
                     break;
-                    
-                case ControlLoopEvents.EXECUTION:
+
+                case ControlLoopEvents.OBSERVATION:
+                    // Canonical observation notification after successful submit.
+                    break;
+
+                case ControlLoopEvents.EXECUTION_REQUEST: {
                     // Process execution according to schema
                     const action = data.action;
-                    if (action) {
-                        this.handleControlLoopExecution(agentId, channelId, loopId, action);
-                    } else {
-                        logger.warn(`Missing action data in ${eventType} event from ${agentId}`);
+                    if (action && this.isExactControlLoopOwner(agentId, channelId, loopId)) {
+                        return this.handleControlLoopExecution(agentId, channelId, loopId, action);
                     }
+                    logger.warn(`Rejected execution for a missing or foreign loop from ${agentId}`);
+                    break;
+                }
+
+                case ControlLoopEvents.EXECUTION:
+                    // Canonical execution notification from the control loop.
                     break;
                     
                 case ControlLoopEvents.REASONING:
@@ -380,14 +409,17 @@ export class ControlLoopService {
                     }
                     break;
                     
-                case ControlLoopEvents.PLAN:
-                    // Process plan according to schema
+                case ControlLoopEvents.PLAN_SUBMIT:
                     const plan = data.plan;
-                    if (plan) {
-                        // Plan events are typically just notifications, no specific handler needed
+                    if (plan && this.isExactControlLoopOwner(agentId, channelId, loopId)) {
+                        this.handleControlLoopPlan(loopId, agentId, channelId, plan);
                     } else {
-                        logger.warn(`Missing plan data in ${eventType} event from ${agentId}`);
+                        logger.warn(`Rejected plan for a missing or foreign loop from ${agentId}`);
                     }
+                    break;
+
+                case ControlLoopEvents.PLAN:
+                    // Canonical plan notification after successful submit.
                     break;
                     
                 case ControlLoopEvents.ACTION:
@@ -400,14 +432,25 @@ export class ControlLoopService {
                     }
                     break;
                     
-                case ControlLoopEvents.REFLECTION:
-                    // Process reflection according to schema
-                    const reflection = data.reflection;
-                    if (reflection) {
-                        // Reflection events are typically just notifications, no specific handler needed
+                case ControlLoopEvents.REFLECTION_SUBMIT: {
+                    const reflection = data.reflection || data.context?.reflection;
+                    if (reflection && this.isExactControlLoopOwner(agentId, channelId, loopId)) {
+                        this.emitControlLoopEvent(
+                            ControlLoopEvents.REFLECTION,
+                            loopId,
+                            agentId,
+                            channelId,
+                            'reflected',
+                            { reflection }
+                        );
                     } else {
-                        logger.warn(`Missing reflection data in ${eventType} event from ${agentId}`);
+                        logger.warn(`Rejected reflection for a missing or foreign loop from ${agentId}`);
                     }
+                    break;
+                }
+
+                case ControlLoopEvents.REFLECTION:
+                    // Canonical reflection notification after successful submit.
                     break;
                     
                 case ControlLoopEvents.SYSTEM_LLM_REASONING:
@@ -421,6 +464,7 @@ export class ControlLoopService {
         } catch (error) {
             logger.error(`Error handling ${eventType} event: ${error}`);
         }
+        return undefined;
     }
     
     /**
@@ -495,10 +539,19 @@ export class ControlLoopService {
                 if (controlLoop) {
                     // Get the old loopId for this agent so we can clean up the controlLoopConfigs map
                     const oldLoopId = controlLoop.getLoopId();
+                    const existingConfig = controlLoopConfigs.get(oldLoopId);
+                    if (!existingConfig || existingConfig.channelId !== channelId) {
+                        throw new Error(
+                            `Agent ${agentId} already owns a control loop in another channel`
+                        );
+                    }
                     
                     // Reset control loop immediately - no need for setTimeout delay
-                    controlLoop.reset()
-                        .then(() => {
+                    controlLoop.reset(fullConfig)
+                        .then((resetSucceeded) => {
+                            if (!resetSucceeded) {
+                                return false;
+                            }
                             
                             // If we had an old loopId, remove its config entry to prevent stale configuration
                             if (oldLoopId) {
@@ -510,55 +563,18 @@ export class ControlLoopService {
                             // Store config with client-provided ID
                             controlLoopConfigs.set(clientProvidedLoopId, fullConfig);
                             
-                            // Reinitialize it with config
-                            return controlLoop.initialize(fullConfig);
-                        })
-                        .then(() => {
-                            // REMOVED: Callback notifications cause duplicate event processing
-                            // Use EventBus as the primary communication mechanism instead
-                            // this.setupControlLoopNotifications(controlLoop, agentId, clientProvidedLoopId, channelId);
-                            
-                            
                             // Add to initialized set
                             initializedControlLoops.add(agentId);
-                            
-                            // Emit initialized event - this is the ONLY source of initialized events
-                            this.emitControlLoopEvent(
-                                ControlLoopEvents.INITIALIZED,
-                                clientProvidedLoopId,
-                                agentId,
-                                channelId,
-                                'initialized',
-                                { config: fullConfig }
-                            );
-                            
+
+                            // ControlLoop owns the canonical INITIALIZED and
+                            // STARTED outcomes. The service only sequences the
+                            // commands and must not manufacture early or duplicate
+                            // lifecycle results.
                             // Auto-start the control loop for fully automated operation
                             return controlLoop.start();
                         })
-                        .then(() => {
-                            
-                            // Emit started event to notify clients
-                            this.emitControlLoopEvent(
-                                ControlLoopEvents.STARTED,
-                                clientProvidedLoopId,
-                                agentId,
-                                channelId,
-                                'running',
-                                { autoStarted: true }
-                            );
-                        })
                         .catch((error: Error) => {
                             logger.error(`[CRITICAL] Failed to reset or reinitialize control loop for agent ${agentId}: ${error}`);
-                            
-                            // Emit error event
-                            this.emitControlLoopEvent(
-                                ControlLoopEvents.ERROR,
-                                clientProvidedLoopId,
-                                agentId,
-                                channelId,
-                                'error',
-                                { error: String(error) }
-                            );
                         });
                 }
                 
@@ -584,44 +600,14 @@ export class ControlLoopService {
                     
                     // Add to initialized set
                     initializedControlLoops.add(agentId);
-                    
-                    // Emit initialized event - this is the ONLY source of initialized events
-                    this.emitControlLoopEvent(
-                        ControlLoopEvents.INITIALIZED,
-                        clientProvidedLoopId,
-                        agentId,
-                        channelId,
-                        'initialized',
-                        { config: fullConfig }
-                    );
-                    
+
+                    // ControlLoop emits INITIALIZED only after initialization
+                    // succeeds, and emits STARTED only after start succeeds.
                     // Auto-start the control loop for fully automated operation
                     return controlLoop.start();
                 })
-                .then(() => {
-                    
-                    // Emit started event to notify clients
-                    this.emitControlLoopEvent(
-                        ControlLoopEvents.STARTED,
-                        clientProvidedLoopId,
-                        agentId,
-                        channelId,
-                        'running',
-                        { autoStarted: true }
-                    );
-                })
                 .catch((error: Error) => {
                     logger.error(`[CRITICAL] Failed to initialize control loop for agent ${agentId}: ${error}`);
-                    
-                    // Emit error event
-                    this.emitControlLoopEvent(
-                        ControlLoopEvents.ERROR,
-                        clientProvidedLoopId,
-                        agentId,
-                        channelId,
-                        'error',
-                        { error: String(error) }
-                    );
                 });
             
         } catch (error) {
@@ -641,6 +627,28 @@ export class ControlLoopService {
             }
         }
         return undefined;
+    }
+
+    /** Verify immutable loop owner, channel, and loop id before mutation. */
+    private isExactControlLoopOwner(
+        agentId: AgentId,
+        channelId: ChannelId,
+        loopId: string
+    ): boolean {
+        const controlLoop = controlLoopsByAgent.get(agentId);
+        const config = controlLoopConfigs.get(loopId);
+        const authorized = controlLoop !== undefined &&
+            controlLoop.getLoopId() === loopId &&
+            config?.agentId === agentId &&
+            config.channelId === channelId;
+
+        if (!authorized) {
+            logger.warn(
+                `Denied control-loop mutation: agent=${agentId} channel=${channelId} loop=${loopId}`
+            );
+        }
+
+        return authorized;
     }
 
     /**
@@ -668,9 +676,8 @@ export class ControlLoopService {
     /**
      * Handle control loop start
      * @param agentId Agent ID
-     * @param channelId Channel ID from event
      */
-    private handleControlLoopStart(agentId: AgentId, channelId: string): void {
+    private handleControlLoopStart(agentId: AgentId): void {
         try {
             
             // Get the control loop for this agent
@@ -680,32 +687,10 @@ export class ControlLoopService {
                 return;
             }
             
-            const loopId = controlLoop.getLoopId();
-            
             // Start the control loop
             controlLoop.start()
-                .then(() => {
-                    // Emit the success event
-                    this.emitControlLoopEvent(
-                        ControlLoopEvents.STARTED,
-                        loopId,
-                        agentId,
-                        channelId,
-                        'started'
-                    );
-                })
-                .catch((error: any) => {
+                .catch((error: unknown) => {
                     logger.error(`Failed to start control loop for agent ${agentId}: ${error}`);
-                    
-                    // Emit the error event
-                    this.emitControlLoopEvent(
-                        ControlLoopEvents.ERROR,
-                        loopId,
-                        agentId,
-                        channelId,
-                        'error',
-                        { error: String(error) }
-                    );
                 });
         } catch (error) {
             logger.error(`Error in handleControlLoopStart: ${error}`);
@@ -715,9 +700,8 @@ export class ControlLoopService {
     /**
      * Handle control loop stop
      * @param agentId Agent ID
-     * @param channelId Channel ID from event
      */
-    private handleControlLoopStop(agentId: AgentId, channelId: string): void {
+    private handleControlLoopStop(agentId: AgentId): void {
         try {
             
             // Get the control loop for this agent
@@ -727,32 +711,10 @@ export class ControlLoopService {
                 return;
             }
             
-            const loopId = controlLoop.getLoopId();
-            
             // Stop the control loop
             controlLoop.stop()
-                .then(() => {
-                    // Emit the success event
-                    this.emitControlLoopEvent(
-                        ControlLoopEvents.STOPPED,
-                        loopId,
-                        agentId,
-                        channelId,
-                        'stopped'
-                    );
-                })
-                .catch((error: any) => {
+                .catch((error: unknown) => {
                     logger.error(`Failed to stop control loop for agent ${agentId}: ${error}`);
-                    
-                    // Emit the error event
-                    this.emitControlLoopEvent(
-                        ControlLoopEvents.ERROR,
-                        loopId,
-                        agentId,
-                        channelId,
-                        'error',
-                        { error: String(error) }
-                    );
                 });
         } catch (error) {
             logger.error(`Error in handleControlLoopStop: ${error}`);
@@ -792,6 +754,14 @@ export class ControlLoopService {
             // The control loop will emit reasoning and plan events as needed
             controlLoop.addObservation(observation)
                 .then(() => {
+                    this.emitControlLoopEvent(
+                        ControlLoopEvents.OBSERVATION,
+                        loopId,
+                        agentId,
+                        channelId,
+                        'observed',
+                        { observation }
+                    );
                 })
                 .catch((error: Error) => {
                     // Emit error event for observation processing failure
@@ -881,7 +851,16 @@ export class ControlLoopService {
      * @param loopId Control loop ID
      * @param data Execution data
      */
-    private handleControlLoopExecution(agentId: AgentId, channelId: string, loopId: string, data: any): void {
+    /**
+     * @returns the execution chain (already caught: failures become ACTION
+     *          'failed' events) so the caller can keep it inside the drain
+     */
+    private handleControlLoopExecution(
+        agentId: AgentId,
+        channelId: string,
+        loopId: string,
+        data: { id?: unknown; type?: string } & Record<string, unknown>
+    ): Promise<void> | undefined {
         try {
             // Validate inputs with fail-fast
             validator.assertIsNonEmptyString(agentId);
@@ -953,23 +932,25 @@ export class ControlLoopService {
             }
             
             // Execute action in the control loop
-            controlLoop.executeAction(data)
+            return controlLoop.executeAction(data)
                 .then(() => {
                     // Phase 2: Track action in sequence and analyze patterns
                     const agentSequence = this.actionSequences.get(agentId) || [];
                     agentSequence.push(`action:${data.type || 'execute'}`);
                     this.actionSequences.set(agentId, agentSequence.slice(-10));
                     
-                    // Analyze patterns if we have enough actions
+                    // Analyze patterns if we have enough actions. The chain is
+                    // kept so it finishes inside the drain with the execution.
+                    let patternAnalysis: Promise<void> | undefined;
                     if (agentSequence.length >= 3) {
-                        this.patternMemoryService.analyzeSequenceForPatterns(
+                        patternAnalysis = this.patternMemoryService.analyzeSequenceForPatterns(
                             channelId,
                             agentId,
                             agentSequence,
                             { loopId, actionData: data }
                         ).then(analysis => {
                             if (analysis.patternDetected && analysis.confidence > 0.7) {
-                                this.patternMemoryService.storePattern(
+                                return this.patternMemoryService.storePattern(
                                     channelId,
                                     agentId,
                                     {
@@ -999,10 +980,11 @@ export class ControlLoopService {
                                             confidence: analysis.confidence
                                         }
                                     }
-                                ).catch((error: Error) => {
+                                ).then((): void => undefined).catch((error: Error) => {
                                     logger.warn(`Pattern storage failed: ${error}`);
                                 });
                             }
+                            return undefined;
                         }).catch((error: Error) => {
                             logger.warn(`Pattern analysis failed: ${error}`);
                         });
@@ -1026,6 +1008,7 @@ export class ControlLoopService {
                             }
                         }
                     );
+                    return patternAnalysis;
                 })
                 .catch((error) => {
                     logger.error(`[CRITICAL] Error executing action: ${error}`);
@@ -1056,6 +1039,7 @@ export class ControlLoopService {
             
             // We don't rethrow here since we've already handled the error by emitting an action 'failed' event
         }
+        return undefined;
     }
 
     /**
@@ -1183,9 +1167,8 @@ export class ControlLoopService {
             validator.assertIsNonEmptyString(status);
 
             
-            // For reasoning and plan events, we should not re-emit them as that causes duplicate processing
-            // These events are typically just notifications that should be sent to clients, not re-processed by the service
-            if (eventType === ControlLoopEvents.REASONING || eventType === ControlLoopEvents.PLAN) {
+            // Reasoning is already emitted by the control loop implementation.
+            if (eventType === ControlLoopEvents.REASONING) {
                 return;
             }
             

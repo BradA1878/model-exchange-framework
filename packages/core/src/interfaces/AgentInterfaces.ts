@@ -104,6 +104,11 @@ export interface AgentConfig {
     providerOptions?: Record<string, any>;
     
     // Tool access control
+    /**
+     * Requested subset of the authenticated channel key's tool grant.
+     * `undefined` selects MXF's curated core-tool set; `[]` denies every tool.
+     * A client request can narrow its credential grant but cannot expand it.
+     */
     allowedTools?: string[];
     circuitBreakerExemptTools?: string[];    // Tools exempt from circuit breaker detection (for game tools, etc.)
     

@@ -39,7 +39,10 @@ import { AgentId, ChannelId } from '../types/ChannelContext.js';
 import { Logger } from '../utils/Logger.js';
 import { Events } from '../events/EventNames.js';
 import { EventBus } from '../events/EventBus.js';
-import { buildShellChildEnv } from '../protocols/mcp/security/McpToolPolicy.js';
+import {
+    buildShellChildEnv,
+    resolveWorkspacePath
+} from '../protocols/mcp/security/McpToolPolicy.js';
 import {
     createShellExecutionProgressPayload,
     createShellBackgroundStartedPayload,
@@ -106,6 +109,12 @@ export interface BackgroundTaskInfo {
     channelId: ChannelId;
 }
 
+/** Authenticated principal allowed to inspect or mutate a background task. */
+export interface BackgroundTaskPrincipal {
+    agentId: AgentId;
+    channelId: ChannelId;
+}
+
 /** Internal task entry extending BackgroundTask with the child process handle and tracking metadata */
 interface InternalTask extends BackgroundTask {
     /** The spawned child process (cleared after exit) */
@@ -116,12 +125,19 @@ interface InternalTask extends BackgroundTask {
     lastProgressEmit: number;
     /** Timeout timer handle (if a timeout was specified) */
     timeoutTimer?: ReturnType<typeof setTimeout>;
+    /** SIGTERM-to-SIGKILL escalation timer. */
+    forceKillTimer?: ReturnType<typeof setTimeout>;
+    /** Settles after terminal process callbacks and their final event emission complete. */
+    completion: Promise<void>;
+    resolveCompletion: () => void;
+    /** Guards Node's error-then-close sequence from reporting completion twice. */
+    terminalFinalized: boolean;
 }
 
 // ---- BackgroundTaskManager ----
 
 export class BackgroundTaskManager {
-    private static instance: BackgroundTaskManager;
+    private static instance: BackgroundTaskManager | undefined;
 
     /** Map of taskId -> internal task state */
     private tasks: Map<string, InternalTask> = new Map();
@@ -139,6 +155,8 @@ export class BackgroundTaskManager {
 
     /** Handle for the periodic cleanup timer */
     private cleanupTimer?: ReturnType<typeof setInterval>;
+    private shutdownPromise: Promise<void> | undefined;
+    private isShuttingDown = false;
 
     private constructor() {
         // Start periodic cleanup of completed tasks older than cleanupIntervalMs
@@ -155,6 +173,16 @@ export class BackgroundTaskManager {
             BackgroundTaskManager.instance = new BackgroundTaskManager();
         }
         return BackgroundTaskManager.instance;
+    }
+
+    /** Stop the live singleton without constructing one solely for teardown. */
+    static async shutdownExisting(): Promise<boolean> {
+        const instance = BackgroundTaskManager.instance;
+        if (!instance) {
+            return false;
+        }
+        await instance.shutdown();
+        return true;
     }
 
     /**
@@ -177,6 +205,10 @@ export class BackgroundTaskManager {
         },
         context: { agentId: AgentId; channelId: ChannelId; requestId: string }
     ): Promise<{ taskId: string }> {
+        if (this.isShuttingDown) {
+            throw new Error('BackgroundTaskManager is shutting down');
+        }
+
         // Validate concurrent task limit
         const runningCount = this.getRunningTaskCount();
         if (runningCount >= this.maxConcurrentTasks) {
@@ -196,13 +228,20 @@ export class BackgroundTaskManager {
         // get the same stripped environment the guarded shell path builds.
         const spawnOptions: SpawnOptions = {
             shell: true,
-            cwd: options.workingDirectory || process.cwd(),
+            cwd: resolveWorkspacePath(
+                options.workingDirectory,
+                'BackgroundTaskManager.startBackground'
+            ),
             env: buildShellChildEnv(options.environment),
         };
 
         const childProcess = spawn(command, [], spawnOptions);
 
         // Create the internal task entry
+        let resolveCompletion!: () => void;
+        const completion = new Promise<void>(resolve => {
+            resolveCompletion = resolve;
+        });
         const task: InternalTask = {
             taskId,
             command,
@@ -217,6 +256,9 @@ export class BackgroundTaskManager {
             process: childProcess,
             totalOutputBytes: 0,
             lastProgressEmit: 0,
+            completion,
+            resolveCompletion,
+            terminalFinalized: false,
         };
 
         this.tasks.set(taskId, task);
@@ -257,6 +299,10 @@ export class BackgroundTaskManager {
 
         // Handle process exit
         childProcess.on('close', (code: number | null) => {
+            if (task.terminalFinalized) {
+                return;
+            }
+            task.terminalFinalized = true;
             const exitCode = code ?? 1;
             task.exitCode = exitCode;
             task.endTime = Date.now();
@@ -271,6 +317,10 @@ export class BackgroundTaskManager {
                 clearTimeout(task.timeoutTimer);
                 task.timeoutTimer = undefined;
             }
+            if (task.forceKillTimer) {
+                clearTimeout(task.forceKillTimer);
+                task.forceKillTimer = undefined;
+            }
 
             const elapsedSeconds = (task.endTime - task.startTime) / 1000;
 
@@ -280,27 +330,36 @@ export class BackgroundTaskManager {
             );
 
             // Emit SHELL_BACKGROUND_COMPLETED event
-            EventBus.server.emit(
-                Events.Shell.SHELL_BACKGROUND_COMPLETED,
-                createShellBackgroundCompletedPayload(
-                    task.agentId,
-                    task.channelId,
-                    {
-                        requestId: task.requestId,
-                        taskId,
-                        command: task.command,
-                        exitCode,
-                        isError: exitCode !== 0,
-                        executionTime: (task.endTime! - task.startTime),
-                        outputSize: task.totalOutputBytes
-                    }
-                )
-            );
+            try {
+                EventBus.server.emit(
+                    Events.Shell.SHELL_BACKGROUND_COMPLETED,
+                    createShellBackgroundCompletedPayload(
+                        task.agentId,
+                        task.channelId,
+                        {
+                            requestId: task.requestId,
+                            taskId,
+                            command: task.command,
+                            exitCode,
+                            isError: exitCode !== 0,
+                            executionTime: (task.endTime! - task.startTime),
+                            outputSize: task.totalOutputBytes
+                        }
+                    )
+                );
+            } finally {
+                task.resolveCompletion();
+            }
         });
 
         // Handle spawn errors (e.g., command not found)
         childProcess.on('error', (error: Error) => {
+            if (task.terminalFinalized) {
+                return;
+            }
+            task.terminalFinalized = true;
             task.status = 'failed';
+            task.exitCode = 1;
             task.endTime = Date.now();
             task.process = undefined;
 
@@ -309,28 +368,34 @@ export class BackgroundTaskManager {
                 clearTimeout(task.timeoutTimer);
                 task.timeoutTimer = undefined;
             }
+            if (task.forceKillTimer) {
+                clearTimeout(task.forceKillTimer);
+                task.forceKillTimer = undefined;
+            }
 
             this.logger.error(`Background task error: ${taskId} — ${error.message}`);
 
-            const elapsedSeconds = (task.endTime - task.startTime) / 1000;
-
             // Emit SHELL_BACKGROUND_COMPLETED with failed status
-            EventBus.server.emit(
-                Events.Shell.SHELL_BACKGROUND_COMPLETED,
-                createShellBackgroundCompletedPayload(
-                    task.agentId,
-                    task.channelId,
-                    {
-                        requestId: task.requestId,
-                        taskId,
-                        command: task.command,
-                        exitCode: 1,
-                        isError: true,
-                        executionTime: (task.endTime! - task.startTime),
-                        outputSize: task.totalOutputBytes
-                    }
-                )
-            );
+            try {
+                EventBus.server.emit(
+                    Events.Shell.SHELL_BACKGROUND_COMPLETED,
+                    createShellBackgroundCompletedPayload(
+                        task.agentId,
+                        task.channelId,
+                        {
+                            requestId: task.requestId,
+                            taskId,
+                            command: task.command,
+                            exitCode: 1,
+                            isError: true,
+                            executionTime: (task.endTime! - task.startTime),
+                            outputSize: task.totalOutputBytes
+                        }
+                    )
+                );
+            } finally {
+                task.resolveCompletion();
+            }
         });
 
         // Set up timeout if specified
@@ -341,14 +406,10 @@ export class BackgroundTaskManager {
                         `Background task timed out after ${options.timeout}s: ${taskId}`
                     );
                     task.process.kill('SIGTERM');
-                    // Force kill after 5 seconds if SIGTERM didn't work
-                    setTimeout(() => {
-                        if (task.status === 'running' && task.process) {
-                            task.process.kill('SIGKILL');
-                        }
-                    }, 5000);
+                    this.scheduleForceKill(task, taskId);
                 }
             }, options.timeout * 1000);
+            task.timeoutTimer.unref?.();
         }
 
         return { taskId };
@@ -360,8 +421,8 @@ export class BackgroundTaskManager {
      * @param taskId - The task identifier returned by startBackground()
      * @returns BackgroundTaskInfo with current status and output preview, or null if not found
      */
-    getTaskStatus(taskId: string): BackgroundTaskInfo | null {
-        const task = this.tasks.get(taskId);
+    getTaskStatus(taskId: string, principal: BackgroundTaskPrincipal): BackgroundTaskInfo | null {
+        const task = this.getOwnedTask(taskId, principal);
         if (!task) {
             return null;
         }
@@ -375,8 +436,8 @@ export class BackgroundTaskManager {
      * @param taskId - The task identifier returned by startBackground()
      * @returns The accumulated stdout output, or null if the task is not found
      */
-    getTaskOutput(taskId: string): string | null {
-        const task = this.tasks.get(taskId);
+    getTaskOutput(taskId: string, principal: BackgroundTaskPrincipal): string | null {
+        const task = this.getOwnedTask(taskId, principal);
         if (!task) {
             return null;
         }
@@ -390,8 +451,8 @@ export class BackgroundTaskManager {
      * @param taskId - The task identifier returned by startBackground()
      * @returns true if the task was found and cancellation was initiated, false otherwise
      */
-    cancelTask(taskId: string): boolean {
-        const task = this.tasks.get(taskId);
+    cancelTask(taskId: string, principal: BackgroundTaskPrincipal): boolean {
+        const task = this.getOwnedTask(taskId, principal);
         if (!task) {
             this.logger.warn(`Cannot cancel task: ${taskId} — task not found`);
             return false;
@@ -422,32 +483,21 @@ export class BackgroundTaskManager {
         task.process.kill('SIGTERM');
 
         // Escalate to SIGKILL after 5 seconds if still alive
-        const killTimer = setTimeout(() => {
-            if (task.process) {
-                this.logger.warn(`Force-killing background task: ${taskId} (SIGKILL)`);
-                task.process.kill('SIGKILL');
-            }
-        }, 5000);
-
-        // Clean up the kill timer when the process actually exits
-        const originalClose = task.process;
-        originalClose.on('close', () => {
-            clearTimeout(killTimer);
-        });
+        this.scheduleForceKill(task, taskId);
 
         return true;
     }
 
     /**
-     * List all background tasks, optionally filtered by agent.
+     * List background tasks owned by the exact authenticated agent/channel pair.
      *
-     * @param agentId - If provided, only tasks belonging to this agent are returned
+     * @param principal - Authenticated agent and channel identity
      * @returns Array of BackgroundTaskInfo for matching tasks
      */
-    listTasks(agentId?: AgentId): BackgroundTaskInfo[] {
+    listTasks(principal: BackgroundTaskPrincipal): BackgroundTaskInfo[] {
         const results: BackgroundTaskInfo[] = [];
         for (const task of this.tasks.values()) {
-            if (agentId && task.agentId !== agentId) {
+            if (task.agentId !== principal.agentId || task.channelId !== principal.channelId) {
                 continue;
             }
             results.push(this.toTaskInfo(task));
@@ -459,7 +509,19 @@ export class BackgroundTaskManager {
      * Shutdown the manager: cancel all running tasks, clear timers, and release resources.
      * Called during server shutdown to ensure clean process cleanup.
      */
-    shutdown(): void {
+    shutdown(): Promise<void> {
+        if (!this.shutdownPromise) {
+            this.isShuttingDown = true;
+            this.shutdownPromise = this.performShutdown().finally((): void => {
+                if (BackgroundTaskManager.instance === this) {
+                    BackgroundTaskManager.instance = undefined;
+                }
+            });
+        }
+        return this.shutdownPromise;
+    }
+
+    private async performShutdown(): Promise<void> {
         this.logger.info('Shutting down BackgroundTaskManager...');
 
         // Clear the periodic cleanup timer
@@ -468,26 +530,71 @@ export class BackgroundTaskManager {
             this.cleanupTimer = undefined;
         }
 
-        // Cancel all running tasks
-        for (const task of this.tasks.values()) {
-            if (task.status === 'running' && task.process) {
-                // Clear any timeout timers
-                if (task.timeoutTimer) {
-                    clearTimeout(task.timeoutTimer);
-                    task.timeoutTimer = undefined;
-                }
+        const completions: Promise<void>[] = [];
 
-                task.status = 'cancelled';
-                task.endTime = Date.now();
+        // Terminate every live child and retain ownership until its terminal
+        // callback has emitted the final lifecycle event. A task can already be
+        // marked cancelled while its process is still exiting, so process
+        // ownership — not status — defines what shutdown must drain.
+        for (const task of this.tasks.values()) {
+            if (task.timeoutTimer) {
+                clearTimeout(task.timeoutTimer);
+                task.timeoutTimer = undefined;
+            }
+            if (task.forceKillTimer) {
+                clearTimeout(task.forceKillTimer);
+                task.forceKillTimer = undefined;
+            }
+
+            if (!task.terminalFinalized && task.process) {
+                if (task.status === 'running') {
+                    task.status = 'cancelled';
+                }
+                task.endTime ??= Date.now();
+                completions.push(task.completion);
                 task.process.kill('SIGKILL');
-                task.process = undefined;
             }
         }
+
+        await Promise.all(completions);
 
         this.logger.info('BackgroundTaskManager shut down successfully');
     }
 
+    private scheduleForceKill(task: InternalTask, taskId: string): void {
+        if (task.forceKillTimer) {
+            clearTimeout(task.forceKillTimer);
+        }
+        task.forceKillTimer = setTimeout(() => {
+            task.forceKillTimer = undefined;
+            if (task.process) {
+                this.logger.warn(`Force-killing background task: ${taskId} (SIGKILL)`);
+                task.process.kill('SIGKILL');
+            }
+        }, 5000);
+        task.forceKillTimer.unref?.();
+    }
+
     // ---- Private helpers ----
+
+    /**
+     * Resolve a task only when it belongs to the authenticated principal. Returning
+     * null for both missing and foreign task IDs avoids leaking task existence.
+     */
+    private getOwnedTask(
+        taskId: string,
+        principal: BackgroundTaskPrincipal
+    ): InternalTask | null {
+        const task = this.tasks.get(taskId);
+        if (
+            !task ||
+            task.agentId !== principal.agentId ||
+            task.channelId !== principal.channelId
+        ) {
+            return null;
+        }
+        return task;
+    }
 
     /**
      * Append output to a task's buffer with ring-buffer semantics.

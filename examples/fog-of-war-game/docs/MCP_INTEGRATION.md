@@ -4,6 +4,11 @@
 
 The Fog of War game uses the **Model Context Protocol (MCP)** to expose game tools to AI commanders. This document explains how the integration works and leverages MXF's built-in OpenAI function call conversion.
 
+The registration step requires an administrator-authenticated `MxfSDK` and
+`MXF_UNSAFE_STDIO_MCP_ENABLED=true` in the MXF server environment. The opt-in is
+required because MXF starts the adapter process on its host. Agent credentials
+cannot manage that process.
+
 ## Architecture
 
 ```
@@ -151,19 +156,23 @@ switch (method) {
 1. Start Game Server (Express + Socket.IO)
 2. Connect to MXF Server (SDK)
 3. Create game channel
-4. Register FogOfWarMcpServer via `agent.registerExternalMcpServer()`
+4. Register the stdio adapter through the administrator `MxfSDK`
 5. Create 8 commander agents with game tools in `allowedTools`
 6. Agents autonomously execute game turns
 
 **Key Code**:
 ```typescript
 // Register custom MCP server
-const mcpResult = await adminAgent.registerExternalMcpServer({
+const mcpResult = await sdk.registerChannelMcpServer(channelId, {
   id: 'fog-of-war-game-server',
   name: 'Fog of War Game Tools',
-  command: 'ts-node',
-  args: ['./server/mcp/FogOfWarMcpServer.ts'],
-  autoStart: true
+  transport: 'stdio',
+  command: 'bun',
+  args: ['run', './examples/fog-of-war-game/server/mcp/FogOfWarMcpServerHttp.ts'],
+  autoStart: true,
+  environmentVariables: {
+    GAME_SERVER_URL: 'http://localhost:3002'
+  }
 });
 
 // Create commander agents with game tools

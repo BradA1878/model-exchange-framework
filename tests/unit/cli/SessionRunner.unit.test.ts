@@ -71,7 +71,7 @@ function makeRunner(): SessionRunner {
         accessToken: 'token',
         llmProvider: 'openrouter',
         apiKey: 'api-key',
-        defaultModel: 'anthropic/claude-sonnet-4.6',
+        defaultModel: '~anthropic/claude-sonnet-latest',
         task: 'do the thing',
         format: 'text',
         timeoutMs: LONG_TIMEOUT_MS,

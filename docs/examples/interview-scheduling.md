@@ -24,12 +24,13 @@ This demo showcases:
 ### 1. SDK Initialization and Authentication
 
 ```typescript
-import { MxfSDK } from '@mxf-dev/sdk';
+import { Events, LlmProviderType, MxfSDK } from '@mxf-dev/sdk';
 
 const sdk = new MxfSDK({
     username: 'demo-user',
     password: 'demo-password',
-    serverUrl: 'http://localhost:3001'
+    serverUrl: 'http://localhost:3001',
+    domainKey: process.env.MXF_DOMAIN_KEY!
 });
 
 await sdk.connect();
@@ -38,8 +39,7 @@ await sdk.connect();
 ### 2. Channel Creation for Collaboration
 
 ```typescript
-const channel = await sdk.createChannel({
-    channelId: 'interview-scheduling',
+const channelMonitor = await sdk.createChannel('interview-scheduling', {
     name: 'Interview Scheduling',
     description: 'Agent collaboration space for interview coordination'
 });
@@ -50,15 +50,17 @@ const channel = await sdk.createChannel({
 Each agent needs authentication keys to join the channel:
 
 ```typescript
-const candidateKey = await sdk.generateKey({
-    channelId: 'interview-scheduling',
-    name: 'Candidate Key'
-});
+const candidateKey = await sdk.generateKey(
+    'interview-scheduling',
+    'candidate-agent',
+    'Candidate Key'
+);
 
-const recruiterKey = await sdk.generateKey({
-    channelId: 'interview-scheduling',
-    name: 'Recruiter Key'
-});
+const recruiterKey = await sdk.generateKey(
+    'interview-scheduling',
+    'recruiter-agent',
+    'Recruiter Key'
+);
 ```
 
 ### 4. Creating Specialized Agents
@@ -72,8 +74,8 @@ const candidate = await sdk.createAgent({
     secretKey: candidateKey.secretKey,
     llmProvider: LlmProviderType.OPENROUTER,
     apiKey: process.env.OPENROUTER_API_KEY!,
-    defaultModel: 'anthropic/claude-haiku-4',
-    personality: `You are Alex Johnson, a software engineer looking for a new position.
+    defaultModel: '~anthropic/claude-haiku-latest',
+    agentConfigPrompt: `You are Alex Johnson, a software engineer looking for a new position.
     You have flexible availability this week except Tuesday mornings.
     You prefer afternoon interviews.`,
     allowedTools: ['messaging_send', 'messaging_discover']
@@ -87,8 +89,8 @@ const recruiter = await sdk.createAgent({
     secretKey: recruiterKey.secretKey,
     llmProvider: LlmProviderType.OPENROUTER,
     apiKey: process.env.OPENROUTER_API_KEY!,
-    defaultModel: 'anthropic/claude-opus-4.5',
-    personality: `You are Sarah Chen, a technical recruiter at TechCorp.
+    defaultModel: '~anthropic/claude-opus-latest',
+    agentConfigPrompt: `You are Sarah Chen, a technical recruiter at TechCorp.
     You're coordinating a first-round interview for a senior developer position.
     The interview should be 45-60 minutes with two engineers.`,
     allowedTools: ['messaging_send', 'messaging_discover', 'task_complete']
@@ -98,13 +100,14 @@ const recruiter = await sdk.createAgent({
 ### 5. Channel Monitoring
 
 ```typescript
-const monitor = sdk.createChannelMonitor('interview-scheduling');
-
-monitor.on(Events.Message.AGENT_MESSAGE, (payload) => {
-    console.log(`[${payload.agentId}]: ${payload.data.content}`);
+channelMonitor.on(Events.Message.AGENT_MESSAGE, (payload) => {
+    const { content } = payload.data;
+    if (content.format === 'text' && typeof content.data === 'string') {
+        console.log(`[${payload.data.senderId}]: ${content.data}`);
+    }
 });
 
-monitor.on(Events.Task.TASK_COMPLETED, (payload) => {
+channelMonitor.on(Events.Task.COMPLETED, (payload) => {
     console.log(`Task completed: ${payload.data.taskId}`);
 });
 ```
@@ -113,7 +116,7 @@ monitor.on(Events.Task.TASK_COMPLETED, (payload) => {
 
 ```typescript
 // Recruiter initiates the scheduling process
-await recruiter.sendMessage(
+await recruiter.mxfService.sendMessage(
     'Hi Alex! I wanted to reach out about scheduling your technical interview at TechCorp. ' +
     'What does your availability look like this week?'
 );

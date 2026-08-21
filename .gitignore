@@ -100,3 +100,6 @@ src/desktop/dist/
 package-lock.json
 packages/core/dist/
 packages/sdk/dist/
+
+# Local browser-automation snapshots and screenshots
+.playwright-mcp/

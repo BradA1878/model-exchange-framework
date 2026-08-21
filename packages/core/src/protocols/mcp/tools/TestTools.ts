@@ -40,14 +40,26 @@ import { TOOL_CATEGORIES } from '../../../constants/ToolNames.js';
 import { defineTool, ToolRunContext } from '../defineTool.js';
 import { ToolError } from '../ToolError.js';
 import { executeShellCommand } from './InfrastructureTools.js';
+import { resolveWorkspacePath } from '../security/McpToolPolicy.js';
 
 /** Exit code the shell reports when a command could not be found or spawned. */
 const COMMAND_NOT_FOUND = 127;
 
 const workingDirectoryProperty = {
     type: 'string',
-    description: 'Working directory path (defaults to the server working directory)'
+    description: 'Working directory under MXF_WORKSPACE_ROOT (defaults to MXF_WORKSPACE_ROOT)'
 };
+
+function resolveTestFiles(
+    inputs: string[] | undefined,
+    workingDirectory: string,
+    consumer: string
+): string[] {
+    return (inputs ?? []).map(input => resolveWorkspacePath(
+        path.resolve(workingDirectory, input),
+        consumer
+    ));
+}
 
 /** Outcome of a test run, in the shape every runner here reports. */
 export interface TestRunResult {
@@ -80,7 +92,7 @@ async function runTestRunner(
             channelId: context.channelId,
             requestId: context.requestId
         },
-        workingDirectory: workingDirectory || process.cwd(),
+        workingDirectory,
         captureOutput: true
     });
 
@@ -197,6 +209,10 @@ export const jestTestTool = defineTool<
         }
     },
     run: async (input, context) => {
+        const workingDirectory = resolveWorkspacePath(
+            input.workingDirectory,
+            'test_jest workingDirectory'
+        );
         const args = ['--no-watchman', '--passWithNoTests'];
 
         if (input.coverage) {
@@ -212,10 +228,10 @@ export const jestTestTool = defineTool<
             args.push('--testNamePattern', input.testNamePattern);
         }
         if (input.testFiles && input.testFiles.length > 0) {
-            args.push(...input.testFiles);
+            args.push(...resolveTestFiles(input.testFiles, workingDirectory, 'test_jest file'));
         }
 
-        return runTestRunner('jest', args, input.workingDirectory, context);
+        return runTestRunner('jest', args, workingDirectory, context);
     }
 });
 
@@ -265,6 +281,10 @@ export const mochaTestTool = defineTool<
         }
     },
     run: async (input, context) => {
+        const workingDirectory = resolveWorkspacePath(
+            input.workingDirectory,
+            'test_mocha workingDirectory'
+        );
         const args: string[] = [];
 
         if (input.reporter) {
@@ -280,10 +300,10 @@ export const mochaTestTool = defineTool<
             args.push('--recursive');
         }
         if (input.testFiles && input.testFiles.length > 0) {
-            args.push(...input.testFiles);
+            args.push(...resolveTestFiles(input.testFiles, workingDirectory, 'test_mocha file'));
         }
 
-        return runTestRunner('mocha', args, input.workingDirectory, context);
+        return runTestRunner('mocha', args, workingDirectory, context);
     }
 });
 
@@ -322,6 +342,10 @@ export const vitestTestTool = defineTool<
         }
     },
     run: async (input, context) => {
+        const workingDirectory = resolveWorkspacePath(
+            input.workingDirectory,
+            'test_vitest workingDirectory'
+        );
         // `run` is Vitest's non-watching mode. Without it Vitest watches by
         // default and the process would never exit.
         const args = ['run'];
@@ -333,10 +357,10 @@ export const vitestTestTool = defineTool<
             args.push('--reporter', input.reporter);
         }
         if (input.testFiles && input.testFiles.length > 0) {
-            args.push(...input.testFiles);
+            args.push(...resolveTestFiles(input.testFiles, workingDirectory, 'test_vitest file'));
         }
 
-        return runTestRunner('vitest', args, input.workingDirectory, context);
+        return runTestRunner('vitest', args, workingDirectory, context);
     }
 });
 
@@ -348,7 +372,10 @@ export const vitestTestTool = defineTool<
  * steps later.
  */
 async function detectFramework(workingDirectory: string): Promise<'jest' | 'mocha' | 'vitest'> {
-    const packageJsonPath = path.join(workingDirectory, 'package.json');
+    const packageJsonPath = resolveWorkspacePath(
+        path.join(workingDirectory, 'package.json'),
+        'test_runner package.json'
+    );
 
     let raw: string;
     try {
@@ -426,7 +453,10 @@ export const testRunnerTool = defineTool<
         }
     },
     run: async (input, context) => {
-        const workingDirectory = input.workingDirectory || process.cwd();
+        const workingDirectory = resolveWorkspacePath(
+            input.workingDirectory,
+            'test_runner workingDirectory'
+        );
         const requested = input.framework ?? 'auto';
 
         const detected = requested === 'auto';
@@ -459,7 +489,7 @@ export const testRunnerTool = defineTool<
         }
 
         if (input.testFiles && input.testFiles.length > 0) {
-            args.push(...input.testFiles);
+            args.push(...resolveTestFiles(input.testFiles, workingDirectory, 'test_runner file'));
         }
 
         const result = await runTestRunner(framework, args, workingDirectory, context);

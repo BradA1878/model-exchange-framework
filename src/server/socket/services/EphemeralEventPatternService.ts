@@ -20,7 +20,7 @@
 
 import { EventBus } from '@mxf-dev/core/events/EventBus';
 import { Events } from '@mxf-dev/core/events/EventNames';
-import { SystemLlmService } from './SystemLlmService';
+import type { Subscription } from 'rxjs';
 import { SystemLlmServiceManager } from './SystemLlmServiceManager';
 import { Logger } from '@mxf-dev/core/utils/Logger';
 import { createStrictValidator } from '@mxf-dev/core/utils/validation';
@@ -29,8 +29,12 @@ import { MessageEvents } from '@mxf-dev/core/events/event-definitions/MessageEve
 import { AgentEvents } from '@mxf-dev/core/events/event-definitions/AgentEvents';
 import { ChannelMessage } from '@mxf-dev/core/schemas/MessageSchemas';
 import { ChannelId, AgentId } from '@mxf-dev/core/types/ChannelContext';
-import { ControlLoopEventPayload } from '@mxf-dev/core/schemas/EventPayloadSchema';
-import { BaseEventPayload, MessageEventData } from '@mxf-dev/core/schemas/EventPayloadSchema';
+import {
+    BaseEventPayload,
+    ControlLoopEventPayload,
+    McpToolResultEventPayload,
+    MessageEventData
+} from '@mxf-dev/core/schemas/EventPayloadSchema';
 import { AgentEventPayload } from '@mxf-dev/core/schemas/EventPayloadSchema';
 import { SystemEvents } from '@mxf-dev/core/events/event-definitions/SystemEvents';
 
@@ -38,7 +42,7 @@ import { SystemEvents } from '@mxf-dev/core/events/event-definitions/SystemEvent
  * Pattern detection interface for ephemeral event triggers
  */
 interface DetectedPattern {
-    type: 'similar_task' | 'tool_struggle' | 'coordination_opportunity' | 'expertise_sharing' | 'workload_imbalance';
+    type: 'similar_task' | 'coordination_opportunity';
     confidence: number;
     channelId: ChannelId;
     triggerAgentId?: AgentId;
@@ -74,18 +78,17 @@ export class EphemeralEventPatternService {
     private validator = createStrictValidator('EphemeralEventPatternService');
     
     // Pattern detection state
-    private agentActivities = new Map<AgentId, AgentActivity>();
+    private agentActivities = new Map<string, AgentActivity>();
     private recentPatterns = new Map<string, number>(); // Pattern ID -> timestamp to prevent spam
     private isInitialized = false;
+    private eventSubscriptions: Subscription[] = [];
     
     // Configuration
     private readonly PATTERN_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes cooldown between similar patterns
     private readonly MAX_RECENT_MESSAGES = 10;
     private readonly SIMILARITY_THRESHOLD = 0.7;
 
-    private constructor() {
-        // Removed SystemLlmService - now uses fallback heuristics for pattern analysis
-    }
+    private constructor() {}
 
     public static getInstance(): EphemeralEventPatternService {
         if (!EphemeralEventPatternService.instance) {
@@ -98,14 +101,11 @@ export class EphemeralEventPatternService {
      * Initialize the service and set up event listeners
      */
     public async initialize(): Promise<void> {
-        
-        // Removed SystemLlmService validation - now uses fallback heuristics
+        this.setupEventListeners();
+    }
 
-        // Set up event listeners
-        this.setupControlLoopListeners();
-        this.setupMessageListeners();  
-        this.setupAgentListeners();
-
+    private activityKey(agentId: AgentId, channelId: ChannelId): string {
+        return `${channelId}\0${agentId}`;
     }
 
     /**
@@ -121,6 +121,9 @@ export class EphemeralEventPatternService {
         
         // Listen to Message events for communication patterns
         this.setupMessageListeners();
+
+        // Record actual successful/failed tool executions, not message keywords.
+        this.setupToolListeners();
         
         // Listen to Agent events for activity tracking
         this.setupAgentListeners();
@@ -133,7 +136,7 @@ export class EphemeralEventPatternService {
      */
     private setupControlLoopListeners(): void {
         // Reasoning phase - check for coordination opportunities
-        EventBus.server.on(ControlLoopEvents.REASONING, async (payload: ControlLoopEventPayload) => {
+        this.eventSubscriptions.push(EventBus.server.on(ControlLoopEvents.REASONING, async (payload: ControlLoopEventPayload) => {
             try {
                 const { agentId, channelId } = payload;
                 this.validator.assertIsNonEmptyString(agentId, 'agentId is required');
@@ -145,25 +148,23 @@ export class EphemeralEventPatternService {
             } catch (error) {
                 this.logger.error(`Error handling reasoning event: ${error}`);
             }
-        });
+        }));
 
         // Planning phase - suggest collaboration
-        EventBus.server.on(ControlLoopEvents.PLAN, async (payload: ControlLoopEventPayload) => {
+        this.eventSubscriptions.push(EventBus.server.on(ControlLoopEvents.PLAN, async (payload: ControlLoopEventPayload) => {
             try {
                 const { agentId, channelId } = payload;
                 this.validator.assertIsNonEmptyString(agentId, 'agentId is required');
                 this.validator.assertIsNonEmptyString(channelId, 'channelId is required');
 
                 await this.updateAgentActivity(agentId, channelId, 'planning');
-                await this.detectWorkloadPatterns(channelId);
-                
             } catch (error) {
                 this.logger.error(`Error handling planning event: ${error}`);
             }
-        });
+        }));
 
         // Action phase - check for tool expertise sharing
-        EventBus.server.on(ControlLoopEvents.ACTION, async (payload: ControlLoopEventPayload) => {
+        this.eventSubscriptions.push(EventBus.server.on(ControlLoopEvents.ACTION, async (payload: ControlLoopEventPayload) => {
             try {
                 const { agentId, channelId } = payload;
                 this.validator.assertIsNonEmptyString(agentId, 'agentId is required');
@@ -175,10 +176,10 @@ export class EphemeralEventPatternService {
             } catch (error) {
                 this.logger.error(`Error handling action event: ${error}`);
             }
-        });
+        }));
 
         // Error events - detect struggle patterns
-        EventBus.server.on(ControlLoopEvents.ERROR, async (payload: ControlLoopEventPayload) => {
+        this.eventSubscriptions.push(EventBus.server.on(ControlLoopEvents.ERROR, async (payload: ControlLoopEventPayload) => {
             try {
                 const { agentId, channelId } = payload;
                 if (agentId && channelId) {
@@ -187,7 +188,7 @@ export class EphemeralEventPatternService {
             } catch (error) {
                 this.logger.error(`Error handling control loop error event: ${error}`);
             }
-        });
+        }));
     }
 
     /**
@@ -195,7 +196,7 @@ export class EphemeralEventPatternService {
      */
     private setupMessageListeners(): void {
         // Channel messages - analyze content for patterns
-        EventBus.server.on(MessageEvents.CHANNEL_MESSAGE, async (payload: BaseEventPayload<MessageEventData>) => {
+        this.eventSubscriptions.push(EventBus.server.on(MessageEvents.CHANNEL_MESSAGE, async (payload: BaseEventPayload<MessageEventData>) => {
             try {
                 const message = payload.data?.message as ChannelMessage;
                 if (!message) {
@@ -213,16 +214,28 @@ export class EphemeralEventPatternService {
                 
                 // Analyze message for patterns
                 await this.analyzeMessagePatterns(agentId, channelId, message);
-                
-                
-                // Trigger workload pattern detection periodically
-                if (Math.random() < 0.1) { // 10% chance to trigger analysis
-                    await this.detectWorkloadPatterns(channelId);
-                }
             } catch (error) {
                 this.logger.error(`Error analyzing message patterns: ${error}`);
             }
-        });
+        }));
+    }
+
+    private setupToolListeners(): void {
+        this.eventSubscriptions.push(EventBus.server.on(
+            Events.Mcp.TOOL_RESULT,
+            async (payload: McpToolResultEventPayload) => {
+                try {
+                    const { agentId, channelId } = payload;
+                    const toolName = payload.data?.toolName;
+                    this.validator.assertIsNonEmptyString(agentId, 'agentId is required');
+                    this.validator.assertIsNonEmptyString(channelId, 'channelId is required');
+                    this.validator.assertIsNonEmptyString(toolName, 'toolName is required');
+                    await this.updateAgentToolUsage(agentId, channelId, [toolName]);
+                } catch (error) {
+                    this.logger.error(`Error recording MCP tool activity: ${error}`);
+                }
+            }
+        ));
     }
 
     /**
@@ -230,7 +243,7 @@ export class EphemeralEventPatternService {
      */
     private setupAgentListeners(): void {
         // Agent connected - initialize activity tracking
-        EventBus.server.on(AgentEvents.CONNECTED, async (payload: AgentEventPayload) => {
+        this.eventSubscriptions.push(EventBus.server.on(AgentEvents.CONNECTED, async (payload: AgentEventPayload) => {
             try {
                 const { agentId, channelId } = payload;                
                 if (agentId && channelId) {
@@ -241,24 +254,23 @@ export class EphemeralEventPatternService {
             } catch (error) {
                 this.logger.error(`Error handling agent connection: ${error}`);
             }
-        });
+        }));
 
         // Agent disconnected - clean up activity tracking
-        EventBus.server.on(AgentEvents.DISCONNECTED, async (payload: AgentEventPayload) => {
+        this.eventSubscriptions.push(EventBus.server.on(AgentEvents.DISCONNECTED, async (payload: AgentEventPayload) => {
             try {
-                const { agentId } = payload;
+                const { agentId, channelId } = payload;
                 //;
                 
-                if (agentId) {
-                    const wasTracked = this.agentActivities.has(agentId);
-                    this.agentActivities.delete(agentId);
+                if (agentId && channelId) {
+                    this.agentActivities.delete(this.activityKey(agentId, channelId));
                 } else {
                     this.logger.warn(`⚠️ Invalid agent disconnection payload: agentId=${agentId}`);
                 }
             } catch (error) {
                 this.logger.error(`Error handling agent disconnection: ${error}`);
             }
-        });
+        }));
     }
 
     /**
@@ -279,47 +291,6 @@ export class EphemeralEventPatternService {
     }
 
     /**
-     * Detect workload imbalance patterns
-     */
-    private async detectWorkloadPatterns(channelId: ChannelId): Promise<void> {
-        const channelAgents = Array.from(this.agentActivities.values())
-            .filter(activity => activity.channelId === channelId);
-
-
-        if (channelAgents.length <= 1) {
-            return;
-        }
-
-        // Check for workload imbalance - use 2 minutes for responsiveness (was 10 minutes)
-        const activeAgents = channelAgents.filter(a => {
-            const timeSinceLastSeen = Date.now() - a.lastSeen;
-            const isActive = timeSinceLastSeen < 2 * 60 * 1000; // Active in last 2 minutes
-            return isActive;
-        });
-
-
-        if (activeAgents.length >= 2) {
-            const pattern: DetectedPattern = {
-                type: 'workload_imbalance',
-                confidence: 0.8,
-                channelId,
-                relatedAgents: activeAgents.map(a => a.agentId),
-                context: {
-                    description: `${activeAgents.length} agents active simultaneously in channel`,
-                    suggestedAction: 'Consider coordinating tasks to avoid duplication',
-                    urgency: 'medium'
-                }
-            };
-
-
-            if (this.shouldTriggerPattern(pattern)) {
-                await this.generateEphemeralEvent(pattern, 'high_activity');
-            }
-        } else {
-        }
-    }
-
-    /**
      * Detect struggle patterns when agents encounter errors
      */
     private async detectStrugglePatterns(
@@ -327,38 +298,12 @@ export class EphemeralEventPatternService {
         channelId: ChannelId, 
         errorMessage?: string
     ): Promise<void> {
-        const activity = this.agentActivities.get(agentId);
+        const activity = this.agentActivities.get(this.activityKey(agentId, channelId));
         if (!activity) return;
 
         // Update struggle context
         activity.strugglingWith = errorMessage || 'Unknown error';
 
-        // Look for agents with relevant expertise
-        const expertsInChannel = Array.from(this.agentActivities.values())
-            .filter(a => 
-                a.channelId === channelId && 
-                a.agentId !== agentId &&
-                a.expertise && a.expertise.length > 0
-            );
-
-        if (expertsInChannel.length > 0) {
-            const pattern: DetectedPattern = {
-                type: 'expertise_sharing',
-                confidence: 0.9,
-                channelId,
-                triggerAgentId: agentId,
-                relatedAgents: expertsInChannel.map(e => e.agentId),
-                context: {
-                    description: `Agent struggling with task, experts available in channel`,
-                    suggestedAction: 'Share expertise or coordinate assistance',
-                    urgency: 'high'
-                }
-            };
-
-            if (this.shouldTriggerPattern(pattern)) {
-                await this.generateEphemeralEvent(pattern, 'conflict_detected');
-            }
-        }
     }
 
     /**
@@ -374,12 +319,6 @@ export class EphemeralEventPatternService {
             ? message.content.data.toLowerCase() 
             : String(message.content?.data || '').toLowerCase();
         
-        // Detect tool usage patterns
-        const toolAnalysis = await this.analyzeToolUsagePatterns(content, agentId);
-        if (toolAnalysis.toolsUsed.length > 0) {
-            await this.updateAgentToolUsage(agentId, toolAnalysis.toolsUsed);
-        }
-
         // Detect struggle indicators
         const struggleKeywords = ['help', 'stuck', 'error', 'failed', 'struggling', 'confused'];
         if (struggleKeywords.some(keyword => content.includes(keyword))) {
@@ -413,7 +352,7 @@ export class EphemeralEventPatternService {
      */
     private async findSimilarTaskPatterns(agentId: AgentId, channelId: ChannelId): Promise<DetectedPattern[]> {
         const patterns: DetectedPattern[] = [];
-        const currentActivity = this.agentActivities.get(agentId);
+        const currentActivity = this.agentActivities.get(this.activityKey(agentId, channelId));
         if (!currentActivity) return patterns;
 
         // Find other agents in the same channel
@@ -481,238 +420,6 @@ export class EphemeralEventPatternService {
     }
 
     /**
-     * Analyze message content for tool usage patterns
-     * Uses fallback heuristic analysis (SystemLLM analysis removed)
-     */
-    private async analyzeToolUsagePatterns(content: string, agentId: AgentId): Promise<{
-        toolsUsed: string[];
-        strugglingWith: string[];
-        expertiseAreas: string[];
-        confidence: number;
-    }> {
-        // Use heuristic analysis instead of SystemLLM to avoid global instance creation
-        return this.fallbackToolAnalysis(content);
-    }
-
-    /**
-     * Analyze coordination opportunities using per-channel SystemLLM instance
-     */
-    private async analyzeCoordinationOpportunities(
-        recentMessages: string[],
-        channelId: ChannelId,
-        agentActivities: string[]
-    ): Promise<{
-        opportunities: string[];
-        urgency: 'low' | 'medium' | 'high';
-        recommendedActions: string[];
-        confidence: number;
-    }> {
-        try {
-            // Get per-channel SystemLlmService instance
-            const systemLlm = SystemLlmServiceManager.getInstance().getServiceForChannel(channelId);
-            if (!systemLlm) {
-                this.logger.warn(`No SystemLLM available for channel ${channelId}, using fallback`);
-                return this.fallbackCoordinationAnalysis();
-            }
-            
-            const coordinationPrompt = `Analyze agent coordination opportunities in this channel:
-
-Channel ID: ${channelId}
-Recent Messages: ${recentMessages.slice(-5).join(' | ')}
-Agent Activities: ${agentActivities.join(' | ')}
-
-Please analyze:
-1. What coordination opportunities exist between agents?
-2. How urgent is coordination needed (low/medium/high)?
-3. What specific actions would improve coordination?
-4. How confident are you in this analysis (0.0-1.0)?
-
-Consider:
-- Duplicate work detection
-- Complementary skills identification
-- Resource sharing opportunities
-- Knowledge transfer needs
-
-Respond with JSON format:
-{
-    "opportunities": ["opportunity1", "opportunity2"],
-    "urgency": "medium",
-    "recommendedActions": ["action1", "action2"],
-    "confidence": 0.7
-}`;
-
-            // Use SystemLLM to analyze coordination opportunities
-            const analysis = await systemLlm.sendLlmRequest(coordinationPrompt, null, {
-                model: systemLlm.getModelForOperation('reasoning'),
-                maxTokens: 400
-            });
-
-            // Parse LLM response with fallback
-            try {
-                const result = JSON.parse(analysis);
-                return {
-                    opportunities: Array.isArray(result.opportunities) ? result.opportunities : [],
-                    urgency: ['low', 'medium', 'high'].includes(result.urgency) ? result.urgency : 'medium',
-                    recommendedActions: Array.isArray(result.recommendedActions) ? result.recommendedActions : [],
-                    confidence: typeof result.confidence === 'number' ? result.confidence : 0.5
-                };
-            } catch (parseError) {
-                this.logger.warn(`Failed to parse SystemLLM coordination analysis: ${parseError}`);
-                return this.fallbackCoordinationAnalysis();
-            }
-
-        } catch (error) {
-            this.logger.error(`SystemLLM coordination analysis failed: ${error}`);
-            return this.fallbackCoordinationAnalysis();
-        }
-    }
-
-    /**
-     * Analyze activity patterns using per-channel SystemLLM instance
-     */
-    private async analyzeActivityPatterns(
-        channelId: ChannelId,
-        recentActivity: string[]
-    ): Promise<{
-        patterns: string[];
-        anomalies: string[];
-        insights: string[];
-        confidence: number;
-    }> {
-        try {
-            // Get per-channel SystemLlmService instance
-            const systemLlm = SystemLlmServiceManager.getInstance().getServiceForChannel(channelId);
-            if (!systemLlm) {
-                this.logger.warn(`No SystemLLM available for channel ${channelId}, using fallback`);
-                return this.fallbackActivityAnalysis();
-            }
-            
-            const activityPrompt = `Analyze agent activity patterns in this channel:
-
-Channel ID: ${channelId}
-Recent Activity: ${recentActivity.slice(-10).join(' | ')}
-
-Please analyze:
-1. What patterns do you see in agent activities?
-2. Are there any anomalies or unusual behaviors?
-3. What insights can help improve agent coordination?
-4. How confident are you in this analysis (0.0-1.0)?
-
-Consider:
-- Timing patterns
-- Tool usage patterns
-- Communication patterns
-- Work distribution patterns
-
-Respond with JSON format:
-{
-    "patterns": ["pattern1", "pattern2"],
-    "anomalies": ["anomaly1", "anomaly2"],
-    "insights": ["insight1", "insight2"],
-    "confidence": 0.8
-}`;
-
-            // Use SystemLLM to analyze activity patterns
-            const analysis = await systemLlm.sendLlmRequest(activityPrompt, null, {
-                model: systemLlm.getModelForOperation('reasoning'),
-                maxTokens: 400
-            });
-
-            // Parse LLM response with fallback
-            try {
-                const result = JSON.parse(analysis);
-                return {
-                    patterns: Array.isArray(result.patterns) ? result.patterns : [],
-                    anomalies: Array.isArray(result.anomalies) ? result.anomalies : [],
-                    insights: Array.isArray(result.insights) ? result.insights : [],
-                    confidence: typeof result.confidence === 'number' ? result.confidence : 0.5
-                };
-            } catch (parseError) {
-                this.logger.warn(`Failed to parse SystemLLM activity analysis: ${parseError}`);
-                return this.fallbackActivityAnalysis();
-            }
-
-        } catch (error) {
-            this.logger.error(`SystemLLM activity analysis failed: ${error}`);
-            return this.fallbackActivityAnalysis();
-        }
-    }
-
-    /**
-     * Fallback tool analysis when SystemLLM is unavailable
-     */
-    private fallbackToolAnalysis(content: string): {
-        toolsUsed: string[];
-        strugglingWith: string[];
-        expertiseAreas: string[];
-        confidence: number;
-    } {
-        // Basic regex patterns as fallback
-        const toolPatterns = [
-            { pattern: /calculator|calculate|math/gi, tool: 'calculator' },
-            { pattern: /file|read|write|save/gi, tool: 'file_operations' },
-            { pattern: /memory|remember|store/gi, tool: 'memory' },
-            { pattern: /search|find|query/gi, tool: 'search' },
-            { pattern: /git|repository|commit/gi, tool: 'git' },
-            { pattern: /time|timezone|date/gi, tool: 'time' }
-        ];
-
-        const strugglingPatterns = [
-            { pattern: /error|failed|struggling|help|stuck/gi, issue: 'general_difficulty' },
-            { pattern: /don't know|unsure|confused/gi, issue: 'knowledge_gap' }
-        ];
-
-        const toolsUsed = toolPatterns
-            .filter(({ pattern }) => pattern.test(content))
-            .map(({ tool }) => tool);
-
-        const strugglingWith = strugglingPatterns
-            .filter(({ pattern }) => pattern.test(content))
-            .map(({ issue }) => issue);
-
-        return {
-            toolsUsed,
-            strugglingWith,
-            expertiseAreas: [], // Cannot determine expertise from simple patterns
-            confidence: 0.3 // Low confidence for fallback analysis
-        };
-    }
-
-    /**
-     * Fallback coordination analysis when SystemLLM is unavailable
-     */
-    private fallbackCoordinationAnalysis(): {
-        opportunities: string[];
-        urgency: 'low' | 'medium' | 'high';
-        recommendedActions: string[];
-        confidence: number;
-    } {
-        return {
-            opportunities: ['potential_collaboration'],
-            urgency: 'medium',
-            recommendedActions: ['monitor_activity'],
-            confidence: 0.2 // Very low confidence for fallback
-        };
-    }
-
-    /**
-     * Fallback activity analysis when SystemLLM is unavailable
-     */
-    private fallbackActivityAnalysis(): {
-        patterns: string[];
-        anomalies: string[];
-        insights: string[];
-        confidence: number;
-    } {
-        return {
-            patterns: ['standard_activity'],
-            anomalies: [],
-            insights: ['requires_deeper_analysis'],
-            confidence: 0.2 // Very low confidence for fallback
-        };
-    }
-
-    /**
      * Check if pattern should trigger an ephemeral event (prevents spam)
      */
     private shouldTriggerPattern(pattern: DetectedPattern): boolean {
@@ -731,16 +438,13 @@ Respond with JSON format:
      */
     private async generateEphemeralEvent(
         pattern: DetectedPattern, 
-        trigger: 'pre_reasoning' | 'post_action' | 'high_activity' | 'conflict_detected' | 'pattern_recognized'
+        trigger: 'pre_reasoning' | 'post_action' | 'pattern_recognized'
     ): Promise<void> {
         try {
             // Map pattern type to injection type
             const injectionTypeMap = {
                 'similar_task': 'coordination_hint',
-                'tool_struggle': 'tool_suggestion',
-                'coordination_opportunity': 'coordination_hint',
-                'expertise_sharing': 'coordination_hint',
-                'workload_imbalance': 'activity_alert'
+                'coordination_opportunity': 'coordination_hint'
             } as const;
 
             const injectionType = injectionTypeMap[pattern.type];
@@ -781,13 +485,18 @@ Respond with JSON format:
         channelId: ChannelId, 
         orparPhase: 'observation' | 'reasoning' | 'planning' | 'action' | 'reflection'
     ): Promise<void> {
-        const existing = this.agentActivities.get(agentId);
+        const existing = this.agentActivities.get(this.activityKey(agentId, channelId));
 
         if (existing) {
             existing.lastSeen = Date.now();
             existing.currentOrparPhase = orparPhase;
         } else {
             await this.initializeAgentActivity(agentId, channelId);
+            const initialized = this.agentActivities.get(this.activityKey(agentId, channelId));
+            if (!initialized) {
+                throw new Error(`Failed to initialize activity for ${agentId} in ${channelId}`);
+            }
+            initialized.currentOrparPhase = orparPhase;
         }
     }
 
@@ -799,7 +508,7 @@ Respond with JSON format:
         channelId: ChannelId, 
         message: ChannelMessage
     ): Promise<void> {
-        const activity = this.agentActivities.get(agentId);
+        const activity = this.agentActivities.get(this.activityKey(agentId, channelId));
         
         if (activity) {
             activity.lastSeen = Date.now();
@@ -811,14 +520,23 @@ Respond with JSON format:
             }
         } else {
             await this.initializeAgentActivity(agentId, channelId);
+            const initialized = this.agentActivities.get(this.activityKey(agentId, channelId));
+            if (!initialized) {
+                throw new Error(`Failed to initialize activity for ${agentId} in ${channelId}`);
+            }
+            initialized.recentMessages.push(message);
         }
     }
 
     /**
      * Update agent tool usage tracking
      */
-    private async updateAgentToolUsage(agentId: AgentId, tools: string[]): Promise<void> {
-        const activity = this.agentActivities.get(agentId);
+    private async updateAgentToolUsage(
+        agentId: AgentId,
+        channelId: ChannelId,
+        tools: string[]
+    ): Promise<void> {
+        const activity = this.agentActivities.get(this.activityKey(agentId, channelId));
         if (activity) {
             activity.toolUsage.push(...tools);
             // Keep only recent tool usage
@@ -828,14 +546,23 @@ Respond with JSON format:
             
             // Update expertise based on tool usage patterns
             activity.expertise = [...new Set(activity.toolUsage)];
+            return;
         }
+
+        await this.initializeAgentActivity(agentId, channelId);
+        const initialized = this.agentActivities.get(this.activityKey(agentId, channelId));
+        if (!initialized) {
+            throw new Error(`Failed to initialize activity for ${agentId} in ${channelId}`);
+        }
+        initialized.toolUsage.push(...tools);
+        initialized.expertise = [...new Set(initialized.toolUsage)];
     }
 
     /**
      * Initialize activity tracking for a new agent
      */
     private async initializeAgentActivity(agentId: AgentId, channelId: ChannelId): Promise<void> {
-        this.agentActivities.set(agentId, {
+        this.agentActivities.set(this.activityKey(agentId, channelId), {
             agentId,
             channelId,
             lastSeen: Date.now(),
@@ -848,8 +575,19 @@ Respond with JSON format:
     /**
      * Get current agent activities (for debugging/monitoring)
      */
-    public getAgentActivities(): Map<AgentId, AgentActivity> {
+    public getAgentActivities(): Map<string, AgentActivity> {
         return new Map(this.agentActivities);
+    }
+
+    /** Release every listener and all process-local pattern state. */
+    public shutdown(): void {
+        for (const subscription of this.eventSubscriptions) {
+            subscription.unsubscribe();
+        }
+        this.eventSubscriptions = [];
+        this.agentActivities.clear();
+        this.recentPatterns.clear();
+        this.isInitialized = false;
     }
 
     /**
@@ -860,9 +598,9 @@ Respond with JSON format:
         const inactivityThreshold = 60 * 60 * 1000; // 1 hour
 
         // Remove inactive agents
-        for (const [agentId, activity] of this.agentActivities) {
+        for (const [activityKey, activity] of this.agentActivities) {
             if (now - activity.lastSeen > inactivityThreshold) {
-                this.agentActivities.delete(agentId);
+                this.agentActivities.delete(activityKey);
             }
         }
 

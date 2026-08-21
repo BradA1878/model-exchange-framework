@@ -30,15 +30,46 @@ import { createStrictValidator } from '@mxf-dev/core/utils/validation';
 import { Logger } from '@mxf-dev/core/utils/Logger';
 import { McpToolRegistry } from '../services/McpToolRegistry';
 import { McpSocketExecutor } from '../../socket/services/McpSocketExecutor';
-import { McpToolDefinition, McpToolHandlerContext, McpToolHandlerResult, McpToolResultContent } from '@mxf-dev/core/protocols/mcp/McpServerTypes';
-import { McpToolInput } from '@mxf-dev/core/protocols/mcp/IMcpClient';
+import {
+    getToolAuthorizationNames,
+    isPrivilegedHostToolEnabled,
+    isPrivilegedNetworkToolEnabled,
+    ToolAuthorizationError
+} from '../../socket/services/ToolAuthorizationPolicy';
+import { McpToolDefinition, McpToolHandlerContext, McpToolHandlerResult } from '@mxf-dev/core/protocols/mcp/McpServerTypes';
+import { UserRole } from '@mxf-dev/core/models/user';
 import { v4 as uuidv4 } from 'uuid';
+import { loadActiveChannelRuntimePolicy } from '../security/ChannelRuntimePolicy';
 
 // Create validator for MCP controller
 const validate = createStrictValidator('McpController');
 
 // Initialize logger
 const logger = new Logger('info', 'McpController', 'server');
+
+/**
+ * Defense in depth for registry mutation controllers.
+ *
+ * The router applies the same policy, but a controller must not become an
+ * unguarded provider/core-tool mutation path when reused or mounted elsewhere.
+ */
+const requireRegistryAdministrator = (req: Request, res: Response): boolean => {
+    const authenticationRequest = req as Request & {
+        authType?: string;
+        user?: { role?: string };
+    };
+
+    if (authenticationRequest.authType !== 'jwt' ||
+        authenticationRequest.user?.role !== UserRole.ADMIN) {
+        res.status(403).json({
+            success: false,
+            message: 'Administrator privileges are required to mutate the MCP tool registry'
+        });
+        return false;
+    }
+
+    return true;
+};
 
 /**
  * Get MCP server capabilities
@@ -92,12 +123,18 @@ export const listTools = async (req: Request, res: Response): Promise<void> => {
         McpToolRegistry.getInstance().listTools(filter).subscribe({
             next: (tools: McpToolDefinition[]) => {
                 // Return tool list without handler functions
-                const sanitizedTools = tools.map(tool => ({
+                const sanitizedTools = tools
+                    .filter(tool => {
+                        const names = getToolAuthorizationNames(tool);
+                        return isPrivilegedHostToolEnabled(names) &&
+                            isPrivilegedNetworkToolEnabled(names);
+                    })
+                    .map(tool => ({
                     name: tool.name,
                     description: tool.description,
                     inputSchema: tool.inputSchema,
                     metadata: tool.metadata
-                }));
+                    }));
                 
                 res.status(200).json({
                     success: true,
@@ -136,6 +173,15 @@ export const getToolByName = async (req: Request, res: Response): Promise<void> 
         // Get tool from registry
         McpToolRegistry.getInstance().getTool(name).subscribe({
             next: (tool: McpToolDefinition) => {
+                const authorizationNames = getToolAuthorizationNames(tool);
+                if (!isPrivilegedHostToolEnabled(authorizationNames) ||
+                    !isPrivilegedNetworkToolEnabled(authorizationNames)) {
+                    res.status(404).json({
+                        success: false,
+                        message: `Tool ${name} not found`
+                    });
+                    return;
+                }
                 // Return tool without handler function
                 const sanitizedTool = {
                     name: tool.name,
@@ -177,15 +223,96 @@ export const executeTool = async (req: Request, res: Response): Promise<void> =>
     try {
         const { name } = req.params;
         const { input } = req.body;
+
+        const authType = (req as Request & { authType?: string }).authType;
+        if (!authType) {
+            res.status(401).json({
+                success: false,
+                message: 'Authentication is required to execute MCP tools'
+            });
+            return;
+        }
+
+        // An HTTP execution must act as an agent. A user JWT authenticates a
+        // user, not an agent/channel pair, so it cannot safely supply this
+        // context. authenticateDual derives this principal from the bound key.
+        if (authType !== 'key') {
+            res.status(403).json({
+                success: false,
+                message: 'Agent key authentication is required to execute MCP tools'
+            });
+            return;
+        }
+
+        const authenticatedAgent = (req as Request & {
+            agent?: {
+                agentId?: unknown;
+                channelId?: unknown;
+                keyId?: unknown;
+                allowedTools?: unknown;
+            };
+        }).agent;
+        if (
+            typeof authenticatedAgent?.agentId !== 'string' ||
+            authenticatedAgent.agentId.length === 0 ||
+            typeof authenticatedAgent.channelId !== 'string' ||
+            authenticatedAgent.channelId.length === 0 ||
+            typeof authenticatedAgent.keyId !== 'string' ||
+            authenticatedAgent.keyId.length === 0 ||
+            (authenticatedAgent.allowedTools !== undefined &&
+                !Array.isArray(authenticatedAgent.allowedTools))
+        ) {
+            logger.error('Key-authenticated MCP execution is missing its bound agent/channel identity');
+            res.status(403).json({
+                success: false,
+                message: 'The authenticated agent key is not bound to a valid agent and channel'
+            });
+            return;
+        }
+
+        // Legacy clients may still send these headers. Treat them only as
+        // assertions and refuse a mismatch; never use them as authority.
+        const assertedAgentId = req.headers['x-agent-id'];
+        const assertedChannelId = req.headers['x-channel-id'];
+        if (
+            (assertedAgentId !== undefined && assertedAgentId !== authenticatedAgent.agentId) ||
+            (assertedChannelId !== undefined && assertedChannelId !== authenticatedAgent.channelId)
+        ) {
+            res.status(403).json({
+                success: false,
+                message: 'Execution identity headers must match the authenticated agent key'
+            });
+            return;
+        }
         
         // Validate input
         validate.assertIsObject(input);
+
+        // HTTP execution does not traverse the socket join path that normally
+        // hydrates channel policy. Load the exact key-bound active channel now;
+        // otherwise an empty policy cache would be mistaken for unrestricted.
+        const authenticatedChannel = await loadActiveChannelRuntimePolicy(
+            authenticatedAgent.channelId
+        );
+        if (!authenticatedChannel) {
+            res.status(403).json({
+                success: false,
+                message: 'The authenticated channel is missing or inactive'
+            });
+            return;
+        }
         
         // Create context
         const context: McpToolHandlerContext = {
             requestId: uuidv4(),
-            agentId: req.headers['x-agent-id'] as string,
-            channelId: req.headers['x-channel-id'] as string,
+            agentId: authenticatedAgent.agentId,
+            channelId: authenticatedAgent.channelId,
+            authorization: {
+                keyId: authenticatedAgent.keyId,
+                allowedTools: authenticatedAgent.allowedTools === undefined
+                    ? undefined
+                    : [...authenticatedAgent.allowedTools] as string[]
+            },
             data: {
                 ip: req.ip,
                 userAgent: req.headers['user-agent']
@@ -206,7 +333,13 @@ export const executeTool = async (req: Request, res: Response): Promise<void> =>
                 logger.error(`Error executing tool ${name}: ${error}`);
                 
                 // Return appropriate status based on error
-                if (error.message?.includes('not found') || error.message?.includes('does not exist')) {
+                if (error instanceof ToolAuthorizationError) {
+                    res.status(403).json({
+                        success: false,
+                        message: 'MCP tool execution is not authorized',
+                        error: error.message
+                    });
+                } else if (error.message?.includes('not found') || error.message?.includes('does not exist')) {
                     res.status(404).json({
                         success: false,
                         message: `Tool ${name} not found`,
@@ -244,75 +377,18 @@ export const executeTool = async (req: Request, res: Response): Promise<void> =>
  */
 export const registerTool = async (req: Request, res: Response): Promise<void> => {
     try {
-        // Destructure all required fields from request body
-        const { name, description, inputSchema, metadata = {}, provider } = req.body;
-        
-        // Extract channelId from headers (required for tool registration)
-        const channelId = req.headers['x-channel-id'] as string;
-        
-        // Validate required fields
-        if (!name || typeof name !== 'string') {
-            res.status(400).json({
-                success: false,
-                message: 'Tool name is required and must be a string'
-            });
+        if (!requireRegistryAdministrator(req, res)) {
             return;
         }
-        
-        if (!channelId || typeof channelId !== 'string') {
-            res.status(400).json({
-                success: false,
-                message: 'Channel ID is required and must be provided in x-channel-id header'
-            });
-            return;
-        }
-        
-        // Create a handler that responds with a fixed message
-        const toolHandler = (input: McpToolInput, context: McpToolHandlerContext): Promise<McpToolHandlerResult> => {
-            return Promise.resolve({
-                content: {
-                    type: 'text',
-                    data: 'Tool registered via API, but execution must be handled separately'
-                }
-            });
-        };
-        
-        // Create tool definition
-        const tool: McpToolDefinition = {
-            name,
-            description,
-            inputSchema,
-            handler: toolHandler,
-            enabled: true,
-            metadata
-        };
-        
-        // Determine the provider ID - use the provider from the request body if available,
-        // otherwise fall back to the user ID
-        const providerId = provider || (req as any).user.id;
-        
-        // Register tool
-        McpToolRegistry.getInstance().registerTool(tool, providerId, channelId).subscribe({
-            next: (success: boolean) => {
-                res.status(201).json({
-                    success: true,
-                    message: `Tool ${name} registered successfully`,
-                    data: {
-                        name,
-                        description,
-                        inputSchema,
-                        metadata
-                    }
-                });
-            },
-            error: (error: Error) => {
-                logger.error(`Error registering tool ${name}: ${error}`);
-                res.status(400).json({
-                    success: false,
-                    message: 'Error registering tool',
-                    error: error instanceof Error ? error.message : String(error)
-                });
-            }
+
+        // A definition without an authenticated, reachable provider handler is
+        // not executable. Persisting a placeholder would advertise a capability
+        // that can only return simulated output, so this endpoint fails closed
+        // until a provider invocation protocol exists.
+        res.status(501).json({
+            success: false,
+            code: 'MCP_PROVIDER_INVOCATION_UNAVAILABLE',
+            message: 'REST tool registration is unavailable because no authenticated provider invocation protocol is configured'
         });
     } catch (error) {
         logger.error(`Error registering tool: ${error}`);
@@ -331,6 +407,10 @@ export const registerTool = async (req: Request, res: Response): Promise<void> =
  */
 export const updateTool = async (req: Request, res: Response): Promise<void> => {
     try {
+        if (!requireRegistryAdministrator(req, res)) {
+            return;
+        }
+
         const { name } = req.params;
         const { description, inputSchema, enabled, metadata } = req.body;
         
@@ -343,7 +423,7 @@ export const updateTool = async (req: Request, res: Response): Promise<void> => 
         
         // Update tool
         McpToolRegistry.getInstance().updateTool(name, updates).subscribe({
-            next: (success: boolean) => {
+            next: (_success: boolean) => {
                 res.status(200).json({
                     success: true,
                     message: `Tool ${name} updated successfully`,
@@ -392,7 +472,7 @@ export const deleteTool = async (req: Request, res: Response): Promise<void> => 
         
         // Unregister tool
         McpToolRegistry.getInstance().unregisterTool(name).subscribe({
-            next: (success: boolean) => {
+            next: (_success: boolean) => {
                 res.status(200).json({
                     success: true,
                     message: `Tool ${name} deleted successfully`

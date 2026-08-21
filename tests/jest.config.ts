@@ -5,6 +5,7 @@ const config: Config = {
     preset: 'ts-jest',
     testEnvironment: 'node',
     rootDir: '..',
+    setupFiles: ['<rootDir>/tests/setup/testEnvironment.ts'],
     roots: ['<rootDir>/tests'],
     testMatch: [
         '**/tests/integration/**/*.integration.test.ts',

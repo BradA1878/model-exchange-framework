@@ -160,7 +160,11 @@ export class SessionRunner {
             });
 
             // Step 3: Generate agent keys
-            const keys = await this.sdk.generateKey(this.channelId);
+            const keys = await this.sdk.generateKey(
+                this.channelId,
+                this.agentId,
+                `Key for ${this.agentId}`
+            );
             this.credentials = { keyId: keys.keyId, secretKey: keys.secretKey };
 
             // Step 4: Setup event monitoring (before agent connects)

@@ -73,9 +73,10 @@ export interface ISocketService {
     /**
      * Get the socket for an agent by its ID
      * @param agentId Agent ID to find the socket for
-     * @returns The socket for the agent, or null if not found
+     * @param channelId Authenticated channel the event is scoped to
+     * @returns The socket for the agent in that exact channel, or null if not found
      */
-    getSocketByAgentId(agentId: string): Socket | null;
+    getSocketByAgentId(agentId: string, channelId: string): Socket | null;
     
     /**
      * Get the Socket.IO server instance

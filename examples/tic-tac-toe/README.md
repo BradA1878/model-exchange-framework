@@ -12,7 +12,7 @@ Watch two AI personalities battle it out:
 
 ### Prerequisites
 
-- Node.js 18+
+- Bun
 - Running MXF server (`bun run dev` in main project)
 - OpenRouter API key
 
@@ -22,10 +22,10 @@ Watch two AI personalities battle it out:
 cd examples/tic-tac-toe
 
 # Install server dependencies
-npm install
+bun install
 
 # Install client dependencies
-cd client && npm install && cd ..
+cd client && bun install && cd ..
 ```
 
 ### Configuration

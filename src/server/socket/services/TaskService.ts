@@ -24,7 +24,7 @@
  */
 
 import { Observable, BehaviorSubject, combineLatest, from, throwError, Subscription } from 'rxjs';
-import { map, filter, switchMap, debounceTime, catchError } from 'rxjs/operators';
+import { switchMap } from 'rxjs/operators';
 import { Logger } from '@mxf-dev/core/utils/Logger';
 import { createStrictValidator } from '@mxf-dev/core/utils/validation';
 import { EventBus } from '@mxf-dev/core/events/EventBus';
@@ -40,6 +40,7 @@ import {
     ChannelWorkloadAnalysis,
     AgentAssignmentAnalysis,
     CreateTaskRequest,
+    NonLifecycleTaskUpdateRequest,
     UpdateTaskRequest,
     TaskAssignmentResult,
     TaskQueryFilters,
@@ -52,15 +53,42 @@ import { v4 as uuidv4 } from 'uuid';
 import { Agent } from '@mxf-dev/core/models/agent';
 import { Task, TaskDocument } from '@mxf-dev/core/models/task';
 import { TaskEvents } from '@mxf-dev/core/events/event-definitions/TaskEvents';
-import { TaskCompletionMonitoringService } from './TaskCompletionMonitoringService';
+import {
+    MonitoredTaskTransition,
+    TaskCompletionMonitoringService
+} from './TaskCompletionMonitoringService';
 import { TaskCompletionConfig } from '@mxf-dev/core/types/TaskCompletionTypes';
 import { TaskDagService } from '@mxf-dev/core/services/dag/TaskDagService';
 import { isDagEnabled, isDagEnforcementEnabled } from '@mxf-dev/core/config/dag.config';
 import { DagEvents } from '@mxf-dev/core/events/event-definitions/DagEvents';
 import { createDagTaskBlockedPayload, createDagTaskDependenciesResolvedPayload } from '@mxf-dev/core/schemas/EventPayloadSchema';
+import type { FilterQuery } from 'mongoose';
+import {
+    parseCreateTaskRequest,
+    parseNonLifecycleTaskUpdateRequest,
+    parseUpdateTaskRequest
+} from './TaskRequestPolicy';
+import {
+    assertTaskAgentsBelongToChannel,
+    assertTaskDependenciesBelongToChannel
+} from './TaskParticipantPolicy';
+
+interface AssignmentCandidate {
+    id: AgentId;
+    role?: string;
+    capabilities?: string[];
+    specialization?: string;
+    metadata?: Record<string, unknown>;
+}
+
+export type AgentTaskLifecycleTransition =
+    | { kind: 'start' }
+    | { kind: 'complete'; output: unknown }
+    | { kind: 'fail'; error: string; output?: unknown }
+    | { kind: 'cancel'; reason?: string };
 
 export class TaskService {
-    private static instance: TaskService;
+    private static instance: TaskService | undefined;
     private readonly logger: Logger;
     private readonly validator = createStrictValidator('TaskService');
     private readonly ephemeralEventService: EphemeralEventPatternService;
@@ -89,7 +117,6 @@ export class TaskService {
         taskTimeoutMinutes: 120,
         enableLlmAssignment: true,
         llmConfidenceThreshold: 0.7,
-        fallbackStrategy: 'role_based',
         enableTaskDependencies: true,
         enableLateJoinHandling: true,
         preventSimultaneousStart: false // Allow immediate assignment for single-agent scenarios
@@ -126,55 +153,55 @@ export class TaskService {
      */
     private initializeOrchestration(): void {
         if (this.orchestrationInitialized) return;
-        
-        // Set up event listeners
-        this.setupTaskEventListeners();
-        this.setupWorkloadMonitoring();
-        this.setupAgentCoordination();
-        
-        // Start periodic analysis
-        this.startPeriodicAnalysis();
-        
-        this.orchestrationInitialized = true;
+
+        try {
+            this.setupTaskEventListeners();
+            this.setupAgentCoordination();
+            this.startPeriodicAnalysis();
+            this.orchestrationInitialized = true;
+        } catch (error) {
+            if (this.coordinationTimer) {
+                clearInterval(this.coordinationTimer);
+                this.coordinationTimer = undefined;
+            }
+            if (this.analysisTimer) {
+                clearInterval(this.analysisTimer);
+                this.analysisTimer = undefined;
+            }
+            if (this.initialAnalysisTimer) {
+                clearTimeout(this.initialAnalysisTimer);
+                this.initialAnalysisTimer = undefined;
+            }
+            for (const subscription of this.orchestrationSubscriptions) {
+                subscription.unsubscribe();
+            }
+            this.orchestrationSubscriptions = [];
+            throw error;
+        }
     }
 
     /**
      * Set up task event listeners for orchestration
      */
     private setupTaskEventListeners(): void {
-        // Listen for task creation events
-        EventBus.server.on(Events.Task.CREATED, (eventPayload: any) => {
-            this.handleTaskCreated(eventPayload.data.task);
-        });
-
-        // Listen for task assignment events
-        EventBus.server.on(Events.Task.ASSIGNED, (eventPayload: any) => {
-            this.handleTaskAssigned(eventPayload.data.task);
-        });
-
-        // Listen for task completion events
-        EventBus.server.on(Events.Task.COMPLETED, (eventPayload: any) => {
-            this.handleTaskCompleted(eventPayload.data.task);
-        });
-
-        // Listen for agent activity patterns
-        EventBus.server.on('agent:activity_pattern', (eventData: any) => {
-            this.handleAgentActivityPattern(eventData);
-        });
-
-    }
-
-    /**
-     * Set up workload monitoring
-     */
-    private setupWorkloadMonitoring(): void {
-        // Monitor active channels for workload changes
-        this.activeChannels.pipe(
-            debounceTime(1000), // Wait for channel activity to settle
-            filter(channels => channels.size > 0)
-        ).subscribe(channels => {
-            // ;
-        });
+        this.orchestrationSubscriptions.push(
+            EventBus.server.on(
+                Events.Task.CREATED,
+                eventPayload => this.handleTaskCreated(eventPayload.data.task)
+            )
+        );
+        this.orchestrationSubscriptions.push(
+            EventBus.server.on(
+                Events.Task.ASSIGNED,
+                eventPayload => this.handleTaskAssigned(eventPayload.data.task)
+            )
+        );
+        this.orchestrationSubscriptions.push(
+            EventBus.server.on(
+                Events.Task.COMPLETED,
+                eventPayload => this.handleTaskCompleted(eventPayload.data.task)
+            )
+        );
     }
 
     /**
@@ -226,12 +253,15 @@ export class TaskService {
     }
 
     /**
-     * Stop orchestration: clear the periodic timers and unsubscribe.
+     * Stop the timer-driven producers without tearing down event handling.
      *
-     * Nothing tore these down before, so a TaskService instance leaked its subscriptions
-     * for the lifetime of the process.
+     * The coordination tick, the periodic optimization pass, and completion
+     * monitoring all start new work on their own schedule, some of it through
+     * SystemLLM. Shutdown calls this before draining accepted work so the
+     * drain only has to wait for work that was already in flight; the event
+     * handlers that finish that work stay subscribed until shutdown().
      */
-    public shutdown(): void {
+    public stopPeriodicWork(): void {
         if (this.coordinationTimer) {
             clearInterval(this.coordinationTimer);
             this.coordinationTimer = undefined;
@@ -244,29 +274,87 @@ export class TaskService {
             clearTimeout(this.initialAnalysisTimer);
             this.initialAnalysisTimer = undefined;
         }
+        TaskCompletionMonitoringService.shutdownExisting();
+    }
+
+    /**
+     * Stop orchestration: clear the periodic timers and unsubscribe.
+     *
+     * Nothing tore these down before, so a TaskService instance leaked its subscriptions
+     * for the lifetime of the process.
+     */
+    public shutdown(): void {
+        if (!this.orchestrationInitialized) {
+            return;
+        }
+        this.stopPeriodicWork();
 
         for (const subscription of this.orchestrationSubscriptions) {
             subscription.unsubscribe();
         }
         this.orchestrationSubscriptions = [];
+        TaskDagService.shutdownExisting();
+        this.taskAssignments.clear();
+        this.channelWorkloads.clear();
+        this.activeChannels.next(new Set());
+        this.coordinationTick.next(0);
+        this.activeChannels.complete();
+        this.coordinationTick.complete();
+        this.agentService = null;
         this.orchestrationInitialized = false;
+        if (TaskService.instance === this) {
+            TaskService.instance = undefined;
+        }
     }
 
     /**
      * Create a new task
      */
-    public async createTask(request: CreateTaskRequest, createdBy: string): Promise<ChannelTask> {
-        this.validator.assertIsNonEmptyString(request.channelId, 'channelId is required');
-        this.validator.assertIsNonEmptyString(request.title, 'title is required');
-        this.validator.assertIsNonEmptyString(request.description, 'description is required');
+    public async createTask(
+        request: CreateTaskRequest,
+        createdBy: string,
+        requestId?: string
+    ): Promise<ChannelTask> {
+        request = parseCreateTaskRequest(request);
         this.validator.assertIsNonEmptyString(createdBy, 'createdBy is required');
 
+        const assignedAgentIds = Array.from(new Set([
+            ...(request.assignedAgentId ? [request.assignedAgentId] : []),
+            ...(request.assignedAgentIds ?? [])
+        ]));
+        const assignedAgentId = request.assignedAgentId ?? assignedAgentIds[0];
+        if (request.completionAgentId && !assignedAgentIds.includes(request.completionAgentId)) {
+            throw new Error(
+                'completionAgentId must identify an agent assigned to the task'
+            );
+        }
+
+        await assertTaskAgentsBelongToChannel(request.channelId, [
+            ...assignedAgentIds,
+            request.leadAgentId,
+            request.completionAgentId
+        ]);
+        await assertTaskDependenciesBelongToChannel(request.channelId, request.dependsOn ?? []);
+
+        const completionConfig = request.metadata?.enableMonitoring
+            ? request.metadata?.completionConfig as TaskCompletionConfig | undefined
+            : undefined;
+        if (request.metadata?.enableMonitoring && !completionConfig) {
+            throw new Error('completionConfig is required when task monitoring is enabled');
+        }
+        if (completionConfig) {
+            TaskCompletionMonitoringService.getInstance().assertValidConfig(completionConfig);
+        }
+
+        const hasExplicitAssignment = assignedAgentId !== undefined || assignedAgentIds.length > 0;
         const task = new Task({
             ...request,
+            assignedAgentId,
+            assignedAgentIds,
             createdBy,
             priority: request.priority || 'medium',
             assignmentStrategy: request.assignmentStrategy || 'intelligent',
-            status: 'pending'
+            status: hasExplicitAssignment ? 'assigned' : 'pending'
         });
 
         const savedTask = await task.save();
@@ -279,6 +367,7 @@ export class TaskService {
             request.channelId,
             {
                 taskId: channelTask.id,
+                requestId,
                 fromAgentId: createdBy,
                 toAgentId: channelTask.assignedAgentId || createdBy,
                 task: channelTask
@@ -287,7 +376,6 @@ export class TaskService {
         EventBus.server.emit(Events.Task.CREATED, eventPayload);
 
         // Emit assignment events for all assigned agents (critical for multi-agent tasks)
-        const assignedAgentIds = request.assignedAgentIds || [];
         if (assignedAgentIds.length > 0) {
             
             for (const agentId of assignedAgentIds) {
@@ -315,41 +403,358 @@ export class TaskService {
                 );
                 EventBus.server.emit(TaskEvents.ASSIGNED, assignmentPayload);
             }
-        } else if (channelTask.assignedAgentId) {
-            // Handle single agent assignment for backward compatibility
-            const assignmentPayload = createTaskEventPayload(
-                TaskEvents.ASSIGNED,
-                createdBy,
-                request.channelId,
-                {
-                    taskId: channelTask.id,
-                    fromAgentId: createdBy,
-                    toAgentId: channelTask.assignedAgentId,
-                    task: {
-                        ...channelTask,
-                        taskRequest: {
-                            taskId: channelTask.id,
-                            title: channelTask.title,
-                            description: channelTask.description,
-                            channelId: request.channelId,
-                            priority: channelTask.priority,
-                            assignmentStrategy: channelTask.assignmentStrategy,
-                            metadata: channelTask.metadata
-                        }
-                    }
-                }
-            );
-            EventBus.server.emit(TaskEvents.ASSIGNED, assignmentPayload);
         }
 
         // Check if task has completion monitoring enabled
-        if (request.metadata?.enableMonitoring && request.metadata?.completionConfig) {
-            const monitoringService = TaskCompletionMonitoringService.getInstance();
-            const completionConfig = request.metadata.completionConfig as TaskCompletionConfig;
-            monitoringService.startMonitoring(savedTask, completionConfig);
+        if (completionConfig) {
+            this.startCompletionMonitoring(savedTask, completionConfig);
         }
 
         return channelTask;
+    }
+
+    private startCompletionMonitoring(
+        task: TaskDocument | ChannelTask,
+        config: TaskCompletionConfig
+    ): void {
+        TaskCompletionMonitoringService.getInstance().startMonitoring(
+            task,
+            config,
+            transition => this.transitionMonitoredTask(transition)
+        );
+    }
+
+    /**
+     * Persist an automatic terminal transition exactly once. The channel and
+     * non-terminal status predicates stay on the write, so two overlapping
+     * monitor evaluations cannot both announce completion and a monitor from
+     * one channel cannot mutate an equal task identity in another.
+     */
+    public async transitionMonitoredTask(
+        transition: MonitoredTaskTransition
+    ): Promise<ChannelTask | null> {
+        this.validator.assertIsNonEmptyString(transition.taskId, 'taskId is required');
+        this.validator.assertIsNonEmptyString(transition.channelId, 'channelId is required');
+
+        const persist = async (): Promise<ChannelTask | null> => {
+            const task = await Task.findOneAndUpdate(
+                {
+                    _id: transition.taskId,
+                    channelId: transition.channelId,
+                    status: { $nin: ['completed', 'failed', 'cancelled'] }
+                },
+                {
+                    $set: {
+                        status: transition.status,
+                        progress: transition.progress,
+                        result: transition.result,
+                        updatedAt: new Date()
+                    }
+                },
+                { new: true, runValidators: true }
+            );
+            return task ? this.taskDocumentToChannelTask(task) : null;
+        };
+
+        if (transition.status === 'completed' && isDagEnabled()) {
+            return TaskDagService.getInstance().withChannelLock(
+                transition.channelId,
+                async (): Promise<ChannelTask | null> => {
+                    const task = await persist();
+                    if (task) {
+                        try {
+                            await this.handleDagTaskCompletion(transition.channelId, transition.taskId);
+                        } catch (error) {
+                            // The database terminal transition is authoritative and
+                            // cannot be rolled back safely here. Return it so the
+                            // terminal task event is still delivered; the explicit
+                            // error preserves the DAG reconciliation signal.
+                            this.logger.error(
+                                `Task ${transition.taskId} completed persistently, but DAG update failed: ${String(error)}`
+                            );
+                        }
+                    }
+                    return task;
+                }
+            );
+        }
+
+        return persist();
+    }
+
+    /**
+     * Perform an agent-owned lifecycle transition with authorization and legal
+     * source states in the same database compare-and-set as the mutation.
+     */
+    public async transitionTaskInChannel(
+        taskId: string,
+        channelId: ChannelId,
+        agentId: AgentId,
+        transition: AgentTaskLifecycleTransition
+    ): Promise<ChannelTask> {
+        this.validator.assertIsNonEmptyString(taskId, 'taskId is required');
+        this.validator.assertIsNonEmptyString(channelId, 'channelId is required');
+        this.validator.assertIsNonEmptyString(agentId, 'agentId is required');
+
+        const completedAt = new Date();
+        let allowedStatuses: Array<ChannelTask['status']>;
+        let update: Record<string, unknown>;
+
+        switch (transition.kind) {
+            case 'start':
+                allowedStatuses = ['assigned'];
+                update = { status: 'in_progress', updatedAt: completedAt };
+                break;
+            case 'complete':
+                allowedStatuses = ['assigned', 'in_progress'];
+                update = {
+                    status: 'completed',
+                    progress: 100,
+                    result: {
+                        success: true,
+                        output: transition.output,
+                        completedAt,
+                        completedBy: agentId
+                    },
+                    updatedAt: completedAt
+                };
+                break;
+            case 'fail':
+                this.validator.assertIsNonEmptyString(transition.error, 'task failure error is required');
+                allowedStatuses = ['assigned', 'in_progress'];
+                update = {
+                    status: 'failed',
+                    result: {
+                        success: false,
+                        error: transition.error,
+                        ...(transition.output !== undefined ? { output: transition.output } : {}),
+                        completedAt,
+                        completedBy: agentId
+                    },
+                    updatedAt: completedAt
+                };
+                break;
+            case 'cancel':
+                if (transition.reason !== undefined) {
+                    this.validator.assertIsNonEmptyString(
+                        transition.reason,
+                        'task cancellation reason must be non-empty when provided'
+                    );
+                }
+                allowedStatuses = ['assigned', 'in_progress'];
+                update = {
+                    status: 'cancelled',
+                    result: {
+                        success: false,
+                        ...(transition.reason !== undefined ? { error: transition.reason } : {}),
+                        completedAt,
+                        completedBy: agentId
+                    },
+                    updatedAt: completedAt
+                };
+                break;
+        }
+
+        if (transition.kind === 'start' && isDagEnforcementEnabled()) {
+            const blockedResult = await this.checkDagBlockers(channelId, taskId);
+            if (blockedResult.blocked) {
+                throw new Error(
+                    `Task ${taskId} blocked by incomplete dependencies: ${blockedResult.blockerIds.join(', ')}`
+                );
+            }
+        }
+
+        const assignedAgentPredicate = {
+            $or: [
+                { assignedAgentId: agentId },
+                { assignedAgentIds: agentId }
+            ]
+        };
+        // Completing and failing are both terminal outcomes, gated the same way:
+        // the designated completion agent when the task names one, otherwise
+        // any assignee. Failing used to need only an assignee, so one
+        // participant's loop error could end a task another agent was
+        // designated to finish.
+        const requiresCompletionAuthority = transition.kind === 'complete' || transition.kind === 'fail';
+        const actorPredicate = requiresCompletionAuthority
+            ? {
+                $or: [
+                    { completionAgentId: agentId },
+                    {
+                        $and: [
+                            {
+                                $or: [
+                                    { completionAgentId: { $exists: false } },
+                                    { completionAgentId: null }
+                                ]
+                            },
+                            assignedAgentPredicate
+                        ]
+                    }
+                ]
+            }
+            : assignedAgentPredicate;
+
+        const persist = async (): Promise<ChannelTask> => {
+            const task = await Task.findOneAndUpdate(
+                {
+                    _id: taskId,
+                    channelId,
+                    status: { $in: allowedStatuses },
+                    ...actorPredicate
+                },
+                { $set: update },
+                { new: true, runValidators: true }
+            );
+
+            if (!task) {
+                // One compare-and-set covers state, assignment, and authority, so
+                // the refusal names every condition it checked.
+                throw new Error(
+                    `Task ${taskId} cannot be ${transition.kind}ed by agent ${agentId} ` +
+                    `in channel ${channelId} from its current state` +
+                    (requiresCompletionAuthority
+                        ? ' — the task is no longer active, the agent is not assigned to it, ' +
+                          'or another agent is designated to report its outcome'
+                        : '')
+                );
+            }
+            return this.taskDocumentToChannelTask(task);
+        };
+
+        if (transition.kind === 'complete' && isDagEnabled()) {
+            return TaskDagService.getInstance().withChannelLock(channelId, async () => {
+                const task = await persist();
+                try {
+                    await this.handleDagTaskCompletion(channelId, taskId);
+                } catch (error) {
+                    this.logger.error(
+                        `Task ${taskId} completed persistently, but DAG update failed: ${String(error)}`
+                    );
+                }
+                return task;
+            });
+        }
+
+        return persist();
+    }
+
+    /**
+     * Owner/admin lifecycle transition used only after HTTP manage authorization.
+     * Unlike an agent transition it may cancel an unassigned pending task, but it
+     * still constrains every transition to its legal source state atomically.
+     */
+    public async transitionTaskAsOwnerInChannel(
+        taskId: string,
+        channelId: ChannelId,
+        ownerId: string,
+        transition: AgentTaskLifecycleTransition
+    ): Promise<ChannelTask> {
+        this.validator.assertIsNonEmptyString(taskId, 'taskId is required');
+        this.validator.assertIsNonEmptyString(channelId, 'channelId is required');
+        this.validator.assertIsNonEmptyString(ownerId, 'ownerId is required');
+
+        const completedAt = new Date();
+        let allowedStatuses: Array<ChannelTask['status']>;
+        let update: Record<string, unknown>;
+
+        switch (transition.kind) {
+            case 'start':
+                allowedStatuses = ['assigned'];
+                update = { status: 'in_progress', updatedAt: completedAt };
+                break;
+            case 'complete':
+                allowedStatuses = ['assigned', 'in_progress'];
+                update = {
+                    status: 'completed',
+                    progress: 100,
+                    result: {
+                        success: true,
+                        output: transition.output,
+                        completedAt,
+                        completedBy: ownerId
+                    },
+                    updatedAt: completedAt
+                };
+                break;
+            case 'fail':
+                this.validator.assertIsNonEmptyString(transition.error, 'task failure error is required');
+                allowedStatuses = ['assigned', 'in_progress'];
+                update = {
+                    status: 'failed',
+                    result: {
+                        success: false,
+                        error: transition.error,
+                        completedAt,
+                        completedBy: ownerId
+                    },
+                    updatedAt: completedAt
+                };
+                break;
+            case 'cancel':
+                if (transition.reason !== undefined) {
+                    this.validator.assertIsNonEmptyString(
+                        transition.reason,
+                        'task cancellation reason must be non-empty when provided'
+                    );
+                }
+                allowedStatuses = ['pending', 'assigned', 'in_progress'];
+                update = {
+                    status: 'cancelled',
+                    result: {
+                        success: false,
+                        ...(transition.reason !== undefined ? { error: transition.reason } : {}),
+                        completedAt,
+                        completedBy: ownerId
+                    },
+                    updatedAt: completedAt
+                };
+                break;
+        }
+
+        if (transition.kind === 'start' && isDagEnforcementEnabled()) {
+            const blockedResult = await this.checkDagBlockers(channelId, taskId);
+            if (blockedResult.blocked) {
+                throw new Error(
+                    `Task ${taskId} blocked by incomplete dependencies: ${blockedResult.blockerIds.join(', ')}`
+                );
+            }
+        }
+
+        const persist = async (): Promise<ChannelTask> => {
+            const task = await Task.findOneAndUpdate(
+                {
+                    _id: taskId,
+                    channelId,
+                    status: { $in: allowedStatuses }
+                },
+                { $set: update },
+                { new: true, runValidators: true }
+            );
+            if (!task) {
+                throw new Error(
+                    `Task ${taskId} cannot be ${transition.kind}ed in channel ${channelId} ` +
+                    'from its current state'
+                );
+            }
+            return this.taskDocumentToChannelTask(task);
+        };
+
+        if (transition.kind === 'complete' && isDagEnabled()) {
+            return TaskDagService.getInstance().withChannelLock(channelId, async () => {
+                const task = await persist();
+                try {
+                    await this.handleDagTaskCompletion(channelId, taskId);
+                } catch (error) {
+                    this.logger.error(
+                        `Task ${taskId} completed persistently, but DAG update failed: ${String(error)}`
+                    );
+                }
+                return task;
+            });
+        }
+
+        return persist();
     }
 
     /**
@@ -410,12 +815,62 @@ export class TaskService {
             {
                 $set: {
                     assignedAgentId: agentId,
+                    assignedAgentIds: [agentId],
                     status: 'assigned',
                     updatedAt: new Date()
                 }
             },
             { new: true }
         );
+    }
+
+    /** Assign one pending task and publish its single authoritative outcome. */
+    public async assignTaskInChannel(
+        taskId: string,
+        channelId: ChannelId,
+        targetAgentId: AgentId,
+        assignedBy: string
+    ): Promise<ChannelTask> {
+        this.validator.assertIsNonEmptyString(taskId, 'taskId is required');
+        this.validator.assertIsNonEmptyString(channelId, 'channelId is required');
+        this.validator.assertIsNonEmptyString(targetAgentId, 'targetAgentId is required');
+        this.validator.assertIsNonEmptyString(assignedBy, 'assignedBy is required');
+        await assertTaskAgentsBelongToChannel(channelId, [targetAgentId]);
+
+        const task = await Task.findOneAndUpdate(
+            {
+                _id: taskId,
+                channelId,
+                status: 'pending'
+            },
+            {
+                    $set: {
+                        assignedAgentId: targetAgentId,
+                        assignedAgentIds: [targetAgentId],
+                        status: 'assigned',
+                    updatedAt: new Date()
+                }
+            },
+            { new: true, runValidators: true }
+        );
+
+        if (!task) {
+            throw new Error(
+                `Task ${taskId} is not pending in channel ${channelId} and cannot be assigned`
+            );
+        }
+
+        const assignedTask = this.taskDocumentToChannelTask(task);
+        EventBus.server.emit(
+            TaskEvents.ASSIGNED,
+            createTaskEventPayload(TaskEvents.ASSIGNED, assignedBy, channelId, {
+                taskId: assignedTask.id,
+                fromAgentId: assignedBy,
+                toAgentId: targetAgentId,
+                task: assignedTask
+            })
+        );
+        return assignedTask;
     }
 
     /**
@@ -457,21 +912,29 @@ export class TaskService {
             (task.assignedAgentIds && task.assignedAgentIds.length > 0 ? task.assignedAgentIds[0] : null);
 
         if (manualAgentId) {
-            // Normalize the singular field when it was derived from the array.
-            // Conditional so a concurrent writer that already set it wins rather
-            // than being clobbered.
-            if (!task.assignedAgentId) {
-                await Task.updateOne(
-                    {
-                        _id: task.id,
-                        $or: [
-                            { assignedAgentId: { $exists: false } },
-                            { assignedAgentId: null }
-                        ]
-                    },
-                    { $set: { assignedAgentId: manualAgentId, updatedAt: new Date() } }
+            const assignedTask = await Task.findOneAndUpdate(
+                {
+                    _id: task.id,
+                    channelId: task.channelId,
+                    status: 'pending',
+                    $or: [
+                        { assignedAgentId: manualAgentId },
+                        { assignedAgentIds: manualAgentId }
+                    ]
+                },
+                {
+                    $set: {
+                        assignedAgentId: manualAgentId,
+                        status: 'assigned',
+                        updatedAt: new Date()
+                    }
+                },
+                { new: true, runValidators: true }
+            );
+            if (!assignedTask) {
+                throw new Error(
+                    `Task ${task.id} is no longer pending for manual assignment`
                 );
-                task.assignedAgentId = manualAgentId;
             }
 
             this.logger.info(`📋 Task assigned: "${task.title}" → Agent: ${manualAgentId} (manual)`);
@@ -485,7 +948,7 @@ export class TaskService {
                     taskId: task.id,
                     fromAgentId: task.createdBy,
                     toAgentId: manualAgentId,
-                    task: this.taskDocumentToChannelTask(task)
+                    task: this.taskDocumentToChannelTask(assignedTask)
                 }
             );
             EventBus.server.emit(TaskEvents.ASSIGNED, eventPayload);
@@ -496,7 +959,7 @@ export class TaskService {
                 strategy: 'manual' as AssignmentStrategy,
                 confidence: 1.0,
                 reasoning: 'Task manually assigned during creation',
-                assignedAt: task.updatedAt?.getTime() || Date.now()
+                assignedAt: assignedTask.updatedAt?.getTime() || Date.now()
             };
         }
 
@@ -508,74 +971,40 @@ export class TaskService {
                 throw new Error(`No available agents in channel ${task.channelId}`);
             }
 
-            // Get workload analysis
-            const workloadAnalysis = this.channelWorkloads.get(task.channelId) || {
-                channelId: task.channelId,
-                totalTasks: 0,
-                pendingTasks: 0,
-                activeTasks: 0,
-                completedTasks: 0,
-                failedTasks: 0,
-                agentWorkloads: [],
-                overloadedAgents: [],
-                availableAgents: availableAgents.map(agent => ({ agentId: agent.id, role: (agent as any).role })),
-                averageCompletionTime: 0,
-                taskThroughput: 0,
-                analysisTimestamp: Date.now(),
-                confidence: 0.5
-            };
+            // Refresh from persisted tasks instead of manufacturing workload
+            // scores when the periodic analysis has not run yet.
+            const workloadAnalysis = await this.analyzeChannelWorkload(task.channelId);
 
-            // Use SystemLLM for intelligent assignment if enabled
-            if (this.config.enableLlmAssignment) {
-                try {
-                    const assignmentAnalysis = await this.getAgentAssignmentAnalysis(task, availableAgents, workloadAnalysis);
-                    
-                    if (assignmentAnalysis.confidence >= this.config.llmConfidenceThreshold) {
-                        const assignedAgentId = assignmentAnalysis.recommendedAgentId;
-                        const assignedAgent = availableAgents.find(agent => agent.id === assignedAgentId);
-
-                        if (assignedAgent) {
-                            // Claim atomically — another assignment pass may have taken
-                            // this task while the LLM was deciding.
-                            const claimed = await this.claimTaskForAgent(task.id, assignedAgent.id);
-
-                            if (!claimed) {
-                                throw new Error(
-                                    `Task ${task.id} was claimed by another agent while assignment was in progress`
-                                );
-                            }
-
-                            this.logger.info(`📋 Task assigned: "${task.title}" → Agent: ${assignedAgent.id} (intelligent)`);
-
-                            // Emit assignment event
-                            await this.emitTaskAssignmentEvent(claimed, assignedAgent.id);
-
-                            return {
-                                taskId: claimed.id,
-                                assignedAgentId: assignedAgent.id,
-                                strategy: 'intelligent' as AssignmentStrategy,
-                                confidence: assignmentAnalysis.confidence,
-                                reasoning: assignmentAnalysis.reasoning,
-                                assignedAt: Date.now()
-                            };
-                        }
-                    }
-                } catch (llmError) {
-                    this.logger.warn(`LLM assignment failed for task ${task.id}: ${llmError}`);
-                }
+            if (!this.config.enableLlmAssignment) {
+                throw new Error('Intelligent task assignment is disabled');
             }
 
-            // Fallback assignment
-            const fallbackAnalysis = this.getFallbackAssignment(task, availableAgents);
-            const fallbackAgentId = fallbackAnalysis.recommendedAgentId;
-            const fallbackAgent = availableAgents.find(agent => agent.id === fallbackAgentId);
+            const assignmentAnalysis = await this.getAgentAssignmentAnalysis(
+                task,
+                availableAgents,
+                workloadAnalysis
+            );
 
-            if (!fallbackAgent) {
-                throw new Error('No suitable agent found for assignment');
+            if (assignmentAnalysis.confidence < this.config.llmConfidenceThreshold) {
+                throw new Error(
+                    `SystemLLM assignment confidence ${assignmentAnalysis.confidence} is below ` +
+                    `the required threshold ${this.config.llmConfidenceThreshold}`
+                );
             }
 
-            // Claim atomically, same as the intelligent path
-            const claimed = await this.claimTaskForAgent(task.id, fallbackAgent.id);
+            const assignedAgent = availableAgents.find(
+                agent => agent.id === assignmentAnalysis.recommendedAgentId
+            );
+
+            if (!assignedAgent) {
+                throw new Error(
+                    `SystemLLM recommended unavailable agent ${assignmentAnalysis.recommendedAgentId}`
+                );
+            }
+
+            // Claim atomically — another assignment pass may have taken this task
+            // while the LLM was deciding.
+            const claimed = await this.claimTaskForAgent(task.id, assignedAgent.id);
 
             if (!claimed) {
                 throw new Error(
@@ -583,22 +1012,22 @@ export class TaskService {
                 );
             }
 
-            this.logger.info(`📋 Task assigned: "${task.title}" → Agent: ${fallbackAgent.id} (fallback)`);
+            this.logger.info(`📋 Task assigned: "${task.title}" → Agent: ${assignedAgent.id} (intelligent)`);
 
-            // Emit assignment event
-            await this.emitTaskAssignmentEvent(claimed, fallbackAgent.id);
+            await this.emitTaskAssignmentEvent(claimed, assignedAgent.id);
 
             return {
                 taskId: claimed.id,
-                assignedAgentId: fallbackAgent.id,
-                strategy: this.config.fallbackStrategy,
-                confidence: 0.6,
-                reasoning: 'Fallback assignment - first available agent',
+                assignedAgentId: assignedAgent.id,
+                strategy: 'intelligent' as AssignmentStrategy,
+                confidence: assignmentAnalysis.confidence,
+                reasoning: assignmentAnalysis.reasoning,
                 assignedAt: Date.now()
             };
 
-        } catch (error: any) {
-            this.logger.error(`❌ Failed to assign task ${task.id}: ${error.message}`);
+        } catch (error: unknown) {
+            const message = error instanceof Error ? error.message : String(error);
+            this.logger.error(`❌ Failed to assign task ${task.id}: ${message}`);
             throw error;
         }
     }
@@ -618,45 +1047,79 @@ export class TaskService {
 
         // Validate all agents exist and are available
         const agents = await Promise.all(
-            assignedAgentIds.map(async (agentId) => {
-                const agent = await this.getAgentService().getAgent(agentId);
-                if (agent) {
-                }
-                return agent;
-            })
+            assignedAgentIds.map(agentId => this.getAgentService().getAgent(agentId))
         );
-        
-        const validAgents = agents.filter(agent => agent !== null);
-        const validAgentIds = validAgents.map(agent => agent!.id);
-        
-        
+        const validAgentIds = agents
+            .filter((agent): agent is NonNullable<typeof agent> => agent !== null)
+            .map(agent => agent.id);
+
         if (validAgentIds.length === 0) {
             this.logger.error(`❌ DEBUG: No valid agents found for assignment - all agents returned null`);
             throw new Error('No valid agents found for assignment');
         }
 
+        const leadAgentId = task.leadAgentId || validAgentIds[0];
+        const assignedTask = await this.claimPendingTaskForAssignment(task, {
+            assignedAgentIds: validAgentIds,
+            leadAgentId,
+            assignedAgentId: leadAgentId
+        }, 'multi-agent');
 
-        // Update task with assignments
-        task.assignedAgentIds = validAgentIds;
-        task.leadAgentId = task.leadAgentId || validAgentIds[0];
-        await task.save();
-
-        this.logger.info(`📋 Task assigned: "${task.title}" → ${validAgentIds.length} agents (multi-agent)`);
+        this.logger.info(`📋 Task assigned: "${assignedTask.title}" → ${validAgentIds.length} agents (multi-agent)`);
 
         // Emit assignment events for each agent
         for (const agentId of validAgentIds) {
-            await this.emitTaskAssignmentEvent(task, agentId);
+            await this.emitTaskAssignmentEvent(assignedTask, agentId);
         }
 
-
         return {
-            taskId: task.id,
-            assignedAgentId: task.leadAgentId!, // Primary agent for compatibility
+            taskId: assignedTask.id,
+            assignedAgentId: leadAgentId, // Primary agent for compatibility
             strategy: 'multi_agent' as AssignmentStrategy,
             confidence: 1.0,
             reasoning: `Multi-agent assignment: ${validAgentIds.length} agents assigned`,
-            assignedAt: Date.now()
+            assignedAt: assignedTask.updatedAt?.getTime() || Date.now()
         };
+    }
+
+    /**
+     * Claim a task for assignment with one pending-only compare-and-set write.
+     *
+     * The caller has only a snapshot of the task. Reading it and then saving the
+     * whole document would let an assignment request that arrives after
+     * completion move the task back to `assigned`, and two concurrent requests
+     * would overwrite each other's roster. The status precondition makes the
+     * second writer fail instead.
+     */
+    private async claimPendingTaskForAssignment(
+        task: TaskDocument,
+        assignment: {
+            assignedAgentIds: string[];
+            leadAgentId: string;
+            assignedAgentId: string;
+            channelWideTask?: boolean;
+        },
+        kind: 'multi-agent' | 'channel-wide'
+    ): Promise<TaskDocument> {
+        const assignedTask = await Task.findOneAndUpdate(
+            {
+                _id: task.id,
+                channelId: task.channelId,
+                status: 'pending'
+            },
+            {
+                $set: {
+                    ...assignment,
+                    status: 'assigned',
+                    updatedAt: new Date()
+                }
+            },
+            { new: true, runValidators: true }
+        );
+        if (!assignedTask) {
+            throw new Error(`Task ${task.id} is no longer pending for ${kind} assignment`);
+        }
+        return assignedTask;
     }
 
     /**
@@ -671,13 +1134,15 @@ export class TaskService {
         let targetAgents = channelAgents;
         
         if (task.targetAgentRoles?.length) {
-            targetAgents = targetAgents.filter((agent: any) => 
-                task.targetAgentRoles!.some(role => agent.role?.includes(role))
+            targetAgents = targetAgents.filter(agent =>
+                task.targetAgentRoles!.some(
+                    role => this.getAssignmentCandidateRole(agent)?.includes(role)
+                )
             );
         }
         
         if (task.excludeAgentIds?.length) {
-            targetAgents = targetAgents.filter((agent: any) => 
+            targetAgents = targetAgents.filter(agent =>
                 !task.excludeAgentIds!.includes(agent.id)
             );
         }
@@ -687,49 +1152,55 @@ export class TaskService {
             targetAgents = await this.selectBestParticipants(task, targetAgents, task.maxParticipants);
         }
         
-        const assignedAgentIds = targetAgents.map((agent: any) => agent.id);
+        const assignedAgentIds = targetAgents.map(agent => agent.id);
         
         if (assignedAgentIds.length === 0) {
             throw new Error('No eligible agents found for channel-wide assignment');
         }
 
-        // Update task with assignments
-        task.assignedAgentIds = assignedAgentIds;
-        task.leadAgentId = task.leadAgentId || assignedAgentIds[0];
-        task.channelWideTask = true;
-        await task.save();
+        const leadAgentId = task.leadAgentId || assignedAgentIds[0];
+        const assignedTask = await this.claimPendingTaskForAssignment(task, {
+            assignedAgentIds,
+            leadAgentId,
+            assignedAgentId: leadAgentId,
+            channelWideTask: true
+        }, 'channel-wide');
 
-        this.logger.info(`📋 Task assigned: "${task.title}" → ${assignedAgentIds.length} agents (channel-wide)`);
+        this.logger.info(`📋 Task assigned: "${assignedTask.title}" → ${assignedAgentIds.length} agents (channel-wide)`);
 
         // Emit assignment events for each agent
         for (const agentId of assignedAgentIds) {
-            await this.emitTaskAssignmentEvent(task, agentId);
+            await this.emitTaskAssignmentEvent(assignedTask, agentId);
         }
 
         return {
-            taskId: task.id,
-            assignedAgentId: task.leadAgentId!, // Primary agent for compatibility
+            taskId: assignedTask.id,
+            assignedAgentId: leadAgentId, // Primary agent for compatibility
             strategy: 'channel_wide' as AssignmentStrategy,
             confidence: 1.0,
             reasoning: `Channel-wide assignment: ${assignedAgentIds.length} agents in ${task.channelId}`,
-            assignedAt: Date.now()
+            assignedAt: assignedTask.updatedAt?.getTime() || Date.now()
         };
     }
 
     /**
      * Select best participants using per-channel SystemLLM instance
      */
-    private async selectBestParticipants(
+    private async selectBestParticipants<TCandidate extends AssignmentCandidate>(
         task: TaskDocument, 
-        agents: any[], 
+        agents: TCandidate[],
         maxCount: number
-    ): Promise<any[]> {
-        // Get per-channel SystemLlmService instance
+    ): Promise<TCandidate[]> {
+        if (!Number.isInteger(maxCount) || maxCount < 1) {
+            throw new Error('maxParticipants must be a positive integer');
+        }
+
         const systemLlm = SystemLlmServiceManager.getInstance().getServiceForChannel(task.channelId);
         if (!systemLlm) {
-            this.logger.warn(`No SystemLLM available for channel ${task.channelId}, using fallback participant selection`);
-            return agents.slice(0, maxCount);
+            throw new Error(`SystemLLM is unavailable for channel ${task.channelId}`);
         }
+
+        const selectionCount = Math.min(maxCount, agents.length);
         
         const selectionPrompt = `
 Select the ${maxCount} best agents for this task:
@@ -741,21 +1212,53 @@ TASK:
 - Required Capabilities: ${task.requiredCapabilities?.join(', ') || 'Any'}
 
 AVAILABLE AGENTS:
-${agents.map((agent: any, index: number) => 
-    `${index + 1}. ${agent.id} - Role: ${agent.role} - Capabilities: ${agent.capabilities?.join(', ')}`
+${agents.map((agent, index) =>
+    `${index + 1}. ${agent.id} - Role: ${this.getAssignmentCandidateRole(agent) ?? 'general'} - Capabilities: ${agent.capabilities?.join(', ')}`
 ).join('\n')}
 
-Return the indices (1-based) of the best agents, separated by commas.
+Return only a JSON array containing exactly ${selectionCount} agent IDs in preference order.
 `;
-        
-        try {
-            const response = await systemLlm.sendLlmRequest(selectionPrompt, null);
-            const indices = response.split(',').map((i: string) => parseInt(i.trim()) - 1);
-            return indices.filter((i: number) => i >= 0 && i < agents.length).map((i: number) => agents[i]);
-        } catch (error) {
-            // Fallback: return first N agents
-            return agents.slice(0, maxCount);
+
+        const response = await systemLlm.sendLlmRequest(
+            selectionPrompt,
+            undefined,
+            { operationType: 'coordination' }
+        );
+        if (typeof response !== 'string' || response.length === 0 || response.length > 10_000) {
+            throw new Error('SystemLLM participant selection returned an invalid response');
         }
+
+        let parsed: unknown;
+        try {
+            parsed = JSON.parse(response);
+        } catch (error) {
+            throw new Error(`SystemLLM participant selection returned invalid JSON: ${String(error)}`);
+        }
+
+        if (!Array.isArray(parsed) || parsed.length !== selectionCount) {
+            throw new Error(
+                `SystemLLM participant selection must contain exactly ${selectionCount} agent IDs`
+            );
+        }
+
+        const selectedIds = parsed.map((value): AgentId => {
+            if (typeof value !== 'string' || value.trim().length === 0) {
+                throw new Error('SystemLLM participant selection contains an invalid agent ID');
+            }
+            return value;
+        });
+        if (new Set(selectedIds).size !== selectedIds.length) {
+            throw new Error('SystemLLM participant selection contains duplicate agent IDs');
+        }
+
+        const candidatesById = new Map(agents.map(agent => [agent.id, agent]));
+        return selectedIds.map(agentId => {
+            const candidate = candidatesById.get(agentId);
+            if (!candidate) {
+                throw new Error(`SystemLLM participant selection named unavailable agent ${agentId}`);
+            }
+            return candidate;
+        });
     }
 
     /**
@@ -794,7 +1297,7 @@ Return the indices (1-based) of the best agents, separated by commas.
         const agentService = AgentService.getInstance();
         const agentData = agentService.getAgent(agentId);
         const allowedTools = agentData?.allowedTools;
-        const hasTaskComplete = !allowedTools || allowedTools.includes('task_complete');
+        const hasTaskComplete = allowedTools === undefined || allowedTools.includes('task_complete');
         
         // Determine agent role based on assignment order and task configuration
         const agentIndex = task.assignedAgentIds?.indexOf(agentId) || 0;
@@ -988,52 +1491,38 @@ Your responsibilities:
      */
     private async getAgentAssignmentAnalysis(
         task: TaskDocument, 
-        agents: any[], 
+        agents: AssignmentCandidate[],
         workloadAnalysis: ChannelWorkloadAnalysis
     ): Promise<AgentAssignmentAnalysis> {
-        // Guard: Check if SystemLLM is enabled for this channel
-        const isEnabled = ConfigManager.getInstance().isChannelSystemLlmEnabled(task.channelId, 'coordination');
-        this.logger.debug(`[ASSIGNMENT] Channel ${task.channelId} - SystemLLM enabled: ${isEnabled}`);
-        if (!isEnabled) {
-            this.logger.debug(`SystemLLM disabled for channel ${task.channelId}, using fallback assignment`);
-            return this.getFallbackAssignment(task, agents);
-        }
-
-        // Get per-channel SystemLlmService instance
         const systemLlm = SystemLlmServiceManager.getInstance().getServiceForChannel(task.channelId);
         if (!systemLlm) {
-            this.logger.warn(`No SystemLLM available for channel ${task.channelId}, using fallback assignment`);
-            return this.getFallbackAssignment(task, agents);
+            throw new Error(`SystemLLM is unavailable for channel ${task.channelId}`);
         }
         
         const prompt = this.buildAssignmentPrompt(task, agents, workloadAnalysis);
-        
-        try {
-            // Use the public method for LLM communication - only takes channelId
-            const response = await systemLlm.analyzeChannelForCoordination(
-                task.channelId
-            );
 
-            // Extract useful information from coordination analysis for assignment
-            const analysis = this.parseCoordinationResponseForAssignment(response, agents, task);
-            return analysis;
-            
-        } catch (error) {
-            this.logger.warn(`LLM assignment failed, using fallback: ${error}`);
-            return this.getFallbackAssignment(task, agents);
-        }
+        const response = await systemLlm.sendLlmRequest(
+            prompt,
+            undefined,
+            { operationType: 'coordination' }
+        );
+        return this.parseAssignmentResponse(response, agents);
     }
 
     /**
      * Build prompt for SystemLLM assignment analysis
      */
-    private buildAssignmentPrompt(task: TaskDocument, agents: any[], workload: ChannelWorkloadAnalysis): string {
+    private buildAssignmentPrompt(
+        task: TaskDocument,
+        agents: AssignmentCandidate[],
+        workload: ChannelWorkloadAnalysis
+    ): string {
         const agentList = agents.map(agent => ({
-            id: agent.agentId,
-            role: agent.role || 'general',
+            id: agent.id,
+            role: this.getAssignmentCandidateRole(agent) || 'general',
             capabilities: agent.capabilities || [],
-            specialization: agent.specialization || 'general',
-            currentTasks: workload.agentWorkloads.find(w => w.agentId === agent.agentId)?.activeTasks || 0
+            specialization: this.getAssignmentCandidateSpecialization(agent) || 'general',
+            currentTasks: workload.agentWorkloads.find(w => w.agentId === agent.id)?.activeTasks || 0
         }));
 
         return `
@@ -1056,87 +1545,81 @@ Respond with JSON:
   "reasoning": "explanation",
   "roleMatch": 0.0-1.0,
   "capabilityMatch": 0.0-1.0,
-  "workloadScore": 0.0-1.0
+  "workloadScore": 0.0-1.0,
+  "expertiseScore": 0.0-1.0,
+  "availabilityScore": 0.0-1.0
 }`;
     }
 
-    /**
-     * Parse coordination response for assignment recommendations
-     */
-    private parseCoordinationResponseForAssignment(response: any, agents: any[], task: TaskDocument): AgentAssignmentAnalysis {
-        try {
-            // Use the coordination analysis to make assignment decisions
-            const bestAgent = agents[0] || { id: 'default' }; // Simple fallback
-            
-            return {
-                recommendedAgentId: bestAgent.id,
-                confidence: 0.7, // Moderate confidence from coordination analysis
-                reasoning: 'Assignment based on channel coordination analysis',
-                roleMatch: 0.6,
-                capabilityMatch: 0.6,
-                workloadScore: 0.7,
-                expertiseScore: 0.6,
-                availabilityScore: 0.8
-            };
-        } catch (error) {
-            return this.getFallbackAssignment(task, agents);
+    private getAssignmentCandidateRole(agent: AssignmentCandidate): string | undefined {
+        if (typeof agent.role === 'string') {
+            return agent.role;
         }
+        const metadataRole = agent.metadata?.role;
+        return typeof metadataRole === 'string' ? metadataRole : undefined;
+    }
+
+    private getAssignmentCandidateSpecialization(agent: AssignmentCandidate): string | undefined {
+        if (typeof agent.specialization === 'string') {
+            return agent.specialization;
+        }
+        const metadataSpecialization = agent.metadata?.specialization;
+        return typeof metadataSpecialization === 'string' ? metadataSpecialization : undefined;
     }
 
     /**
      * Parse LLM response for assignment
      */
-    private parseAssignmentResponse(response: string, agents: any[]): AgentAssignmentAnalysis {
+    private parseAssignmentResponse(
+        response: string,
+        agents: AssignmentCandidate[]
+    ): AgentAssignmentAnalysis {
+        if (typeof response !== 'string' || response.length === 0 || response.length > 10_000) {
+            throw new Error('SystemLLM assignment returned an invalid response');
+        }
+
+        let parsed: unknown;
         try {
-            const parsed = JSON.parse(response);
-            return {
-                recommendedAgentId: parsed.recommendedAgentId,
-                confidence: parsed.confidence || 0.5,
-                reasoning: parsed.reasoning || 'LLM assignment',
-                roleMatch: parsed.roleMatch || 0.5,
-                capabilityMatch: parsed.capabilityMatch || 0.5,
-                workloadScore: parsed.workloadScore || 0.5,
-                expertiseScore: 0.5,
-                availabilityScore: 0.5
-            };
+            parsed = JSON.parse(response);
         } catch (error) {
-            return this.getFallbackAssignment({ requiredRoles: [] } as any, agents);
+            throw new Error(`SystemLLM assignment returned invalid JSON: ${String(error)}`);
         }
-    }
 
-    /**
-     * Fallback assignment when LLM fails
-     */
-    private getFallbackAssignment(task: any, agents: any[]): AgentAssignmentAnalysis {
-        // If task has manual assignedAgentIds, respect them first
-        if (task.assignedAgentIds && task.assignedAgentIds.length > 0) {
-            const assignedAgentId = task.assignedAgentIds[0];
-            const assignedAgent = agents.find(a => a.id === assignedAgentId || a.agentId === assignedAgentId);
-            if (assignedAgent) {
-                return {
-                    recommendedAgentId: assignedAgent.id || assignedAgent.agentId,
-                    confidence: 1.0,
-                    reasoning: 'Manual assignment - task explicitly assigned to this agent',
-                    roleMatch: 1.0,
-                    capabilityMatch: 1.0,
-                    workloadScore: 1.0,
-                    expertiseScore: 1.0,
-                    availabilityScore: 1.0
-                };
+        if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+            throw new Error('SystemLLM assignment response must be a JSON object');
+        }
+
+        const record = parsed as Record<string, unknown>;
+        const recommendedAgentId = record.recommendedAgentId;
+        if (
+            typeof recommendedAgentId !== 'string' ||
+            !agents.some(agent => agent.id === recommendedAgentId)
+        ) {
+            throw new Error('SystemLLM assignment recommended an unavailable agent');
+        }
+
+        const reasoning = record.reasoning;
+        if (typeof reasoning !== 'string' || reasoning.trim().length === 0 || reasoning.length > 4_000) {
+            throw new Error('SystemLLM assignment reasoning must be a non-empty string');
+        }
+
+        const readScore = (field: string): number => {
+            const value = record[field];
+            if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 1) {
+                throw new Error(`SystemLLM assignment ${field} must be a number between 0 and 1`);
             }
-        }
+            return value;
+        };
 
-        // Simple fallback to first agent if no manual assignment
-        const bestAgent = agents[0];
         return {
-            recommendedAgentId: bestAgent.id || bestAgent.agentId,
-            confidence: 0.5,
-            reasoning: 'Fallback assignment - no manual assignment specified',
-            roleMatch: 0.5,
-            capabilityMatch: 0.5,
-            workloadScore: 0.5,
-            expertiseScore: 0.5,
-            availabilityScore: 0.5
+            recommendedAgentId,
+            confidence: readScore('confidence'),
+            reasoning,
+            roleMatch: readScore('roleMatch'),
+            capabilityMatch: readScore('capabilityMatch'),
+            workloadScore: readScore('workloadScore'),
+            expertiseScore: readScore('expertiseScore'),
+            availabilityScore: readScore('availabilityScore')
         };
     }
 
@@ -1154,6 +1637,7 @@ Respond with JSON:
             
             // Assignment fields (new and legacy)
             assignedAgentId: task.assignedAgentId,
+            completionAgentId: task.completionAgentId,
             assignmentScope: task.assignmentScope || 'single', // Use actual scope or default
             assignedAgentIds: task.assignedAgentIds,
             leadAgentId: task.leadAgentId,
@@ -1170,6 +1654,13 @@ Respond with JSON:
             createdAt: task.createdAt?.getTime() || Date.now(),
             updatedAt: task.updatedAt?.getTime() || Date.now(),
             progress: task.progress || 0,
+            result: task.result ? {
+                success: task.result.success,
+                output: task.result.output,
+                error: task.result.error,
+                completedAt: task.result.completedAt?.getTime(),
+                completedBy: task.result.completedBy
+            } : undefined,
             metadata: task.metadata, // Preserve metadata
             tags: task.tags, // Preserve tags
             dependsOn: task.dependsOn || [], // Preserve dependency edges for DAG
@@ -1181,15 +1672,85 @@ Respond with JSON:
      * Get tasks by various filters
      */
     public async getTasks(filters: TaskQueryFilters = {}): Promise<ChannelTask[]> {
-        const query: any = {};
-        
+        const query = this.buildTaskQuery(filters);
+        const tasks = await Task.find(query).sort({ priority: -1, createdAt: -1 });
+        return tasks.map(task => this.taskDocumentToChannelTask(task));
+    }
+
+    /**
+     * Query tasks within an already-authorized channel set.
+     *
+     * The channel predicate is applied in MongoDB. Callers must never fetch an
+     * unrestricted collection and filter it afterward because that makes a
+     * future projection, pagination, or aggregation change an authorization
+     * bypass.
+     */
+    public async getTasksInChannels(
+        filters: TaskQueryFilters,
+        authorizedChannelIds: readonly ChannelId[]
+    ): Promise<ChannelTask[]> {
+        const channelIds = Array.from(new Set(
+            authorizedChannelIds.filter(channelId => typeof channelId === 'string' && channelId.trim().length > 0)
+        ));
+
+        if (channelIds.length === 0) {
+            return [];
+        }
+
+        const query = this.buildTaskQuery(filters);
+        if (filters.channelId) {
+            if (!channelIds.includes(filters.channelId)) {
+                return [];
+            }
+            query.channelId = filters.channelId;
+        } else {
+            query.channelId = { $in: channelIds };
+        }
+
+        const tasks = await Task.find(query).sort({ priority: -1, createdAt: -1 });
+        return tasks.map(task => this.taskDocumentToChannelTask(task));
+    }
+
+    /** Resolve only the task's authorization boundary, without exposing content. */
+    public async getTaskChannelId(taskId: string): Promise<ChannelId | null> {
+        this.validator.assertIsNonEmptyString(taskId, 'taskId is required');
+
+        const task = await Task.findById(taskId).select('channelId').lean();
+        return task && typeof task.channelId === 'string' ? task.channelId : null;
+    }
+
+    /** Read one task with the channel predicate present in the database query. */
+    public async getTaskInChannel(taskId: string, channelId: ChannelId): Promise<ChannelTask | null> {
+        this.validator.assertIsNonEmptyString(taskId, 'taskId is required');
+        this.validator.assertIsNonEmptyString(channelId, 'channelId is required');
+
+        const task = await Task.findOne({ _id: taskId, channelId });
+        return task ? this.taskDocumentToChannelTask(task) : null;
+    }
+
+    private buildTaskQuery(filters: TaskQueryFilters): FilterQuery<TaskDocument> {
+        const query: FilterQuery<TaskDocument> = {};
+
         if (filters.channelId) query.channelId = filters.channelId;
         if (filters.status) query.status = Array.isArray(filters.status) ? { $in: filters.status } : filters.status;
         if (filters.assignedAgentId) query.assignedAgentId = filters.assignedAgentId;
         if (filters.priority) query.priority = Array.isArray(filters.priority) ? { $in: filters.priority } : filters.priority;
-        
-        const tasks = await Task.find(query).sort({ priority: -1, createdAt: -1 });
-        return tasks.map((task: any) => this.taskDocumentToChannelTask(task));
+        if (filters.createdBy) query.createdBy = filters.createdBy;
+        if (filters.tags?.length) query.tags = { $all: filters.tags };
+
+        if (filters.dueBefore !== undefined || filters.dueAfter !== undefined) {
+            query.dueDate = {};
+            if (filters.dueBefore !== undefined) query.dueDate.$lte = new Date(filters.dueBefore);
+            if (filters.dueAfter !== undefined) query.dueDate.$gte = new Date(filters.dueAfter);
+        }
+
+        if (filters.createdBefore !== undefined || filters.createdAfter !== undefined) {
+            query.createdAt = {};
+            if (filters.createdBefore !== undefined) query.createdAt.$lte = new Date(filters.createdBefore);
+            if (filters.createdAfter !== undefined) query.createdAt.$gte = new Date(filters.createdAfter);
+        }
+
+        return query;
     }
 
     /**
@@ -1199,11 +1760,61 @@ Respond with JSON:
      * When completing, updates the DAG and emits events for newly unblocked tasks.
      */
     public async updateTask(taskId: string, update: UpdateTaskRequest): Promise<ChannelTask> {
+        this.validator.assertIsNonEmptyString(taskId, 'taskId is required');
+        const safeUpdate = parseUpdateTaskRequest(update);
+
         // Get the current task state to check transitions
         const existingTask = await Task.findById(taskId);
         if (!existingTask) {
             throw new Error(`Task ${taskId} not found`);
         }
+
+        return this.applyTaskUpdate(
+            taskId,
+            existingTask,
+            { _id: taskId },
+            safeUpdate,
+            `Task ${taskId} not found`
+        );
+    }
+
+    /**
+     * Apply an already-validated update while keeping its authorization scope in
+     * the mutation query. The pre-read is needed for DAG transition checks; the
+     * filter on findOneAndUpdate is what makes that read safe against a race.
+     */
+    private async applyTaskUpdate(
+        taskId: string,
+        existingTask: TaskDocument,
+        mutationFilter: FilterQuery<TaskDocument>,
+        update: UpdateTaskRequest,
+        notFoundMessage: string
+    ): Promise<ChannelTask> {
+        const completionConfig = update.metadata?.enableMonitoring
+            ? update.metadata.completionConfig as TaskCompletionConfig | undefined
+            : undefined;
+        if (update.metadata?.enableMonitoring && !completionConfig) {
+            throw new Error('completionConfig is required when task monitoring is enabled');
+        }
+        if (completionConfig) {
+            TaskCompletionMonitoringService.getInstance().assertValidConfig(completionConfig);
+        }
+
+        const persistUpdate = async (): Promise<ChannelTask> => {
+            const task = await Task.findOneAndUpdate(
+                mutationFilter,
+                { $set: update },
+                { new: true, runValidators: true }
+            );
+            if (!task) {
+                throw new Error(notFoundMessage);
+            }
+            const channelTask = this.taskDocumentToChannelTask(task);
+            if (completionConfig) {
+                this.startCompletionMonitoring(channelTask, completionConfig);
+            }
+            return channelTask;
+        };
 
         // DAG enforcement: Check if task can transition to in_progress
         if (update.status === 'in_progress' && isDagEnforcementEnabled()) {
@@ -1232,55 +1843,44 @@ Respond with JSON:
         if (update.status === 'completed' && isDagEnabled()) {
             const dagService = TaskDagService.getInstance();
             return dagService.withChannelLock(existingTask.channelId, async () => {
-                const task = await Task.findByIdAndUpdate(taskId, update, { new: true });
-                if (!task) {
-                    throw new Error(`Task ${taskId} not found`);
+                const channelTask = await persistUpdate();
+                try {
+                    await this.handleDagTaskCompletion(existingTask.channelId, taskId);
+                } catch (error) {
+                    this.logger.error(
+                        `Task ${taskId} completed persistently, but DAG update failed: ${String(error)}`
+                    );
                 }
-                const channelTask = this.taskDocumentToChannelTask(task);
-                await this.handleDagTaskCompletion(existingTask.channelId, taskId);
                 return channelTask;
             });
         }
 
         // Non-DAG or non-completion path: no lock needed
-        const task = await Task.findByIdAndUpdate(taskId, update, { new: true });
-        if (!task) {
-            throw new Error(`Task ${taskId} not found`);
-        }
-
-        return this.taskDocumentToChannelTask(task);
+        return persistUpdate();
     }
 
     /**
      * Update a task on behalf of an agent, scoped to the channel it connected on.
      *
-     * `updateTask` takes a bare taskId and writes straight through to
-     * Task.findByIdAndUpdate — fine for server-internal callers that already know
-     * which task they mean, wrong for anything driven by a client. Every socket
-     * task handler goes through here instead, so a taskId from the wire can only
-     * ever address a task in the caller's own channel: an agent in channel A can
-     * no longer complete, reassign, or cancel a task in channel B by guessing its
-     * id.
-     *
-     * `requireAssignedAgentId` additionally restricts the update to the agent the
-     * task is assigned to, which is what completion and failure need — finishing
-     * someone else's work is not a thing an agent gets to do.
+     * Every socket task handler goes through here, so the final mutation includes
+     * both task and authenticated channel. An agent in channel A cannot complete,
+     * reassign, or cancel a task in channel B by guessing its id, even if the task
+     * changes between the transition pre-read and the write.
      *
      * @param taskId - Task being updated
      * @param channelId - Channel the caller authenticated on
-     * @param update - Fields to change
-     * @param options.requireAssignedAgentId - Agent that must hold the assignment
+     * @param update - Non-lifecycle fields to change
      * @returns The updated task
-     * @throws If the task is not in the caller's channel, or not assigned to them
+     * @throws If the task is not in the caller's channel or status is supplied
      */
     public async updateTaskInChannel(
         taskId: string,
         channelId: ChannelId,
-        update: UpdateTaskRequest,
-        options: { requireAssignedAgentId?: AgentId } = {}
+        update: NonLifecycleTaskUpdateRequest
     ): Promise<ChannelTask> {
         this.validator.assertIsNonEmptyString(taskId, 'taskId is required');
         this.validator.assertIsNonEmptyString(channelId, 'channelId is required');
+        const safeUpdate = parseNonLifecycleTaskUpdateRequest(update);
 
         const task = await Task.findOne({ _id: taskId, channelId });
 
@@ -1290,19 +1890,18 @@ Respond with JSON:
             throw new Error(`Task ${taskId} not found in channel ${channelId}`);
         }
 
-        const requiredAgentId = options.requireAssignedAgentId;
-        if (requiredAgentId) {
-            const isAssignee = task.assignedAgentId === requiredAgentId
-                || (Array.isArray(task.assignedAgentIds) && task.assignedAgentIds.includes(requiredAgentId));
+        const mutationFilter: FilterQuery<TaskDocument> = {
+            _id: taskId,
+            channelId
+        };
 
-            if (!isAssignee) {
-                throw new Error(
-                    `Agent ${requiredAgentId} is not assigned to task ${taskId} and cannot change its state`
-                );
-            }
-        }
-
-        return this.updateTask(taskId, update);
+        return this.applyTaskUpdate(
+            taskId,
+            task,
+            mutationFilter,
+            safeUpdate,
+            `Task ${taskId} not found in channel ${channelId}`
+        );
     }
 
     /**
@@ -1351,59 +1950,73 @@ Respond with JSON:
     /**
      * Analyze workload for a specific channel
      */
-    private async analyzeChannelWorkload(channelId: ChannelId): Promise<void> {
-        try {
-            // ;
-            
-            // Get active tasks in the channel
-            const activeTasks = await this.getActiveTasksInChannel(channelId);
-            
-            // Get agents in the channel
-            const agentsInChannel = await this.getAgentService().getActiveAgentsInChannel(channelId);
-            
-            // Create workload analysis
-            const workload: ChannelWorkloadAnalysis = {
-                channelId,
-                totalTasks: activeTasks.length,
-                pendingTasks: activeTasks.filter(t => t.status === 'pending').length,
-                activeTasks: activeTasks.filter(t => t.status === 'in_progress').length,
-                completedTasks: 0, // Would need historical data
-                failedTasks: 0, // Would need historical data
-                agentWorkloads: agentsInChannel.map(agent => ({
+    private async analyzeChannelWorkload(channelId: ChannelId): Promise<ChannelWorkloadAnalysis> {
+        const tasks = await this.getTasks({ channelId });
+        const agentsInChannel = await this.getAgentService().getActiveAgentsInChannel(channelId);
+        const now = Date.now();
+        const completedTasks = tasks.filter(task => task.status === 'completed');
+        const completionDurations = completedTasks
+            .map(task => (task.result?.completedAt ?? task.updatedAt) - task.createdAt)
+            .filter(duration => Number.isFinite(duration) && duration >= 0);
+        const average = (values: number[]): number => values.length === 0
+            ? 0
+            : values.reduce((sum, value) => sum + value, 0) / values.length;
+        const isAssignedTo = (task: ChannelTask, agentId: AgentId): boolean =>
+            task.assignedAgentId === agentId || task.assignedAgentIds?.includes(agentId) === true;
+
+        const workload: ChannelWorkloadAnalysis = {
+            channelId,
+            totalTasks: tasks.length,
+            pendingTasks: tasks.filter(task => task.status === 'pending').length,
+            activeTasks: tasks.filter(task => task.status === 'in_progress').length,
+            completedTasks: completedTasks.length,
+            failedTasks: tasks.filter(task => task.status === 'failed').length,
+            agentWorkloads: agentsInChannel.map(agent => {
+                const agentTasks = tasks.filter(task => isAssignedTo(task, agent.id));
+                const activeTasks = agentTasks.filter(
+                    task => task.status === 'assigned' || task.status === 'in_progress'
+                ).length;
+                const pendingTasks = agentTasks.filter(task => task.status === 'pending').length;
+                const terminalTasks = agentTasks.filter(
+                    task => task.status === 'completed' || task.status === 'failed'
+                );
+                const agentCompletionDurations = terminalTasks
+                    .filter(task => task.status === 'completed')
+                    .map(task => (task.result?.completedAt ?? task.updatedAt) - task.createdAt)
+                    .filter(duration => Number.isFinite(duration) && duration >= 0);
+
+                return {
                     agentId: agent.id,
-                    activeTasks: activeTasks.filter(t => t.assignedAgentId === agent.id).length,
-                    pendingTasks: activeTasks.filter(t => t.assignedAgentId === agent.id && t.status === 'pending').length,
-                    completionRate: 0.8, // Would need historical data
-                    averageTaskDuration: 3600000, // 1 hour in ms, would need historical data
-                    isOverloaded: false
-                })),
-                averageCompletionTime: 3600000, // 1 hour in ms, would need historical data
-                taskThroughput: 0, // Would need historical data
-                analysisTimestamp: Date.now(),
-                confidence: 0.9
-            };
+                    activeTasks,
+                    pendingTasks,
+                    completionRate: terminalTasks.length === 0
+                        ? 0
+                        : terminalTasks.filter(task => task.status === 'completed').length /
+                            terminalTasks.length,
+                    averageTaskDuration: average(agentCompletionDurations),
+                    isOverloaded: activeTasks >= this.config.maxTasksPerAgent
+                };
+            }),
+            averageCompletionTime: average(completionDurations),
+            taskThroughput: completedTasks.filter(
+                task => (task.result?.completedAt ?? task.updatedAt) >= now - 3_600_000
+            ).length,
+            analysisTimestamp: now,
+            confidence: 1
+        };
 
-            // Store workload analysis
-            this.channelWorkloads.set(channelId, workload);
-
-        } catch (error) {
-            this.logger.error(`❌ Failed to analyze channel workload: ${error}`);
-        }
+        this.channelWorkloads.set(channelId, workload);
+        return workload;
     }
 
     /**
      * Get active tasks in a channel
      */
     private async getActiveTasksInChannel(channelId: ChannelId): Promise<ChannelTask[]> {
-        try {
-            return await this.getTasks({
-                channelId,
-                status: ['pending', 'in_progress'] as any
-            });
-        } catch (error) {
-            this.logger.error(`❌ Failed to get active tasks for channel ${channelId}: ${error}`);
-            return [];
-        }
+        return this.getTasks({
+            channelId,
+            status: ['pending', 'assigned', 'in_progress']
+        });
     }
 
     /**
@@ -1415,7 +2028,7 @@ Respond with JSON:
         try {
             // Add task to DAG if enabled
             if (isDagEnabled()) {
-                this.addTaskToDag(task);
+                await this.addTaskToDag(task);
             }
 
             // Add channel to active channels
@@ -1435,6 +2048,14 @@ Respond with JSON:
             // created for dependency tracking, not for delegation)
             if (task.assignmentStrategy === 'none') {
                 this.logger.debug(`[ASSIGNMENT] Skipping assignment for task "${task.title}" (strategy: none)`);
+                return;
+            }
+
+            // createTask persists explicit assignments as `assigned` and emits
+            // their ASSIGNED outcome itself. Re-running assignment from CREATED
+            // would announce the same assignment twice.
+            if (task.status === 'assigned' || task.assignedAgentId ||
+                (task.assignedAgentIds?.length ?? 0) > 0) {
                 return;
             }
 
@@ -1491,21 +2112,6 @@ Respond with JSON:
     }
 
     /**
-     * Handle agent activity patterns from EphemeralEventPatternService
-     */
-    private async handleAgentActivityPattern(eventData: any): Promise<void> {
-        try {
-            // ;
-            
-            // Future implementation for responding to activity patterns
-            // Could trigger task reassignment or workload balancing
-
-        } catch (error) {
-            this.logger.error(`❌ Failed to handle agent activity pattern: ${error}`);
-        }
-    }
-
-    /**
      * Add a task to the DAG
      *
      * If a DAG doesn't exist for the channel, builds one from all channel tasks.
@@ -1513,7 +2119,7 @@ Respond with JSON:
      *
      * @param task - The task to add
      */
-    private addTaskToDag(task: ChannelTask): void {
+    private async addTaskToDag(task: ChannelTask): Promise<void> {
         try {
             const dagService = TaskDagService.getInstance();
             if (!dagService.isEnabled()) {
@@ -1526,10 +2132,9 @@ Respond with JSON:
                 // Add task to existing DAG
                 dagService.addTask(task.channelId, task);
             } else {
-                // Build new DAG with all tasks in channel (async, fire and forget)
-                this.buildChannelDag(task.channelId).catch((err) => {
-                    this.logger.error(`Failed to build DAG for channel ${task.channelId}: ${err}`);
-                });
+                // The task event remains accepted work until the initial DAG snapshot
+                // has finished reading and building the channel state.
+                await this.buildChannelDag(task.channelId);
             }
         } catch (error) {
             this.logger.error(`Failed to add task ${task.id} to DAG: ${error}`);
@@ -1657,89 +2262,81 @@ Respond with JSON:
         completionData: {
             summary: string;
             success?: boolean;
-            details?: Record<string, any>;
+            details?: Record<string, unknown>;
             nextSteps?: string;
             requestId: string;
         }
     ): Promise<{ status: string; message: string; taskId?: string; nextSteps?: string }> {
         try {
             
-            // Validate inputs (be forgiving on summary - use default if not provided)
             const validator = createStrictValidator('TaskService.handleTaskCompletion');
             validator.assertIsNonEmptyString(agentId, 'agentId is required');
             validator.assertIsNonEmptyString(channelId, 'channelId is required');
+            validator.assertIsNonEmptyString(completionData.summary, 'completion summary is required');
+            validator.assertIsNonEmptyString(completionData.requestId, 'requestId is required');
             
-            // Use default summary if not provided (forgiving of LLM variations)
-            if (!completionData.summary || completionData.summary.trim() === '') {
-                completionData.summary = 'Task completed';
-            }
-            
-            // Find the active task for this agent
+            // Find the active task whose terminal authority belongs to this
+            // agent. A designated completion agent overrides the otherwise
+            // assignee-based completion policy.
             const activeTasks = await this.getTasks({ channelId });
-            const agentTask = activeTasks.find(task => 
-                (task.assignedAgentIds?.includes(agentId) || task.assignedAgentId === agentId) && 
-                task.status !== 'completed' &&
-                task.status !== 'failed' && 
-                task.status !== 'cancelled'
-            );
-            
-            if (!agentTask) {
-                this.logger.warn(`⚠️ No active task found for agent ${agentId} in channel ${channelId}`);
-                return {
-                    status: 'no_active_task',
-                    message: 'No active task found to complete'
-                };
-            }
-            
-            
-            // Check if task is already completed (race condition protection)
-            if (agentTask.status === 'completed') {
-                return {
-                    status: 'already_completed',
-                    message: 'Task was already completed by another agent',
-                    taskId: agentTask.id
-                };
-            }
-            
-            // Update task to completed status
-            const updatedTask = await this.updateTask(agentTask.id, {
-                status: 'completed',
-                progress: 100,
-                metadata: {
-                    ...agentTask.metadata,
-                    completedAt: new Date().toISOString(),
-                    completedBy: agentId,
-                    result: {
-                        agentId,
-                        summary: completionData.summary,
-                        success: completionData.success !== false,
-                        details: completionData.details || {},
-                        nextSteps: completionData.nextSteps,
-                        completedAt: new Date().toISOString(),
-                        requestId: completionData.requestId
-                    }
-                }
+            const agentTask = activeTasks.find(task => {
+                const canReportTerminalOutcome = task.completionAgentId
+                    ? task.completionAgentId === agentId
+                    : task.assignedAgentIds?.includes(agentId) || task.assignedAgentId === agentId;
+                return canReportTerminalOutcome &&
+                    task.status !== 'completed' &&
+                    task.status !== 'failed' &&
+                    task.status !== 'cancelled';
             });
             
+            if (!agentTask) {
+                throw new Error(
+                    `No active task is assigned to agent ${agentId} in channel ${channelId}`
+                );
+            }
+
+            const completionOutput = {
+                agentId,
+                summary: completionData.summary,
+                ...(completionData.details !== undefined
+                    ? { details: completionData.details }
+                    : {}),
+                ...(completionData.nextSteps !== undefined
+                    ? { nextSteps: completionData.nextSteps }
+                    : {}),
+                reportedSuccess: completionData.success !== false,
+                requestId: completionData.requestId
+            };
+            const reportedSuccess = completionData.success !== false;
+            const updatedTask = await this.transitionTaskInChannel(
+                agentTask.id,
+                channelId,
+                agentId,
+                reportedSuccess
+                    ? { kind: 'complete', output: completionOutput }
+                    : { kind: 'fail', error: completionData.summary, output: completionOutput }
+            );
             
-            // Emit single task completion event
+            
+            // Emit one authoritative terminal event matching the durable state.
             const taskEventData = {
                 taskId: updatedTask.id,
+                requestId: completionData.requestId,
                 fromAgentId: agentId,
                 toAgentId: agentId,
-                task: {
-                    ...updatedTask,
-                    result: updatedTask.metadata?.result || completionData
-                }
+                task: updatedTask
             };
             
-            const eventPayload = createTaskEventPayload(TaskEvents.COMPLETED, agentId, channelId, taskEventData);
-            EventBus.server.emit(TaskEvents.COMPLETED, eventPayload);
+            const terminalEvent = reportedSuccess ? TaskEvents.COMPLETED : TaskEvents.FAILED;
+            const eventPayload = createTaskEventPayload(terminalEvent, agentId, channelId, taskEventData);
+            EventBus.server.emit(terminalEvent, eventPayload);
             
             
             return {
-                status: 'task_completed',
-                message: `Task completed successfully: ${completionData.summary}`,
+                status: reportedSuccess ? 'task_completed' : 'task_failed',
+                message: reportedSuccess
+                    ? `Task completed successfully: ${completionData.summary}`
+                    : `Task failed: ${completionData.summary}`,
                 taskId: updatedTask.id,
                 nextSteps: completionData.nextSteps
             };

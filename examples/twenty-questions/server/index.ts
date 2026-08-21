@@ -2,7 +2,7 @@
  * Twenty Questions Server Entry Point
  *
  * Starts the game server independently for testing or dashboard development.
- * For the full demo with agents, use: npm run connect-agents
+ * For the full demo with agents, use: bun run connect-agents
  */
 
 import { GameServer } from './server/GameServer';

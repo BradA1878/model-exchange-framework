@@ -27,7 +27,7 @@
 
 import express from 'express';
 import * as mcpController from '../controllers/mcpController';
-import { requireAdmin, requireProvider } from '../middleware/auth';
+import { requireAdmin } from '../middleware/dualAuth';
 import { validateToolInput } from '../middleware/validation';
 
 // Create router
@@ -57,23 +57,29 @@ router.get('/tools/:name', mcpController.getToolByName);
 /**
  * @route   POST /api/mcp/tools/:name/execute
  * @desc    Execute an MCP tool
- * @access  Public
+ * @access  Agent key (bound agent/channel identity)
  */
 router.post('/tools/:name/execute', mcpController.executeTool);
 
 /**
  * @route   POST /api/mcp/tools
  * @desc    Register a new MCP tool
- * @access  Restricted (admin or provider)
+ * @access  Restricted (admin only)
+ *
+ * Provider-owned mutation is intentionally disabled until MXF has an
+ * authenticated provider invocation protocol. The current REST registration
+ * stores only a definition and cannot invoke provider code, so allowing a
+ * provider principal to choose an arbitrary channel/provider identity would be
+ * both misleading and a cross-tenant registry mutation.
  */
-router.post('/tools', requireProvider, validateToolInput, mcpController.registerTool);
+router.post('/tools', requireAdmin, validateToolInput, mcpController.registerTool);
 
 /**
  * @route   PUT /api/mcp/tools/:name
  * @desc    Update an existing MCP tool
- * @access  Restricted (admin or provider)
+ * @access  Restricted (admin only)
  */
-router.put('/tools/:name', requireProvider, validateToolInput, mcpController.updateTool);
+router.put('/tools/:name', requireAdmin, validateToolInput, mcpController.updateTool);
 
 /**
  * @route   DELETE /api/mcp/tools/:name

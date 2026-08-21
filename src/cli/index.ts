@@ -51,6 +51,7 @@ import { logError } from './utils/output';
 import { existsSync } from 'fs';
 import { spawn } from 'child_process';
 import { join } from 'path';
+import { readAppVersion } from '../shared/appVersion';
 
 /**
  * Check if the Tauri desktop app binary exists and we have a display.
@@ -111,7 +112,7 @@ const program = new Command();
 program
     .name('mxf')
     .description('Model Exchange Framework CLI — multi-agent AI orchestration')
-    .version('1.5.2');
+    .version(readAppVersion());
 
 registerInstallCommand(program);
 registerInitCommand(program);

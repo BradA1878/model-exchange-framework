@@ -28,24 +28,25 @@
 import { Router, Request, Response } from 'express';
 import { createStrictValidator } from '@mxf-dev/core/utils/validation';
 import { Logger } from '@mxf-dev/core/utils/Logger';
-import { TaskService } from '../../socket/services/TaskService';
-import { EventBus } from '@mxf-dev/core/events/EventBus';
-import { TaskEvents } from '@mxf-dev/core/events/event-definitions/TaskEvents';
-import { createTaskEventPayload, createTaskAssignmentEventPayload } from '@mxf-dev/core/schemas/EventPayloadSchema';
-import { Task } from '@mxf-dev/core/models/task';
+import {
+    AgentTaskLifecycleTransition,
+    TaskService
+} from '../../socket/services/TaskService';
 import { 
-    CreateTaskRequest, 
-    UpdateTaskRequest, 
+    ChannelTask,
     TaskQueryFilters,
     TaskPriority,
     TaskStatus 
 } from '@mxf-dev/core/types/TaskTypes';
-
-// Extend Request interface for authentication properties
-interface AuthenticatedRequest extends Request {
-    user?: { userId: string };
-    agentId?: string;
-}
+import {
+    parseCreateTaskRequest,
+    parseNonLifecycleTaskUpdateRequest
+} from '../../socket/services/TaskRequestPolicy';
+import {
+    AuthorizationPrincipal,
+    ChannelAuthorizationScope,
+    authorizationService
+} from '../services/AuthorizationService';
 
 const router = Router();
 const logger = new Logger('info', 'TaskAPI', 'server');
@@ -54,21 +55,200 @@ const validator = createStrictValidator('TaskAPI');
 // Initialize TaskService
 const taskService = TaskService.getInstance();
 
+const sendAuthorizationFailure = (
+    res: Response,
+    decision: { status: 401 | 403 | 404; reason: string },
+    concealExistence: boolean = false
+): void => {
+    const status = concealExistence && decision.status !== 401 ? 404 : decision.status;
+    res.status(status).json({
+        success: false,
+        error: concealExistence && status === 404 ? 'Task not found' : decision.reason
+    });
+};
+
+const authorizeChannel = async (
+    req: Request,
+    res: Response,
+    channelId: string
+): Promise<boolean> => {
+    const principal = authorizationService.readPrincipal(req);
+    const decision = await authorizationService.authorize(
+        'access',
+        'channel',
+        channelId,
+        principal
+    );
+
+    if (!decision.allowed) {
+        sendAuthorizationFailure(res, decision);
+        return false;
+    }
+
+    return true;
+};
+
+/** Resolve task -> channel first, then authorize without revealing foreign task existence. */
+const resolveAuthorizedTaskChannel = async (
+    req: Request,
+    res: Response,
+    taskId: string
+): Promise<string | null> => {
+    const channelId = await taskService.getTaskChannelId(taskId);
+    if (!channelId) {
+        res.status(404).json({ success: false, error: 'Task not found' });
+        return null;
+    }
+
+    const principal = authorizationService.readPrincipal(req);
+    const decision = await authorizationService.authorize(
+        'access',
+        'channel',
+        channelId,
+        principal
+    );
+
+    if (!decision.allowed) {
+        sendAuthorizationFailure(res, decision, true);
+        return null;
+    }
+
+    return channelId;
+};
+
+/** Resolve task -> channel, then require owning-user or administrator authority. */
+const resolveManagedTaskChannel = async (
+    req: Request,
+    res: Response,
+    taskId: string
+): Promise<string | null> => {
+    const channelId = await taskService.getTaskChannelId(taskId);
+    if (!channelId) {
+        res.status(404).json({ success: false, error: 'Task not found' });
+        return null;
+    }
+
+    const decision = await authorizationService.authorize(
+        'manage',
+        'channel',
+        channelId,
+        authorizationService.readPrincipal(req)
+    );
+    if (!decision.allowed) {
+        sendAuthorizationFailure(res, decision, true);
+        return null;
+    }
+    return channelId;
+};
+
+const parseOwnerLifecycleTransition = (value: unknown): AgentTaskLifecycleTransition => {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+        throw new Error('Task lifecycle transition must be an object');
+    }
+    const input = value as Record<string, unknown>;
+    if (typeof input.action !== 'string') {
+        throw new Error('Task lifecycle action is required');
+    }
+
+    const allowedFields = new Set(
+        input.action === 'complete'
+            ? ['action', 'result']
+            : input.action === 'fail'
+                ? ['action', 'error']
+                : input.action === 'cancel'
+                    ? ['action', 'reason']
+                    : ['action']
+    );
+    const unknownFields = Object.keys(input).filter(field => !allowedFields.has(field));
+    if (unknownFields.length > 0) {
+        throw new Error(
+            `Task lifecycle transition contains unsupported field(s): ${unknownFields.sort().join(', ')}`
+        );
+    }
+
+    switch (input.action) {
+        case 'start':
+            return { kind: 'start' };
+        case 'complete':
+            if (!Object.prototype.hasOwnProperty.call(input, 'result')) {
+                throw new Error('Task completion result is required');
+            }
+            return { kind: 'complete', output: input.result };
+        case 'fail':
+            if (typeof input.error !== 'string' || input.error.trim().length === 0) {
+                throw new Error('Task failure error must be a non-empty string');
+            }
+            return { kind: 'fail', error: input.error };
+        case 'cancel':
+            if (input.reason !== undefined &&
+                (typeof input.reason !== 'string' || input.reason.trim().length === 0)) {
+                throw new Error('Task cancellation reason must be non-empty when provided');
+            }
+            return { kind: 'cancel', reason: input.reason as string | undefined };
+        default:
+            throw new Error('Task lifecycle action must be one of: start, complete, fail, cancel');
+    }
+};
+
+const resolveTaskCollectionScope = async (
+    req: Request,
+    res: Response,
+    requestedChannelId?: string
+): Promise<ChannelAuthorizationScope | null> => {
+    if (requestedChannelId) {
+        const allowed = await authorizeChannel(req, res, requestedChannelId);
+        return allowed
+            ? { unrestricted: false, channelIds: [requestedChannelId] }
+            : null;
+    }
+
+    const principal = authorizationService.readPrincipal(req);
+    const decision = await authorizationService.resolveChannelScope(principal);
+    if (!decision.allowed) {
+        sendAuthorizationFailure(res, decision);
+        return null;
+    }
+
+    return decision.scope;
+};
+
+const getAuthenticatedCreatorId = (principal: AuthorizationPrincipal): string => {
+    if (principal.kind === 'user') {
+        return principal.userId;
+    }
+    if (principal.kind === 'agent') {
+        return principal.agentId;
+    }
+
+    throw new Error('Authenticated task creator identity is required');
+};
+
+const getTasksForScope = (
+    filters: TaskQueryFilters,
+    scope: ChannelAuthorizationScope
+): Promise<ChannelTask[]> => scope.unrestricted
+    ? taskService.getTasks(filters)
+    : taskService.getTasksInChannels(filters, scope.channelIds);
+
 /**
  * Create a new task
  * POST /api/tasks
  */
-router.post('/', async (req: AuthenticatedRequest, res: Response) => {
+router.post('/', async (req: Request, res: Response) => {
     try {
-        const createRequest: CreateTaskRequest = req.body;
-        
-        // Get creator from authentication context
-        const createdBy = req.user?.userId || req.agentId || 'system';
-        
-        // Validate required fields
-        validator.assertIsNonEmptyString(createRequest.channelId, 'channelId is required');
-        validator.assertIsNonEmptyString(createRequest.title, 'title is required');
-        validator.assertIsNonEmptyString(createRequest.description, 'description is required');
+        // Parse before authorization or service work. A TypeScript annotation on
+        // req.body does not remove runtime fields, so accepting it directly would
+        // let callers smuggle model-only state into TaskService's object spread.
+        const createRequest = parseCreateTaskRequest(req.body);
+
+        if (!await authorizeChannel(req, res, createRequest.channelId)) {
+            return;
+        }
+
+        // Identity comes only from authentication middleware. Body/header values
+        // are never considered when attributing a task.
+        const principal = authorizationService.readPrincipal(req);
+        const createdBy = getAuthenticatedCreatorId(principal);
         
         const task = await taskService.createTask(createRequest, createdBy);
         
@@ -90,7 +270,7 @@ router.post('/', async (req: AuthenticatedRequest, res: Response) => {
  * Get tasks with optional filters
  * GET /api/tasks
  */
-router.get('/', async (req: AuthenticatedRequest, res: Response) => {
+router.get('/', async (req: Request, res: Response) => {
     try {
         const filters: TaskQueryFilters = {};
         
@@ -138,7 +318,12 @@ router.get('/', async (req: AuthenticatedRequest, res: Response) => {
             filters.dueAfter = parseInt(req.query.dueAfter as string);
         }
         
-        const tasks = await taskService.getTasks(filters);
+        const scope = await resolveTaskCollectionScope(req, res, filters.channelId);
+        if (!scope) {
+            return;
+        }
+
+        const tasks = await getTasksForScope(filters, scope);
         
         res.json({
             success: true,
@@ -159,19 +344,24 @@ router.get('/', async (req: AuthenticatedRequest, res: Response) => {
  * Get specific task by ID
  * GET /api/tasks/:taskId
  */
-router.get('/:taskId', async (req: AuthenticatedRequest, res: Response) => {
+router.get('/:taskId', async (req: Request, res: Response) => {
     try {
         const { taskId } = req.params;
         validator.assertIsNonEmptyString(taskId, 'taskId is required');
-        
-        const tasks = await taskService.getTasks({ /* no filters - will get all, then filter */ });
-        const task = tasks.find((t: any) => t.id === taskId);
+
+        const channelId = await resolveAuthorizedTaskChannel(req, res, taskId);
+        if (!channelId) {
+            return;
+        }
+
+        const task = await taskService.getTaskInChannel(taskId, channelId);
         
         if (!task) {
-            return res.status(404).json({
+            res.status(404).json({
                 success: false,
                 error: 'Task not found'
             });
+            return;
         }
         
         res.json({
@@ -192,14 +382,22 @@ router.get('/:taskId', async (req: AuthenticatedRequest, res: Response) => {
  * Update a task
  * PATCH /api/tasks/:taskId
  */
-router.patch('/:taskId', async (req: AuthenticatedRequest, res: Response) => {
+router.patch('/:taskId', async (req: Request, res: Response) => {
     try {
         const { taskId } = req.params;
-        const updateRequest: UpdateTaskRequest = req.body;
+        // Reject model-only fields before even resolving the task's channel. The
+        // service parses again because socket/internal boundaries can call it
+        // without going through this route.
+        const updateRequest = parseNonLifecycleTaskUpdateRequest(req.body);
         
         validator.assertIsNonEmptyString(taskId, 'taskId is required');
-        
-        const updatedTask = await taskService.updateTask(taskId, updateRequest);
+
+        const channelId = await resolveAuthorizedTaskChannel(req, res, taskId);
+        if (!channelId) {
+            return;
+        }
+
+        const updatedTask = await taskService.updateTaskInChannel(taskId, channelId, updateRequest);
         
         res.json({
             success: true,
@@ -216,21 +414,64 @@ router.patch('/:taskId', async (req: AuthenticatedRequest, res: Response) => {
 });
 
 /**
+ * Owner/admin-only lifecycle transition. Channel-key agents must use the
+ * assignee-scoped socket operations so their identity remains on the CAS.
+ */
+router.post('/:taskId/transition', async (req: Request, res: Response) => {
+    try {
+        const { taskId } = req.params;
+        validator.assertIsNonEmptyString(taskId, 'taskId is required');
+        const transition = parseOwnerLifecycleTransition(req.body);
+        const channelId = await resolveManagedTaskChannel(req, res, taskId);
+        if (!channelId) {
+            return;
+        }
+
+        const principal = authorizationService.readPrincipal(req);
+        if (principal.kind !== 'user') {
+            throw new Error('A user account is required to transition this task');
+        }
+        const task = await taskService.transitionTaskAsOwnerInChannel(
+            taskId,
+            channelId,
+            principal.userId,
+            transition
+        );
+        res.json({ success: true, data: task });
+    } catch (error) {
+        logger.error(`❌ Failed to transition task: ${error}`);
+        res.status(400).json({
+            success: false,
+            error: error instanceof Error ? error.message : 'Unknown error'
+        });
+    }
+});
+
+/**
  * Manually assign task to agent
  * POST /api/tasks/:taskId/assign
  */
-router.post('/:taskId/assign', async (req: AuthenticatedRequest, res: Response) => {
+router.post('/:taskId/assign', async (req: Request, res: Response) => {
     try {
         const { taskId } = req.params;
         const { agentId } = req.body;
         
         validator.assertIsNonEmptyString(taskId, 'taskId is required');
         validator.assertIsNonEmptyString(agentId, 'agentId is required');
-        
-        const updatedTask = await taskService.updateTask(taskId, {
-            assignedAgentId: agentId,
-            status: 'assigned'
-        });
+
+        const channelId = await resolveAuthorizedTaskChannel(req, res, taskId);
+        if (!channelId) {
+            return;
+        }
+
+        const principal = authorizationService.readPrincipal(req);
+        const assignedBy = getAuthenticatedCreatorId(principal);
+        const updatedTask = await taskService.assignTaskInChannel(
+            taskId,
+            channelId,
+            agentId,
+            assignedBy
+        );
         
         res.json({
             success: true,
@@ -250,34 +491,17 @@ router.post('/:taskId/assign', async (req: AuthenticatedRequest, res: Response) 
  * Trigger intelligent assignment for a task
  * POST /api/tasks/:taskId/assign-intelligent
  */
-router.post('/:taskId/assign-intelligent', async (req: AuthenticatedRequest, res: Response) => {
+router.post('/:taskId/assign-intelligent', async (req: Request, res: Response) => {
     try {
         const { taskId } = req.params;
         validator.assertIsNonEmptyString(taskId, 'taskId is required');
-        
-        const assignmentResult = await taskService.assignTaskIntelligently(taskId);
-        
-        
-        // Emit task:assigned event - get task to obtain channelId
-        const taskRecord = await Task.findById(taskId);
-        if (taskRecord) {
-            const taskAssignmentData = {
-                taskId: assignmentResult.taskId,
-                assignedAgentId: assignmentResult.assignedAgentId,
-                strategy: assignmentResult.strategy,
-                confidence: assignmentResult.confidence,
-                reasoning: assignmentResult.reasoning,
-                assignedAt: assignmentResult.assignedAt,
-                task: taskRecord 
-            };
-            const eventPayload = createTaskAssignmentEventPayload(
-                TaskEvents.ASSIGNED,
-                assignmentResult.assignedAgentId,
-                taskRecord.channelId,
-                taskAssignmentData
-            );
-            EventBus.server.emit(TaskEvents.ASSIGNED, eventPayload);
+
+        const channelId = await resolveAuthorizedTaskChannel(req, res, taskId);
+        if (!channelId) {
+            return;
         }
+
+        const assignmentResult = await taskService.assignTaskIntelligentlyInChannel(taskId, channelId);
         
         res.json({
             success: true,
@@ -297,10 +521,14 @@ router.post('/:taskId/assign-intelligent', async (req: AuthenticatedRequest, res
  * Get channel workload analysis
  * GET /api/tasks/analysis/workload/:channelId
  */
-router.get('/analysis/workload/:channelId', async (req: AuthenticatedRequest, res: Response) => {
+router.get('/analysis/workload/:channelId', async (req: Request, res: Response) => {
     try {
         const { channelId } = req.params;
         validator.assertIsNonEmptyString(channelId, 'channelId is required');
+
+        if (!await authorizeChannel(req, res, channelId)) {
+            return;
+        }
         
         // Workload analysis is now handled internally by TaskService orchestration
         res.json({
@@ -321,12 +549,16 @@ router.get('/analysis/workload/:channelId', async (req: AuthenticatedRequest, re
  * Get tasks by channel
  * GET /api/tasks/channel/:channelId
  */
-router.get('/channel/:channelId', async (req: AuthenticatedRequest, res: Response) => {
+router.get('/channel/:channelId', async (req: Request, res: Response) => {
     try {
         const { channelId } = req.params;
         validator.assertIsNonEmptyString(channelId, 'channelId is required');
-        
-        const tasks = await taskService.getTasks({ channelId });
+
+        if (!await authorizeChannel(req, res, channelId)) {
+            return;
+        }
+
+        const tasks = await taskService.getTasksInChannels({ channelId }, [channelId]);
         
         res.json({
             success: true,
@@ -347,12 +579,17 @@ router.get('/channel/:channelId', async (req: AuthenticatedRequest, res: Respons
  * Get tasks assigned to agent
  * GET /api/tasks/agent/:agentId
  */
-router.get('/agent/:agentId', async (req: AuthenticatedRequest, res: Response) => {
+router.get('/agent/:agentId', async (req: Request, res: Response) => {
     try {
         const { agentId } = req.params;
         validator.assertIsNonEmptyString(agentId, 'agentId is required');
-        
-        const tasks = await taskService.getTasks({ assignedAgentId: agentId });
+
+        const scope = await resolveTaskCollectionScope(req, res);
+        if (!scope) {
+            return;
+        }
+
+        const tasks = await getTasksForScope({ assignedAgentId: agentId }, scope);
         
         res.json({
             success: true,

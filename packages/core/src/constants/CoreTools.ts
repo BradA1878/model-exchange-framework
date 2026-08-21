@@ -19,18 +19,19 @@
  */
 
 /**
- * Core MXF Tools - Essential tools that should be available when allowedTools is empty/missing
+ * Core MXF Tools - Essential tools available when allowedTools is omitted
  * 
  * These tools provide a curated selection that demonstrates the MXF ecosystem
  * without overwhelming agents with all 180+ available tools.
  * 
- * IMPORTANT: allowedTools always takes priority - if specified, only those tools are allowed.
- * This core set is only used as a fallback when allowedTools is empty or missing.
+ * IMPORTANT: allowedTools always takes priority when specified. An explicit
+ * empty array denies every tool; this core set is used only when the policy is
+ * undefined.
  */
 
 /**
- * Essential core MXF tools that should always be available as fallback
- * when allowedTools is empty or missing
+ * Essential core MXF tools available as the fallback when allowedTools is
+ * undefined.
  */
 export const CORE_MXF_TOOLS = [
     // Meta-discovery tools (most important - gateway to other tools)

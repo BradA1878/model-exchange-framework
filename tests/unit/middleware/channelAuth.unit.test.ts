@@ -1,21 +1,18 @@
-/**
- * Channel Authorization Middleware Unit Tests
- *
- * Covers the rule that decides which channel a principal may act on:
- * - a user may act on channels they created
- * - an agent may act on the channel its key is bound to, or one it participates in
- * - everything else is refused
- *
- * These routes previously had no ownership or membership check at all, so knowing
- * a channelId was enough to rename, delete, or read any channel in the system.
- */
+import { NextFunction, Request, Response } from 'express';
 
-import { Request, Response, NextFunction } from 'express';
+const mockHydrateChannelRuntimePolicy = jest.fn();
 
 jest.mock('@mxf-dev/core/models/channel', () => ({
-    Channel: {
-        findOne: jest.fn()
-    }
+    Channel: { findOne: jest.fn() }
+}));
+
+jest.mock('@mxf-dev/core/models/agent', () => ({
+    Agent: { findOne: jest.fn() }
+}));
+
+jest.mock('@mxf-dev/core/models/channelKey', () => ({
+    __esModule: true,
+    default: { findOne: jest.fn() }
 }));
 
 jest.mock('@mxf-dev/core/utils/Logger', () => ({
@@ -27,253 +24,168 @@ jest.mock('@mxf-dev/core/utils/Logger', () => ({
     }))
 }));
 
+jest.mock('../../../src/server/api/security/ChannelRuntimePolicy', () => ({
+    hydrateChannelRuntimePolicy: mockHydrateChannelRuntimePolicy
+}));
+
 import { Channel } from '@mxf-dev/core/models/channel';
 import {
-    authorizeChannel,
-    readPrincipal,
-    requireChannelAccess
+    ChannelAuthorizedRequest,
+    requireChannelAccess,
+    requireChannelDeletionOwner,
+    requireChannelOwner
 } from '../../../src/server/api/middleware/channelAuth';
 
 const mockChannel = Channel.findOne as jest.Mock;
 
-/** Build a channel document as the middleware sees it. */
-const channelDoc = (overrides: Record<string, unknown> = {}) => ({
+const channelDocument = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
     channelId: 'channel-a',
     createdBy: 'user-1',
     participants: ['agent-1'],
     ...overrides
 });
 
-describe('channelAuth', () => {
+const buildResponse = (): Response => {
+    const res: Partial<Response> = {};
+    res.status = jest.fn().mockReturnValue(res);
+    res.json = jest.fn().mockReturnValue(res);
+    return res as Response;
+};
+
+describe('channel authorization middleware', () => {
     beforeEach(() => {
         jest.clearAllMocks();
     });
 
-    describe('readPrincipal', () => {
-        it('reads a JWT user and stringifies the id', () => {
-            const req = {
-                authType: 'jwt',
-                user: { id: { toString: () => 'user-1' } }
-            } as unknown as Request;
+    it('attaches the resolved channel for its owning user', async () => {
+        const channel = channelDocument();
+        mockChannel.mockResolvedValue(channel);
+        const req = {
+            params: { channelId: 'channel-a' },
+            authType: 'jwt',
+            user: { id: 'user-1', role: 'consumer' }
+        } as unknown as Request;
+        const res = buildResponse();
+        const next = jest.fn() as NextFunction;
 
-            expect(readPrincipal(req)).toEqual({
-                authType: 'jwt',
-                userId: 'user-1',
-                agentId: undefined,
-                keyChannelId: undefined
-            });
-        });
+        await requireChannelAccess(req, res, next);
 
-        it('reads a key-authenticated agent with its bound channel', () => {
-            const req = {
-                authType: 'key',
-                agent: { agentId: 'agent-1', channelId: 'channel-a' }
-            } as unknown as Request;
-
-            expect(readPrincipal(req)).toEqual({
-                authType: 'key',
-                userId: undefined,
-                agentId: 'agent-1',
-                keyChannelId: 'channel-a'
-            });
-        });
-
-        it('reports no auth type when the request is unauthenticated', () => {
-            expect(readPrincipal({} as Request).authType).toBeUndefined();
-        });
+        expect(next).toHaveBeenCalledTimes(1);
+        expect((req as ChannelAuthorizedRequest).channel).toBe(channel);
+        expect(mockHydrateChannelRuntimePolicy).toHaveBeenCalledWith(channel);
     });
 
-    describe('authorizeChannel — users', () => {
-        it('allows the user who created the channel', async () => {
-            mockChannel.mockResolvedValue(channelDoc({ createdBy: 'user-1' }));
+    it('allows an administrator to manage a channel owned by another user', async () => {
+        mockChannel.mockResolvedValue(channelDocument());
+        const req = {
+            params: { channelId: 'channel-a' },
+            authType: 'jwt',
+            user: { id: 'admin-1', role: 'admin' }
+        } as unknown as Request;
+        const res = buildResponse();
+        const next = jest.fn() as NextFunction;
 
-            const decision = await authorizeChannel('channel-a', {
-                authType: 'jwt',
-                userId: 'user-1'
-            });
+        await requireChannelOwner(req, res, next);
 
-            expect(decision.allowed).toBe(true);
-        });
-
-        it('refuses a user who did not create the channel', async () => {
-            mockChannel.mockResolvedValue(channelDoc({ createdBy: 'user-1' }));
-
-            const decision = await authorizeChannel('channel-a', {
-                authType: 'jwt',
-                userId: 'user-2'
-            });
-
-            expect(decision).toMatchObject({ allowed: false, status: 403 });
-        });
-
-        it('compares ids as strings so an ObjectId createdBy still matches', async () => {
-            mockChannel.mockResolvedValue(
-                channelDoc({ createdBy: { toString: () => 'user-1' } })
-            );
-
-            const decision = await authorizeChannel('channel-a', {
-                authType: 'jwt',
-                userId: 'user-1'
-            });
-
-            expect(decision.allowed).toBe(true);
-        });
+        expect(next).toHaveBeenCalledTimes(1);
+        expect(res.status).not.toHaveBeenCalled();
     });
 
-    describe('authorizeChannel — agents', () => {
-        it('allows an agent whose key is bound to the channel', async () => {
-            mockChannel.mockResolvedValue(channelDoc({ participants: [] }));
+    it('allows an agent to access only the channel bound to its key', async () => {
+        mockChannel.mockResolvedValue(channelDocument({ participants: [] }));
+        const req = {
+            params: { channelId: 'channel-a' },
+            authType: 'key',
+            agent: { agentId: 'agent-9', channelId: 'channel-a', keyId: 'key-a' }
+        } as unknown as Request;
+        const res = buildResponse();
+        const next = jest.fn() as NextFunction;
 
-            const decision = await authorizeChannel('channel-a', {
-                authType: 'key',
-                agentId: 'agent-9',
-                keyChannelId: 'channel-a'
-            });
+        await requireChannelAccess(req, res, next);
 
-            expect(decision.allowed).toBe(true);
-        });
-
-        it('allows an agent listed as a participant', async () => {
-            mockChannel.mockResolvedValue(channelDoc({ participants: ['agent-1'] }));
-
-            const decision = await authorizeChannel('channel-a', {
-                authType: 'key',
-                agentId: 'agent-1',
-                keyChannelId: 'channel-other'
-            });
-
-            expect(decision.allowed).toBe(true);
-        });
-
-        it('refuses an agent whose key belongs to a different channel', async () => {
-            mockChannel.mockResolvedValue(
-                channelDoc({ channelId: 'channel-b', participants: [] })
-            );
-
-            const decision = await authorizeChannel('channel-b', {
-                authType: 'key',
-                agentId: 'agent-1',
-                keyChannelId: 'channel-a'
-            });
-
-            expect(decision).toMatchObject({ allowed: false, status: 403 });
-        });
-
-        it('refuses an agent with no bound channel and no participation', async () => {
-            mockChannel.mockResolvedValue(channelDoc({ participants: [] }));
-
-            const decision = await authorizeChannel('channel-a', {
-                authType: 'key',
-                agentId: 'agent-1'
-            });
-
-            expect(decision).toMatchObject({ allowed: false, status: 403 });
-        });
+        expect(next).toHaveBeenCalledTimes(1);
     });
 
-    describe('authorizeChannel — rejections', () => {
-        it('returns 401 when the request is unauthenticated', async () => {
-            const decision = await authorizeChannel('channel-a', {});
+    it('does not let participation turn a different channel key into a bearer credential', async () => {
+        mockChannel.mockResolvedValue(channelDocument({ participants: ['agent-1'] }));
+        const req = {
+            params: { channelId: 'channel-a' },
+            method: 'GET',
+            originalUrl: '/api/channels/channel-a',
+            authType: 'key',
+            agent: { agentId: 'agent-1', channelId: 'channel-other', keyId: 'key-other' }
+        } as unknown as Request;
+        const res = buildResponse();
+        const next = jest.fn() as NextFunction;
 
-            expect(decision).toMatchObject({ allowed: false, status: 401 });
-            expect(mockChannel).not.toHaveBeenCalled();
-        });
+        await requireChannelAccess(req, res, next);
 
-        it('returns 404 when the channel does not exist', async () => {
-            mockChannel.mockResolvedValue(null);
-
-            const decision = await authorizeChannel('nope', {
-                authType: 'jwt',
-                userId: 'user-1'
-            });
-
-            expect(decision).toMatchObject({ allowed: false, status: 404 });
-        });
-
-        it('returns 404 for a blank channelId without querying', async () => {
-            const decision = await authorizeChannel('  ', {
-                authType: 'jwt',
-                userId: 'user-1'
-            });
-
-            expect(decision).toMatchObject({ allowed: false, status: 404 });
-            expect(mockChannel).not.toHaveBeenCalled();
-        });
-
-        it('refuses an unrecognized auth type', async () => {
-            mockChannel.mockResolvedValue(channelDoc());
-
-            const decision = await authorizeChannel('channel-a', {
-                authType: 'something-else'
-            });
-
-            expect(decision).toMatchObject({ allowed: false, status: 403 });
-        });
+        expect(next).not.toHaveBeenCalled();
+        expect(res.status).toHaveBeenCalledWith(403);
     });
 
-    describe('requireChannelAccess middleware', () => {
-        const buildRes = () => {
-            const res: Partial<Response> = {};
-            res.status = jest.fn().mockReturnValue(res);
-            res.json = jest.fn().mockReturnValue(res);
-            return res as Response;
-        };
+    it('reserves channel administration for users', async () => {
+        const req = {
+            params: { channelId: 'channel-a' },
+            method: 'DELETE',
+            originalUrl: '/api/channels/channel-a',
+            authType: 'key',
+            agent: { agentId: 'agent-1', channelId: 'channel-a', keyId: 'key-a' }
+        } as unknown as Request;
+        const res = buildResponse();
+        const next = jest.fn() as NextFunction;
 
-        it('calls next and attaches the channel when allowed', async () => {
-            const channel = channelDoc();
-            mockChannel.mockResolvedValue(channel);
+        await requireChannelOwner(req, res, next);
 
-            const req = {
-                params: { channelId: 'channel-a' },
-                authType: 'jwt',
-                user: { id: 'user-1' }
-            } as unknown as Request;
-            const res = buildRes();
-            const next = jest.fn() as NextFunction;
+        expect(next).not.toHaveBeenCalled();
+        expect(res.status).toHaveBeenCalledWith(403);
+        expect(mockChannel).not.toHaveBeenCalled();
+    });
 
-            await requireChannelAccess(req, res, next);
-
-            expect(next).toHaveBeenCalled();
-            expect(res.status).not.toHaveBeenCalled();
-            expect((req as any).channel).toBe(channel);
+    it('allows an owner to retry pending deletion without rehydrating the tombstone', async () => {
+        const tombstone = channelDocument({
+            active: false,
+            metadata: { deletionCleanupStatus: 'pending' }
         });
+        mockChannel.mockResolvedValue(tombstone);
+        const req = {
+            params: { channelId: 'channel-a' },
+            method: 'DELETE',
+            originalUrl: '/api/channels/channel-a',
+            authType: 'jwt',
+            user: { id: 'user-1', role: 'consumer' }
+        } as unknown as Request;
+        const res = buildResponse();
+        const next = jest.fn() as NextFunction;
 
-        it('responds 403 and does not call next when refused', async () => {
-            mockChannel.mockResolvedValue(channelDoc({ createdBy: 'someone-else' }));
+        await requireChannelDeletionOwner(req, res, next);
 
-            const req = {
-                params: { channelId: 'channel-a' },
-                method: 'DELETE',
-                originalUrl: '/api/channels/channel-a',
-                authType: 'jwt',
-                user: { id: 'user-1' }
-            } as unknown as Request;
-            const res = buildRes();
-            const next = jest.fn() as NextFunction;
-
-            await requireChannelAccess(req, res, next);
-
-            expect(next).not.toHaveBeenCalled();
-            expect(res.status).toHaveBeenCalledWith(403);
+        expect(mockChannel).toHaveBeenCalledWith({
+            channelId: 'channel-a',
+            $or: [
+                { active: true },
+                { active: false, 'metadata.deletionCleanupStatus': 'pending' }
+            ]
         });
+        expect(next).toHaveBeenCalledTimes(1);
+        expect(mockHydrateChannelRuntimePolicy).not.toHaveBeenCalled();
+    });
 
-        it('responds 500 when the channel lookup throws', async () => {
-            mockChannel.mockRejectedValue(new Error('database down'));
+    it('returns 500 when the policy lookup fails', async () => {
+        mockChannel.mockRejectedValue(new Error('database down'));
+        const req = {
+            params: { channelId: 'channel-a' },
+            method: 'GET',
+            originalUrl: '/api/channels/channel-a',
+            authType: 'jwt',
+            user: { id: 'user-1' }
+        } as unknown as Request;
+        const res = buildResponse();
+        const next = jest.fn() as NextFunction;
 
-            const req = {
-                params: { channelId: 'channel-a' },
-                method: 'PUT',
-                originalUrl: '/api/channels/channel-a',
-                authType: 'jwt',
-                user: { id: 'user-1' }
-            } as unknown as Request;
-            const res = buildRes();
-            const next = jest.fn() as NextFunction;
+        await requireChannelAccess(req, res, next);
 
-            await requireChannelAccess(req, res, next);
-
-            expect(next).not.toHaveBeenCalled();
-            expect(res.status).toHaveBeenCalledWith(500);
-        });
+        expect(next).not.toHaveBeenCalled();
+        expect(res.status).toHaveBeenCalledWith(500);
     });
 });

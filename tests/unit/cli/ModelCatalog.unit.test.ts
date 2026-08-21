@@ -18,6 +18,19 @@ describe('Model catalog', () => {
         }
     });
 
+    it('offers the OpenRouter latest Claude aliases before any pinned release', () => {
+        expect(getModelIds('openrouter').slice(0, 4)).toEqual([
+            '~anthropic/claude-opus-latest',
+            '~anthropic/claude-sonnet-latest',
+            '~anthropic/claude-haiku-latest',
+            '~anthropic/claude-fable-latest'
+        ]);
+    });
+
+    it('never puts the most expensive alias first, where init would make it the default', () => {
+        expect(getModelIds('openrouter')[0]).not.toBe('~anthropic/claude-fable-latest');
+    });
+
     it('includes the opus model that init.ts had drifted away from', () => {
         expect(getModelIds('openrouter')).toContain('anthropic/claude-opus-4.6');
     });

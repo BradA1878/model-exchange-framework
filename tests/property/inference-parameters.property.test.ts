@@ -118,8 +118,8 @@ describe('Inference Parameter Property Tests', () => {
         // Known models for reliable cost testing
         const knownModels = [
             'google/gemini-2.5-flash',
-            'anthropic/claude-sonnet-4-5',
-            'anthropic/claude-3-haiku',
+            '~anthropic/claude-sonnet-latest',
+            '~anthropic/claude-haiku-latest',
             'openai/gpt-4-turbo'
         ];
         const knownModelArb = fc.constantFrom(...knownModels);
@@ -156,7 +156,7 @@ describe('Inference Parameter Property Tests', () => {
 
         it('cost includes reasoning tokens for models that support reasoning', () => {
             // Use a model known to support reasoning (Sonnet)
-            const model = 'anthropic/claude-sonnet-4-5';
+            const model = '~anthropic/claude-sonnet-latest';
             fc.assert(
                 fc.property(
                     fc.integer({ min: 100, max: 10000 }),

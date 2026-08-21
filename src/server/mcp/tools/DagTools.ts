@@ -30,8 +30,25 @@ import { MongoDagRepository } from '@mxf-dev/core/database/adapters/mongodb/Mong
 import { isDagEnabled, getDagConfig } from '@mxf-dev/core/config/dag.config';
 import { DagErrorCode } from '@mxf-dev/core/types/DagTypes';
 import { TaskService } from '../../socket/services/TaskService';
+import { McpToolHandlerContext } from '@mxf-dev/core/protocols/mcp/McpServerTypes';
+import { requireExactToolTenantContext } from './helpers/toolTenantContext';
 
 const logger = new Logger('info', 'DagTools', 'server');
+
+export type DagToolResult = Record<string, unknown>;
+
+export interface DagToolArgs extends Record<string, unknown> {
+    channelId?: string;
+    limit?: number;
+    dependentTaskId?: string;
+    dependencyTaskId?: string;
+    includeCompleted?: boolean;
+    includeBlocked?: boolean;
+    taskId?: string;
+}
+
+const getErrorMessage = (error: unknown): string =>
+    error instanceof Error ? error.message : String(error);
 
 /**
  * Validate that a task ID is a non-empty string.
@@ -41,7 +58,7 @@ const logger = new Logger('info', 'DagTools', 'server');
  * @param value - The value to validate
  * @returns Error response object if invalid, null if valid
  */
-function validateTaskId(fieldName: string, value: any): { success: false; message: string } | null {
+function validateTaskId(fieldName: string, value: unknown): { success: false; message: string } | null {
     if (typeof value !== 'string' || value.trim() === '') {
         return {
             success: false,
@@ -63,20 +80,19 @@ function getDagRepository(): MongoDagRepository {
  * Returns objects with { id, title, status } for each task ID.
  */
 async function enrichTaskIds(taskIds: string[], channelId: string): Promise<Array<{ id: string; title: string; status: string }>> {
-    try {
-        const taskService = TaskService.getInstance();
-        const allTasks = await taskService.getTasks({ channelId });
-        const taskMap = new Map(allTasks.map(t => [t.id, t]));
-        return taskIds.map(id => {
-            const task = taskMap.get(id);
-            return task
-                ? { id: task.id, title: task.title, status: task.status }
-                : { id, title: 'Unknown', status: 'unknown' };
-        });
-    } catch {
-        // If enrichment fails, return IDs with placeholder titles
-        return taskIds.map(id => ({ id, title: id, status: 'unknown' }));
+    const taskService = TaskService.getInstance();
+    const allTasks = await taskService.getTasks({ channelId });
+    const taskMap = new Map(allTasks.map(t => [t.id, t]));
+    const missingTaskIds = taskIds.filter((id) => !taskMap.has(id));
+
+    if (missingTaskIds.length > 0) {
+        throw new Error('DAG references one or more tasks outside the authenticated channel');
     }
+
+    return taskIds.map((id) => {
+        const task = taskMap.get(id)!;
+        return { id: task.id, title: task.title, status: task.status };
+    });
 }
 
 /**
@@ -102,22 +118,18 @@ export const dag_get_ready_tasks = {
         },
         required: [],
     },
-    handler: async (args: any, context: any) => {
+    handler: async (
+        args: DagToolArgs,
+        context: McpToolHandlerContext
+    ): Promise<DagToolResult> => {
         try {
+            const { channelId } = requireExactToolTenantContext(context, args.channelId);
+
             if (!isDagEnabled()) {
                 return {
                     success: false,
                     readyTasks: [],
                     message: 'DAG system is disabled. Enable with TASK_DAG_ENABLED=true',
-                };
-            }
-
-            const channelId = args.channelId || context.channelId;
-            if (!channelId) {
-                return {
-                    success: false,
-                    readyTasks: [],
-                    message: 'channelId is required but not provided',
                 };
             }
 
@@ -139,13 +151,14 @@ export const dag_get_ready_tasks = {
                     ? `Found ${readyTasks.length} tasks ready to execute`
                     : 'No tasks are currently ready',
             };
-        } catch (error: any) {
-            logger.error('Failed to get ready tasks', { error: error.message });
+        } catch (error: unknown) {
+            const errorMessage = getErrorMessage(error);
+            logger.error('Failed to get ready tasks', { error: errorMessage });
             return {
                 success: false,
                 readyTasks: [],
                 message: 'Failed to get ready tasks',
-                error: error.message,
+                error: errorMessage,
                 errorCode: 'INTERNAL_ERROR',
             };
         }
@@ -176,12 +189,17 @@ export const dag_validate_dependency = {
         },
         required: ['dependentTaskId', 'dependencyTaskId'],
     },
-    handler: async (args: any, context: any) => {
+    handler: async (
+        args: DagToolArgs,
+        context: McpToolHandlerContext
+    ): Promise<DagToolResult> => {
         try {
+            const { channelId } = requireExactToolTenantContext(context, args.channelId);
+
             if (!isDagEnabled()) {
                 return {
                     success: false,
-                    isValid: true, // If disabled, any dependency is "valid"
+                    isValid: false,
                     message: 'DAG system is disabled. Dependencies not validated.',
                 };
             }
@@ -196,21 +214,27 @@ export const dag_validate_dependency = {
             if (dependencyError) {
                 return { ...dependencyError, isValid: false };
             }
+            const dependentTaskId = args.dependentTaskId as string;
+            const dependencyTaskId = args.dependencyTaskId as string;
 
-            const channelId = args.channelId || context.channelId;
-            if (!channelId) {
+            const taskService = TaskService.getInstance();
+            const [dependentTask, dependencyTask] = await Promise.all([
+                taskService.getTaskInChannel(dependentTaskId, channelId),
+                taskService.getTaskInChannel(dependencyTaskId, channelId)
+            ]);
+            if (!dependentTask || !dependencyTask) {
                 return {
                     success: false,
                     isValid: false,
-                    message: 'channelId is required but not provided',
+                    message: 'Both tasks must exist in the authenticated channel'
                 };
             }
 
             const dagRepo = getDagRepository();
             const result = await dagRepo.validateDependency(
                 channelId,
-                args.dependentTaskId,
-                args.dependencyTaskId
+                dependentTaskId,
+                dependencyTaskId
             );
 
             if (result.success) {
@@ -228,13 +252,14 @@ export const dag_validate_dependency = {
                     cyclePath: result.cyclePath,
                 };
             }
-        } catch (error: any) {
-            logger.error('Failed to validate dependency', { error: error.message });
+        } catch (error: unknown) {
+            const errorMessage = getErrorMessage(error);
+            logger.error('Failed to validate dependency', { error: errorMessage });
             return {
                 success: false,
                 isValid: false,
                 message: 'Failed to validate dependency',
-                error: error.message,
+                error: errorMessage,
                 errorCode: DagErrorCode.CYCLE_DETECTED,
             };
         }
@@ -267,22 +292,18 @@ export const dag_get_execution_order = {
         },
         required: [],
     },
-    handler: async (args: any, context: any) => {
+    handler: async (
+        args: DagToolArgs,
+        context: McpToolHandlerContext
+    ): Promise<DagToolResult> => {
         try {
+            const { channelId } = requireExactToolTenantContext(context, args.channelId);
+
             if (!isDagEnabled()) {
                 return {
                     success: false,
                     executionOrder: [],
                     message: 'DAG system is disabled',
-                };
-            }
-
-            const channelId = args.channelId || context.channelId;
-            if (!channelId) {
-                return {
-                    success: false,
-                    executionOrder: [],
-                    message: 'channelId is required but not provided',
                 };
             }
 
@@ -299,13 +320,14 @@ export const dag_get_execution_order = {
                 count: executionOrder.length,
                 message: `Execution order contains ${executionOrder.length} tasks`,
             };
-        } catch (error: any) {
-            logger.error('Failed to get execution order', { error: error.message });
+        } catch (error: unknown) {
+            const errorMessage = getErrorMessage(error);
+            logger.error('Failed to get execution order', { error: errorMessage });
             return {
                 success: false,
                 executionOrder: [],
                 message: 'Failed to get execution order',
-                error: error.message,
+                error: errorMessage,
                 errorCode: 'INTERNAL_ERROR',
             };
         }
@@ -332,8 +354,13 @@ export const dag_get_blocking_tasks = {
         },
         required: ['taskId'],
     },
-    handler: async (args: any, context: any) => {
+    handler: async (
+        args: DagToolArgs,
+        context: McpToolHandlerContext
+    ): Promise<DagToolResult> => {
         try {
+            const { channelId } = requireExactToolTenantContext(context, args.channelId);
+
             if (!isDagEnabled()) {
                 return {
                     success: false,
@@ -347,38 +374,40 @@ export const dag_get_blocking_tasks = {
             if (taskIdError) {
                 return { ...taskIdError, blockingTasks: [] };
             }
+            const taskId = args.taskId as string;
 
-            const channelId = args.channelId || context.channelId;
-            if (!channelId) {
+            const task = await TaskService.getInstance().getTaskInChannel(taskId, channelId);
+            if (!task) {
                 return {
                     success: false,
                     blockingTasks: [],
-                    message: 'channelId is required but not provided',
+                    message: 'Task was not found in the authenticated channel',
                 };
             }
 
             const dagRepo = getDagRepository();
-            const blockingTaskIds = await dagRepo.getBlockingTasks(channelId, args.taskId);
+            const blockingTaskIds = await dagRepo.getBlockingTasks(channelId, taskId);
             const blockingTasks = await enrichTaskIds(blockingTaskIds, channelId);
 
             const isReady = blockingTasks.length === 0;
 
             return {
                 success: true,
-                taskId: args.taskId,
+                taskId,
                 blockingTasks,
                 isReady,
                 message: isReady
                     ? 'Task has no blockers and is ready to execute'
                     : `Task is blocked by ${blockingTasks.length} incomplete dependencies`,
             };
-        } catch (error: any) {
-            logger.error('Failed to get blocking tasks', { error: error.message });
+        } catch (error: unknown) {
+            const errorMessage = getErrorMessage(error);
+            logger.error('Failed to get blocking tasks', { error: errorMessage });
             return {
                 success: false,
                 blockingTasks: [],
                 message: 'Failed to get blocking tasks',
-                error: error.message,
+                error: errorMessage,
                 errorCode: 'INTERNAL_ERROR',
             };
         }
@@ -401,22 +430,18 @@ export const dag_get_parallel_groups = {
         },
         required: [],
     },
-    handler: async (args: any, context: any) => {
+    handler: async (
+        args: DagToolArgs,
+        context: McpToolHandlerContext
+    ): Promise<DagToolResult> => {
         try {
+            const { channelId } = requireExactToolTenantContext(context, args.channelId);
+
             if (!isDagEnabled()) {
                 return {
                     success: false,
                     parallelGroups: [],
                     message: 'DAG system is disabled',
-                };
-            }
-
-            const channelId = args.channelId || context.channelId;
-            if (!channelId) {
-                return {
-                    success: false,
-                    parallelGroups: [],
-                    message: 'channelId is required but not provided',
                 };
             }
 
@@ -434,13 +459,14 @@ export const dag_get_parallel_groups = {
                 totalTasks: parallelGroups.reduce((sum, group) => sum + group.length, 0),
                 message: `Found ${parallelGroups.length} parallel execution levels`,
             };
-        } catch (error: any) {
-            logger.error('Failed to get parallel groups', { error: error.message });
+        } catch (error: unknown) {
+            const errorMessage = getErrorMessage(error);
+            logger.error('Failed to get parallel groups', { error: errorMessage });
             return {
                 success: false,
                 parallelGroups: [],
                 message: 'Failed to get parallel groups',
-                error: error.message,
+                error: errorMessage,
                 errorCode: 'INTERNAL_ERROR',
             };
         }
@@ -463,22 +489,18 @@ export const dag_get_critical_path = {
         },
         required: [],
     },
-    handler: async (args: any, context: any) => {
+    handler: async (
+        args: DagToolArgs,
+        context: McpToolHandlerContext
+    ): Promise<DagToolResult> => {
         try {
+            const { channelId } = requireExactToolTenantContext(context, args.channelId);
+
             if (!isDagEnabled()) {
                 return {
                     success: false,
                     criticalPath: [],
                     message: 'DAG system is disabled',
-                };
-            }
-
-            const channelId = args.channelId || context.channelId;
-            if (!channelId) {
-                return {
-                    success: false,
-                    criticalPath: [],
-                    message: 'channelId is required but not provided',
                 };
             }
 
@@ -494,13 +516,14 @@ export const dag_get_critical_path = {
                     ? `Critical path has ${criticalPath.length} tasks`
                     : 'No tasks in DAG or all tasks are isolated',
             };
-        } catch (error: any) {
-            logger.error('Failed to get critical path', { error: error.message });
+        } catch (error: unknown) {
+            const errorMessage = getErrorMessage(error);
+            logger.error('Failed to get critical path', { error: errorMessage });
             return {
                 success: false,
                 criticalPath: [],
                 message: 'Failed to get critical path',
-                error: error.message,
+                error: errorMessage,
                 errorCode: 'INTERNAL_ERROR',
             };
         }
@@ -523,22 +546,18 @@ export const dag_get_stats = {
         },
         required: [],
     },
-    handler: async (args: any, context: any) => {
+    handler: async (
+        args: DagToolArgs,
+        context: McpToolHandlerContext
+    ): Promise<DagToolResult> => {
         try {
+            const { channelId } = requireExactToolTenantContext(context, args.channelId);
+
             if (!isDagEnabled()) {
                 return {
                     success: false,
                     stats: null,
                     message: 'DAG system is disabled',
-                };
-            }
-
-            const channelId = args.channelId || context.channelId;
-            if (!channelId) {
-                return {
-                    success: false,
-                    stats: null,
-                    message: 'channelId is required but not provided',
                 };
             }
 
@@ -566,13 +585,14 @@ export const dag_get_stats = {
                 },
                 message: `DAG has ${stats.nodeCount} tasks with ${stats.edgeCount} dependencies`,
             };
-        } catch (error: any) {
-            logger.error('Failed to get DAG stats', { error: error.message });
+        } catch (error: unknown) {
+            const errorMessage = getErrorMessage(error);
+            logger.error('Failed to get DAG stats', { error: errorMessage });
             return {
                 success: false,
                 stats: null,
                 message: 'Failed to get DAG stats',
-                error: error.message,
+                error: errorMessage,
                 errorCode: 'INTERNAL_ERROR',
             };
         }

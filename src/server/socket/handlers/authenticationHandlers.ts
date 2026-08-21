@@ -33,22 +33,28 @@
 
 import { Socket } from 'socket.io';
 import logger from '@mxf-dev/core/utils/Logger';
-import { createStrictValidator } from '@mxf-dev/core/utils/validation';
-import { EventBus } from '@mxf-dev/core/events/EventBus';
 import { AuthEvents } from '@mxf-dev/core/events/EventNames';
 import { getNormalizedChannelName } from './utilityHandlers';
 import KeyAuthHelper from '../../utils/keyAuthHelper';
 import { Channel } from '@mxf-dev/core/models/channel';
-import { requireEnv } from '@mxf-dev/core/utils/env';
 import { User } from '@mxf-dev/core/models/user';
-import jwt from 'jsonwebtoken';
 import bcrypt from 'bcrypt';
 import { AgentService } from '../services/AgentService';
 import { ConfigManager } from '@mxf-dev/core/config/ConfigManager';
 import { PersonalAccessTokenService } from '../../api/services/PersonalAccessTokenService';
+import { verifySessionToken } from '../../api/security/jwtTokenPolicy';
+import { consumeSocketPasswordAttempt } from '../security/SocketPasswordRateLimiter';
 
 // Create module logger
 const moduleLogger = logger.child('AuthenticationHandlers');
+
+interface SocketChannelConfig {
+    channelId: string;
+    name?: string;
+    description?: string;
+    showActiveAgents: boolean;
+    systemLlmEnabled: boolean;
+}
 
 /**
  * Create authentication middleware for Socket.IO
@@ -63,8 +69,6 @@ const moduleLogger = logger.child('AuthenticationHandlers');
 export const createAuthMiddleware = () => {
     return (socket: Socket, next: (err?: Error) => void): void => {
         try {
-            const validator = createStrictValidator('AuthenticationHandlers.authMiddleware');
-            
             // Get authentication data from handshake
             const auth = socket.handshake.auth;
             
@@ -116,7 +120,10 @@ export const createAuthMiddleware = () => {
  * @param authData Authentication data
  * @returns Agent ID if authentication successful, null otherwise
  */
-export const handleSocketAuthentication = async (socket: Socket, authData: any): Promise<string | null> => {
+export const handleSocketAuthentication = async (
+    socket: Socket,
+    authData: unknown
+): Promise<string | null> => {
     try {
         // Domain key was already validated by middleware
 
@@ -124,26 +131,32 @@ export const handleSocketAuthentication = async (socket: Socket, authData: any):
             moduleLogger.warn(`Invalid auth data format for socket ${socket.id}`);
             return null;
         }
+        const credentials = authData as Record<string, unknown>;
 
         // Try Personal Access Token authentication first (RECOMMENDED for SDK)
-        if (authData.accessToken) {
-            const patResult = await tryPATSocketAuthentication(socket, authData.accessToken);
+        if (typeof credentials.accessToken === 'string') {
+            const patResult = await tryPATSocketAuthentication(socket, credentials.accessToken);
             if (patResult) {
                 return patResult;
             }
         }
 
         // Try JWT authentication (for users with pre-authenticated sessions)
-        if (authData.token) {
-            const jwtResult = await tryJwtSocketAuthentication(socket, authData.token);
+        if (typeof credentials.token === 'string') {
+            const jwtResult = await tryJwtSocketAuthentication(socket, credentials.token);
             if (jwtResult) {
                 return jwtResult;
             }
         }
 
         // Try username/password authentication (for users - no API required)
-        if (authData.username && authData.password) {
-            const userPassResult = await tryUsernamePasswordSocketAuthentication(socket, authData.username, authData.password);
+        if (typeof credentials.username === 'string' &&
+            typeof credentials.password === 'string') {
+            const userPassResult = await tryUsernamePasswordSocketAuthentication(
+                socket,
+                credentials.username,
+                credentials.password
+            );
             if (userPassResult) {
                 return userPassResult;
             }
@@ -152,8 +165,13 @@ export const handleSocketAuthentication = async (socket: Socket, authData: any):
         // Try key-based authentication (for agents).
         // authData.agentId is deliberately not passed through — the agent identity
         // is derived from the key. See tryKeySocketAuthentication.
-        if (authData.keyId && authData.secretKey) {
-            const keyResult = await tryKeySocketAuthentication(socket, authData.keyId, authData.secretKey);
+        if (typeof credentials.keyId === 'string' &&
+            typeof credentials.secretKey === 'string') {
+            const keyResult = await tryKeySocketAuthentication(
+                socket,
+                credentials.keyId,
+                credentials.secretKey
+            );
             if (keyResult) {
                 return keyResult;
             }
@@ -216,8 +234,10 @@ const tryPATSocketAuthentication = async (socket: Socket, accessToken: string): 
         socket.data = {
             userId: validation.userId,
             username: user.username,
+            role: user.role,
             tokenId: validation.tokenId,
             scopes: validation.scopes,
+            credentialExpiresAt: validation.expiresAt?.getTime(),
             authType: 'pat',
             authenticated: true
         };
@@ -241,9 +261,9 @@ const tryPATSocketAuthentication = async (socket: Socket, accessToken: string): 
 const tryJwtSocketAuthentication = async (socket: Socket, token: string): Promise<string | null> => {
     try {
 
-        // Verify token
-        const secret = requireEnv('JWT_SECRET', 'Set a strong secret in .env — it signs and verifies all user JWTs.');
-        const decoded = jwt.verify(token, secret) as any;
+        // Socket sessions use the same purpose/audience policy as HTTP. Magic
+        // links must be exchanged first and cannot authenticate a socket.
+        const decoded = verifySessionToken(token);
 
         if (!decoded || !decoded.userId) {
             return null;
@@ -259,6 +279,8 @@ const tryJwtSocketAuthentication = async (socket: Socket, token: string): Promis
         socket.data = {
             userId: String(user._id),
             username: user.username,
+            role: user.role,
+            credentialExpiresAt: decoded.exp * 1000,
             authType: 'jwt',
             authenticated: true
         };
@@ -294,6 +316,14 @@ const tryUsernamePasswordSocketAuthentication = async (socket: Socket, username:
             return null;
         }
 
+        // Process-wide buckets survive socket reconnects. This check happens
+        // before MongoDB and bcrypt so rejected brute-force traffic consumes no
+        // database query or password-hash CPU.
+        if (!consumeSocketPasswordAttempt(socket, usernameValue)) {
+            moduleLogger.warn(`Socket password authentication rate limit exceeded for socket ${socket.id}`);
+            return null;
+        }
+
         // Find user by username or email
         const user = await User.findOne({
             $or: [
@@ -316,6 +346,7 @@ const tryUsernamePasswordSocketAuthentication = async (socket: Socket, username:
         socket.data = {
             userId: String(user._id),
             username: user.username,
+            role: user.role,
             authType: 'password',  // Different from JWT to indicate socket-based auth
             authenticated: true
         };
@@ -377,6 +408,10 @@ const tryKeySocketAuthentication = async (socket: Socket, keyId: string, secretK
             agentId: agentId,
             channelId: validation.channelId,
             keyId,
+            credentialAllowedTools: validation.allowedTools === undefined
+                ? undefined
+                : [...validation.allowedTools],
+            credentialExpiresAt: validation.expiresAt?.getTime(),
             authType: 'key',
             authenticated: true
         };
@@ -400,33 +435,34 @@ const tryKeySocketAuthentication = async (socket: Socket, keyId: string, secretK
  * @param authData Authentication data to validate
  * @returns True if auth data has valid structure, false otherwise
  */
-export const validateAuthData = (authData: any): boolean => {
+export const validateAuthData = (authData: unknown): boolean => {
     if (!authData || typeof authData !== 'object') {
         return false;
     }
+    const credentials = authData as Record<string, unknown>;
 
     // Check for Personal Access Token authentication (RECOMMENDED)
-    if (authData.accessToken && typeof authData.accessToken === 'string' &&
-        authData.accessToken.trim() && authData.accessToken.includes(':')) {
+    if (typeof credentials.accessToken === 'string' &&
+        credentials.accessToken.trim() && credentials.accessToken.includes(':')) {
         return true;
     }
 
     // Check for JWT authentication
-    if (authData.token && typeof authData.token === 'string' && authData.token.trim()) {
+    if (typeof credentials.token === 'string' && credentials.token.trim()) {
         return true;
     }
 
     // Check for username/password authentication
-    if (authData.username && authData.password &&
-        typeof authData.username === 'string' && typeof authData.password === 'string' &&
-        authData.username.trim() && authData.password.trim()) {
+    if (typeof credentials.username === 'string' &&
+        typeof credentials.password === 'string' &&
+        credentials.username.trim() && credentials.password.trim()) {
         return true;
     }
 
     // Check for key-based authentication
-    if (authData.keyId && authData.secretKey &&
-        typeof authData.keyId === 'string' && typeof authData.secretKey === 'string' &&
-        authData.keyId.trim() && authData.secretKey.trim()) {
+    if (typeof credentials.keyId === 'string' &&
+        typeof credentials.secretKey === 'string' &&
+        credentials.keyId.trim() && credentials.secretKey.trim()) {
         return true;
     }
 
@@ -441,7 +477,11 @@ export const validateAuthData = (authData: any): boolean => {
  * @param authenticatedId User/Agent ID if authenticated, null otherwise
  * @param authData Original auth data
  */
-export const sendAuthResponse = async (socket: Socket, authenticatedId: string | null, authData: any): Promise<void> => {
+export const sendAuthResponse = async (
+    socket: Socket,
+    authenticatedId: string | null,
+    _authData: unknown
+): Promise<void> => {
     if (authenticatedId) {
         // Authentication successful
         const socketData = socket.data;
@@ -459,7 +499,7 @@ export const sendAuthResponse = async (socket: Socket, authenticatedId: string |
             // Key authentication response - fetch channel config
             try {
                 const channelId = socketData?.channelId;
-                let channelConfig: any = null;
+                let channelConfig: SocketChannelConfig | null = null;
                 let activeAgents: string[] = [];
 
                 if (channelId) {

@@ -48,6 +48,8 @@ export interface IChannel extends Document {
     maxAgents: number;
     allowAnonymous: boolean;
     showActiveAgents: boolean; // Whether agents can see other agents in the channel
+    allowedTools: string[]; // Empty means no additional channel-level restriction
+    systemLlmEnabled: boolean;
     
     // Channel state
     active: boolean;

@@ -32,6 +32,7 @@
 import { createBaseEventPayload } from '../schemas/EventPayloadSchema.js';
 import * as os from 'os';
 import { EventEmitter } from 'events';
+import type { Subscription } from 'rxjs';
 import { Logger } from '../utils/Logger.js';
 import { EventBus } from '../events/EventBus.js';
 import { Events } from '../events/EventNames.js';
@@ -195,8 +196,9 @@ export class PerformanceOptimizationService extends EventEmitter {
         optimizationsApplied: 0,
         performanceImprovement: 0
     };
-    
-    private static instance: PerformanceOptimizationService;
+    private readonly eventSubscriptions: Subscription[] = [];
+
+    private static instance: PerformanceOptimizationService | undefined;
     
     private constructor() {
         super();
@@ -880,8 +882,9 @@ proactiveValidationService.updateConfig({
         }
         
         this.autoTuningInterval = setInterval(() => {
-            this.performAutoTuning();
+            void this.performAutoTuning();
         }, this.autoTuningConfig.tuningInterval);
+        this.autoTuningInterval.unref?.();
         
     }
     
@@ -1002,6 +1005,7 @@ proactiveValidationService.updateConfig({
             // Emit resource update
             this.emit('resource_update', usage);
         }, 5000); // Every 5 seconds
+        this.resourceMonitorInterval.unref?.();
     }
     
     /**
@@ -1071,13 +1075,13 @@ proactiveValidationService.updateConfig({
      */
     private setupEventListeners(): void {
         // Listen to validation events for performance tracking
-        EventBus.server.on(Events.Mcp.TOOL_VALIDATION_STARTED, (event) => {
+        this.eventSubscriptions.push(EventBus.server.on(Events.Mcp.TOOL_VALIDATION_STARTED, (_event) => {
             // Track validation start times
-        });
+        }));
         
-        EventBus.server.on(Events.Mcp.TOOL_VALIDATION_COMPLETED, (event) => {
+        this.eventSubscriptions.push(EventBus.server.on(Events.Mcp.TOOL_VALIDATION_COMPLETED, (_event) => {
             // Track validation completion times
-        });
+        }));
     }
     
     // =============================================================================
@@ -1121,12 +1125,25 @@ proactiveValidationService.updateConfig({
     /**
      * Cleanup
      */
-    public cleanup(): void {
+    public shutdown(): void {
         if (this.resourceMonitorInterval) {
             clearInterval(this.resourceMonitorInterval);
+            this.resourceMonitorInterval = undefined;
         }
         if (this.autoTuningInterval) {
             clearInterval(this.autoTuningInterval);
+            this.autoTuningInterval = undefined;
+        }
+        for (const subscription of this.eventSubscriptions) {
+            subscription.unsubscribe();
+        }
+        this.eventSubscriptions.length = 0;
+        this.activeProfiles.clear();
+        this.clearMetrics();
+        this.removeAllListeners();
+
+        if (PerformanceOptimizationService.instance === this) {
+            PerformanceOptimizationService.instance = undefined;
         }
     }
 }

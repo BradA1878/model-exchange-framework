@@ -35,7 +35,8 @@ The SDK has **ONE** main entry point:
   - Creates and manages agent instances via `sdk.createAgent()`
   - Provides channel and key management methods
 
-**Important**: `MxfAgent` is not exported from the SDK. All agent creation must go through `MxfSDK.createAgent()`.
+**Important**: `MxfAgent` is exported only as a TypeScript type. The runtime class is
+not a supported constructor; create every agent through `MxfSDK.createAgent()`.
 
 ### Key Features
 
@@ -54,10 +55,10 @@ The SDK has **ONE** main entry point:
 
 ## Installation
 
-Install the SDK from npm:
+Install the SDK package:
 
 ```bash
-npm install @mxf-dev/sdk    # or: bun add @mxf-dev/sdk
+bun add @mxf-dev/sdk
 # (@mxf-dev/core is pulled in automatically)
 ```
 
@@ -66,7 +67,7 @@ To build from source instead (for contributing):
 ```bash
 git clone https://github.com/BradA1878/model-exchange-framework.git
 cd mxf
-npm install
+bun install
 
 # Build the project
 bun run build
@@ -96,6 +97,11 @@ const sdk = new MxfSDK({
 // Connect the SDK
 await sdk.connect();
 ```
+
+The promise resolves only after user authentication succeeds. The administrative
+socket retries transient transport failures continuously by default; set a finite
+`reconnectionAttempts` when the application needs bounded retry. Authentication
+rejection and configured retry exhaustion reject the promise.
 
 ### Step 2: Generate Channel and Keys (CLI)
 
@@ -127,7 +133,7 @@ const agent = await sdk.createAgent({
     keyId: 'your-key-id',
     secretKey: 'your-secret-key',
     llmProvider: 'openrouter',
-    defaultModel: 'anthropic/claude-3.5-sonnet',
+    defaultModel: '~anthropic/claude-sonnet-latest',
     capabilities: ['research', 'analysis']
 });
 
@@ -135,14 +141,23 @@ const agent = await sdk.createAgent({
 await agent.connect();
 
 // Send a message to the channel
-await agent.channelService.sendMessage('Hello from Research Agent!');
+await agent.mxfService.sendMessage('Hello from Research Agent!');
 
 // Handle incoming messages
 agent.on(Events.Message.AGENT_MESSAGE, (payload) => {
-    console.log('Received:', payload.data.content);
+    console.log('Received:', payload.data.content.data);
     console.log('From:', payload.data.senderId);
 });
 ```
+
+> **Note:** Model ids change often. The ids in these docs are a snapshot of what was
+> available when they were written; providers add, rename, and retire models all the
+> time. Check your provider's current list before relying on an id — for OpenRouter,
+> <https://openrouter.ai/models>. For Claude on OpenRouter, `~anthropic/claude-opus-latest`,
+> `~anthropic/claude-sonnet-latest`, and `~anthropic/claude-haiku-latest` resolve to the
+> newest release in each family, so they are the ids to use unless you need a specific
+> version. `~anthropic/claude-fable-latest` is the same kind of alias for the top-tier
+> family; it is priced well above the others and nothing in MXF selects it by default.
 
 ### LLM-Powered Agent with Full Configuration
 
@@ -166,7 +181,7 @@ const llmAgent = await sdk.createAgent({
     keyId: 'your-key-id',
     secretKey: 'your-secret-key',
     llmProvider: 'openrouter',
-    defaultModel: 'anthropic/claude-3.5-sonnet',
+    defaultModel: '~anthropic/claude-sonnet-latest',
     
     // Optional: Agent identity
     agentConfigPrompt: 'You are a helpful AI assistant specialized in customer support.',
@@ -213,7 +228,7 @@ await llmAgent.connect();
 await agent.connect();
 
 // Check connection status
-const status = agent.getConnectionStatus();
+const connected = agent.isConnected();
 
 // Disconnect
 await agent.disconnect();
@@ -281,51 +296,42 @@ The update is immediate and affects the next LLM iteration's tool selection.
 
 ```typescript
 // Send message to current channel
-await agent.channelService.sendMessage('Hello world', {
-    priority: 'high'
+await agent.mxfService.sendMessage('Hello world', {
+    metadata: { priority: 10 }
 });
 
 // Send message with structured content
-await agent.channelService.sendMessage({
-    format: 'text',
-    data: 'Hello world'
-}, { priority: 'high' });
-
-// Send direct message to another agent
-await agent.channelService.sendMessage('Private message', {
-    recipientId: 'target-agent-id',
-    type: 'direct'
+await agent.mxfService.sendMessage({
+    action: 'status',
+    state: 'ready'
 });
 
-// Broadcast to all agents in channel
-await agent.channelService.sendMessage('Announcement for everyone', {
-    type: 'broadcast'
+// Address one recipient. The sender is always the authenticated agent identity.
+await agent.mxfService.sendMessage('Private message', {
+    receiverId: 'target-agent-id'
 });
 ```
 
 ### Memory Operations
 
 ```typescript
-// Agent Memory (private to this agent)
-await agent.channelService.updateMemory('agent', 'preferences', {
-    theme: 'dark',
-    language: 'en'
+// Canonical channel memory returns the persisted document on both read and write.
+const updatedChannelMemory = await agent.mxfService.updateSharedMemory({
+    notes: { topic: 'Research Project X' },
+    sharedState: { phase: 'planning' }
 });
-const agentMemory = await agent.channelService.getMemory('agent', 'preferences');
+const channelMemory = await agent.mxfService.getSharedMemory();
 
-// Channel Memory (shared with all agents in channel)
-await agent.channelService.updateMemory('channel', 'shared-context', {
-    topic: 'Research Project X',
-    phase: 'planning'
+// Agent-private key/value memory uses the authorized MCP memory tools.
+await agent.executeTool('agent_memory_write', {
+    key: 'preferences',
+    value: { theme: 'dark', language: 'en' },
+    memorySection: 'notes'
 });
-const channelMemory = await agent.channelService.getMemory('channel', 'shared-context');
-
-// Delete memory
-await agent.channelService.deleteMemory('agent', 'old-preference');
-
-// List all memory keys
-const agentKeys = await agent.channelService.listMemoryKeys('agent');
-const channelKeys = await agent.channelService.listMemoryKeys('channel');
+const agentMemory = await agent.executeTool('agent_memory_read', {
+    key: 'preferences',
+    memorySection: 'notes'
+});
 ```
 
 ### Task Handling
@@ -333,12 +339,11 @@ const channelKeys = await agent.channelService.listMemoryKeys('channel');
 ```typescript
 import { Events } from '@mxf-dev/sdk';
 
-// Create a task for agents
-await agent.channelService.createTask({
-    taskId: 'research-task-001',
+// Creation resolves to the server-persisted task ID; callers do not choose it.
+const taskId = await agent.mxfService.createTask({
     title: 'Analyze Market Data',
     description: 'Analyze Q4 2024 market data and provide insights',
-    assignedAgents: ['analyst-agent'],
+    assignedAgentIds: ['analyst-agent'],
     priority: 'high',
     metadata: {
         deadline: '2025-12-31',
@@ -346,10 +351,15 @@ await agent.channelService.createTask({
     }
 });
 
+// Only an assigned participant can authoritatively complete/fail/cancel it.
+await agent.mxfService.completeTask(taskId, { reportId: 'report-42' });
+await agent.mxfService.failTask(taskId, 'Input dataset is unreadable');
+await agent.mxfService.cancelTask(taskId, 'Work is no longer required');
+
 // Listen for task assignments
 agent.on(Events.Task.ASSIGNED, (payload) => {
     console.log('New task assigned:', payload.data.taskId);
-    console.log('Description:', payload.data.description);
+    console.log('Description:', payload.data.task.description);
 });
 
 // Listen for task completion
@@ -363,7 +373,7 @@ agent.on(Events.Task.PROGRESS_UPDATED, (payload) => {
     console.log('Task progress:', payload.data.progress);
 });
 
-// Agents complete tasks by using the task_complete tool via LLM
+// The lifecycle methods resolve only after the matching server acknowledgement.
 ```
 
 ### Tool Execution (MCP)
@@ -441,11 +451,11 @@ import { Events } from '@mxf-dev/sdk';
 agent.on(Events.Message.AGENT_MESSAGE, (payload) => {
     console.log('From:', payload.data.senderId);
     console.log('Channel:', payload.channelId);
-    console.log('Content:', payload.data.content);
+    console.log('Content:', payload.data.content.data);
 });
 
 agent.on(Events.Message.CHANNEL_MESSAGE, (payload) => {
-    console.log('Channel message:', payload.data.content);
+    console.log('Channel message:', payload.data.content.data);
 });
 
 // Task events
@@ -499,17 +509,17 @@ Listen to events only within a specific channel (automatically filtered by chann
 
 ```typescript
 // Events are automatically scoped to this agent's channel
-agent.channelService.on(Events.Message.AGENT_MESSAGE, (payload) => {
+agent.mxfService.on(Events.Message.AGENT_MESSAGE, (payload) => {
     // payload.channelId will always be this agent's channel
-    console.log('Message in my channel:', payload.data.content);
+    console.log('Message in my channel:', payload.data.content.data);
 });
 
-agent.channelService.on(Events.Task.ASSIGNED, (payload) => {
+agent.mxfService.on(Events.Task.ASSIGNED, (payload) => {
     console.log('Task in my channel:', payload.data.taskId);
 });
 
 // Remove listener
-agent.channelService.off(Events.Message.AGENT_MESSAGE);
+agent.mxfService.off(Events.Message.AGENT_MESSAGE);
 ```
 
 ### Event Categories
@@ -622,7 +632,7 @@ const coordinator = await sdk.createAgent({
     keyId: 'coord-key',
     secretKey: 'coord-secret',
     llmProvider: 'openrouter',
-    defaultModel: 'anthropic/claude-3.5-sonnet'
+    defaultModel: '~anthropic/claude-sonnet-latest'
 });
 
 const analyst = await sdk.createAgent({
@@ -632,7 +642,7 @@ const analyst = await sdk.createAgent({
     keyId: 'analyst-key',
     secretKey: 'analyst-secret',
     llmProvider: 'openrouter',
-    defaultModel: 'anthropic/claude-3.5-sonnet'
+    defaultModel: '~anthropic/claude-sonnet-latest'
 });
 
 // Connect all agents
@@ -670,7 +680,7 @@ const gameChannel = await sdk.createChannel('game-channel', {
     mcpServers: [{                                       // Pre-register MCP servers
         id: 'game-server',
         name: 'Game Server',
-        command: 'npx',
+        command: 'bunx',
         args: ['-y', '@mcp/game-tools'],
         keepAliveMinutes: 30
     }]
@@ -687,11 +697,17 @@ console.log('Secret Key:', keyInfo.secretKey);
 Implement principle of least privilege with `allowedTools`:
 
 ```typescript
-// Full tool access (default)
-const adminAgent = await sdk.createAgent({
-    agentId: 'admin',
-    // No allowedTools = access to all tools
-    // ... other config
+// Omitting allowedTools selects MXF's curated core-tool set.
+const coreAgent = await sdk.createAgent({
+    agentId: 'core-agent',
+    // ... other required config
+});
+
+// An explicit empty list denies every tool.
+const conversationalAgent = await sdk.createAgent({
+    agentId: 'conversation-only',
+    allowedTools: [],
+    // ... other required config
 });
 
 // Restricted tool access (recommended for production)
@@ -713,29 +729,37 @@ The MXF SDK provides fine-grained control over which tools agents can access thr
 
 ### Overview
 
-The `allowedTools` property is an optional array of tool names that restricts which MCP tools an agent can access. This filtering happens at three levels:
+The `allowedTools` property requests a tool policy within the maximum grant carried
+by the authenticated channel key. It can narrow that credential grant but cannot
+expand it. Its three states are intentionally distinct:
 
-1. **SDK Level**: Tools are filtered when sent to the agent
-2. **Meta-tools Level**: `tools_recommend` and `tools_discover` only suggest allowed tools
-3. **System Prompt Level**: Tool documentation only shows allowed tools
+- `undefined`: MXF's curated `CORE_MXF_TOOLS` set (plus enabled memory-search tools)
+- `[]`: no tools
+- non-empty array: exactly that requested subset, if every name is in the key grant
+
+Filtering is enforced at the server's discovery and execution boundaries as well as
+inside the SDK; prompt filtering is not the security boundary.
+
+1. **Credential boundary**: A client cannot self-grant beyond its channel key
+2. **Server boundary**: Discovery and execution use the same effective policy
+3. **SDK/prompt boundary**: The model sees only the effective tool set
 
 Internal tools are named by their tool name (`messaging_send`, `task_complete`). Tools from external and channel MCP servers are named by the raw name the origin server reports — the names returned in `toolsDiscovered` at registration. The registry's canonical form, `<serverId>__<toolName>`, is accepted in `allowedTools` as well, but the raw name is the one to use: a channel server's registry id contains `:`, which LLM providers reject in function names. See [External MCP Servers](external-mcp-servers.md#tool-names).
 
 ### Configuration Options
 
-#### **Unrestricted Access (Development/Admin)**
+#### **Curated Core Access**
 
 ```typescript
-// Omit allowedTools for full access to all tools
-const adminAgent = await sdk.createAgent({
-    agentId: 'admin-agent',
-    name: 'Admin Agent',
-    // No allowedTools property = all tools available
-    channelId: 'admin-channel',
-    keyId: 'admin-key',
-    secretKey: 'admin-secret',
+// Omit allowedTools to use CORE_MXF_TOOLS, not the full registry.
+const coreAgent = await sdk.createAgent({
+    agentId: 'core-agent',
+    name: 'Core Agent',
+    channelId: 'work-channel',
+    keyId: 'agent-key',
+    secretKey: 'agent-secret',
     llmProvider: 'openrouter',
-    defaultModel: 'anthropic/claude-3.5-sonnet'
+    defaultModel: '~anthropic/claude-sonnet-latest'
 });
 ```
 
@@ -750,7 +774,7 @@ const serviceAgent = await sdk.createAgent({
     keyId: 'service-key',
     secretKey: 'service-secret',
     llmProvider: 'openrouter',
-    defaultModel: 'anthropic/claude-3.5-sonnet',
+    defaultModel: '~anthropic/claude-sonnet-latest',
     allowedTools: [
         'messaging_send',        // Send messages to customers
         'messaging_coordinate',  // Coordinate with other agents
@@ -767,7 +791,7 @@ const analysisAgent = await sdk.createAgent({
     keyId: 'analysis-key',
     secretKey: 'analysis-secret',
     llmProvider: 'openrouter',
-    defaultModel: 'anthropic/claude-3.5-sonnet',
+    defaultModel: '~anthropic/claude-sonnet-latest',
     allowedTools: [
         'filesystem_read',       // Read data files
         'memory_store',          // Store analysis results
@@ -785,7 +809,7 @@ const orchestratorAgent = await sdk.createAgent({
     keyId: 'orchestrator-key', 
     secretKey: 'orchestrator-secret',
     llmProvider: 'openrouter',
-    defaultModel: 'anthropic/claude-3.5-sonnet',
+    defaultModel: '~anthropic/claude-sonnet-latest',
     allowedTools: [
         'messaging_send',        // Coordinate with agents
         'messaging_coordinate',  // Multi-party coordination
@@ -859,7 +883,7 @@ const dangerousAgent = await sdk.createAgent({
 const roles = {
     customer_service: ['messaging_send', 'channel_context_get'],
     data_processor: ['filesystem_read', 'memory_store', 'task_complete'],  
-    system_admin: undefined, // Unrestricted access for admin tasks
+    system_agent: undefined, // Curated core tools, not unrestricted access
     coordinator: ['messaging_coordinate', 'messaging_broadcast', 'task_complete']
 };
 ```
@@ -881,7 +905,7 @@ The SDK provides helpful logging when tools are filtered:
 If you're adding `allowedTools` to existing agents:
 
 ```typescript
-// Before: Unrestricted access (implicit)
+// Before: Curated core access (implicit)
 const legacyAgent = await sdk.createAgent({
     agentId: 'legacy-agent',
     name: 'Legacy Agent',
@@ -905,7 +929,11 @@ const secureAgent = await sdk.createAgent({
 });
 ```
 
-**Testing Tip**: Start with unrestricted access during development, then gradually add restrictions as you identify which tools each agent actually uses.
+**Testing Tip**: Generate the channel key with the maximum tools the role may ever
+need, then request the smallest per-agent subset. Privileged host tools
+(`shell_execute`, filesystem/code tools) and network tools remain disabled unless the
+server operator explicitly enables `MXF_UNSAFE_HOST_TOOLS_ENABLED=true` or
+`MXF_UNSAFE_NETWORK_TOOLS_ENABLED=true`.
 
 ### Dynamic Tool Updates
 

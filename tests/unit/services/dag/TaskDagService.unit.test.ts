@@ -636,4 +636,18 @@ describe('TaskDagService', () => {
             expect(service.isEnabled()).toBe(false);
         });
     });
+
+    describe('singleton lifecycle', () => {
+        it('does not construct during repeated shutdown and restarts with a fresh instance', () => {
+            const original = service;
+
+            expect(TaskDagService.shutdownExisting()).toBe(true);
+            expect(TaskDagService.shutdownExisting()).toBe(false);
+
+            const restarted = TaskDagService.getInstance();
+            expect(restarted).not.toBe(original);
+            expect(restarted.isEnabled()).toBe(true);
+            expect(TaskDagService.shutdownExisting()).toBe(true);
+        });
+    });
 });

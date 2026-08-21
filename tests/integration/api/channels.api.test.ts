@@ -23,6 +23,7 @@ describe('Channel API Endpoints', () => {
         isPrivate: false,
         requireApproval: false,
         maxAgents: 10,
+        systemLlmEnabled: false,
         metadata: { testChannel: true }
     };
 

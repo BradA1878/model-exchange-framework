@@ -115,7 +115,7 @@ export class MxfTaskExecutionManager {
         // CRITICAL: Filter tools by allowedTools to ensure only permitted tools are sent to LLM
         // This is essential for phase-gated tool systems where allowedTools changes dynamically
         const allowedTools = this.callbacks.getAllowedTools();
-        if (allowedTools && allowedTools.length > 0) {
+        if (allowedTools !== undefined) {
             const originalCount = availableTools.length;
             availableTools = availableTools.filter((tool: any) =>
                 allowedTools.includes(tool.name)
@@ -192,7 +192,7 @@ ${intentGuidance}${planningGuidance}`;
         
         // Check if agent has task_complete tool
         const allowedTools = this.callbacks.getAllowedTools();
-        const hasTaskComplete = !allowedTools || allowedTools.includes('task_complete');
+        const hasTaskComplete = allowedTools === undefined || allowedTools.includes('task_complete');
         
         let guidance = '';
         
@@ -247,7 +247,7 @@ ${intentGuidance}${planningGuidance}`;
         
         // Check if agent has task_complete tool
         const allowedTools = this.callbacks.getAllowedTools();
-        const hasTaskComplete = !allowedTools || allowedTools.includes('task_complete');
+        const hasTaskComplete = allowedTools === undefined || allowedTools.includes('task_complete');
         
         if (!isCompletionAgent) {
             return `\n## COMPLETION GUIDANCE:
@@ -361,6 +361,20 @@ ${intentGuidance}${planningGuidance}`;
         
         const totalTime = metrics.reduce((sum, metric) => sum + metric.executionTime, 0);
         return totalTime / metrics.length;
+    }
+
+    /**
+     * Forget the current task because it reached its outcome — completed,
+     * failed, or cancelled. Unlike cancelCurrentTask() this is the normal end
+     * of a task, not an interruption, and is logged as such.
+     */
+    public clearCurrentTask(reason: string): void {
+        if (!this.currentTask) {
+            return;
+        }
+        this.logger.info(`Task ${this.currentTask.taskId} ended (${reason}); agent is idle until the next assignment`);
+        this.currentTask = null;
+        this.callbacks.setCurrentTask(null);
     }
 
     /**

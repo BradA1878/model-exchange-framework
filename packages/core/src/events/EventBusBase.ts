@@ -41,20 +41,25 @@ import { Logger } from '../utils/Logger.js';
  * rejection can kill the bus subscription or vanish silently. Errors are
  * logged loudly with the event name; the bus stays alive for other handlers.
  */
-export const invokeHandlerSafely = (
+export const invokeHandlerSafely = <T>(
     busLogger: Logger,
     eventName: unknown,
-    handler: (payload: any) => unknown,
-    payload: any
+    handler: (payload: T) => unknown,
+    payload: T,
+    trackAsyncWork?: (work: Promise<void>) => void
 ): void => {
     try {
         const result = handler(payload);
         if (result && typeof (result as Promise<unknown>).then === 'function') {
-            (result as Promise<unknown>).catch((error: unknown) => {
-                busLogger.error(
-                    `Async handler for '${String(eventName)}' rejected: ${error instanceof Error ? error.stack : String(error)}`
-                );
-            });
+            const work = Promise.resolve(result).then(
+                () => undefined,
+                (error: unknown): void => {
+                    busLogger.error(
+                        `Async handler for '${String(eventName)}' rejected: ${error instanceof Error ? error.stack : String(error)}`
+                    );
+                }
+            );
+            trackAsyncWork?.(work);
         }
     } catch (error) {
         busLogger.error(
@@ -76,7 +81,7 @@ export interface SocketLike {
     off: (event: string, listener?: (...args: any[]) => void) => any;
     emit: (event: string, ...args: any[]) => any;
     onAny?: (listener: (event: string, ...args: any[]) => void) => any;
-    offAny?: () => any;
+    offAny?: (listener?: (event: string, ...args: unknown[]) => void) => unknown;
     removeAllListeners?: () => any;
     disconnect?: () => void;
     data?: {
@@ -161,7 +166,13 @@ export interface EventBusBase {
      * @param event Event name
      * @param payload Event payload
      */
-    emit?(event: AnyEventName, payload: any): void;
+    emit?<K extends AnyEventName>(event: K, payload: PayloadOf<K>): void;
+
+    /**
+     * Publish an event to local subscribers without forwarding it to the
+     * transport. Used when a socket event has already crossed the transport.
+     */
+    emitLocal<K extends AnyEventName>(event: K, payload: PayloadOf<K>): void;
 
     /**
      * Check if an event has subscribers
@@ -190,6 +201,12 @@ export interface EventBusBase {
      * @returns this (for chaining)
      */
     removeAllListeners(event?: AnyEventName): this;
+
+    /** Wait for every async handler already accepted by this bus to settle. */
+    drain(): Promise<void>;
+
+    /** Number of accepted async handlers that have not settled yet. */
+    pendingHandlerCount(): number;
 }
 
 /**
@@ -232,7 +249,7 @@ export function isReservedEvent(event: string): boolean {
  * the wrapper (as an earlier version did) meant off() could never find the entry,
  * so the RxJS subscription was never disposed and the "one-shot" listener kept
  * firing on every later event. take(1) now disposes the subscription itself and
- * the completion callback clears the registry entry.
+ * the subscription teardown clears the registry entry.
  *
  * ## Emit contract
  *
@@ -258,13 +275,16 @@ export abstract class BaseEventBusImplementation implements EventBusBase {
      * A handler may be registered more than once for the same event, so the
      * value is a list; off() disposes all of them.
      */
-    protected handlerSubscriptions: Map<string, Map<EventHandler<any>, Subscription[]>> = new Map();
+    protected handlerSubscriptions: Map<string, Map<EventHandler<never>, Subscription[]>> = new Map();
 
     /** event → number of live per-event subscribers. */
     protected subscriptionCountMap: Map<string, number> = new Map();
 
     /** onAll() subscriptions, which are not tied to any single event name. */
     protected allEventSubscriptions: Set<Subscription> = new Set();
+
+    /** Async handler work accepted by this bus and still using server resources. */
+    private readonly pendingHandlerWork = new Set<Promise<void>>();
 
     private debugMode: boolean = false;
     private debugSubscription: Subscription | null = null;
@@ -313,6 +333,37 @@ export abstract class BaseEventBusImplementation implements EventBusBase {
         } catch (error) {
             this.busLogger.error(
                 `Error emitting event '${String(event)}': ${error instanceof Error ? error.message : String(error)}`
+            );
+            this.reportEmitFailure(event, error);
+            throw error;
+        }
+    }
+
+    /**
+     * Deliver an event to this bus's local subscribers only.
+     *
+     * Socket ingress must use this path when adapting a received event for SDK
+     * subscribers. Calling emit()/emitOn() there sends the same event back over
+     * the socket and creates a transport echo loop for bidirectional names.
+     */
+    public emitLocal<K extends AnyEventName>(event: K, payload: PayloadOf<K>): void {
+        try {
+            validateEventName(event);
+
+            if (payload === undefined || payload === null) {
+                throw new Error(
+                    `Event '${String(event)}' was emitted locally with a ` +
+                    `${payload === null ? 'null' : 'undefined'} payload. ` +
+                    'Build the payload with a helper from EventPayloadSchema.'
+                );
+            }
+
+            this.validateEventPayload(String(event), payload);
+            this.eventSubject.next({ type: event, payload });
+        } catch (error) {
+            this.busLogger.error(
+                `Error emitting local event '${String(event)}': ` +
+                `${error instanceof Error ? error.message : String(error)}`
             );
             this.reportEmitFailure(event, error);
             throw error;
@@ -375,11 +426,17 @@ export abstract class BaseEventBusImplementation implements EventBusBase {
             .subscribe({
                 // Isolate throws/rejections so one bad handler cannot kill the
                 // subscription or fail silently.
-                next: (payload) => invokeHandlerSafely(this.busLogger, event, handler, payload),
-                complete: () => this.forgetSubscription(event, handler, subscription)
+                next: (payload) => invokeHandlerSafely(
+                    this.busLogger,
+                    event,
+                    handler,
+                    payload,
+                    this.trackAsyncHandlerWork
+                )
             });
 
         this.registerHandler(event, handler, subscription);
+        subscription.add(() => this.forgetSubscription(event, handler, subscription));
 
         return subscription;
     }
@@ -388,7 +445,7 @@ export abstract class BaseEventBusImplementation implements EventBusBase {
      * Subscribe to an event for exactly one delivery.
      *
      * take(1) disposes the RxJS subscription after the first event, and the
-     * completion callback removes it from the registry, so nothing is left
+     * subscription teardown removes it from the registry, so nothing is left
      * behind. off(event, handler) still works before the event arrives.
      *
      * @param event Event name
@@ -398,13 +455,6 @@ export abstract class BaseEventBusImplementation implements EventBusBase {
     public once<K extends AnyEventName>(event: K, handler: EventHandler<PayloadOf<K>>): Subscription {
         validateEventName(event);
 
-        // The completion callback needs the Subscription, which only exists once
-        // subscribe() returns. With a plain Subject the source cannot emit during
-        // subscribe(), but this flag keeps the bookkeeping correct even if the
-        // Subject were ever swapped for a replaying one.
-        let registered = false;
-        let completedBeforeRegistration = false;
-
         const subscription: Subscription = this.eventSubject
             .pipe(
                 filter((e: EventMessage) => e.type === event),
@@ -412,22 +462,17 @@ export abstract class BaseEventBusImplementation implements EventBusBase {
                 map((e: EventMessage) => e.payload)
             )
             .subscribe({
-                next: (payload) => invokeHandlerSafely(this.busLogger, event, handler, payload),
-                complete: () => {
-                    if (registered) {
-                        this.forgetSubscription(event, handler, subscription);
-                    } else {
-                        completedBeforeRegistration = true;
-                    }
-                }
+                next: (payload) => invokeHandlerSafely(
+                    this.busLogger,
+                    event,
+                    handler,
+                    payload,
+                    this.trackAsyncHandlerWork
+                )
             });
 
         this.registerHandler(event, handler, subscription);
-        registered = true;
-
-        if (completedBeforeRegistration) {
-            this.forgetSubscription(event, handler, subscription);
-        }
+        subscription.add(() => this.forgetSubscription(event, handler, subscription));
 
         return subscription;
     }
@@ -441,11 +486,18 @@ export abstract class BaseEventBusImplementation implements EventBusBase {
     public onAll(listener: (eventType: string, payload: any) => void): Subscription {
         const subscription = this.eventSubject.subscribe({
             next: (e: EventMessage) =>
-                invokeHandlerSafely(this.busLogger, e.type, (payload) => listener(e.type, payload), e.payload)
+                invokeHandlerSafely(
+                    this.busLogger,
+                    e.type,
+                    (payload) => listener(e.type, payload),
+                    e.payload,
+                    this.trackAsyncHandlerWork
+                )
         });
 
         this.subscriptions.push(subscription);
         this.allEventSubscriptions.add(subscription);
+        subscription.add(() => this.forgetSubscriptionEverywhere(subscription));
 
         return subscription;
     }
@@ -472,6 +524,7 @@ export abstract class BaseEventBusImplementation implements EventBusBase {
         } else {
             this.categorySubscriptions.set(category, [subscription]);
         }
+        subscription.add(() => this.forgetCategorySubscription(category, subscription));
 
         return subscription;
     }
@@ -528,7 +581,7 @@ export abstract class BaseEventBusImplementation implements EventBusBase {
             return this;
         }
 
-        for (const subscription of categorySubs) {
+        for (const subscription of [...categorySubs]) {
             subscription.unsubscribe();
             this.forgetSubscriptionEverywhere(subscription);
         }
@@ -614,6 +667,22 @@ export abstract class BaseEventBusImplementation implements EventBusBase {
         return this.allEventSubscriptions.size;
     }
 
+    /** Number of async callbacks which have not yet settled. */
+    public pendingHandlerCount(): number {
+        return this.pendingHandlerWork.size;
+    }
+
+    /**
+     * Wait for all accepted async callbacks, including callbacks accepted by a
+     * callback while the current batch is settling. Ingress must be stopped
+     * before calling this during process shutdown so the set eventually closes.
+     */
+    public async drain(): Promise<void> {
+        while (this.pendingHandlerWork.size > 0) {
+            await Promise.all([...this.pendingHandlerWork]);
+        }
+    }
+
     /**
      * Log every event passing through this bus at debug level.
      *
@@ -648,10 +717,18 @@ export abstract class BaseEventBusImplementation implements EventBusBase {
     // Internal bookkeeping
     // ---------------------------------------------------------------------
 
+    /** Keep shutdown ownership of an async handler until it has settled. */
+    private readonly trackAsyncHandlerWork = (work: Promise<void>): void => {
+        this.pendingHandlerWork.add(work);
+        void work.then((): void => {
+            this.pendingHandlerWork.delete(work);
+        });
+    };
+
     /** Record a new per-event subscription across all three structures. */
     private registerHandler(
         event: AnyEventName,
-        handler: EventHandler<any>,
+        handler: EventHandler<never>,
         subscription: Subscription
     ): void {
         this.subscriptions.push(subscription);
@@ -679,7 +756,7 @@ export abstract class BaseEventBusImplementation implements EventBusBase {
      */
     private forgetSubscription(
         event: AnyEventName,
-        handler: EventHandler<any>,
+        handler: EventHandler<never>,
         subscription: Subscription
     ): void {
         const eventHandlers = this.handlerSubscriptions.get(event);
@@ -725,6 +802,22 @@ export abstract class BaseEventBusImplementation implements EventBusBase {
         const index = this.subscriptions.indexOf(subscription);
         if (index !== -1) {
             this.subscriptions.splice(index, 1);
+        }
+    }
+
+    /** Drop a subscription from one category without affecting other registrations. */
+    private forgetCategorySubscription(category: string, subscription: Subscription): void {
+        const categorySubs = this.categorySubscriptions.get(category);
+        if (!categorySubs) {
+            return;
+        }
+
+        const index = categorySubs.indexOf(subscription);
+        if (index !== -1) {
+            categorySubs.splice(index, 1);
+        }
+        if (categorySubs.length === 0) {
+            this.categorySubscriptions.delete(category);
         }
     }
 

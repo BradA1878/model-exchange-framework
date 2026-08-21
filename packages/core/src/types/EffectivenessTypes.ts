@@ -125,6 +125,9 @@ export interface TaskEffectivenessMetrics {
 export interface TaskDefinition {
     /** Unique task identifier */
     taskId: string;
+
+    /** Agent that owns this effectiveness record */
+    agentId: AgentId;
     
     /** Channel where task is executed */
     channelId: ChannelId;
@@ -267,9 +270,10 @@ export interface EffectivenessAnalytics {
 export interface TaskExecutionEvent {
     eventId: string;
     taskId: string;
+    agentId: AgentId;
+    channelId: ChannelId;
     timestamp: number;
     type: 'start' | 'step' | 'tool_use' | 'agent_join' | 'human_input' | 'error' | 'complete';
-    agentId?: AgentId;
     details: Record<string, any>;
 }
 

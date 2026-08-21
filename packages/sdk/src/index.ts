@@ -25,7 +25,7 @@
  * Only public APIs are exported - internal implementation details are hidden.
  * 
  * IMPORTANT: EventBus is NOT exported - it is internal only.
- * Use agent.on() for event listening and agent.channelService for operations.
+ * Use agent.on() for event listening and agent.mxfService for channel operations.
  */
 
 // ============================================================================
@@ -56,6 +56,7 @@
  * const agent = await sdk.createAgent({
  *     agentId: 'my-agent',
  *     name: 'My Agent',
+ *     channelId: 'my-channel',
  *     keyId: 'key-123',
  *     secretKey: 'secret-456',
  *     llmProvider: 'openrouter',
@@ -75,16 +76,21 @@
  * await sdk.connect();
  * const agent = await sdk.createAgent({ ... });
  * 
- * agent.on(Events.Message.AGENT_MESSAGE, (message) => {
- *     console.log('Received:', message.content);
+ * agent.on(Events.Message.AGENT_MESSAGE, (payload) => {
+ *     console.log('Received:', payload.data.content.data);
  * });
  * 
- * agent.on(Events.Task.ASSIGNED, (task) => {
- *     console.log('New task:', task.taskId);
+ * agent.on(Events.Task.ASSIGNED, (payload) => {
+ *     console.log('New task:', payload.data.taskId);
  * });
  * ```
  */
 export { Events } from '@mxf-dev/core/events/EventNames';
+export {
+    CORE_MXF_TOOLS,
+    isCoreToolName,
+} from '@mxf-dev/core/constants/CoreTools';
+export type { CoreMxfTool } from '@mxf-dev/core/constants/CoreTools';
 
 // ============================================================================
 // TYPES - Public type definitions
@@ -98,7 +104,31 @@ export type { TaskConfig } from './services/MxfService.js';
 /**
  * Task event callbacks for event handling
  */
-export type { TaskEventCallbacks } from './services/MxfService.js';
+export type {
+    MxfMessageOptions,
+    TaskEventCallbacks,
+} from './services/MxfService.js';
+export { ContentFormat } from '@mxf-dev/core/schemas/MessageSchemas';
+
+/**
+ * Canonical memory contracts returned by the SDK's supported memory surfaces.
+ */
+export {
+    MemoryPersistenceLevel,
+    MemoryScope,
+} from '@mxf-dev/core/types/MemoryTypes';
+export type {
+    IAgentMemory,
+    IChannelMemory,
+    IRelationshipMemory,
+    MemoryData,
+} from '@mxf-dev/core/types/MemoryTypes';
+export type {
+    ChannelMemory,
+    ChannelMemoryUpdate,
+    RelationshipMemory,
+    RelationshipMemoryUpdate,
+} from './services/MxfApiService.js';
 
 /**
  * Admin operation types for channel and key management
@@ -119,6 +149,7 @@ export type { TaskEventCallbacks } from './services/MxfService.js';
 export type { 
     ChannelCreateConfig, 
     ChannelCreateResult, 
+    KeyGenerateConfig,
     KeyGenerateResult, 
     KeyInfo 
 } from './services/MxfService.js';
@@ -128,6 +159,7 @@ export type {
  */
 export { MxfSDK } from './MxfSDK.js';
 export type { MxfSDKConfig, AgentCreationConfig } from './MxfSDK.js';
+export type { SdkReconnectedEventData } from '@mxf-dev/core/events/event-definitions/SdkEvents';
 
 /**
  * Agent configuration interface
@@ -187,6 +219,9 @@ export { ConnectionStatus } from '@mxf-dev/core/types/types';
  * ```
  */
 export type { MxfAgent } from './MxfAgent.js';
+export { AgentMcpProcessManagementError } from './MxfClient.js';
+export { AgentChannelAdministrationError } from './services/MxfService.js';
+export type { McpServerRegistrationResult } from './MxfClient.js';
 
 /**
  * MxfChannelMonitor - Channel event monitor
@@ -202,30 +237,31 @@ export type { MxfAgent } from './MxfAgent.js';
  * await sdk.connect();
  * 
  * // Create channel and get monitor
- * const channel: MxfChannelMonitor = await sdk.createChannel('my-channel', 'My Channel');
+ * const channel: MxfChannelMonitor = await sdk.createChannel('my-channel', {
+ *     name: 'My Channel'
+ * });
  * 
  * // Listen to channel events
  * channel.on(Events.Message.AGENT_MESSAGE, (payload) => {
- *     console.log('Message:', payload.data.content);
+ *     console.log('Message:', payload.data.content.data);
  * });
  * ```
  */
 export { MxfChannelMonitor } from './MxfChannelMonitor.js';
 
 /**
- * SDK Configuration Manager
+ * Process-local Configuration Manager
  * 
- * Manages SDK-level configuration including SystemLLM settings.
- * Use this to enable/disable SystemLLM for channels and configure other SDK features.
+ * Manages configuration for services running in this process. SDK clients must
+ * send channel settings during channel creation so the server can persist them;
+ * changing this singleton in a client process does not configure a remote server.
  * 
  * @example
  * ```typescript
- * import { ConfigManager } from '@mxf-dev/sdk';
- * 
- * const configManager = ConfigManager.getInstance();
- * 
- * // Disable SystemLLM for a channel
- * configManager.setChannelSystemLlmEnabled(false, 'Demo channel - agents handle coordination');
+ * const channel = await sdk.createChannel('demo-channel', {
+ *     name: 'Demo channel',
+ *     systemLlmEnabled: false
+ * });
  * ```
  */
 export { ConfigManager } from '@mxf-dev/core/config/ConfigManager';
@@ -305,4 +341,3 @@ export type {
     MultiSelectInputConfig,
     ConfirmInputConfig,
 } from '@mxf-dev/core/events/event-definitions/UserInputEvents';
-

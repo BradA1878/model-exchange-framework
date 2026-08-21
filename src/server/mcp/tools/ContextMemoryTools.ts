@@ -27,7 +27,6 @@
  */
 
 import { firstValueFrom } from 'rxjs';
-import { AgentId, ChannelId } from '@mxf-dev/core/types/ChannelContext';
 import { Logger } from '@mxf-dev/core/utils/Logger';
 import { createStrictValidator } from '@mxf-dev/core/utils/validation';
 import { ChannelContextService } from '../../services/ChannelContextService';
@@ -39,6 +38,27 @@ import { QValueManager } from '@mxf-dev/core/services/QValueManager';
 
 const logger = new Logger('info', 'ContextMemoryTools', 'server');
 const validator = createStrictValidator('ContextMemoryTools');
+
+interface CognitiveMemoryReferences {
+    observationIds?: unknown[];
+    reasoningIds?: unknown[];
+    planIds?: unknown[];
+    reflectionIds?: unknown[];
+}
+
+interface CognitiveMemoryCarrier {
+    cognitiveMemory?: CognitiveMemoryReferences;
+}
+
+const getCognitiveMemoryCounts = (memory: IAgentMemory): Record<string, number> => {
+    const cognitiveMemory = (memory as IAgentMemory & CognitiveMemoryCarrier).cognitiveMemory;
+    return {
+        observationCount: cognitiveMemory?.observationIds?.length ?? 0,
+        reasoningCount: cognitiveMemory?.reasoningIds?.length ?? 0,
+        planCount: cognitiveMemory?.planIds?.length ?? 0,
+        reflectionCount: cognitiveMemory?.reflectionIds?.length ?? 0
+    };
+};
 
 /**
  * MCP Tool: channel_memory_read
@@ -81,17 +101,17 @@ export const channelMemoryReadTool = {
             const memoryService = MemoryService.getInstance();
             const channelMemory = await firstValueFrom(memoryService.getChannelMemory(context.channelId!));
 
-            let resultData = channelMemory;
+            let resultData: unknown = channelMemory;
 
             // If specific key requested, extract from notes, sharedState, or customData
             if (input.key) {
                 validator.assertIsString(input.key, 'key');
-                resultData = channelMemory.notes?.[input.key] || 
-                             channelMemory.sharedState?.[input.key] || 
-                             channelMemory.customData?.[input.key] || null;
+                resultData = channelMemory.notes?.[input.key] ??
+                             channelMemory.sharedState?.[input.key] ??
+                             channelMemory.customData?.[input.key] ?? null;
             }
 
-            const result: any = {
+            const result: Record<string, unknown> = {
                 channelId: context.channelId,
                 memory: resultData,
                 retrievedAt: Date.now()
@@ -120,13 +140,9 @@ export const channelMemoryReadTool = {
             return { content };
         } catch (error) {
             logger.error(`Failed to read channel memory: ${error}`);
-            const content: McpToolResultContent = {
-                type: 'application/json',
-                data: {
-                    error: `Failed to read channel memory: ${error instanceof Error ? error.message : String(error)}`
-                }
-            };
-            return { content };
+            throw new Error(
+                `Failed to read channel memory: ${error instanceof Error ? error.message : String(error)}`
+            );
         }
     }
 };
@@ -169,9 +185,9 @@ export const channelMemoryWriteTool = {
 
     handler: async (input: {
         key: string;
-        value: any;
+        value: unknown;
         memorySection?: 'notes' | 'sharedState' | 'customData';
-        metadata?: Record<string, any>;
+        metadata?: Record<string, unknown>;
         overwrite?: boolean;
     }, context: McpToolHandlerContext): Promise<McpToolHandlerResult> => {
         try {
@@ -179,12 +195,23 @@ export const channelMemoryWriteTool = {
             validator.assertIsNonEmptyString(context.agentId, 'agentId');
             validator.assertIsNonEmptyString(input.key, 'key');
 
+            const section = input.memorySection || 'sharedState';
+            const targetsReservedField =
+                (section === 'sharedState' && (
+                    input.key === 'context' || input.key.startsWith('context.')
+                )) ||
+                (section === 'customData' && (
+                    input.key === 'contextHistory' || input.key.startsWith('contextHistory.')
+                ));
+            if (targetsReservedField) {
+                throw new Error(
+                    `Key '${input.key}' is reserved for atomic keyed-memory operations`
+                );
+            }
 
             // Get current channel memory
             const memoryService = MemoryService.getInstance();
             const channelMemory = await firstValueFrom(memoryService.getChannelMemory(context.channelId!));
-
-            const section = input.memorySection || 'sharedState';
 
             // Check if key exists and overwrite is false
             const sectionData = channelMemory[section] || {};
@@ -193,12 +220,11 @@ export const channelMemoryWriteTool = {
             }
 
             // Prepare updates
-            const updates: any = {
+            const updates: Partial<IChannelMemory> = {
                 [section]: {
-                    ...sectionData,
                     [input.key]: input.value
                 }
-            };
+            } as Partial<IChannelMemory>;
 
             // Update channel memory
             await firstValueFrom(memoryService.updateChannelMemory(context.channelId!, updates));
@@ -216,13 +242,9 @@ export const channelMemoryWriteTool = {
             return { content };
         } catch (error) {
             logger.error(`Failed to write channel memory: ${error}`);
-            const content: McpToolResultContent = {
-                type: 'application/json',
-                data: {
-                    error: `Failed to write channel memory: ${error instanceof Error ? error.message : String(error)}`
-                }
-            };
-            return { content };
+            throw new Error(
+                `Failed to write channel memory: ${error instanceof Error ? error.message : String(error)}`
+            );
         }
     }
 };
@@ -267,59 +289,26 @@ export const channelContextReadTool = {
         includeTopics?: boolean;
         includeSummary?: boolean;
         historyLimit?: number;
-    }, context: {
-        agentId: string;
-        channelId: string;
-        requestId: string;
-    }): Promise<{
-        content: {
-            type: string;
-            data: any;
-        }
-    }> => {
+    }, context: McpToolHandlerContext): Promise<McpToolHandlerResult> => {
         try {
-            validator.assertIsNonEmptyString(context.channelId, 'channelId');
+            const channelId = context.channelId;
+            validator.assertIsNonEmptyString(channelId, 'channelId');
             validator.assertIsNonEmptyString(context.agentId, 'agentId');
+            if (!channelId) {
+                throw new Error('channelId is required');
+            }
 
 
             // Tools execute on the SERVER side via MCP protocol
             // Ensure server context is set (default behavior)
             ChannelContextService.setClientContext(false);
             
-            // Get channel context from ChannelContextService with timeout
             const contextService = ChannelContextService.getInstance();
-            
-            // Add timeout to prevent hanging indefinitely
-            // Note: ChannelContextMemoryOperations has a 45-second timeout internally
-            // We use a slightly longer timeout here to let it complete naturally
-            const contextPromise = firstValueFrom(contextService.getContext(context.channelId));
-            const timeoutPromise = new Promise<null>((_, reject) => {
-                setTimeout(() => reject(new Error('Context retrieval timeout')), 50000); // 50 second timeout (longer than internal 45s)
-            });
-            
-            let channelContext;
-            try {
-                channelContext = await Promise.race([contextPromise, timeoutPromise]);
-            } catch (error) {
-                logger.warn(`Context retrieval failed or timed out: ${error}, returning default context`);
-                channelContext = null;
-            }
+            const channelContext = await firstValueFrom(
+                contextService.getContext(channelId)
+            );
 
-            // If no context exists, create a minimal default context
-            if (!channelContext) {
-                channelContext = {
-                    channelId: context.channelId,
-                    name: `Channel ${context.channelId}`,
-                    description: 'No context available',
-                    topics: [],
-                    conversationSummary: 'No conversation history available',
-                    createdAt: Date.now(),
-                    updatedAt: Date.now(),
-                    lastActivity: Date.now()
-                };
-            }
-
-            const result: any = {
+            const result: Record<string, unknown> = {
                 channelId: context.channelId,
                 context: channelContext,
                 retrievedAt: Date.now()
@@ -338,19 +327,12 @@ export const channelContextReadTool = {
 
             // Add history if requested
             if (input.includeHistory) {
-                try {
-                    // Add timeout to prevent hanging indefinitely
-                    const historyPromise = firstValueFrom(contextService.getContextHistory(context.channelId, input.historyLimit || 10));
-                    const historyTimeoutPromise = new Promise<null>((_, reject) => {
-                        setTimeout(() => reject(new Error('History retrieval timeout')), 50000); // 50 second timeout for consistency
-                    });
-                    
-                    const history = await Promise.race([historyPromise, historyTimeoutPromise]);
-                    result.history = history || [];
-                } catch (historyError) {
-                    logger.warn(`Could not retrieve context history: ${historyError}`);
-                    result.history = [];
-                }
+                result.history = await firstValueFrom(
+                    contextService.getContextHistory(
+                        channelId,
+                        input.historyLimit || 10
+                    )
+                );
             }
 
             
@@ -363,26 +345,9 @@ export const channelContextReadTool = {
             };
         } catch (error) {
             logger.error(`[CHANNEL_CONTEXT_READ ERROR] Failed to read channel context for requestId ${context?.requestId}: ${error}`);
-            // Return error result in MCP format
-            return {
-                content: {
-                    type: 'application/json',
-                    data: {
-                        channelId: context?.channelId || 'unknown',
-                        context: {
-                            channelId: context?.channelId || 'unknown',
-                            name: 'Error Channel',
-                            description: `Failed to read channel context: ${error instanceof Error ? error.message : String(error)}`,
-                            topics: [],
-                            conversationSummary: 'Error retrieving context',
-                            createdAt: Date.now(),
-                            updatedAt: Date.now(),
-                            lastActivity: Date.now()
-                        },
-                        retrievedAt: Date.now()
-                    }
-                }
-            };
+            throw new Error(
+                `Failed to read channel context: ${error instanceof Error ? error.message : String(error)}`
+            );
         }
     }
 };
@@ -489,13 +454,9 @@ export const channelMessagesReadTool = {
             return { content };
         } catch (error) {
             logger.error(`Failed to read channel messages: ${error}`);
-            const content: McpToolResultContent = {
-                type: 'application/json',
-                data: {
-                    error: `Failed to read channel messages: ${error instanceof Error ? error.message : String(error)}`
-                }
-            };
-            return { content };
+            throw new Error(
+                `Failed to read channel messages: ${error instanceof Error ? error.message : String(error)}`
+            );
         }
     }
 };
@@ -550,7 +511,7 @@ export const agentContextReadTool = {
             const memoryService = MemoryService.getInstance();
             const agentMemory = await firstValueFrom(memoryService.getAgentMemory(context.agentId!));
 
-            const result: any = {
+            const result: Record<string, unknown> = {
                 agentId: context.agentId,
                 context: {
                     id: agentMemory.id,
@@ -573,13 +534,7 @@ export const agentContextReadTool = {
 
             // Add cognitive memory references if requested and available
             if (input.includeCognitive && 'cognitiveMemory' in agentMemory) {
-                const enhancedMemory = agentMemory as any; // Type assertion for enhanced memory
-                result.cognitiveMemory = {
-                    observationCount: enhancedMemory.cognitiveMemory?.observationIds?.length || 0,
-                    reasoningCount: enhancedMemory.cognitiveMemory?.reasoningIds?.length || 0,
-                    planCount: enhancedMemory.cognitiveMemory?.planIds?.length || 0,
-                    reflectionCount: enhancedMemory.cognitiveMemory?.reflectionIds?.length || 0
-                };
+                result.cognitiveMemory = getCognitiveMemoryCounts(agentMemory);
             }
 
             result.retrievedAt = Date.now();
@@ -591,22 +546,9 @@ export const agentContextReadTool = {
             return { content };
         } catch (error) {
             logger.error(`Failed to read agent context: ${error}`);
-            const content: McpToolResultContent = {
-                type: 'application/json',
-                data: {
-                    agentId: context?.agentId || 'unknown',
-                    context: {
-                        id: context?.agentId || 'unknown',
-                        name: 'Error Agent',
-                        role: 'error',
-                        capabilities: [],
-                        description: `Failed to read agent context: ${error instanceof Error ? error.message : String(error)}`
-                    },
-                    memoryStats: { totalEntries: 0, sections: {} },
-                    retrievedAt: Date.now()
-                }
-            };
-            return { content };
+            throw new Error(
+                `Failed to read agent context: ${error instanceof Error ? error.message : String(error)}`
+            );
         }
     }
 };
@@ -666,22 +608,24 @@ export const agentMemoryReadTool = {
             const memoryService = MemoryService.getInstance();
             const agentMemory = await firstValueFrom(memoryService.getAgentMemory(context.agentId!));
 
-            let resultData: any = agentMemory;
+            let resultData: unknown = agentMemory;
 
             // If specific section requested
             if (input.memorySection) {
                 const sectionData = agentMemory[input.memorySection as keyof typeof agentMemory];
-                resultData = sectionData || {};
+                resultData = sectionData ?? {};
             }
 
             // If specific key requested, extract just that key
             if (input.key && input.memorySection) {
                 validator.assertIsString(input.key, 'key');
-                const sectionData = agentMemory[input.memorySection as keyof typeof agentMemory] as Record<string, any>;
-                resultData = sectionData?.[input.key] || null;
+                const sectionData = agentMemory[input.memorySection as keyof typeof agentMemory];
+                resultData = sectionData && typeof sectionData === 'object' && !Array.isArray(sectionData)
+                    ? (sectionData as Record<string, unknown>)[input.key] ?? null
+                    : null;
             }
 
-            const result: any = {
+            const result: Record<string, unknown> = {
                 agentId: context.agentId,
                 memory: resultData,
                 retrievedAt: Date.now()
@@ -700,13 +644,7 @@ export const agentMemoryReadTool = {
 
             // Add cognitive memory references if requested and available
             if (input.includeCognitive && 'cognitiveMemory' in agentMemory) {
-                const enhancedMemory = agentMemory as any; // Type assertion for enhanced memory
-                result.cognitiveReferences = {
-                    observationCount: enhancedMemory.cognitiveMemory?.observationIds?.length || 0,
-                    reasoningCount: enhancedMemory.cognitiveMemory?.reasoningIds?.length || 0,
-                    planCount: enhancedMemory.cognitiveMemory?.planIds?.length || 0,
-                    reflectionCount: enhancedMemory.cognitiveMemory?.reflectionIds?.length || 0
-                };
+                result.cognitiveReferences = getCognitiveMemoryCounts(agentMemory);
             }
 
             const content: McpToolResultContent = {
@@ -716,13 +654,9 @@ export const agentMemoryReadTool = {
             return { content };
         } catch (error) {
             logger.error(`Failed to read agent memory: ${error}`);
-            const content: McpToolResultContent = {
-                type: 'application/json',
-                data: {
-                    error: `Failed to read agent memory: ${error instanceof Error ? error.message : String(error)}`
-                }
-            };
-            return { content };
+            throw new Error(
+                `Failed to read agent memory: ${error instanceof Error ? error.message : String(error)}`
+            );
         }
     }
 };
@@ -765,9 +699,9 @@ export const agentMemoryWriteTool = {
 
     handler: async (input: {
         key: string;
-        value: any;
+        value: unknown;
         memorySection?: 'notes' | 'customData';
-        metadata?: Record<string, any>;
+        metadata?: Record<string, unknown>;
         overwrite?: boolean;
     }, context: McpToolHandlerContext): Promise<McpToolHandlerResult> => {
         try {
@@ -783,7 +717,7 @@ export const agentMemoryWriteTool = {
             const section = input.memorySection || 'notes';
             
             // Check if key exists and overwrite is false
-            const currentSection = currentMemory[section as keyof typeof currentMemory] as Record<string, any> || {};
+            const currentSection = currentMemory[section as keyof typeof currentMemory] as Record<string, unknown> || {};
             if (!input.overwrite && input.key && currentSection[input.key] !== undefined) {
                 throw new Error(`Key '${input.key}' already exists and overwrite is disabled`);
             }
@@ -797,10 +731,12 @@ export const agentMemoryWriteTool = {
                 ...(input.metadata || {})
             };
 
-            // Prepare updates
+            // Send only the key being written. MemoryService merges it into the
+            // section under the agent's mutation lock; echoing the snapshot read
+            // above would re-apply stale values over keys a concurrent write
+            // has changed since.
             const updates: Partial<IAgentMemory> = {
                 [section]: {
-                    ...currentSection,
                     [input.key]: memoryEntry
                 }
             } as Partial<IAgentMemory>;
@@ -828,13 +764,9 @@ export const agentMemoryWriteTool = {
             return { content };
         } catch (error) {
             logger.error(`Failed to write agent memory: ${error}`);
-            const content: McpToolResultContent = {
-                type: 'application/json',
-                data: {
-                    error: `Failed to write agent memory: ${error instanceof Error ? error.message : String(error)}`
-                }
-            };
-            return { content };
+            throw new Error(
+                `Failed to write agent memory: ${error instanceof Error ? error.message : String(error)}`
+            );
         }
     }
 };

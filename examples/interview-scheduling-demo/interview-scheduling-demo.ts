@@ -43,10 +43,10 @@
  * **Every Time You Run the Demo:**
  * ```bash
  * # Terminal 1: Start the MXF server (if not already running)
- * npm run start:dev
+ * bun run dev
  * 
  * # Terminal 2: Run this demo
- * npx tsx examples/interview-scheduling-demo/interview-scheduling-demo.ts
+ * bun run demo:interview
  * ```
  * 
  * The SDK requires a running MXF server to handle authentication, channel management,
@@ -64,17 +64,13 @@
  * await sdk.connect();
  * 
  * // 2. Create or load a channel for agent communication
- * const channel = await sdk.createChannel({
- *   channelId: 'my-channel',
+ * const channel = await sdk.createChannel('my-channel', {
  *   name: 'My Channel',
  *   description: 'Agent collaboration space'
  * });
  * 
  * // 3. Generate authentication keys for agents
- * const agentKey = await sdk.generateKey({
- *   channelId: 'my-channel',
- *   name: 'Agent 1 Key'
- * });
+ * const agentKey = await sdk.generateKey('my-channel', 'agent-1', 'Agent 1 Key');
  * 
  * // 4. Create agents with their keys
  * const agent = await sdk.createAgent({
@@ -85,16 +81,15 @@
  *   secretKey: agentKey.secretKey,
  *   llmProvider: LlmProviderType.OPENROUTER,
  *   apiKey: process.env.OPENROUTER_API_KEY!,
- *   defaultModel: 'anthropic/claude-3.5-haiku',
+ *   defaultModel: '~anthropic/claude-haiku-latest',
  *   allowedTools: ['messaging_send']
  * });
  * 
  * // 5. Connect agent and start communication
  * await agent.connect();
  * 
- * // 6. Listen to channel events for monitoring
- * const monitor = sdk.createChannelMonitor('my-channel');
- * monitor.on(Events.Message.AGENT_MESSAGE, (payload) => {
+ * // 6. Listen to channel events through the returned monitor
+ * channel.on(Events.Message.AGENT_MESSAGE, (payload) => {
  *   console.log(`Message from ${payload.agentId}:`, payload.data);
  * });
  * ```
@@ -192,7 +187,7 @@ const agentConfigurations: { [key: string]: AgentCreationConfig } = {
         // LLM Configuration
         llmProvider: LlmProviderType.OPENROUTER,
         apiKey: process.env.OPENROUTER_API_KEY!,
-        defaultModel: 'anthropic/claude-3.5-haiku', 
+        defaultModel: '~anthropic/claude-haiku-latest', 
         temperature: 0.7,
         maxTokens: MAX_TOKENS,
         
@@ -250,7 +245,7 @@ const agentConfigurations: { [key: string]: AgentCreationConfig } = {
         },
         llmProvider: LlmProviderType.OPENROUTER,
         apiKey: process.env.OPENROUTER_API_KEY!,
-        defaultModel: 'anthropic/claude-3.5-haiku', 
+        defaultModel: '~anthropic/claude-haiku-latest', 
         temperature: 0.8,
         maxTokens: MAX_TOKENS,
         
@@ -308,7 +303,7 @@ const agentConfigurations: { [key: string]: AgentCreationConfig } = {
         apiKey: process.env.OPENROUTER_API_KEY || '',
         useMessageAggregate: false,
         llmProvider: LlmProviderType.OPENROUTER,
-        defaultModel: 'anthropic/claude-3.5-sonnet',  // Use more reliable model for complex scheduling
+        defaultModel: '~anthropic/claude-sonnet-latest',  // Use more reliable model for complex scheduling
         temperature: 0.3,       // Lower temperature for deterministic tool calls
         maxTokens: MAX_TOKENS,       // Sufficient tokens for tool calls without overflow
         
@@ -424,19 +419,19 @@ const displayStartBanner = (): void => {
  * await sdk.connect();
  * 
  * // Create a new channel dynamically
- * const channel = await sdk.createChannel({
- *   channelId: 'customer-support-123',
+ * const channel = await sdk.createChannel('customer-support-123', {
  *   name: 'Customer Support Channel',
  *   description: 'Support channel for customer 123',
  *   metadata: { customerId: '123', tier: 'enterprise' }
  * });
  * 
  * // Generate keys for agents in this channel
- * const supportKey = await sdk.generateKey({
- *   channelId: 'customer-support-123',
- *   name: 'Support Agent Key',
- *   expiresAt: new Date(Date.now() + 86400000) // 24 hours
- * });
+ * const supportKey = await sdk.generateKey(
+ *   'customer-support-123',
+ *   'support-agent-123',
+ *   'Support Agent Key',
+ *   new Date(Date.now() + 86400000) // 24 hours
+ * );
  * 
  * // Create and connect the agent
  * const supportAgent = await sdk.createAgent({
@@ -447,7 +442,7 @@ const displayStartBanner = (): void => {
  *   secretKey: supportKey.secretKey,
  *   llmProvider: LlmProviderType.OPENROUTER,
  *   apiKey: process.env.OPENROUTER_API_KEY!,
- *   defaultModel: 'anthropic/claude-3.5-haiku'
+ *   defaultModel: '~anthropic/claude-haiku-latest'
  * });
  * await supportAgent.connect();
  * ```
@@ -607,8 +602,8 @@ const initializeAgents = async (sdk: MxfSDK): Promise<{ [key: string]: MxfAgent 
  * Events are automatically filtered to the channel you're monitoring.
  * 
  * ```typescript
- * // Create a channel monitor
- * const monitor = sdk.createChannelMonitor('my-channel');
+ * // Use the monitor returned by sdk.createChannel(...)
+ * const monitor = channel;
  * 
  * // Listen for agent messages
  * monitor.on(Events.Message.AGENT_MESSAGE, (payload) => {

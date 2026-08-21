@@ -35,6 +35,7 @@
  */
 
 import { createBaseEventPayload } from '../../schemas/EventPayloadSchema.js';
+import type { Subscription } from 'rxjs';
 import { Logger } from '../../utils/Logger.js';
 import { EventBus } from '../../events/EventBus.js';
 import {
@@ -87,6 +88,7 @@ export class SurpriseOrparAdapter {
     private logger: Logger;
     private enabled: boolean = false;
     private thresholds: SurpriseThresholds;
+    private graphSurpriseSubscription?: Subscription;
 
     // Track surprise momentum per agent/cycle
     private surpriseMomentum: Map<string, number[]> = new Map();
@@ -137,13 +139,18 @@ export class SurpriseOrparAdapter {
      * observation cycles.
      */
     private setupGraphSurpriseListener(): void {
+        if (this.graphSurpriseSubscription && !this.graphSurpriseSubscription.closed) {
+            return;
+        }
+        this.graphSurpriseSubscription = undefined;
+
         // Only set up listener if Knowledge Graph surprise detection is enabled
         if (!isKnowledgeGraphEnabled() || !isSurpriseDetectionEnabled()) {
             this.logger.debug('[SurpriseOrparAdapter] Knowledge Graph surprise integration disabled');
             return;
         }
 
-        EventBus.server.on(
+        this.graphSurpriseSubscription = EventBus.server.on(
             KnowledgeGraphEvents.HIGH_SURPRISE_RELATIONSHIP,
             (payload: { data: HighSurpriseRelationshipEventData; agentId?: AgentId; channelId?: ChannelId }) => {
                 this.handleGraphSurpriseEvent(payload);
@@ -567,6 +574,8 @@ export class SurpriseOrparAdapter {
      */
     public reset(): void {
         this.enabled = false;
+        this.graphSurpriseSubscription?.unsubscribe();
+        this.graphSurpriseSubscription = undefined;
         this.surpriseMomentum.clear();
     }
 }

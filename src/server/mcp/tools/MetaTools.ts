@@ -31,9 +31,16 @@ import { createStrictValidator } from '@mxf-dev/core/utils/validation';
 import { Logger } from '@mxf-dev/core/utils/Logger';
 import { SystemLlmServiceManager } from '../../socket/services/SystemLlmServiceManager';
 import { TOOL_RECOMMENDATION_SCHEMA } from '@mxf-dev/core/schemas/JsonResponseSchemas';
-import { McpToolRegistry } from '../../api/services/McpToolRegistry';
 import { getHybridMcpToolRegistry } from '../services/HybridMcpRegistryAccess';
-import type { HybridMcpToolRegistry, HybridMcpTool } from '../services/HybridMcpToolRegistry';
+import type { HybridMcpTool } from '../services/HybridMcpToolRegistry';
+import { McpService } from '../../socket/services/McpService';
+import {
+    getToolAuthorizationNames,
+    isAllowedByAgentPolicy,
+    isAllowedByChannelPolicy,
+    isPrivilegedHostToolEnabled,
+    isPrivilegedNetworkToolEnabled
+} from '../../socket/services/ToolAuthorizationPolicy';
 import { META_TOOLS } from '@mxf-dev/core/constants/ToolNames';
 import { TaskService } from '../../socket/services/TaskService';
 import { TaskEvents } from '@mxf-dev/core/events/event-definitions/TaskEvents';
@@ -50,6 +57,7 @@ import { AgentId } from '@mxf-dev/core/types/Agent';
 import { ChannelId } from '@mxf-dev/core/types/ChannelContext';
 import { paginationInputSchema, paginateArray, checkResultSize, PaginationMetadata } from '@mxf-dev/core/utils/ToolPaginationUtils';
 import { normalizeSummaryInput } from './helpers/toolInputNormalization';
+import type { McpToolHandlerContext } from '@mxf-dev/core/protocols/mcp/McpServerTypes';
 
 const logger = new Logger('info', 'MetaTools', 'server');
 const validator = createStrictValidator('MetaTools');
@@ -90,11 +98,50 @@ const getToolCategory = (toolName: string): string => {
  * namespaced snapshot is only used when no channel is known, so meta tools
  * never recommend or validate a name the calling agent cannot actually use.
  */
-const agentVisibleToolsFrom = (hybridRegistry: HybridMcpToolRegistry, context: unknown): HybridMcpTool[] => {
-    const channelId = (context as { channelId?: unknown } | undefined)?.channelId;
-    return typeof channelId === 'string' && channelId.length > 0
-        ? hybridRegistry.getAgentFacingToolsForChannel(channelId)
-        : hybridRegistry.getAllToolsSnapshot();
+interface MetaToolAuthorizationContext {
+    agentId?: unknown;
+    channelId?: unknown;
+    authorization?: {
+        keyId?: unknown;
+        allowedTools?: unknown;
+    };
+}
+
+/** Build the exact same fail-closed tool view used by final execution. */
+const getAuthorizedAgentVisibleTools = (context: MetaToolAuthorizationContext): HybridMcpTool[] => {
+    if (typeof context.agentId !== 'string' || context.agentId.trim().length === 0 ||
+        typeof context.channelId !== 'string' || context.channelId.trim().length === 0) {
+        throw new Error('Meta-tool discovery requires exact authenticated agent and channel identity');
+    }
+    if (!context.authorization ||
+        typeof context.authorization.keyId !== 'string' ||
+        context.authorization.keyId.trim().length === 0 ||
+        (context.authorization.allowedTools !== undefined &&
+            !Array.isArray(context.authorization.allowedTools))) {
+        throw new Error('Meta-tool discovery requires a validated credential-scoped tool policy');
+    }
+
+    const hybridRegistry = getHybridMcpToolRegistry();
+    if (!hybridRegistry) {
+        throw new Error('Hybrid MCP registry is unavailable');
+    }
+
+    const channelAllowedTools = McpService.getInstance().getChannelAllowedTools(context.channelId);
+    if (channelAllowedTools === undefined) {
+        throw new Error(`Tool policy for channel '${context.channelId}' has not been loaded`);
+    }
+
+    return hybridRegistry.getAgentFacingToolsForChannel(context.channelId, context.agentId)
+        .filter(tool => {
+            const names = getToolAuthorizationNames(tool);
+            return isAllowedByAgentPolicy(
+                names,
+                context.authorization?.allowedTools as string[] | undefined
+            ) &&
+                isAllowedByChannelPolicy(names, channelAllowedTools) &&
+                isPrivilegedHostToolEnabled(names) &&
+                isPrivilegedNetworkToolEnabled(names);
+        });
 };
 
 /**
@@ -296,25 +343,8 @@ export const tools_recommend = {
             }
             
             
-            // Try to get tools from hybrid registry first, fallback to internal registry
-            let allToolsFromRegistry: any[] = [];
-            let isHybridRegistry = false;
-            
-            try {
-                // Check if we have a hybrid registry available (will be injected later)
-                const hybridRegistry = getHybridMcpToolRegistry();
-                if (hybridRegistry) {
-                    allToolsFromRegistry = agentVisibleToolsFrom(hybridRegistry, context);
-                    isHybridRegistry = true;
-                } else {
-                    // Fallback to internal registry only
-                    allToolsFromRegistry = await firstValueFrom(McpToolRegistry.getInstance().listTools());
-                }
-            } catch (error) {
-                // Fallback to internal registry on any error
-                allToolsFromRegistry = await firstValueFrom(McpToolRegistry.getInstance().listTools());
-                logger.warn(`Hybrid registry unavailable, using internal only: ${error instanceof Error ? error.message : String(error)}`);
-            }
+            const allToolsFromRegistry = getAuthorizedAgentVisibleTools(context);
+            const isHybridRegistry = true;
             
             
             // Get enhanced tool metrics if validation insights are requested
@@ -350,29 +380,6 @@ export const tools_recommend = {
                 
                 return true;
             });
-
-            // CRITICAL: Filter by agent's allowedTools if specified
-            // This ensures meta-tools only recommend tools the agent is permitted to use
-            try {
-                // Get agent's allowedTools from context (passed from agent configuration)
-                // The context.allowedTools is populated by the tool execution framework
-                // when invoking meta-tools with the agent's permission settings
-                const agentAllowedTools = (context as any).allowedTools as string[] | undefined;
-                
-                if (agentAllowedTools && agentAllowedTools.length > 0) {
-                    const originalCount = availableTools.length;
-                    availableTools = availableTools.filter(tool => {
-                        const isAllowed = agentAllowedTools.includes(tool.name);
-                        if (!isAllowed) {
-                        }
-                        return isAllowed;
-                    });
-                }
-            } catch (error) {
-                logger.warn(`Failed to apply allowedTools filtering in meta-tools: ${error}`);
-                // Continue without filtering if there's an error
-            }
-
 
             const calculatorTools = availableTools.filter(tool => 
                 tool.name.toLowerCase().includes('calculator') || 
@@ -698,23 +705,27 @@ export const task_complete = {
         success?: boolean;
         details?: Record<string, any>;
         nextSteps?: string;
-    }, context: {
-        agentId: string;
-        channelId: string;
-        requestId: string;
-    }) => {
+    }, context: McpToolHandlerContext) => {
         const startTime = Date.now();
 
         // Accept either 'summary' or 'result' parameter (LLMs may use either),
         // as prose or as a structured object — objects are stored as their JSON
-        // string. Fall back to a default if neither is provided.
+        // string. Missing completion evidence is rejected below.
         const summaryText = normalizeSummaryInput(input.summary)
-            || normalizeSummaryInput(input.result)
-            || 'Task completed';
+            || normalizeSummaryInput(input.result);
         
         // Validate context (but be forgiving on input)
         validator.assertIsNonEmptyString(context.agentId, 'agentId is required');
         validator.assertIsNonEmptyString(context.channelId, 'channelId is required');
+        validator.assertIsNonEmptyString(summaryText, 'completion summary or result is required');
+        if (summaryText === undefined) {
+            throw new Error('Task completion summary or result is required');
+        }
+        if (typeof context.agentId !== 'string' || typeof context.channelId !== 'string') {
+            throw new Error('Task completion requires exact authenticated agent and channel identity');
+        }
+        const agentId = context.agentId;
+        const channelId = context.channelId;
         
         // Prepare completion data
         const completionData = {
@@ -728,14 +739,14 @@ export const task_complete = {
         // Use TaskService to handle completion (single source of truth)
         const taskService = TaskService.getInstance();
         const result = await taskService.handleTaskCompletion(
-            context.agentId,
-            context.channelId,
+            agentId,
+            channelId,
             completionData
         );
                 
         return {
             status: result.status,
-            agentId: context.agentId,
+            agentId,
             message: result.message,
             taskId: result.taskId,
             nextSteps: result.nextSteps,
@@ -769,26 +780,11 @@ export const tools_validate = {
     handler: async (input: {
         toolNames: string[];
         checkConfiguration?: boolean;
-    }, context: {
-        agentId: string;
-        channelId: string;
-        requestId: string;
-    }) => {
+    }, context: McpToolHandlerContext) => {
         const startTime = Date.now();
         
         try {
-            // Get all available tools
-            let allTools: any[] = [];
-            try {
-                const hybridRegistry = getHybridMcpToolRegistry();
-                if (hybridRegistry) {
-                    allTools = agentVisibleToolsFrom(hybridRegistry, context);
-                } else {
-                    allTools = await firstValueFrom(McpToolRegistry.getInstance().listTools());
-                }
-            } catch (error) {
-                allTools = await firstValueFrom(McpToolRegistry.getInstance().listTools());
-            }
+            const allTools = getAuthorizedAgentVisibleTools(context);
             
             const validationResults = input.toolNames.map(toolName => {
                 const tool = allTools.find(t => t.name === toolName);
@@ -882,18 +878,7 @@ export const tools_discover = {
         const startTime = Date.now();
         
         try {
-            // Get all available tools
-            let allTools: any[] = [];
-            try {
-                const hybridRegistry = getHybridMcpToolRegistry();
-                if (hybridRegistry) {
-                    allTools = agentVisibleToolsFrom(hybridRegistry, context);
-                } else {
-                    allTools = await firstValueFrom(McpToolRegistry.getInstance().listTools());
-                }
-            } catch (error) {
-                allTools = await firstValueFrom(McpToolRegistry.getInstance().listTools());
-            }
+            const allTools = getAuthorizedAgentVisibleTools(context);
             
             // Apply filters
             let filteredTools = allTools;
@@ -916,25 +901,6 @@ export const tools_discover = {
                 );
             }
 
-            // CRITICAL: Filter by agent's allowedTools if specified
-            // This ensures tools_discover only returns tools the agent is permitted to use
-            try {
-                const agentAllowedTools = (context as any).allowedTools as string[] | undefined;
-                
-                if (agentAllowedTools && agentAllowedTools.length > 0) {
-                    const originalCount = filteredTools.length;
-                    filteredTools = filteredTools.filter(tool => {
-                        const isAllowed = agentAllowedTools.includes(tool.name);
-                        if (!isAllowed) {
-                        }
-                        return isAllowed;
-                    });
-                }
-            } catch (error) {
-                logger.warn(`Failed to apply allowedTools filtering in tools_discover: ${error}`);
-                // Continue without filtering if there's an error
-            }
-            
             // Apply pagination using utility
             const limit = input.limit || 20;
             const offset = input.offset || 0;
@@ -1035,18 +1001,7 @@ export const tools_compare = {
         const startTime = Date.now();
         
         try {
-            // Get all available tools
-            let allTools: any[] = [];
-            try {
-                const hybridRegistry = getHybridMcpToolRegistry();
-                if (hybridRegistry) {
-                    allTools = agentVisibleToolsFrom(hybridRegistry, context);
-                } else {
-                    allTools = await firstValueFrom(McpToolRegistry.getInstance().listTools());
-                }
-            } catch (error) {
-                allTools = await firstValueFrom(McpToolRegistry.getInstance().listTools());
-            }
+            const allTools = getAuthorizedAgentVisibleTools(context);
             
             // Find requested tools
             const requestedTools = input.toolNames.map(name => {
@@ -1255,18 +1210,7 @@ export const agent_introspect = {
             };
             
             if (input.includeTools !== false) {
-                // Get available tools
-                let allTools: any[] = [];
-                try {
-                    const hybridRegistry = getHybridMcpToolRegistry();
-                    if (hybridRegistry) {
-                        allTools = agentVisibleToolsFrom(hybridRegistry, context);
-                    } else {
-                        allTools = await firstValueFrom(McpToolRegistry.getInstance().listTools());
-                    }
-                } catch (error) {
-                    allTools = await firstValueFrom(McpToolRegistry.getInstance().listTools());
-                }
+                const allTools = getAuthorizedAgentVisibleTools(context);
                 
                 const toolsByCategory = allTools.reduce((groups: any, tool) => {
                     const category = getToolCategory(tool.name);
@@ -1353,18 +1297,7 @@ export const workflow_plan = {
         const startTime = Date.now();
         
         try {
-            // Get available tools
-            let allTools: any[] = [];
-            try {
-                const hybridRegistry = getHybridMcpToolRegistry();
-                if (hybridRegistry) {
-                    allTools = agentVisibleToolsFrom(hybridRegistry, context);
-                } else {
-                    allTools = await firstValueFrom(McpToolRegistry.getInstance().listTools());
-                }
-            } catch (error) {
-                allTools = await firstValueFrom(McpToolRegistry.getInstance().listTools());
-            }
+            const allTools = getAuthorizedAgentVisibleTools(context);
             
             // Basic workflow planning (simplified)
             const steps = [];
@@ -1536,18 +1469,7 @@ export const tools_recommend_on_error = {
                 }
             }
             
-            // Get all available tools
-            let allTools: any[] = [];
-            try {
-                const hybridRegistry = getHybridMcpToolRegistry();
-                if (hybridRegistry) {
-                    allTools = agentVisibleToolsFrom(hybridRegistry, context);
-                } else {
-                    allTools = await firstValueFrom(McpToolRegistry.getInstance().listTools());
-                }
-            } catch (error) {
-                allTools = await firstValueFrom(McpToolRegistry.getInstance().listTools());
-            }
+            const allTools = getAuthorizedAgentVisibleTools(context);
             
             // Find similar tools in the same category
             const failedToolCategory = getToolCategory(input.failedTool);
@@ -1751,18 +1673,7 @@ export const error_diagnose = {
             const validationService = ValidationPerformanceService.getInstance();
             const patternService = PatternLearningService.getInstance();
             
-            // Get tool information
-            let allTools: any[] = [];
-            try {
-                const hybridRegistry = getHybridMcpToolRegistry();
-                if (hybridRegistry) {
-                    allTools = agentVisibleToolsFrom(hybridRegistry, context);
-                } else {
-                    allTools = await firstValueFrom(McpToolRegistry.getInstance().listTools());
-                }
-            } catch (error) {
-                allTools = await firstValueFrom(McpToolRegistry.getInstance().listTools());
-            }
+            const allTools = getAuthorizedAgentVisibleTools(context);
             
             const tool = allTools.find(t => t.name === input.toolName);
             

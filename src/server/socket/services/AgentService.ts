@@ -193,9 +193,10 @@ export class AgentService {
             
             // Update agent status (create if not exists)
             if (!this.agentExists(agentId)) {
-                // Only create with empty data if agent doesn't exist
+                // Only create with empty data if agent doesn't exist. Omitted
+                // allowedTools means the curated core default; [] is deny-all.
                 // This preserves any previously registered capabilities and allowedTools
-                this.registerAgent(agentId, [], []); // Create with empty capabilities and tools initially
+                this.registerAgent(agentId, [], undefined);
             }
             
             // Update the agent status to connected
@@ -505,18 +506,6 @@ export class AgentService {
             agent.meilisearchReady = true;
             this.agents.set(agentId, agent);
 
-
-            // Emit tools refresh event to notify agent
-            EventBus.server.emit(Events.Mcp.MXF_TOOL_LIST, {
-                eventId: uuidv4(),
-                eventType: Events.Mcp.MXF_TOOL_LIST,
-                timestamp: Date.now(),
-                agentId: agentId,
-                channelId: payload.channelId || 'system',
-                data: {
-                    requestId: `meilisearch-ready-${Date.now()}`
-                }
-            });
 
         } catch (error) {
             this.logger.error(`Error handling backfill complete: ${error}`);

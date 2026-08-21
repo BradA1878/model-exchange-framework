@@ -187,7 +187,7 @@ import { SystemLlmService } from './src/server/socket/services/SystemLlmService'
 
 const systemLlm = new SystemLlmService({
     provider: 'openrouter',
-    model: 'anthropic/claude-3.5-sonnet',
+    model: '~anthropic/claude-sonnet-latest',
     apiKey: process.env.OPENROUTER_API_KEY,
     temperature: 0.7
 });
@@ -260,6 +260,10 @@ const result = await systemLlm.processWithSchema(prompt, schema);
 - Efficient resource management
 - Centralized service lifecycle
 
+**Environment Configuration:**
+- `loadSystemLlmEnvironmentConfig()` reads the `SYSTEMLLM_*` variables and returns a `SystemLlmServiceConfig`, or `null` when SystemLLM is off. It throws when SystemLLM is on and the provider's credentials or `SYSTEMLLM_DEFAULT_MODEL` are missing — there is no built-in model to fall back to.
+- `assertSystemLlmConfigured()` calls it once at server boot, next to the JWT and Mongo checks, so a misconfigured SystemLLM stops the server from starting instead of failing on the first request.
+
 **Usage:**
 ```typescript
 import { SystemLlmServiceManager } from './src/server/socket/services/SystemLlmServiceManager';
@@ -271,9 +275,9 @@ const manager = SystemLlmServiceManager.getInstance();
 // Returns existing instance if already created, otherwise creates new one
 const service = manager.getServiceForChannel('channel-1', {
     providerType: LlmProviderType.OPENROUTER,
-    defaultModel: 'anthropic/claude-3.5-sonnet',
+    defaultModel: '~anthropic/claude-sonnet-latest',
     orparModels: {
-        reasoning: 'anthropic/claude-3.5-sonnet',
+        reasoning: '~anthropic/claude-sonnet-latest',
         planning: 'openai/o1-preview'
     }
 });

@@ -38,6 +38,7 @@ import { TaskEvents } from '@mxf-dev/core/events/event-definitions/TaskEvents';
 import { UserInputEvents } from '@mxf-dev/core/events/event-definitions/UserInputEvents';
 import { UserInputRequestManager } from '@mxf-dev/core/services/UserInputRequestManager';
 import { createStrictValidator } from '@mxf-dev/core/utils/validation';
+import { isAgentSocketMcpEventAllowed } from '../../api/middleware/runtimeFeaturePolicy';
 import { logger , Logger } from '@mxf-dev/core/utils/Logger';
 import { EventBus } from '@mxf-dev/core/events/EventBus';
 import { v4 as uuidv4 } from 'uuid'; 
@@ -54,6 +55,8 @@ import {
     createMcpResourceGetPayload,
     createMcpResourceListPayload,
     createUserInputResponsePayload,
+    createMeilisearchIndexEventPayload,
+    createMeilisearchBackfillEventPayload,
     AgentEventData,
     ChannelEventData,
     TaskEventData,
@@ -63,9 +66,172 @@ import { AgentId, ChannelId } from '@mxf-dev/core/types/ChannelContext';
 import { ChannelActionType } from '@mxf-dev/core/events/event-definitions/ChannelEvents';
 import { MxpMiddleware } from '@mxf-dev/core/middleware/MxpMiddleware';
 import { isMxpMessage } from '@mxf-dev/core/schemas/MxpProtocolSchemas';
+import { ChannelService } from '../services/ChannelService';
+import { authorizeMeilisearchSocketRequest, buildMeilisearchIngressFailure } from '../security/MeilisearchIngressPolicy';
+import {
+    resolveTaskEventAgentTarget,
+    TASK_SOCKET_EGRESS_EVENTS
+} from './TaskEventRoutingPolicy';
 
 // Create a module-specific logger
 const moduleLogger = new Logger('debug', 'EventForwardingHandlers', 'server');
+
+/** Explicit client-to-server event directions. New events fail closed. */
+const AGENT_SOCKET_MESSAGE_REQUEST_EVENTS = [
+    Events.Message.AGENT_MESSAGE,
+    Events.Message.CHANNEL_MESSAGE
+] as const;
+
+const AGENT_SOCKET_MEMORY_REQUEST_EVENTS = [
+    Events.Memory.GET,
+    Events.Memory.UPDATE,
+    Events.Memory.DELETE
+] as const;
+
+const AGENT_SOCKET_MEILISEARCH_REQUEST_EVENTS = [
+    Events.Meilisearch.INDEX_REQUEST,
+    Events.Meilisearch.BACKFILL_REQUEST
+] as const;
+
+const AGENT_SOCKET_TASK_REQUEST_EVENTS = [
+    TaskEvents.REQUEST,
+    TaskEvents.RESPONSE,
+    TaskEvents.CREATE_REQUEST,
+    TaskEvents.START_REQUEST,
+    TaskEvents.COMPLETE_REQUEST,
+    TaskEvents.FAIL_REQUEST,
+    TaskEvents.CANCEL_REQUEST,
+    TaskEvents.ASSIGN_REQUEST,
+    TaskEvents.UPDATE_REQUEST,
+    TaskEvents.WORKLOAD_ANALYZE_REQUEST,
+    TaskEvents.ASSIGNMENT_REQUESTED
+] as const;
+
+const isRecord = (value: unknown): value is Record<string, unknown> => (
+    value !== null && typeof value === 'object' && !Array.isArray(value)
+);
+
+const emitMeilisearchIngressError = (
+    eventName: string,
+    rawData: unknown,
+    agentId: string,
+    channelId: string,
+    error: unknown
+): void => {
+    const failure = buildMeilisearchIngressFailure(eventName, rawData, agentId, channelId, error);
+    if (failure.event === Events.Meilisearch.INDEX_ERROR) {
+        EventBus.server.emit(failure.event, createMeilisearchIndexEventPayload(
+            failure.event, agentId, channelId, failure.data
+        ));
+        return;
+    }
+    EventBus.server.emit(failure.event, createMeilisearchBackfillEventPayload(
+        failure.event, agentId, channelId, failure.data
+    ));
+};
+
+const containsForeignChannelIdentity = (value: unknown, channelId: string): boolean => {
+    const pending: unknown[] = [value];
+    const visited = new Set<object>();
+
+    while (pending.length > 0) {
+        const current = pending.pop();
+        if (current === null || typeof current !== 'object' || visited.has(current)) {
+            continue;
+        }
+        visited.add(current);
+
+        if (Array.isArray(current)) {
+            pending.push(...current);
+            continue;
+        }
+
+        const record = current as Record<string, unknown>;
+        if (Object.prototype.hasOwnProperty.call(record, 'channelId') &&
+            record.channelId !== channelId) {
+            return true;
+        }
+        pending.push(...Object.values(record));
+    }
+
+    return false;
+};
+
+const authorizeSocketMemoryRequest = (
+    requestData: Record<string, unknown>,
+    agentId: string,
+    channelId: string
+): Record<string, unknown> | null => {
+    const allowedChannelMemoryIds = new Set([
+        channelId,
+        `channel:messages:${channelId}`,
+        `channel:context:${channelId}`,
+        `channel:context:history:${channelId}`
+    ]);
+
+    switch (requestData.scope) {
+        case 'agent':
+            return requestData.id === agentId ? requestData : null;
+
+        case 'channel': {
+            if (typeof requestData.id !== 'string' ||
+                !allowedChannelMemoryIds.has(requestData.id)) {
+                return null;
+            }
+
+            if (requestData.key !== undefined &&
+                (typeof requestData.key !== 'string' ||
+                    !allowedChannelMemoryIds.has(requestData.key))) {
+                return null;
+            }
+
+            // MemoryService supports a legacy keyed update shape. Do not let an
+            // otherwise-valid channel id smuggle a different channel's key in
+            // the update body.
+            if (isRecord(requestData.data)) {
+                const embeddedChannelKeys = Object.keys(requestData.data)
+                    .filter(key => key.startsWith('channel:'));
+                if (embeddedChannelKeys.some(key => !allowedChannelMemoryIds.has(key))) {
+                    return null;
+                }
+
+                if (containsForeignChannelIdentity(requestData.data, channelId)) {
+                    return null;
+                }
+            }
+
+            return requestData;
+        }
+
+        case 'relationship': {
+            const relationshipId = requestData.id;
+            if (!Array.isArray(relationshipId) ||
+                (relationshipId.length !== 2 && relationshipId.length !== 3) ||
+                relationshipId.some(part => typeof part !== 'string' || part.length === 0) ||
+                (relationshipId.length === 3 && relationshipId[2] !== channelId) ||
+                (relationshipId[0] !== agentId && relationshipId[1] !== agentId)) {
+                return null;
+            }
+
+            const peerAgentId = relationshipId[0] === agentId
+                ? relationshipId[1]
+                : relationshipId[0];
+            const channelService = ChannelService.getInstance();
+            if (!channelService.isParticipant(channelId, agentId) ||
+                !channelService.isParticipant(channelId, peerAgentId)) {
+                return null;
+            }
+
+            return {
+                ...requestData,
+                id: [relationshipId[0], relationshipId[1], channelId]
+            };
+        }
+
+        default:
+            return null;
+    }
+};
 
 // Event priority levels for queue management
 enum EventPriority {
@@ -84,6 +250,7 @@ interface QueuedEvent {
     eventName: string;
     payload: any;
     targetId: string; // agentId or channelId
+    channelId: string; // authenticated channel scope for delivery
     excludedAgentId?: string; // for channel events
     timestamp: number;
     retryCount: number;
@@ -261,7 +428,10 @@ class EventForwardingQueue {
     private forwardToAgent(event: QueuedEvent): void {
         if (!this.socketService) return;
 
-        const socket = this.socketService.getSocketByAgentId(event.targetId);
+        const socket = this.socketService.getSocketByAgentId(
+            event.targetId,
+            event.channelId
+        );
         if (!socket) {
             // Log when critical events can't be delivered (socket not found)
             if (event.eventName.includes('tool:result') || event.eventName.includes('tool:error')) {
@@ -286,7 +456,10 @@ class EventForwardingQueue {
         }
 
         if (event.excludedAgentId) {
-            const excludedSocket = this.socketService.getSocketByAgentId(event.excludedAgentId);
+            const excludedSocket = this.socketService.getSocketByAgentId(
+                event.excludedAgentId,
+                event.channelId
+            );
             if (excludedSocket) {
                 io.to(roomName).except(excludedSocket.id).emit(event.eventName, event.payload);
             } else {
@@ -472,7 +645,7 @@ export const setupEventBusToSocketForwarding = (socketService: ISocketService): 
                 moduleLogger.error(`Error forwarding channel message from EventBus: ${error}`);
             }
         });
-        
+
         // Message error events - Forward validation errors back to the sending agent
         EventBus.server.on(Events.Message.MESSAGE_ERROR, (payload) => {
             try {
@@ -563,9 +736,9 @@ export const setupEventBusToSocketForwarding = (socketService: ISocketService): 
             Events.Agent.REGISTERED,
             Events.Agent.REGISTRATION_FAILED,
             Events.Agent.STATUS_CHANGE,
+            Events.Agent.ERROR,
 
             // Control loop events (server-orchestrated)
-            ControlLoopEvents.INITIALIZE,
             ControlLoopEvents.INITIALIZED,
             ControlLoopEvents.STARTED,
             ControlLoopEvents.OBSERVATION,
@@ -732,10 +905,13 @@ export const setupEventBusToSocketForwarding = (socketService: ISocketService): 
             Events.Mcp.TOOL_ERROR,
             Events.Mcp.TOOL_REGISTERED,
             Events.Mcp.TOOL_UNREGISTERED,
+            Events.Mcp.TOOL_LIST_RESULT,
+            Events.Mcp.TOOL_LIST_ERROR,
             Events.Mcp.MXF_TOOL_LIST_RESULT,
             Events.Mcp.MXF_TOOL_LIST_ERROR,
             Events.Mcp.RESOURCE_RESULT,
             Events.Mcp.RESOURCE_ERROR,
+            Events.Mcp.RESOURCE_LIST_RESULT,
             Events.Mcp.EXTERNAL_SERVER_REGISTERED,
             Events.Mcp.EXTERNAL_SERVER_UNREGISTERED,
             Events.Mcp.EXTERNAL_SERVER_REGISTRATION_FAILED,
@@ -788,47 +964,76 @@ export const setupEventBusToSocketForwarding = (socketService: ISocketService): 
                 }
             });
         });
-        
-        // Handle user input events - Forward request/cancelled/timeout to channel,
-        // and route responses back to UserInputRequestManager to resolve pending Promises
-        EventBus.server.on(UserInputEvents.REQUEST, (payload) => {
-            try {
-                const channelId = payload.channelId;
-                if (!channelId) {
-                    moduleLogger.warn('Missing channelId in user_input:request event');
-                    return;
+
+        // Meilisearch outcomes may contain indexed content and operational
+        // details. They are observable by the requesting agent only; never
+        // restore the former EventBus-wide Socket.IO broadcast for them.
+        [
+            Events.Meilisearch.INDEX,
+            Events.Meilisearch.INDEX_ERROR,
+            Events.Meilisearch.BACKFILL_COMPLETE,
+            Events.Meilisearch.BACKFILL_PARTIAL,
+            Events.Meilisearch.BACKFILL_ERROR
+        ].forEach(eventName => {
+            EventBus.server.on(eventName, (payload) => {
+                try {
+                    const validator = createStrictValidator(`EventForwarding:${eventName}`);
+                    validator.assertIsObject(payload, 'Meilisearch event payload must be an object');
+                    validator.assertIsNonEmptyString(
+                        payload.agentId,
+                        'Meilisearch event payload.agentId is required'
+                    );
+                    validator.assertIsNonEmptyString(
+                        payload.channelId,
+                        'Meilisearch event payload.channelId is required'
+                    );
+
+                    forwardEventToAgent(
+                        socketService,
+                        payload.agentId,
+                        eventName,
+                        payload
+                    );
+                } catch (error) {
+                    moduleLogger.error(
+                        `Error forwarding Meilisearch event from EventBus: ${eventName}, error: ${error}`
+                    );
+                    throw error;
                 }
-                // Broadcast request to all clients in the channel so any client can render the prompt
-                forwardEventToChannel(socketService, UserInputEvents.REQUEST, payload, channelId);
-            } catch (error) {
-                moduleLogger.error(`Error forwarding user_input:request: ${error}`);
-            }
+            });
         });
 
-        EventBus.server.on(UserInputEvents.CANCELLED, (payload) => {
-            try {
-                const channelId = payload.channelId;
-                if (!channelId) {
-                    moduleLogger.warn('Missing channelId in user_input:cancelled event');
-                    return;
+        // User-input prompts and request ids belong to one exact agent. Peers in
+        // the same channel do not need them and must not be able to race or read
+        // the prompt. All lifecycle delivery is requester-targeted.
+        [
+            UserInputEvents.REQUEST,
+            UserInputEvents.CANCELLED,
+            UserInputEvents.TIMEOUT
+        ].forEach(eventName => {
+            EventBus.server.on(eventName, (payload) => {
+                try {
+                    const validator = createStrictValidator(`EventForwarding:${eventName}`);
+                    validator.assertIsObject(payload, 'User input event payload must be an object');
+                    validator.assertIsNonEmptyString(
+                        payload.agentId,
+                        'User input event payload.agentId is required'
+                    );
+                    validator.assertIsNonEmptyString(
+                        payload.channelId,
+                        'User input event payload.channelId is required'
+                    );
+                    forwardEventToAgent(
+                        socketService,
+                        payload.agentId,
+                        eventName,
+                        payload
+                    );
+                } catch (error) {
+                    moduleLogger.error(`Error forwarding ${eventName}: ${error}`);
+                    throw error;
                 }
-                forwardEventToChannel(socketService, UserInputEvents.CANCELLED, payload, channelId);
-            } catch (error) {
-                moduleLogger.error(`Error forwarding user_input:cancelled: ${error}`);
-            }
-        });
-
-        EventBus.server.on(UserInputEvents.TIMEOUT, (payload) => {
-            try {
-                const channelId = payload.channelId;
-                if (!channelId) {
-                    moduleLogger.warn('Missing channelId in user_input:timeout event');
-                    return;
-                }
-                forwardEventToChannel(socketService, UserInputEvents.TIMEOUT, payload, channelId);
-            } catch (error) {
-                moduleLogger.error(`Error forwarding user_input:timeout: ${error}`);
-            }
+            });
         });
 
         // Handle user input responses — route to UserInputRequestManager to resolve the blocking tool call
@@ -846,13 +1051,22 @@ export const setupEventBusToSocketForwarding = (socketService: ISocketService): 
                 }
 
                 const manager = UserInputRequestManager.getInstance();
-                manager.submitResponse(responseData.requestId, responseData.value);
+                manager.submitResponse(
+                    responseData.requestId,
+                    responseData.value,
+                    payload.agentId,
+                    payload.channelId
+                );
 
-                // Forward response to channel so paused agents can resume their work loops
-                const channelId = payload.channelId;
-                if (channelId) {
-                    forwardEventToChannel(socketService, UserInputEvents.RESPONSE, payload, channelId);
-                }
+                // The response can contain human-entered secrets. Only the
+                // authenticated agent that owns the pending request receives it;
+                // peers in the room must not see the value.
+                forwardEventToAgent(
+                    socketService,
+                    payload.agentId,
+                    UserInputEvents.RESPONSE,
+                    payload
+                );
             } catch (error) {
                 moduleLogger.error(`Error processing user_input:response: ${error}`);
             }
@@ -861,11 +1075,22 @@ export const setupEventBusToSocketForwarding = (socketService: ISocketService): 
         // Handle task events - Forward to assigned agents and channels
         const taskEventProcessingKeys = new Set<string>();
         
-        Object.values(TaskEvents).forEach(eventName => {
+        // TaskEvents also contains client -> server write requests. Only the
+        // explicitly reviewed egress set may acquire an outbound socket handler;
+        // otherwise a CREATE/COMPLETE/etc. request would be echoed to peers before
+        // its authoritative handler had accepted and persisted it.
+        TASK_SOCKET_EGRESS_EVENTS.forEach(eventName => {
             EventBus.server.on(eventName, (payload) => {
                 try {
-                    // Create a unique key for this specific event to prevent duplication
-                    const eventKey = `${eventName}-${payload.taskId}-${payload.agentId}-${payload.channelId}`;
+                    if (typeof payload?.eventId !== 'string' || payload.eventId.length === 0) {
+                        moduleLogger.warn(`Dropped task event without eventId: ${eventName}`);
+                        return;
+                    }
+
+                    // eventId identifies one exact envelope. Reading taskId from
+                    // the envelope root made every helper-built task (whose id is
+                    // in data.taskId) collide for one second.
+                    const eventKey = `${eventName}-${payload.eventId}`;
                     
                     // Check if we're already processing this exact event
                     if (taskEventProcessingKeys.has(eventKey)) {
@@ -876,38 +1101,48 @@ export const setupEventBusToSocketForwarding = (socketService: ISocketService): 
                     taskEventProcessingKeys.add(eventKey);
                     
                     // Clean up old keys after processing
-                    setTimeout(() => {
+                    const cleanupTimer = setTimeout(() => {
                         taskEventProcessingKeys.delete(eventKey);
                     }, 1000);
-                    
-                    
-                    // For task completion, failure, and cancellation events, only forward to the specific agent
-                    if (eventName === TaskEvents.COMPLETED || 
-                        eventName === TaskEvents.FAILED || 
-                        eventName === TaskEvents.CANCELLED) {
-                        
-                        if (payload.agentId) {
-                            forwardEventToAgent(socketService, payload.agentId, eventName, payload);
+                    cleanupTimer.unref?.();
+
+                    // Legacy task requests and responses are private peer
+                    // messages. Route them only to their same-channel target.
+                    if (eventName === TaskEvents.REQUEST ||
+                        eventName === TaskEvents.RESPONSE) {
+                        const targetAgentId = payload.data?.toAgentId;
+                        if (typeof payload.channelId !== 'string' ||
+                            typeof targetAgentId !== 'string' ||
+                            targetAgentId.trim().length === 0 ||
+                            !ChannelService.getInstance().isParticipant(
+                                payload.channelId,
+                                targetAgentId
+                            )) {
+                            moduleLogger.warn(
+                                `Dropped ${eventName} with an invalid same-channel target`
+                            );
+                            return;
                         }
+
+                        forwardEventToAgent(
+                            socketService,
+                            targetAgentId,
+                            eventName,
+                            payload
+                        );
                         return;
                     }
-                    
-                    // For task assignment events, determine forwarding strategy based on assignment scope
-                    if (eventName === TaskEvents.ASSIGNED) {
-                        // Check if this is a multi-agent task (multiple agents assigned)
-                        const isMultiAgentTask = payload.assignedAgents && Array.isArray(payload.assignedAgents) && payload.assignedAgents.length > 1;
-                        
-                        if (isMultiAgentTask) {
-                            // Multi-agent task: forward to channel only (agents will filter for themselves)
-                            if (payload.channelId) {
-                                forwardEventToChannel(socketService, eventName, payload, payload.channelId);
-                            }
-                        } else {
-                            // Single-agent task: forward to specific agent only
-                            if (payload.agentId) {
-                                forwardEventToAgent(socketService, payload.agentId, eventName, payload);
-                            }
+
+                    const taskTarget = resolveTaskEventAgentTarget(eventName, payload);
+                    if (taskTarget) {
+                        if (!ChannelService.getInstance().isParticipant(payload.channelId, taskTarget)) {
+                            moduleLogger.warn(
+                                `Dropped ${eventName}: target ${taskTarget} is not a participant ` +
+                                `in ${payload.channelId}`
+                            );
+                            return;
                         }
+                        forwardEventToAgent(socketService, taskTarget, eventName, payload);
                         return;
                     }
                     
@@ -946,20 +1181,23 @@ export const setupEventBusToSocketForwarding = (socketService: ISocketService): 
  */
 const assertMatchesSocketIdentity = (
     eventName: string,
-    payload: { agentId?: unknown; channelId?: unknown },
+    payload: { eventType?: unknown; agentId?: unknown; channelId?: unknown },
     socketAgentId: string,
     socketChannelId: string
 ): boolean => {
     const claimedAgentId = payload.agentId;
     const claimedChannelId = payload.channelId;
 
-    if (claimedAgentId === socketAgentId && claimedChannelId === socketChannelId) {
+    if (payload.eventType === eventName &&
+        claimedAgentId === socketAgentId &&
+        claimedChannelId === socketChannelId) {
         return true;
     }
 
     moduleLogger.warn(
         `Rejected ${eventName} from agent ${socketAgentId} on channel ${socketChannelId}: ` +
-        `payload claims agentId=${String(claimedAgentId)} channelId=${String(claimedChannelId)}`
+        `payload claims eventType=${String(payload.eventType)} ` +
+        `agentId=${String(claimedAgentId)} channelId=${String(claimedChannelId)}`
     );
 
     // Tell the sender. MESSAGE_ERROR is forwarded back to payload.agentId by the
@@ -971,7 +1209,7 @@ const assertMatchesSocketIdentity = (
             socketAgentId as AgentId,
             socketChannelId as ChannelId,
             {
-                error: `Rejected ${eventName}: payload agentId/channelId must match the authenticated socket`,
+                error: `Rejected ${eventName}: payload type and identity must match the authenticated socket event`,
                 rejectedEvent: eventName
             }
         )
@@ -1039,7 +1277,7 @@ export const setupSocketToEventBusForwarding = (
         // This used to forward the client's object verbatim after checking only
         // that the fields were present, so any connected agent could post into
         // any channel as any agent.
-        Object.values(Events.Message).forEach(eventName => {
+        AGENT_SOCKET_MESSAGE_REQUEST_EVENTS.forEach(eventName => {
             socket.on(eventName, (payload) => {
                 try {
                     const validator = createStrictValidator('setupSocketToEventBusForwarding');
@@ -1056,9 +1294,42 @@ export const setupSocketToEventBusForwarding = (
                         return;
                     }
 
-                    const messageData = (payload.data && typeof payload.data === 'object')
-                        ? { ...payload.data, senderId: agentId }
+                    const messageContext = isRecord(payload.data?.context)
+                        ? { ...payload.data.context, channelId }
+                        : { channelId };
+                    const messageData = isRecord(payload.data)
+                        ? {
+                            ...payload.data,
+                            senderId: agentId,
+                            context: messageContext
+                        }
                         : payload.data;
+
+                    if (eventName === Events.Message.AGENT_MESSAGE) {
+                        const receiverId = isRecord(messageData)
+                            ? messageData.receiverId
+                            : undefined;
+                        if (typeof receiverId !== 'string' ||
+                            receiverId.trim().length === 0 ||
+                            !ChannelService.getInstance().isParticipant(channelId, receiverId)) {
+                            moduleLogger.warn(
+                                `Denied direct message from ${agentId} to a non-participant in ${channelId}`
+                            );
+                            EventBus.server.emit(
+                                Events.Message.MESSAGE_ERROR,
+                                createBaseEventPayload(
+                                    Events.Message.MESSAGE_ERROR,
+                                    agentId,
+                                    channelId,
+                                    {
+                                        originalEvent: eventName,
+                                        error: 'Direct message recipient is not a participant in the authenticated channel'
+                                    }
+                                )
+                            );
+                            return;
+                        }
+                    }
 
                     const structuredPayload = createBaseEventPayload(
                         eventName,
@@ -1080,7 +1351,7 @@ export const setupSocketToEventBusForwarding = (
         // socket context. Memory results are routed back by `payload.agentId`, so
         // a forged envelope both hid the requester and delivered another agent's
         // memory to a socket of the attacker's choosing.
-        Object.values(Events.Memory).forEach(eventName => {
+        AGENT_SOCKET_MEMORY_REQUEST_EVENTS.forEach(eventName => {
             socket.on(eventName, (payload) => {
                 try {
                     const validator = createStrictValidator('setupSocketToEventBusForwarding');
@@ -1097,11 +1368,50 @@ export const setupSocketToEventBusForwarding = (
                         return;
                     }
 
+                    const untrustedRequestData = isRecord(payload.data) ? payload.data : {};
+                    const requestData = authorizeSocketMemoryRequest(
+                        untrustedRequestData,
+                        agentId,
+                        channelId
+                    );
+                    if (!requestData) {
+                        moduleLogger.warn(
+                            `Denied unauthorized ${eventName} memory scope from socket ${socket.id}`
+                        );
+
+                        const resultEvent = eventName === Events.Memory.GET
+                            ? Events.Memory.GET_RESULT
+                            : eventName === Events.Memory.UPDATE
+                                ? Events.Memory.UPDATE_RESULT
+                                : Events.Memory.DELETE_RESULT;
+                        const error = 'Memory request is outside the authenticated socket scope';
+                        const resultData = eventName === Events.Memory.DELETE
+                            ? {
+                                operationId: untrustedRequestData.operationId,
+                                scope: untrustedRequestData.scope,
+                                id: untrustedRequestData.id,
+                                success: false,
+                                error
+                            }
+                            : {
+                                operationId: untrustedRequestData.operationId,
+                                scope: untrustedRequestData.scope,
+                                id: untrustedRequestData.id,
+                                memory: null,
+                                error
+                            };
+                        EventBus.server.emit(
+                            resultEvent,
+                            createBaseEventPayload(resultEvent, agentId, channelId, resultData)
+                        );
+                        return;
+                    }
+
                     const structuredPayload = createBaseEventPayload(
                         eventName,
                         agentId as AgentId,
                         channelId as ChannelId,
-                        payload.data
+                        requestData
                     );
 
                     EventBus.server.emit(eventName, structuredPayload);
@@ -1111,28 +1421,86 @@ export const setupSocketToEventBusForwarding = (
             });
         });
 
-        // Forward Meilisearch events (server-side indexing with embeddings)
-        Object.values(Events.Meilisearch).forEach(eventName => {
+        // Forward only Meilisearch client requests. Results and errors are
+        // server-owned and must never be injected back into the server bus.
+        AGENT_SOCKET_MEILISEARCH_REQUEST_EVENTS.forEach(eventName => {
             socket.on(eventName, (payload) => {
                 try {
-                    // Payload should already be a proper BaseEventPayload structure
-                    // Forward directly to EventBus for server-side processing
-                    EventBus.server.emit(eventName, payload);
+                    if (!payload || typeof payload !== 'object' ||
+                        !payload.eventId || !payload.eventType || !payload.agentId || !payload.channelId) {
+                        throw new Error(`Invalid EventPayload structure received for ${eventName}`);
+                    }
+
+                    if (!assertMatchesSocketIdentity(eventName, payload, agentId, channelId)) {
+                        throw new Error('Meilisearch request identity does not match the authenticated socket');
+                    }
+
+                    const safeData = authorizeMeilisearchSocketRequest(
+                        eventName,
+                        payload.data,
+                        agentId,
+                        channelId
+                    );
+
+                    EventBus.server.emit(
+                        eventName,
+                        createBaseEventPayload(eventName, agentId, channelId, safeData)
+                    );
                 } catch (error) {
                     moduleLogger.error(`Error processing Meilisearch event ${eventName}: ${error}`);
+                    emitMeilisearchIngressError(
+                        eventName,
+                        payload?.data,
+                        agentId,
+                        channelId,
+                        error
+                    );
                 }
             });
         });
 
-        // Forward Task events
-        Object.values(TaskEvents).forEach(eventName => {
+        // Forward only task requests. Lifecycle transitions, results, and
+        // orchestration notifications originate on the server.
+        AGENT_SOCKET_TASK_REQUEST_EVENTS.forEach(eventName => {
             socket.on(eventName, (payload) => {
                 try {
                     const validator = createStrictValidator('setupSocketToEventBusForwarding');
                     validator.assertIsNonEmptyString(agentId, 'agentId');
                     validator.assertIsNonEmptyString(channelId, 'channelId');
-                    
-                    
+
+                    const isStructuredPayload = payload !== null &&
+                        typeof payload === 'object' &&
+                        typeof payload.eventId === 'string' &&
+                        typeof payload.eventType === 'string' &&
+                        Object.prototype.hasOwnProperty.call(payload, 'data');
+
+                    if (isStructuredPayload &&
+                        !assertMatchesSocketIdentity(eventName, payload, agentId, channelId)) {
+                        return;
+                    }
+
+                    const rawData = isStructuredPayload ? payload.data : payload;
+                    const requestData = rawData !== null && typeof rawData === 'object'
+                        ? rawData
+                        : {};
+
+                    if (eventName === TaskEvents.REQUEST ||
+                        eventName === TaskEvents.RESPONSE) {
+                        const targetAgentId = requestData.toAgentId;
+                        if (typeof targetAgentId !== 'string' ||
+                            targetAgentId.trim().length === 0 ||
+                            !ChannelService.getInstance().isParticipant(
+                                channelId,
+                                targetAgentId
+                            )) {
+                            moduleLogger.warn(
+                                `Denied ${eventName} from ${agentId}: ` +
+                                `target is not a participant in ${channelId}`
+                            );
+                            return;
+                        }
+                    }
+
                     let structuredPayload;
                     
                     // Handle START_REQUEST differently - it doesn't need a full task object
@@ -1142,10 +1510,12 @@ export const setupSocketToEventBusForwarding = (
                             agentId,
                             channelId,
                             {
-                                taskId: payload.taskId || payload.data?.taskId,
-                                startingAgentId: payload.startingAgentId || payload.data?.startingAgentId,
+                                taskId: requestData.taskId,
+                                requestId: requestData.requestId,
+                                startingAgentId: agentId,
                                 fromAgentId: agentId,
-                                toAgentId: payload.toAgentId || payload.data?.toAgentId || agentId
+                                toAgentId: requestData.toAgentId || agentId,
+                                task: requestData.task ?? `Start task ${String(requestData.taskId ?? '')}`
                             }
                         );
                     } else {
@@ -1155,10 +1525,38 @@ export const setupSocketToEventBusForwarding = (
                             agentId,
                             channelId,
                             {
-                                taskId: payload.taskId || payload.data?.taskId,
+                                taskId: requestData.taskId,
+                                requestId: requestData.requestId,
                                 fromAgentId: agentId,
-                                toAgentId: payload.toAgentId || payload.data?.toAgentId || agentId,
-                                task: payload.data?.task || payload.task || payload.data || payload
+                                toAgentId: requestData.toAgentId || agentId,
+                                task: requestData.task || requestData,
+                                ...(eventName === TaskEvents.COMPLETE_REQUEST
+                                    ? {
+                                        completingAgentId: agentId,
+                                        result: requestData.result,
+                                        completedAt: requestData.completedAt
+                                    }
+                                    : {}),
+                                ...(eventName === TaskEvents.FAIL_REQUEST
+                                    ? {
+                                        failingAgentId: agentId,
+                                        error: requestData.error,
+                                        failedAt: requestData.failedAt
+                                    }
+                                    : {}),
+                                ...(eventName === TaskEvents.CANCEL_REQUEST
+                                    ? {
+                                        cancellingAgentId: agentId,
+                                        reason: requestData.reason,
+                                        cancelledAt: requestData.cancelledAt
+                                    }
+                                    : {}),
+                                ...(eventName === TaskEvents.ASSIGN_REQUEST
+                                    ? { targetAgentId: requestData.targetAgentId }
+                                    : {}),
+                                ...(eventName === TaskEvents.WORKLOAD_ANALYZE_REQUEST
+                                    ? { targetChannelId: requestData.targetChannelId }
+                                    : {})
                             }
                         );
                     }
@@ -1231,25 +1629,55 @@ export const setupMcpSocketToEventBusForwarding = (socket: Socket, agentId: stri
         // channelId can be undefined or empty if not in a channel context, so no assertion here
         
         
-        // Forward MCP events using the same pattern as other event forwarding
-        Object.values(Events.Mcp).forEach(eventName => {
-            socket.on(eventName, (payload) => {
+        // Only install listeners for reviewed client-to-server request events.
+        // Response, lifecycle, observability, and process-management event names
+        // are server-owned and therefore cannot be injected by an agent socket.
+        Object.values(Events.Mcp)
+            .filter(isAgentSocketMcpEventAllowed)
+            .forEach(eventName => {
+                socket.on(eventName, (payload) => {
                 try {
                     const validator = createStrictValidator('setupMcpSocketToEventBusForwarding');
                     validator.assertIsNonEmptyString(agentId, 'agentId');
                     // channelId can be empty for some contexts, so we don't validate it as non-empty
 
-                    // Log channel server events for debugging
-                    if (eventName.includes('channel:server')) {
-                        moduleLogger.info(`[MCP-FORWARD] Received ${eventName} from socket, forwarding to EventBus.server`);
-                    }
-                    
-                    // Check if payload is already a structured EventPayload
-                    if (payload.eventId && payload.eventType && payload.data) {
-                        // Already structured - just forward it
-                        EventBus.server.emit(eventName, payload);
+                    const isStructuredPayload = payload !== null &&
+                        typeof payload === 'object' &&
+                        typeof payload.eventId === 'string' &&
+                        typeof payload.eventType === 'string' &&
+                        Object.prototype.hasOwnProperty.call(payload, 'data');
+
+                    if (isStructuredPayload && payload.eventType !== eventName) {
+                        moduleLogger.warn(
+                            `Denied MCP envelope type mismatch from socket ${socket.id}: ` +
+                            `listener=${eventName}, envelope=${String(payload.eventType)}`
+                        );
                         return;
                     }
+
+                    // Never trust identity fields from an incoming envelope. Only
+                    // its data is accepted; a fresh envelope is built below from
+                    // the authenticated socket's agent and channel.
+                    const rawData = isStructuredPayload ? payload.data : payload;
+                    const requestData = rawData !== null && typeof rawData === 'object'
+                        ? rawData
+                        : {};
+                    const authenticatedKeyId = socket.data?.keyId;
+                    if (typeof authenticatedKeyId !== 'string' || authenticatedKeyId.trim().length === 0) {
+                        moduleLogger.warn(`Denied MCP request without an authenticated key on socket ${socket.id}`);
+                        return;
+                    }
+                    const effectiveAllowedTools = socket.data?.effectiveAllowedTools;
+                    if (effectiveAllowedTools !== undefined && !Array.isArray(effectiveAllowedTools)) {
+                        moduleLogger.warn(`Denied MCP request with invalid server tool policy on socket ${socket.id}`);
+                        return;
+                    }
+                    const authorization = {
+                        keyId: authenticatedKeyId,
+                        allowedTools: effectiveAllowedTools === undefined
+                            ? undefined
+                            : [...effectiveAllowedTools]
+                    };
                     
                     // For MCP events, we need to transform the raw socket payload into proper EventBus payload
                     // using the appropriate createMcp* helper functions
@@ -1263,9 +1691,9 @@ export const setupMcpSocketToEventBusForwarding = (socket: Socket, agentId: stri
                                 agentId,
                                 channelId,
                                 {
-                                    toolName: payload.toolName,
-                                    callId: payload.callId || uuidv4(),
-                                    arguments: payload.arguments || {}
+                                    toolName: requestData.toolName,
+                                    callId: requestData.callId || uuidv4(),
+                                    arguments: requestData.arguments || {}
                                 }
                             );
                             break;
@@ -1277,25 +1705,23 @@ export const setupMcpSocketToEventBusForwarding = (socket: Socket, agentId: stri
                                 agentId,
                                 channelId,
                                 {
-                                    toolName: payload.toolName,
-                                    description: payload.description,
-                                    inputSchema: payload.inputSchema,
-                                    registrationDetails: payload.registrationDetails || {}
+                                    toolName: requestData.toolName,
+                                    description: requestData.description,
+                                    inputSchema: requestData.inputSchema,
+                                    registrationDetails: requestData.registrationDetails || {}
                                 }
                             );
                             break;
-                            
+
                         // MXF Tool Service events (for client-server tool communication)
+                        case Events.Mcp.TOOL_UNREGISTER:
+                        case Events.Mcp.TOOL_LIST:
                         case Events.Mcp.MXF_TOOL_LIST:
-                        case Events.Mcp.MXF_TOOL_LIST_RESULT:
-                        case Events.Mcp.MXF_TOOL_LIST_ERROR:
-                            // For MXF tool events, preserve the payload structure 
-                            // as it contains requestId and other important metadata
                             structuredPayload = createBaseEventPayload(
                                 eventName,
                                 agentId,
                                 channelId,
-                                payload
+                                requestData
                             );
                             break;
                             
@@ -1305,8 +1731,8 @@ export const setupMcpSocketToEventBusForwarding = (socket: Socket, agentId: stri
                                 agentId,
                                 channelId,
                                 {
-                                    resourceUri: payload.uri || payload.resourceUri,
-                                    requestId: payload.requestId || uuidv4()
+                                    resourceUri: requestData.uri || requestData.resourceUri,
+                                    requestId: requestData.requestId || uuidv4()
                                 }
                             );
                             break;
@@ -1318,33 +1744,32 @@ export const setupMcpSocketToEventBusForwarding = (socket: Socket, agentId: stri
                                 channelId,
                                 {
                                     resourceUri: 'list', // Standard URI for list operations
-                                    requestId: payload.requestId || uuidv4(),
-                                    filter: payload.filter
+                                    requestId: requestData.requestId || uuidv4(),
+                                    filter: requestData.filter
                                 }
                             );
                             break;
-                            
+
                         default:
-                            // For other MCP events, use the base payload structure
-                            structuredPayload = createBaseEventPayload(
-                                eventName,
-                                agentId,
-                                channelId,
-                                payload
-                            );
-                            break;
+                            // The feature policy is the source of the request
+                            // allowlist. Fail closed if the two ever drift.
+                            moduleLogger.warn(`Denied unhandled MCP request event ${eventName}`);
+                            return;
                     }
                     
                     
                     // Forward the structured payload to EventBus
-                    EventBus.server.emit(eventName, structuredPayload);
+                    EventBus.server.emit(eventName, {
+                        ...structuredPayload,
+                        authorization
+                    });
                     
                     
                 } catch (error) {
                     moduleLogger.error(`Error processing MCP ${eventName}: ${error}`);
                 }
+                });
             });
-        });
         
         
     } catch (error) {
@@ -1398,6 +1823,11 @@ export const forwardEventToAgent = (
         // Validate parameters
         validator.assertIsNonEmptyString(agentId);
         validator.assertIsNonEmptyString(eventName);
+        validator.assertIsObject(payload);
+        validator.assertIsNonEmptyString(
+            payload.channelId,
+            'Agent-targeted event payload.channelId is required'
+        );
         
         // Check if queuing is enabled
         if (eventQueue.isEnabled()) {
@@ -1407,7 +1837,8 @@ export const forwardEventToAgent = (
                 type: 'agent',
                 eventName,
                 payload,
-                targetId: agentId
+                targetId: agentId,
+                channelId: payload.channelId
             });
             // ;
             return;
@@ -1417,7 +1848,7 @@ export const forwardEventToAgent = (
         // ;
         
         // Get the socket for the agent
-        const socket = socketService.getSocketByAgentId(agentId);
+        const socket = socketService.getSocketByAgentId(agentId, payload.channelId);
         
         // Skip if agent has no socket — log a warning for critical events (tool results)
         // since these are required for agent loop progress. Silence for normal disconnect sequences.
@@ -1506,6 +1937,7 @@ export const forwardEventToChannel = (
                 eventName,
                 payload,
                 targetId: channelId,
+                channelId,
                 excludedAgentId
             });
             // ;
@@ -1528,7 +1960,10 @@ export const forwardEventToChannel = (
         // Forward the event to all sockets in the room, excluding the specified agent if any
         if (excludedAgentId) {
             // Get the socket ID for the excluded agent
-            const excludedSocket = socketService.getSocketByAgentId(excludedAgentId);
+            const excludedSocket = socketService.getSocketByAgentId(
+                excludedAgentId,
+                channelId
+            );
             if (excludedSocket) {
                 io.to(roomName).except(excludedSocket.id).emit(eventName, payload);
             } else {

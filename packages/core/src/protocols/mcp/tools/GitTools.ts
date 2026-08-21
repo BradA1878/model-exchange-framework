@@ -34,11 +34,13 @@ import { TOOL_CATEGORIES } from '../../../constants/ToolNames.js';
 import { defineTool, ToolRunContext } from '../defineTool.js';
 import { ToolError } from '../ToolError.js';
 import { executeShellCommand, ShellCommandResult } from './InfrastructureTools.js';
+import * as path from 'path';
+import { resolveWorkspacePath } from '../security/McpToolPolicy.js';
 
 /** Working-directory property shared by every git tool's schema. */
 const workingDirectoryProperty = {
     type: 'string',
-    description: 'Working directory path (defaults to the server working directory)'
+    description: 'Working directory under MXF_WORKSPACE_ROOT (defaults to MXF_WORKSPACE_ROOT)'
 };
 
 /**
@@ -58,7 +60,7 @@ async function runGit(
             channelId: context.channelId,
             requestId: context.requestId
         },
-        workingDirectory: workingDirectory || process.cwd(),
+        workingDirectory,
         captureOutput: true
     });
 
@@ -164,11 +166,19 @@ export const gitAddTool = defineTool<
         required: ['files']
     },
     run: async (input, context) => {
-        await runGit(['add', ...input.files], input.workingDirectory, context);
+        const workingDirectory = resolveWorkspacePath(
+            input.workingDirectory,
+            'git_add workingDirectory'
+        );
+        const files = input.files.map(file => resolveWorkspacePath(
+            path.resolve(workingDirectory, file),
+            'git_add file'
+        ));
+        await runGit(['add', ...files], workingDirectory, context);
 
         return {
-            stagedCount: input.files.length,
-            files: input.files
+            stagedCount: files.length,
+            files
         };
     }
 });

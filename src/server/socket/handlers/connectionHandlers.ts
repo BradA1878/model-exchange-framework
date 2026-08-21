@@ -35,8 +35,6 @@ import {
     ChannelActionTypes,
     AuthEvents
 } from '@mxf-dev/core/events/EventNames';
-import { ControlLoopEvents } from '@mxf-dev/core/events/event-definitions/ControlLoopEvents';
-import { OrparEvents } from '@mxf-dev/core/events/event-definitions/OrparEvents';
 import { AgentConnectionStatus } from '@mxf-dev/core/types/AgentTypes';
 import { createStrictValidator } from '@mxf-dev/core/utils/validation';
 import logger from '@mxf-dev/core/utils/Logger';
@@ -58,6 +56,14 @@ import { setupChannelContextEventBusHandlers } from './channelContextHandlers';
 import { setupAdminEventHandlers } from './adminHandlers';
 import { ChannelService } from '../services/ChannelService';
 import { SystemLlmServiceManager } from '../services/SystemLlmServiceManager';
+import { UserRole } from '@mxf-dev/core/models/user';
+import {
+    isStdioMcpTransport,
+    isUnsafeStdioMcpEnabled
+} from '@mxf-dev/core/protocols/mcp/security/ExternalMcpRegistrationPolicy';
+import { authorizationService } from '../../api/services/AuthorizationService';
+import { resolveCredentialBoundAgentPolicy } from '../services/ToolAuthorizationPolicy';
+import { userSessionLifecycle } from '../services/UserSessionLifecycle';
 
 // Global Services - lazy initialization to avoid early singleton creation
 let agentService: AgentService;
@@ -97,40 +103,474 @@ const initializeEventBusHandlers = (): void => {
  * sockets since they are not registered in the agent socket map.
  */
 const setupAdminSocketForwarding = (socket: Socket, userId: string): void => {
+    if (socket.data?.role !== UserRole.ADMIN) {
+        moduleLogger.warn(`Installing user-scoped administrative handlers for non-admin user ${userId}`);
+
+        // These public SDK operations are asynchronous. Track the exact
+        // user/channel requests this socket forwarded so success (including a
+        // one-time plaintext key secret) returns only to its requester and only
+        // once. The event contract has no request id in responses, so enforce a
+        // single in-flight request of each kind per channel.
+        const pendingChannelCreations = new Set<string>();
+        const pendingKeyGenerations = new Set<string>();
+        const userResponseSubscriptions: Array<{ unsubscribe?: () => void }> = [];
+
+        [
+            Events.Channel.CREATED,
+            Events.Channel.CREATION_FAILED,
+            Events.Key.GENERATED,
+            Events.Key.GENERATION_FAILED
+        ].forEach(eventName => {
+            const subscription = EventBus.server.on(eventName, (payload: unknown) => {
+                if (payload === null || typeof payload !== 'object') {
+                    return;
+                }
+                const response = payload as Record<string, unknown>;
+                if (response.agentId !== userId ||
+                    typeof response.channelId !== 'string' ||
+                    response.channelId.trim().length === 0) {
+                    return;
+                }
+
+                const responseData = response.data !== null &&
+                    typeof response.data === 'object'
+                    ? response.data as Record<string, unknown>
+                    : undefined;
+
+                const responseChannelId = response.channelId;
+                if (responseData?.channelId !== undefined &&
+                    responseData.channelId !== responseChannelId) {
+                    return;
+                }
+
+                const pendingRequests = eventName === Events.Channel.CREATED ||
+                    eventName === Events.Channel.CREATION_FAILED
+                    ? pendingChannelCreations
+                    : pendingKeyGenerations;
+                if (!pendingRequests.delete(responseChannelId)) {
+                    return;
+                }
+
+                socket.emit(eventName, payload);
+            });
+            userResponseSubscriptions.push(subscription);
+        });
+
+        socket.on(CoreSocketEvents.DISCONNECT, () => {
+            userResponseSubscriptions.forEach(subscription => subscription.unsubscribe?.());
+            pendingChannelCreations.clear();
+            pendingKeyGenerations.clear();
+        });
+
+        const readUserRequest = (
+            eventName: string,
+            payload: unknown
+        ): { channelId: string; data: Record<string, unknown> } | null => {
+            if (payload === null || typeof payload !== 'object') {
+                return null;
+            }
+            const envelope = payload as Record<string, unknown>;
+            if (envelope.eventType !== eventName ||
+                envelope.agentId !== userId ||
+                typeof envelope.channelId !== 'string' ||
+                envelope.channelId.trim().length === 0 ||
+                envelope.data === null ||
+                typeof envelope.data !== 'object') {
+                return null;
+            }
+            const data = envelope.data as Record<string, unknown>;
+            if (data.channelId !== undefined && data.channelId !== envelope.channelId) {
+                return null;
+            }
+            return { channelId: envelope.channelId, data };
+        };
+
+        socket.on(Events.Channel.CREATE, (payload: unknown) => {
+            let pendingChannelId: string | undefined;
+            void (async (): Promise<void> => {
+                const request = readUserRequest(Events.Channel.CREATE, payload);
+                if (!request) {
+                    socket.emit(
+                        Events.Channel.CREATION_FAILED,
+                        createBaseEventPayload(
+                            Events.Channel.CREATION_FAILED,
+                            userId,
+                            'system',
+                            { error: 'Invalid channel creation request' }
+                        )
+                    );
+                    return;
+                }
+
+                pendingChannelId = request.channelId;
+                if (pendingChannelCreations.has(request.channelId)) {
+                    socket.emit(
+                        Events.Channel.CREATION_FAILED,
+                        createBaseEventPayload(
+                            Events.Channel.CREATION_FAILED,
+                            userId,
+                            request.channelId,
+                            {
+                                channelId: request.channelId,
+                                error: 'Channel creation is already in progress'
+                            }
+                        )
+                    );
+                    return;
+                }
+                pendingChannelCreations.add(request.channelId);
+
+                // Creation is idempotent only for the existing owner. Without
+                // this preflight, ChannelService returns any existing channel
+                // and the global admin handler emits CREATED to the attacker.
+                const decision = await authorizationService.authorize(
+                    'manage',
+                    'channel',
+                    request.channelId,
+                    { kind: 'user', userId, role: String(socket.data?.role ?? '') }
+                );
+                if (!decision.allowed && decision.status !== 404) {
+                    pendingChannelCreations.delete(request.channelId);
+                    socket.emit(
+                        Events.Channel.CREATION_FAILED,
+                        createBaseEventPayload(
+                            Events.Channel.CREATION_FAILED,
+                            userId,
+                            request.channelId,
+                            {
+                                channelId: request.channelId,
+                                error: 'An existing channel can only be opened by its owner'
+                            }
+                        )
+                    );
+                    return;
+                }
+
+                EventBus.server.emit(
+                    Events.Channel.CREATE,
+                    createBaseEventPayload(
+                        Events.Channel.CREATE,
+                        userId,
+                        request.channelId,
+                        request.data
+                    )
+                );
+            })().catch(error => {
+                if (pendingChannelId) {
+                    pendingChannelCreations.delete(pendingChannelId);
+                }
+                moduleLogger.error(`Failed to authorize channel creation for ${userId}: ${error}`);
+                socket.emit(
+                    Events.Channel.CREATION_FAILED,
+                    createBaseEventPayload(
+                        Events.Channel.CREATION_FAILED,
+                        userId,
+                        'system',
+                        { error: 'Channel creation authorization failed' }
+                    )
+                );
+            });
+        });
+
+        socket.on(Events.Key.GENERATE, (payload: unknown) => {
+            let pendingChannelId: string | undefined;
+            void (async (): Promise<void> => {
+                const request = readUserRequest(Events.Key.GENERATE, payload);
+                if (request) {
+                    pendingChannelId = request.channelId;
+                    if (pendingKeyGenerations.has(request.channelId)) {
+                        socket.emit(
+                            Events.Key.GENERATION_FAILED,
+                            createBaseEventPayload(
+                                Events.Key.GENERATION_FAILED,
+                                userId,
+                                request.channelId,
+                                {
+                                    channelId: request.channelId,
+                                    success: false,
+                                    error: 'Key generation is already in progress'
+                                }
+                            )
+                        );
+                        return;
+                    }
+                    pendingKeyGenerations.add(request.channelId);
+
+                    const decision = await authorizationService.authorize(
+                        'manage',
+                        'channel',
+                        request.channelId,
+                        { kind: 'user', userId, role: String(socket.data?.role ?? '') }
+                    );
+                    if (decision.allowed) {
+                        EventBus.server.emit(
+                            Events.Key.GENERATE,
+                            createBaseEventPayload(
+                                Events.Key.GENERATE,
+                                userId,
+                                request.channelId,
+                                { ...request.data, channelId: request.channelId }
+                            )
+                        );
+                        return;
+                    }
+
+                    pendingKeyGenerations.delete(request.channelId);
+                }
+
+                const envelope = payload !== null && typeof payload === 'object'
+                    ? payload as Record<string, unknown>
+                    : {};
+                const channelId = typeof envelope.channelId === 'string'
+                    ? envelope.channelId
+                    : 'system';
+                socket.emit(
+                    Events.Key.GENERATION_FAILED,
+                    createBaseEventPayload(
+                        Events.Key.GENERATION_FAILED,
+                        userId,
+                        channelId,
+                        {
+                            channelId,
+                            success: false,
+                            error: 'Channel ownership is required to generate a key'
+                        }
+                    )
+                );
+            })().catch(error => {
+                if (pendingChannelId) {
+                    pendingKeyGenerations.delete(pendingChannelId);
+                }
+                moduleLogger.error(`Failed to authorize key generation for ${userId}: ${error}`);
+                const channelId = pendingChannelId ?? 'system';
+                socket.emit(
+                    Events.Key.GENERATION_FAILED,
+                    createBaseEventPayload(
+                        Events.Key.GENERATION_FAILED,
+                        userId,
+                        channelId,
+                        {
+                            channelId,
+                            success: false,
+                            error: 'Key generation authorization failed'
+                        }
+                    )
+                );
+            });
+        });
+
+        const deniedOperations = new Map<string, string>([
+            [Events.Mcp.CHANNEL_SERVER_REGISTER, Events.Mcp.CHANNEL_SERVER_REGISTRATION_FAILED],
+            [Events.Mcp.CHANNEL_SERVER_UNREGISTER, Events.Mcp.CHANNEL_SERVER_UNREGISTERED],
+            [Events.Mcp.EXTERNAL_SERVER_REGISTER, Events.Mcp.EXTERNAL_SERVER_REGISTRATION_FAILED],
+            [Events.Mcp.EXTERNAL_SERVER_UNREGISTER, Events.Mcp.EXTERNAL_SERVER_UNREGISTERED]
+        ]);
+
+        deniedOperations.forEach((failureEvent, requestEvent) => {
+            socket.on(requestEvent, (payload: unknown) => {
+                const envelope = payload !== null && typeof payload === 'object'
+                    ? payload as Record<string, unknown>
+                    : {};
+                const data = envelope.data !== null && typeof envelope.data === 'object'
+                    ? envelope.data as Record<string, unknown>
+                    : {};
+                const channelId = typeof envelope.channelId === 'string' &&
+                    envelope.channelId.trim().length > 0
+                    ? envelope.channelId
+                    : 'system';
+
+                socket.emit(
+                    failureEvent,
+                    createBaseEventPayload(failureEvent, userId, channelId, {
+                        channelId,
+                        serverId: data.id || data.serverId,
+                        success: false,
+                        error: 'Administrator privileges are required for this operation'
+                    })
+                );
+            });
+        });
+        return;
+    }
+
+    const requestedExternalServerIds = new Set<string>();
+
+    const readAdminRequest = (
+        eventName: string,
+        payload: unknown
+    ): { channelId: string; data: Record<string, unknown> } | null => {
+        if (payload === null || typeof payload !== 'object') {
+            moduleLogger.warn(`Denied malformed ${eventName} request from admin socket ${socket.id}`);
+            return null;
+        }
+
+        const envelope = payload as Record<string, unknown>;
+        if (typeof envelope.eventId !== 'string' ||
+            envelope.eventType !== eventName ||
+            envelope.agentId !== userId ||
+            typeof envelope.channelId !== 'string' ||
+            envelope.channelId.trim().length === 0 ||
+            envelope.data === null ||
+            typeof envelope.data !== 'object') {
+            moduleLogger.warn(`Denied untrusted ${eventName} envelope from admin socket ${socket.id}`);
+            return null;
+        }
+
+        const data = envelope.data as Record<string, unknown>;
+        const dataChannelId = data.channelId;
+        if (dataChannelId !== undefined && dataChannelId !== envelope.channelId) {
+            moduleLogger.warn(`Denied channel mismatch in ${eventName} from admin socket ${socket.id}`);
+            return null;
+        }
+
+        return { channelId: envelope.channelId, data };
+    };
+
+    const forwardAdminRequest = (eventName: string, payload: unknown): void => {
+        const request = readAdminRequest(eventName, payload);
+        if (!request) {
+            return;
+        }
+
+        EventBus.server.emit(
+            eventName,
+            createBaseEventPayload(eventName, userId, request.channelId, {
+                ...request.data,
+                ...(request.data.channelId === undefined ? {} : { channelId: request.channelId })
+            })
+        );
+    };
+
+    const emitAdminMcpFailure = (
+        requestEvent: string,
+        payload: unknown,
+        error: string
+    ): void => {
+        const envelope = payload !== null && typeof payload === 'object'
+            ? payload as Record<string, unknown>
+            : {};
+        const data = envelope.data !== null && typeof envelope.data === 'object'
+            ? envelope.data as Record<string, unknown>
+            : {};
+        const channelId = typeof envelope.channelId === 'string' &&
+            envelope.channelId.trim().length > 0
+            ? envelope.channelId
+            : 'system';
+        const failureEvent = requestEvent === Events.Mcp.EXTERNAL_SERVER_REGISTER
+            ? Events.Mcp.EXTERNAL_SERVER_REGISTRATION_FAILED
+            : requestEvent === Events.Mcp.EXTERNAL_SERVER_UNREGISTER
+                ? Events.Mcp.EXTERNAL_SERVER_UNREGISTERED
+                : requestEvent === Events.Mcp.CHANNEL_SERVER_REGISTER
+                    ? Events.Mcp.CHANNEL_SERVER_REGISTRATION_FAILED
+                    : Events.Mcp.CHANNEL_SERVER_UNREGISTERED;
+
+        socket.emit(
+            failureEvent,
+            createBaseEventPayload(failureEvent, userId, channelId, {
+                serverId: data.id || data.serverId,
+                scopeId: requestEvent.startsWith('mcp:channel:') ? channelId : undefined,
+                success: false,
+                error
+            })
+        );
+    };
 
     // ── Outbound: admin socket → EventBus.server (requests) ──
 
     // Forward channel:create events to EventBus
-    socket.on(Events.Channel.CREATE, (payload: any) => {
+    socket.on(Events.Channel.CREATE, (payload: unknown) => {
         try {
-            EventBus.server.emit(Events.Channel.CREATE, payload);
+            forwardAdminRequest(Events.Channel.CREATE, payload);
         } catch (error) {
             moduleLogger.error(`Error forwarding channel:create event: ${error}`);
         }
     });
 
     // Forward key:generate events to EventBus
-    socket.on(Events.Key.GENERATE, (payload: any) => {
+    socket.on(Events.Key.GENERATE, (payload: unknown) => {
         try {
-            EventBus.server.emit(Events.Key.GENERATE, payload);
+            forwardAdminRequest(Events.Key.GENERATE, payload);
         } catch (error) {
             moduleLogger.error(`Error forwarding key:generate event: ${error}`);
         }
     });
 
     // Forward MCP channel server events to EventBus (for SDK-level MCP server registration)
-    const mcpChannelServerEvents = [
+    const adminMcpServerEvents = [
         Events.Mcp.CHANNEL_SERVER_REGISTER,
-        Events.Mcp.CHANNEL_SERVER_UNREGISTER
+        Events.Mcp.CHANNEL_SERVER_UNREGISTER,
+        Events.Mcp.EXTERNAL_SERVER_REGISTER,
+        Events.Mcp.EXTERNAL_SERVER_UNREGISTER
     ];
 
-    mcpChannelServerEvents.forEach(eventName => {
-        socket.on(eventName, (payload: any) => {
+    adminMcpServerEvents.forEach(eventName => {
+        socket.on(eventName, (payload: unknown) => {
+            let correlatedExternalServerId: string | undefined;
             try {
+                const request = readAdminRequest(eventName, payload);
+                if (!request) {
+                    emitAdminMcpFailure(eventName, payload, 'Invalid administrative MCP request envelope');
+                    return;
+                }
+
+                const isRegistration = eventName === Events.Mcp.CHANNEL_SERVER_REGISTER ||
+                    eventName === Events.Mcp.EXTERNAL_SERVER_REGISTER;
+                const registrationDenied = isRegistration &&
+                    isStdioMcpTransport(request.data.transport) &&
+                    !isUnsafeStdioMcpEnabled();
+                if (registrationDenied) {
+                    moduleLogger.warn(
+                        `Denied ${eventName} from socket user ${userId}: ` +
+                        'registration requires the explicit unsafe capability'
+                    );
+
+                    emitAdminMcpFailure(
+                        eventName,
+                        payload,
+                        'MCP server registration is disabled or not authorized'
+                    );
+                    return;
+                }
+
+                if (eventName === Events.Mcp.EXTERNAL_SERVER_REGISTER) {
+                    const serverId = request.data.id;
+                    if (typeof serverId !== 'string' || serverId.trim().length === 0) {
+                        moduleLogger.warn(`Denied external MCP registration without a server id from ${userId}`);
+                        emitAdminMcpFailure(eventName, payload, 'External MCP server id is required');
+                        return;
+                    }
+                    correlatedExternalServerId = serverId;
+                    requestedExternalServerIds.add(serverId);
+                } else if (eventName === Events.Mcp.EXTERNAL_SERVER_UNREGISTER) {
+                    const serverId = request.data.serverId;
+                    if (typeof serverId !== 'string' || serverId.trim().length === 0) {
+                        moduleLogger.warn(`Denied external MCP unregistration without a server id from ${userId}`);
+                        emitAdminMcpFailure(eventName, payload, 'External MCP server id is required');
+                        return;
+                    }
+                }
+
                 moduleLogger.info(`[ADMIN-MCP] Forwarding ${eventName} from admin socket to EventBus.server`);
-                EventBus.server.emit(eventName, payload);
+                EventBus.server.emit(
+                    eventName,
+                    createBaseEventPayload(eventName, userId, request.channelId, {
+                        ...request.data,
+                        ...(eventName === Events.Mcp.CHANNEL_SERVER_REGISTER ||
+                            eventName === Events.Mcp.CHANNEL_SERVER_UNREGISTER
+                            ? { channelId: request.channelId }
+                            : {})
+                    })
+                );
             } catch (error) {
+                if (correlatedExternalServerId) {
+                    requestedExternalServerIds.delete(correlatedExternalServerId);
+                }
                 moduleLogger.error(`Error forwarding ${eventName} event: ${error}`);
+                emitAdminMcpFailure(
+                    eventName,
+                    payload,
+                    error instanceof Error ? error.message : 'Administrative MCP request failed'
+                );
             }
         });
     });
@@ -140,6 +580,9 @@ const setupAdminSocketForwarding = (socket: Socket, userId: string): void => {
     // where registerChannelMcpServer() and generateKey() are listening.
 
     const adminResponseEvents = [
+        // Channel responses
+        Events.Channel.CREATED,
+        Events.Channel.CREATION_FAILED,
         // Key responses
         Events.Key.GENERATED,
         Events.Key.GENERATION_FAILED,
@@ -147,23 +590,44 @@ const setupAdminSocketForwarding = (socket: Socket, userId: string): void => {
         Events.Mcp.CHANNEL_SERVER_REGISTERED,
         Events.Mcp.CHANNEL_SERVER_REGISTRATION_FAILED,
         Events.Mcp.CHANNEL_SERVER_UNREGISTERED,
+        // Global MCP server responses
+        Events.Mcp.EXTERNAL_SERVER_REGISTERED,
+        Events.Mcp.EXTERNAL_SERVER_REGISTRATION_FAILED,
+        Events.Mcp.EXTERNAL_SERVER_UNREGISTERED,
+        Events.Mcp.EXTERNAL_SERVER_TOOLS_DISCOVERED,
     ];
 
     const responseSubscriptions: any[] = [];
 
     adminResponseEvents.forEach(eventName => {
         const sub = EventBus.server.on(eventName, (payload: any) => {
-            // Only forward events that originated from this admin user
-            if (payload.agentId === userId) {
+            const serverId = payload?.data?.serverId;
+            const isCorrelatedToolsDiscovery = eventName === Events.Mcp.EXTERNAL_SERVER_TOOLS_DISCOVERED &&
+                typeof serverId === 'string' &&
+                requestedExternalServerIds.has(serverId);
+
+            // Most responses retain the requester identity. Tool discovery is
+            // emitted by the global manager as SYSTEM, so correlate it to a
+            // server id this exact admin socket requested rather than exposing
+            // every global discovery event to every administrator.
+            if (payload.agentId === userId || isCorrelatedToolsDiscovery) {
                 socket.emit(eventName, payload);
+
+                if (typeof serverId === 'string' &&
+                    (eventName === Events.Mcp.EXTERNAL_SERVER_TOOLS_DISCOVERED ||
+                        eventName === Events.Mcp.EXTERNAL_SERVER_REGISTRATION_FAILED ||
+                        eventName === Events.Mcp.EXTERNAL_SERVER_UNREGISTERED)) {
+                    requestedExternalServerIds.delete(serverId);
+                }
             }
         });
         responseSubscriptions.push(sub);
     });
 
     // Clean up subscriptions when admin socket disconnects
-    socket.on('disconnect', () => {
-        responseSubscriptions.forEach(sub => sub.unsubscribe());
+    socket.on(CoreSocketEvents.DISCONNECT, () => {
+        responseSubscriptions.forEach(sub => sub?.unsubscribe());
+        requestedExternalServerIds.clear();
     });
 };
 
@@ -174,7 +638,104 @@ const setupAdminSocketForwarding = (socket: Socket, userId: string): void => {
  */
 export const handleConnection = (socket: Socket, socketService: ISocketService): void => {
     const validator = createStrictValidator('ConnectionHandlers.handleConnection');
-    
+    let authenticationInFlight = false;
+    let authenticationCompleted = false;
+    let authenticationTerminal = false;
+
+    const rejectDuplicateAuthentication = (): void => {
+        moduleLogger.warn(`Rejected repeated authentication attempt for socket ${socket.id}`);
+        socket.emit(AuthEvents.ERROR, {
+            error: 'Socket authentication is already in progress or complete'
+        });
+    };
+
+    const authenticateAndComplete = async (
+        authData: unknown,
+        responseMode: 'handshake' | 'event'
+    ): Promise<void> => {
+        if (authenticationInFlight || authenticationCompleted || authenticationTerminal) {
+            rejectDuplicateAuthentication();
+            return;
+        }
+
+        authenticationInFlight = true;
+        // A socket gets one credential attempt, whether it arrives in the
+        // handshake or through the post-connect auth event. Failed attempts are
+        // terminal so this endpoint cannot become an unlimited password/PAT/JWT
+        // oracle, and a handshake/auth race cannot start a second validator.
+        authenticationTerminal = true;
+
+        try {
+            validator.assertIsObject(authData);
+
+            const authenticatedId = await handleSocketAuthentication(socket, authData);
+            if (!authenticatedId) {
+                moduleLogger.warn(`Socket authentication failed: ${socket.id}`);
+                if (responseMode === 'handshake') {
+                    await sendAuthResponse(socket, null, authData);
+                } else {
+                    socket.emit(AuthEvents.ERROR, { error: 'Authentication failed' });
+                }
+                socket.data.authenticated = false;
+                if (socket.connected !== false) {
+                    socket.disconnect(true);
+                }
+                return;
+            }
+
+            if (socket.data?.authType === 'key') {
+                const agentId = socket.data.agentId;
+                const channelId = socket.data.channelId;
+
+                // Completion is part of authentication. In particular, a key
+                // whose persisted channel no longer exists must not leave an
+                // authenticated socket with request handlers installed.
+                await completeSocketConnection(socket, agentId, channelId, socketService);
+            } else if (socket.data?.authType === 'jwt' ||
+                socket.data?.authType === 'password' ||
+                socket.data?.authType === 'pat') {
+                // Registration validates the immutable user/token identity and
+                // installs JWT/PAT hard-expiry before privileged forwarding.
+                // If lifecycle is unavailable, authentication fails closed.
+                await userSessionLifecycle.registerUserSession(
+                    socket,
+                    () => setupAdminSocketForwarding(socket, authenticatedId)
+                );
+            } else {
+                throw new Error('Unsupported authenticated socket type');
+            }
+
+            // Set the guard before emitting a response. A response callback can
+            // synchronously cause another client auth event in tests and in some
+            // Socket.IO adapters; it must observe the completed state.
+            authenticationCompleted = true;
+
+            if (responseMode === 'handshake') {
+                await sendAuthResponse(socket, authenticatedId, authData);
+            } else if (socket.data?.authType === 'key') {
+                socket.emit(AuthEvents.SUCCESS, {
+                    agentId: socket.data.agentId,
+                    channelId: socket.data.channelId
+                });
+            } else {
+                socket.emit(AuthEvents.SUCCESS, {
+                    userId: socket.data.userId,
+                    username: socket.data.username
+                });
+            }
+        } catch (error) {
+            moduleLogger.error(`Socket authentication error for ${socket.id}: ${error}`);
+            if (socket.connected !== false) {
+                socket.emit(AuthEvents.ERROR, { error: 'Authentication failed' });
+            }
+            if (authenticationTerminal && !authenticationCompleted) {
+                socket.data.authenticated = false;
+                socket.disconnect(true);
+            }
+        } finally {
+            authenticationInFlight = false;
+        }
+    };
     
     // Initialize EventBus handlers (once, for all connections)
     initializeEventBusHandlers();
@@ -182,79 +743,12 @@ export const handleConnection = (socket: Socket, socketService: ISocketService):
     // Handle authentication data if provided with connection
     const auth = socket.handshake.auth;
     if (auth) {
-        // Authenticate socket (now async)
-        handleSocketAuthentication(socket, auth).then(async authenticatedId => {
-            // Send authentication response to client
-            await sendAuthResponse(socket, authenticatedId, auth);
-            
-            if (authenticatedId && socket.data?.authType === 'key') {
-                const agentId = socket.data.agentId;
-                const channelId = socket.data.channelId;
-                
-                
-                // Complete socket connection with agent ID and channelId from validation
-                completeSocketConnection(socket, agentId, channelId, socketService).catch(error => {
-                    moduleLogger.error(`Error completing socket connection for ${agentId}: ${error}`);
-                });
-            } else if (authenticatedId && (socket.data?.authType === 'jwt' || socket.data?.authType === 'password' || socket.data?.authType === 'pat')) {
-                // JWT, password, and PAT users don't need full agent setup, but they need admin event forwarding
-                setupAdminSocketForwarding(socket, authenticatedId);
-            } else {
-                moduleLogger.error(`Socket authentication failed on connection: ${socket.id}`);
-            }
-        }).catch(error => {
-            moduleLogger.error(`Socket authentication error on connection: ${socket.id} - ${error}`);
-        });
+        void authenticateAndComplete(auth, 'handshake');
     }
     
     // Handle authentication requests after connection
     socket.on('auth', (authData) => {
-        const authValidator = createStrictValidator('ConnectionHandlers.auth');
-        
-        try {
-            
-            // Validate authData
-            authValidator.assertIsObject(authData);
-            
-            // Authenticate socket (now async)
-            handleSocketAuthentication(socket, authData).then(authenticatedId => {
-                if (authenticatedId && socket.data?.authType === 'key') {
-                    const agentId = socket.data.agentId;
-                    const channelId = socket.data.channelId;
-                    
-                    
-                    // Complete socket connection with agent ID and channelId from validation
-                    completeSocketConnection(socket, agentId, channelId, socketService).catch(error => {
-                        moduleLogger.error(`Error completing socket connection for ${agentId}: ${error}`);
-                    });
-                    
-                    // Emit success event for key-based auth
-                    socket.emit(AuthEvents.SUCCESS, { 
-                        agentId, 
-                        channelId
-                    });
-                } else if (authenticatedId && (socket.data?.authType === 'jwt' || socket.data?.authType === 'password' || socket.data?.authType === 'pat')) {
-
-                    // Setup admin event forwarding
-                    setupAdminSocketForwarding(socket, authenticatedId);
-
-                    // Emit success event for JWT/password/PAT auth
-                    socket.emit(AuthEvents.SUCCESS, {
-                        userId: socket.data.userId,
-                        username: socket.data.username
-                    });
-                } else {
-                    moduleLogger.warn(`Socket authentication failed: ${socket.id}`);
-                    socket.emit(AuthEvents.ERROR, { error: 'Authentication failed' });
-                }
-            }).catch(error => {
-                moduleLogger.error(`Socket authentication error: ${socket.id} - ${error}`);
-                socket.emit(AuthEvents.ERROR, { error: 'Authentication failed' });
-            });
-        } catch (error) {
-            moduleLogger.error(`Auth event error: ${error}`);
-            socket.emit(AuthEvents.ERROR, { error: 'Authentication failed' });
-        }
+        void authenticateAndComplete(authData, 'event');
     });
     
     // Handle socket error
@@ -263,32 +757,6 @@ export const handleConnection = (socket: Socket, socketService: ISocketService):
         handleSocketError(socket.id, socket.data?.agentId, error, socketService);
     });
     
-    // Handle socket disconnect
-    socket.on('disconnect', (reason) => {
-        
-        // Get agent ID and channel ID from socket data
-        const agentId = socket.data?.agentId;
-        const channelId = socket.data?.channelId;
-        
-        if (agentId) {
-            // channelId is required for proper disconnect handling
-            if (!channelId) {
-                moduleLogger.warn(`Socket ${socket.id} disconnected without channelId - socket was never properly connected (Agent: ${agentId})`);
-                // Unregister the socket without full disconnect processing
-                socketService.unregisterSocket(socket.id, agentId);
-                // Still update agent status even without channelId (e.g., admin socket reconnects as agent socket)
-                const agentSvc = getAgentService();
-                agentSvc.removeSocketFromAgent(agentId, socket.id);
-                if (!agentSvc.hasActiveSockets(agentId)) {
-                    agentSvc.updateAgentStatus(agentId, AgentConnectionStatus.DISCONNECTED);
-                }
-                return;
-            }
-            
-            // Handle socket disconnection with valid channelId
-            handleSocketDisconnect(socket.id, channelId, agentId, reason, socketService);
-        }
-    });
 };
 
 /**
@@ -310,13 +778,32 @@ export const completeSocketConnection = async (
     
     try {
         moduleValidator.assertIsNonEmptyString(agentId);
-        
-        // Register socket with socket service
-        socketService.registerSocket(socket, agentId, channelId);
+        moduleValidator.assertIsNonEmptyString(channelId);
         
         // Extract capabilities and allowedTools from socket auth data
         const capabilities = socket.handshake.auth?.capabilities || [];
-        const allowedTools = socket.handshake.auth?.allowedTools || [];
+        const rawAllowedTools = socket.handshake.auth?.allowedTools;
+        if (rawAllowedTools !== undefined &&
+            (!Array.isArray(rawAllowedTools) ||
+                rawAllowedTools.some(toolName => (
+                    typeof toolName !== 'string' || toolName.trim().length === 0
+                )))) {
+            throw new Error('allowedTools must be an array of non-empty strings when provided');
+        }
+        const credentialAllowedTools = socket.data?.credentialAllowedTools;
+        if (credentialAllowedTools !== undefined && !Array.isArray(credentialAllowedTools)) {
+            throw new Error('Authenticated credential contains an invalid allowedTools grant');
+        }
+        const allowedTools = resolveCredentialBoundAgentPolicy(
+            credentialAllowedTools as string[] | undefined,
+            rawAllowedTools as string[] | undefined
+        );
+        socket.data.effectiveAllowedTools = allowedTools === undefined
+            ? undefined
+            : [...allowedTools];
+
+        // Register only after authentication options have passed validation.
+        socketService.registerSocket(socket, agentId, channelId);
         
         // Register agent in agent service if not already registered
         if (!getAgentService().agentExists(agentId)) {
@@ -332,8 +819,9 @@ export const completeSocketConnection = async (
                 }
             }
             
-            // Update allowedTools if provided
-            if (allowedTools.length > 0) {
+            // Omitted means preserve the core default/current policy. An
+            // explicit [] is intentional deny-all and must still be applied.
+            if (allowedTools !== undefined) {
                 try {
                     getAgentService().updateAgentAllowedTools(agentId, allowedTools);
                 } catch (error) {
@@ -364,7 +852,10 @@ export const completeSocketConnection = async (
                 // Add participant to ChannelService for proper tracking
                 // Note: addParticipant internally emits AGENT_JOINED event via notifyChannelEvent
                 const channelService = ChannelService.getInstance();
-                await channelService.addParticipant(channelId, agentId, agentId);
+                const participantAdded = await channelService.addParticipant(channelId, agentId, agentId);
+                if (!participantAdded) {
+                    throw new Error(`Authenticated channel ${channelId} is unavailable`);
+                }
                 
                 // Emit the channel:joined event needed by the SDK
                 const channelJoinedPayload = createBaseEventPayload(
@@ -390,7 +881,29 @@ export const completeSocketConnection = async (
                 
             } catch (error) {
                 moduleLogger.error(`Error adding socket ${socket.id} to channel ${channelId}: ${error}`);
-                // Continue with connection despite channel join error
+
+                // A key is bound to a persisted channel. If that channel was
+                // deleted or became inactive after key issuance, authentication
+                // must fail closed before any request handlers are installed.
+                try {
+                    socketService.unregisterSocket(socket.id, agentId);
+                    const agentSvc = getAgentService();
+                    agentSvc.removeSocketFromAgent(agentId, socket.id);
+                    if (!agentSvc.hasActiveSockets(agentId)) {
+                        agentSvc.updateAgentStatus(agentId, AgentConnectionStatus.DISCONNECTED);
+                    }
+                } catch (cleanupError) {
+                    moduleLogger.error(`Failed to roll back rejected socket ${socket.id}: ${cleanupError}`);
+                }
+
+                socket.emit(AuthEvents.ERROR, {
+                    error: 'Authenticated channel is unavailable',
+                    channelId
+                });
+                socket.data.agentId = undefined;
+                socket.data.authenticated = false;
+                socket.disconnect(true);
+                throw error;
             }
         }
         
@@ -428,38 +941,61 @@ export const completeSocketConnection = async (
 
         // 7. Set up allowed tools update handler for dynamic tool changes
         socket.on(Events.Agent.ALLOWED_TOOLS_UPDATE, (envelope: { agentId: string; data?: { allowedTools?: string[] } }) => {
-            // The SDK now emits this through EventBus.client rather than a raw socket emit,
-            // so it arrives as a BaseEventPayload: agentId on the envelope, the tool list
-            // inside `data`. Phase-gated tool access breaks silently if this reads the old
-            // flat shape. Derived outside the try so the catch can still report the agent.
-            const payload = {
-                agentId: envelope.agentId,
-                allowedTools: envelope.data?.allowedTools ?? []
-            };
+            const allowedTools = envelope.data?.allowedTools;
 
             try {
-                const updated = getAgentService().updateAgentAllowedTools(payload.agentId, payload.allowedTools);
+                if (envelope.agentId !== agentId ||
+                    !Array.isArray(allowedTools) ||
+                    allowedTools.some((toolName) => (
+                        typeof toolName !== 'string' || toolName.trim().length === 0
+                    ))) {
+                    moduleLogger.warn(
+                        `Rejected allowedTools update from ${agentId}: ` +
+                        `envelope claimed agent ${String(envelope.agentId)}`
+                    );
+                    socket.emit(Events.Agent.ALLOWED_TOOLS_UPDATED, {
+                        agentId,
+                        allowedTools: [],
+                        success: false
+                    });
+                    return;
+                }
+
+                const credentialAllowedTools = socket.data?.credentialAllowedTools;
+                const effectiveAllowedTools = resolveCredentialBoundAgentPolicy(
+                    Array.isArray(credentialAllowedTools)
+                        ? credentialAllowedTools as string[]
+                        : undefined,
+                    allowedTools
+                );
+                const updated = getAgentService().updateAgentAllowedTools(
+                    agentId,
+                    effectiveAllowedTools ?? []
+                );
 
                 if (updated) {
-                    moduleLogger.info(`Updated allowedTools for ${payload.agentId}: ${payload.allowedTools.length} tools`);
+                    socket.data.effectiveAllowedTools = effectiveAllowedTools === undefined
+                        ? undefined
+                        : [...effectiveAllowedTools];
+                    moduleLogger.info(`Updated allowedTools for ${agentId}: ${effectiveAllowedTools?.length ?? 0} tools`);
                     socket.emit(Events.Agent.ALLOWED_TOOLS_UPDATED, {
-                        agentId: payload.agentId,
-                        allowedTools: payload.allowedTools,
+                        agentId,
+                        allowedTools: effectiveAllowedTools ?? [],
                         success: true
                     });
                 } else {
-                    moduleLogger.warn(`Failed to update allowedTools for ${payload.agentId}: agent not found`);
+                    moduleLogger.warn(`Failed to update allowedTools for ${agentId}: agent not found`);
                     socket.emit(Events.Agent.ALLOWED_TOOLS_UPDATED, {
-                        agentId: payload.agentId,
-                        allowedTools: payload.allowedTools,
+                        agentId,
+                        allowedTools,
                         success: false
                     });
                 }
             } catch (error) {
-                moduleLogger.error(`Error updating allowedTools for ${payload.agentId}: ${error}`);
+                moduleLogger.error(`Error updating allowedTools for ${agentId}: ${error}`);
                 socket.emit(Events.Agent.ALLOWED_TOOLS_UPDATED, {
-                    agentId: payload.agentId,
-                    allowedTools: payload.allowedTools || [],
+                    agentId,
+                    allowedTools: Array.isArray(allowedTools) ? allowedTools : [],
                     success: false
                 });
             }
@@ -502,113 +1038,6 @@ export const completeSocketConnection = async (
     } catch (error) {
         moduleLogger.error(`Error completing socket connection: ${error}`);
         throw error;
-    }
-};
-
-/**
- * Setup socket event handlers and forward events
- * @param socket Socket instance
- * @param agentId Agent ID
- * @param channelId Channel ID
- * @param socketService Reference to the socket service
- */
-export const setupSocketEventHandling = (
-    socket: Socket, 
-    agentId: string, 
-    channelId: string,
-    socketService: ISocketService
-): void => {
-    const validator = createStrictValidator('ConnectionHandlers.setupSocketEventHandling');
-    
-    try {
-        
-        // Validate parameters
-        validator.assertIsNonEmptyString(agentId);
-        
-        // Setup MCP socket-to-EventBus forwarding
-        setupMcpSocketToEventBusForwarding(socket, agentId, channelId);
-        
-        // Setup MCP event handlers if present
-        setupMcpEventHandlers(socket, agentId, channelId);
-        
-        // Build a set of server-originated events that should NOT be routed back to EventBus.server
-        // These events are emitted by the server (OrparTools, ControlLoop) and forwarded to clients.
-        // If clients re-emit them back, we must NOT re-forward to EventBus.server to prevent loops.
-        const serverOriginatedEvents = new Set([
-            // ControlLoop events (server-orchestrated)
-            ...Object.values(ControlLoopEvents),
-            // ORPAR events (agent-driven cognitive documentation via server-side OrparTools)
-            ...Object.values(OrparEvents)
-        ]);
-
-        // Use event bus to route client events to server
-        socket.onAny((eventName, payload) => {
-            // Skip internal events
-            if (eventName.startsWith('connection:') ||
-                eventName === AuthEvents.SUCCESS ||
-                eventName === AuthEvents.ERROR ||
-                eventName === 'disconnect' ||
-                eventName === 'error') {
-                return;
-            }
-
-            // Skip server-originated events to prevent client → server → client loops
-            // These events originate from OrparTools/ControlLoop, are forwarded to clients,
-            // and should NOT be re-emitted to EventBus.server when clients echo them back
-            if (serverOriginatedEvents.has(eventName)) {
-                return;
-            }
-
-            // Route event to server
-            routeClientEventToServer(socket, eventName, payload, socketService);
-        });
-        
-    } catch (error) {
-        moduleLogger.error(`Error setting up socket event handlers: ${error}`);
-        socket.emit('connection:error', { error: 'Event handler setup failed' });
-    }
-};
-
-/**
- * Receive an event from a client and route it to the server-side event bus
- * @param socket - Socket.io socket
- * @param eventName - Name of the event
- * @param payload - Event payload
- * @param socketService Reference to the socket service
- */
-export const routeClientEventToServer = (
-    socket: Socket, 
-    eventName: string, 
-    payload: any,
-    socketService: ISocketService
-): void => {
-    try {
-        // Get socket metadata
-        const agentId = socket.data?.agentId;
-        const channelId = socket.data?.channelId;
-        
-        if (!agentId) {
-            moduleLogger.warn(`Unauthorized event from socket ${socket.id}: ${eventName}`);
-            return;
-        }
-        
-        // Update agent heartbeat on activity
-        socketService.updateHeartbeat(agentId);
-        
-        // Create full payload with socket metadata using our utility function
-        // Use 'system' as default channel for agents not yet in a specific channel
-        const effectiveChannelId = channelId || 'system';
-        const fullPayload = createBaseEventPayload(
-            eventName, 
-            agentId, 
-            effectiveChannelId, 
-            payload
-        );
-        
-        // Emit event on EventBus
-        EventBus.server.emit(eventName, fullPayload);
-    } catch (error) {
-        moduleLogger.error(`Error routing client event to server: ${error}`);
     }
 };
 

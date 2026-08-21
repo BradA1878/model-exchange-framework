@@ -19,224 +19,128 @@
  */
 
 /**
- * Control Loop Handlers
- * 
- * This module provides EventBus handlers for control loop operations.
- * Control loop events are forwarded from socket to EventBus by eventForwardingHandlers,
- * then processed here and responses sent back through EventBus.
+ * Reviewed socket-to-EventBus request boundary for control-loop operations.
+ *
+ * Client commands use request-specific names. Canonical lifecycle/phase names
+ * are server-owned and are never installed as socket listeners, which prevents
+ * a client from forging results and prevents socket echo loops.
  */
 
 import { Socket } from 'socket.io';
 import { EventBus } from '@mxf-dev/core/events/EventBus';
-import { Events } from '@mxf-dev/core/events/EventNames';
 import { ControlLoopEvents } from '@mxf-dev/core/events/event-definitions/ControlLoopEvents';
+import { CoreSocketEvents } from '@mxf-dev/core/events/EventNames';
 import { createStrictValidator } from '@mxf-dev/core/utils/validation';
 import { Logger } from '@mxf-dev/core/utils/Logger';
-import { ControlLoopEventPayload } from '@mxf-dev/core/schemas/EventPayloadSchema';
+import {
+    ControlLoopSpecificData,
+    createControlLoopEventPayload
+} from '@mxf-dev/core/schemas/EventPayloadSchema';
 
-// Create module logger
 const moduleLogger = new Logger('info', 'ControlLoopHandlers', 'server');
 
-// Track registered handlers for cleanup
-const eventHandlers = new Map<string, (() => void)[]>();
+/** Reviewed client request events. Canonical lifecycle names are absent. */
+const CLIENT_CONTROL_LOOP_REQUESTS = [
+    [ControlLoopEvents.INITIALIZE, ControlLoopEvents.INITIALIZE],
+    [ControlLoopEvents.START_REQUEST, ControlLoopEvents.START_REQUEST],
+    [ControlLoopEvents.STOP_REQUEST, ControlLoopEvents.STOP_REQUEST],
+    [ControlLoopEvents.OBSERVATION_SUBMIT, ControlLoopEvents.OBSERVATION_SUBMIT],
+    [ControlLoopEvents.EXECUTION_REQUEST, ControlLoopEvents.EXECUTION_REQUEST],
+    [ControlLoopEvents.PLAN_SUBMIT, ControlLoopEvents.PLAN_SUBMIT],
+    [ControlLoopEvents.REFLECTION_SUBMIT, ControlLoopEvents.REFLECTION_SUBMIT]
+] as const;
+
+const isRecord = (value: unknown): value is Record<string, unknown> => (
+    value !== null && typeof value === 'object' && !Array.isArray(value)
+);
+
+const hasRequiredRequestData = (
+    requestEvent: string,
+    data: Record<string, unknown>
+): boolean => {
+    if (typeof data.loopId !== 'string' || data.loopId.trim().length === 0) {
+        return false;
+    }
+
+    switch (requestEvent) {
+        case ControlLoopEvents.OBSERVATION_SUBMIT:
+            return data.observation !== undefined && data.observation !== null;
+        case ControlLoopEvents.EXECUTION_REQUEST:
+            return data.action !== undefined && data.action !== null;
+        case ControlLoopEvents.PLAN_SUBMIT:
+            return data.plan !== undefined && data.plan !== null;
+        case ControlLoopEvents.REFLECTION_SUBMIT:
+            return (data.reflection !== undefined && data.reflection !== null) ||
+                (isRecord(data.context) &&
+                    data.context.reflection !== undefined &&
+                    data.context.reflection !== null);
+        default:
+            return true;
+    }
+};
 
 /**
- * Register control loop event handlers for EventBus
- * These handlers listen to control loop events forwarded from sockets via EventBus
- * 
- * @param socket Socket connection (used for cleanup on disconnect)
- * @param agentId Agent ID associated with the socket
- * @param channelId Channel ID for the connection context
+ * Install only reviewed control-loop command listeners for an authenticated
+ * agent socket.
  */
-export const setupControlLoopHandlers = (socket: Socket, agentId: string, channelId: string): void => {
+export const setupControlLoopHandlers = (
+    socket: Socket,
+    agentId: string,
+    channelId: string
+): void => {
     const validator = createStrictValidator('ControlLoopHandlers.setupControlLoopHandlers');
-    
-    // Validate required parameters
     validator.assertIsNonEmptyString(agentId);
-    
-    // Store cleanup functions for this socket
-    const cleanupFunctions: (() => void)[] = [];
-    
-    // Handler functions for each control loop event type
-    const handleControlLoopInitialize = async (payload: ControlLoopEventPayload): Promise<void> => {
-        try {
-            validator.assertIsObject(payload, 'payload');
-            validator.assertIsObject(payload.data, 'payload.data');
-            
-            // Process control loop initialization
-            const loopId = payload.data.loopId;
-            validator.assertIsNonEmptyString(loopId, 'loopId is required');
-            
-            
-            // Emit response back through EventBus
-            const responsePayload = {
-                ...payload,
-                eventType: ControlLoopEvents.INITIALIZED,
-                timestamp: Date.now()
-            };
-            
-            EventBus.server.emit(ControlLoopEvents.INITIALIZED, responsePayload);
-            
-        } catch (error: any) {
-            moduleLogger.error(`Error handling control loop initialization for agent ${agentId}: ${error.message}`);
-            
-            // Emit error event
-            const errorPayload = {
-                ...payload,
-                eventType: ControlLoopEvents.ERROR,
-                timestamp: Date.now(),
-                data: {
-                    ...payload.data,
-                    error: `Initialization failed: ${error.message}`
-                }
-            };
-            
-            EventBus.server.emit(ControlLoopEvents.ERROR, errorPayload);
-        }
-    };
-    
-    const handleControlLoopObservation = async (payload: ControlLoopEventPayload): Promise<void> => {
-        try {
-            validator.assertIsObject(payload, 'payload');
-            validator.assertIsObject(payload.data, 'payload.data');
-            
-            const loopId = payload.data.loopId;
-            validator.assertIsNonEmptyString(loopId, 'loopId is required');
-            
-            // Process observation event - check both possible locations for observation data
-            const observationData = payload.data.observation || payload.data.config?.observations;
-            if (!observationData) {
-                throw new Error('Observation data is required');
+    validator.assertIsNonEmptyString(channelId);
+
+    const cleanupFunctions: Array<() => void> = [];
+
+    CLIENT_CONTROL_LOOP_REQUESTS.forEach(([requestEvent, serverEvent]) => {
+        const socketHandler = (payload: unknown): void => {
+            if (!isRecord(payload)) {
+                moduleLogger.warn(`Denied malformed ${requestEvent} from socket ${socket.id}`);
+                return;
             }
-            
-            
-            // Forward observation to any interested services
-            // The observation is already on EventBus, so other services can listen to it
-            
-        } catch (error: any) {
-            moduleLogger.error(`Error handling control loop observation for agent ${agentId}: ${error.message}`);
-            
-            // Emit error event
-            const errorPayload = {
-                ...payload,
-                eventType: ControlLoopEvents.ERROR,
-                timestamp: Date.now(),
-                data: {
-                    ...payload.data,
-                    error: `Observation processing failed: ${error.message}`
-                }
-            };
-            
-            EventBus.server.emit(ControlLoopEvents.ERROR, errorPayload);
-        }
-    };
-    
-    const handleControlLoopAction = async (payload: ControlLoopEventPayload): Promise<void> => {
-        try {
-            validator.assertIsObject(payload, 'payload');
-            validator.assertIsObject(payload.data, 'payload.data');
-            
-            const loopId = payload.data.loopId;
-            validator.assertIsNonEmptyString(loopId, 'loopId is required');
-            
-            // Process action event
-            const actionData = payload.data.action;
-            if (!actionData) {
-                throw new Error('Action data is required');
+
+            const data = payload.data;
+            if (typeof payload.eventId !== 'string' ||
+                payload.eventType !== requestEvent ||
+                payload.agentId !== agentId ||
+                payload.channelId !== channelId ||
+                !isRecord(data) ||
+                !hasRequiredRequestData(requestEvent, data)) {
+                moduleLogger.warn(`Denied untrusted ${requestEvent} envelope from socket ${socket.id}`);
+                return;
             }
-            
-            
-            // Action processing happens here
-            // The action is already on EventBus for other services to handle
-            
-        } catch (error: any) {
-            moduleLogger.error(`Error handling control loop action for agent ${agentId}: ${error.message}`);
-            
-            // Emit error event
-            const errorPayload = {
-                ...payload,
-                eventType: ControlLoopEvents.ERROR,
-                timestamp: Date.now(),
-                data: {
-                    ...payload.data,
-                    error: `Action processing failed: ${error.message}`
-                }
-            };
-            
-            EventBus.server.emit(ControlLoopEvents.ERROR, errorPayload);
-        }
-    };
-    
-    const handleGenericControlLoopEvent = (eventType: string) => {
-        return async (payload: ControlLoopEventPayload): Promise<void> => {
-            try {
-                validator.assertIsObject(payload, 'payload');
-                
-                const loopId = payload.data?.loopId;
-                if (loopId) {
-                }
-                
-                // Generic processing - most control loop events just need to be forwarded
-                // They're already on EventBus for other services to consume
-                
-            } catch (error: any) {
-                moduleLogger.error(`Error handling control loop event ${eventType} for agent ${agentId}: ${error.message}`);
-                
-                // Emit error event
-                const errorPayload = {
-                    ...payload,
-                    eventType: ControlLoopEvents.ERROR,
-                    timestamp: Date.now(),
-                    data: {
-                        ...payload.data,
-                        error: `${eventType} processing failed: ${error.message}`
-                    }
+
+            const trustedData: Record<string, unknown> = { ...data };
+            if (requestEvent === ControlLoopEvents.OBSERVATION_SUBMIT) {
+                const claimedContext = isRecord(data.context) ? data.context : {};
+                trustedData.context = {
+                    ...claimedContext,
+                    // Cross-agent loop mutation is not part of the authenticated
+                    // socket contract. Bind the owner to this key's agent.
+                    loopOwnerId: agentId
                 };
-                
-                EventBus.server.emit(ControlLoopEvents.ERROR, errorPayload);
             }
+
+            // Discard the caller's envelope. The domain service consumes the
+            // request-specific name and exclusively owns canonical outcomes.
+            EventBus.server.emit(
+                serverEvent,
+                createControlLoopEventPayload(
+                    serverEvent,
+                    agentId,
+                    channelId,
+                    trustedData as ControlLoopSpecificData
+                )
+            );
         };
-    };
-    
-    // Register EventBus listeners for all control loop events
-    const eventHandlerMap = new Map([
-        [ControlLoopEvents.INITIALIZE, handleControlLoopInitialize],
-        [ControlLoopEvents.OBSERVATION, handleControlLoopObservation],
-        [ControlLoopEvents.ACTION, handleControlLoopAction],
-        [ControlLoopEvents.INITIALIZED, handleGenericControlLoopEvent(ControlLoopEvents.INITIALIZED)],
-        [ControlLoopEvents.STARTED, handleGenericControlLoopEvent(ControlLoopEvents.STARTED)],
-        [ControlLoopEvents.STOPPED, handleGenericControlLoopEvent(ControlLoopEvents.STOPPED)],
-        [ControlLoopEvents.REASONING, handleGenericControlLoopEvent(ControlLoopEvents.REASONING)],
-        [ControlLoopEvents.PLAN, handleGenericControlLoopEvent(ControlLoopEvents.PLAN)],
-        [ControlLoopEvents.EXECUTION, handleGenericControlLoopEvent(ControlLoopEvents.EXECUTION)],
-        [ControlLoopEvents.REFLECTION, handleGenericControlLoopEvent(ControlLoopEvents.REFLECTION)],
-        [ControlLoopEvents.ERROR, handleGenericControlLoopEvent(ControlLoopEvents.ERROR)]
-    ]);
-    
-    // Register all event handlers
-    eventHandlerMap.forEach((handler, eventType) => {
-        
-        EventBus.server.on(eventType, handler);
-        
-        // Store cleanup function
-        const cleanup = () => {
-            EventBus.server.off(eventType, handler);
-        };
-        cleanupFunctions.push(cleanup);
+
+        socket.on(requestEvent, socketHandler);
+        cleanupFunctions.push(() => socket.off(requestEvent, socketHandler));
     });
-    
-    // Store cleanup functions for this socket
-    eventHandlers.set(socket.id, cleanupFunctions);
-    
-    // Handle socket disconnection cleanup
-    socket.on('disconnect', () => {
-        
-        // Clean up EventBus listeners
-        const socketCleanupFunctions = eventHandlers.get(socket.id);
-        if (socketCleanupFunctions) {
-            socketCleanupFunctions.forEach(cleanup => cleanup());
-            eventHandlers.delete(socket.id);
-        }
+
+    socket.on(CoreSocketEvents.DISCONNECT, () => {
+        cleanupFunctions.forEach(cleanup => cleanup());
     });
-    
 };

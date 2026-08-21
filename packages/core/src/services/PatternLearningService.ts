@@ -25,7 +25,7 @@
  * pattern learning and cross-agent pattern sharing capabilities.
  */
 
-import { Observable, Subject } from 'rxjs';
+import { Observable, Subject, Subscription } from 'rxjs';
 import { Logger } from '../utils/Logger.js';
 import { EventBus } from '../events/EventBus.js';
 import { Events } from '../events/EventNames.js';
@@ -69,8 +69,11 @@ export class PatternLearningService {
     private readonly patternCache = new Map<string, EnhancedParameterPattern[]>();
     private readonly cacheExpiry = new Map<string, number>();
     private readonly CACHE_TTL = 5 * 60 * 1000; // 5 minutes
-    
-    private static instance: PatternLearningService;
+    private validationEventSubscription?: Subscription;
+    private patternCleanupInterval?: ReturnType<typeof setInterval>;
+    private cacheCleanupInterval?: ReturnType<typeof setInterval>;
+
+    private static instance: PatternLearningService | undefined;
 
     private constructor() {
         this.logger = new Logger('info', 'PatternLearningService', 'server');
@@ -985,7 +988,7 @@ export class PatternLearningService {
 
     private setupEventListeners(): void {
         // Listen to validation events from ValidationPerformanceService
-        this.validationService.validationEvents.subscribe(event => {
+        this.validationEventSubscription = this.validationService.validationEvents.subscribe(event => {
             // Convert validation events to pattern learning events when appropriate
             if (event.eventType === 'validation_success' && event.details.parameters) {
                 this.storeSuccessfulPattern(
@@ -1013,16 +1016,17 @@ export class PatternLearningService {
 
     private startPeriodicTasks(): void {
         // Pattern cleanup task - runs every hour
-        setInterval(async () => {
+        this.patternCleanupInterval = setInterval(async () => {
             try {
                 await this.cleanupStalePatterns();
             } catch (error) {
                 this.logger.error('Pattern cleanup task failed:', error);
             }
         }, 60 * 60 * 1000);
+        this.patternCleanupInterval.unref?.();
 
         // Cache cleanup task - runs every 10 minutes
-        setInterval(() => {
+        this.cacheCleanupInterval = setInterval(() => {
             const now = Date.now();
             for (const [key, expiry] of this.cacheExpiry.entries()) {
                 if (now > expiry) {
@@ -1030,6 +1034,7 @@ export class PatternLearningService {
                 }
             }
         }, 10 * 60 * 1000);
+        this.cacheCleanupInterval.unref?.();
     }
 
     private async cleanupStalePatterns(): Promise<void> {
@@ -1080,5 +1085,25 @@ export class PatternLearningService {
      */
     public getConfig(): PatternLearningConfig {
         return { ...this.config };
+    }
+
+    /** Release every timer and subscription owned by this singleton. */
+    public shutdown(): void {
+        if (this.patternCleanupInterval) {
+            clearInterval(this.patternCleanupInterval);
+            this.patternCleanupInterval = undefined;
+        }
+        if (this.cacheCleanupInterval) {
+            clearInterval(this.cacheCleanupInterval);
+            this.cacheCleanupInterval = undefined;
+        }
+        this.validationEventSubscription?.unsubscribe();
+        this.validationEventSubscription = undefined;
+        this.clearAllCaches();
+        this.patternLearningEvents$.complete();
+
+        if (PatternLearningService.instance === this) {
+            PatternLearningService.instance = undefined;
+        }
     }
 }

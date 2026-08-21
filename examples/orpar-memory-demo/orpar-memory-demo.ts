@@ -215,7 +215,7 @@ const createDemoAgent = async (
         // LLM configuration
         llmProvider: LlmProviderType.OPENROUTER,
         apiKey: process.env.OPENROUTER_API_KEY!,
-        defaultModel: 'anthropic/claude-3.5-sonnet',
+        defaultModel: '~anthropic/claude-sonnet-latest',
         temperature: 0.3,
         maxTokens: 8000,
 

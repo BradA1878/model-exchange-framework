@@ -54,8 +54,8 @@ MXF uses a comprehensive three-tier testing strategy to ensure code quality and 
 # Run fast tests (no server needed)
 bun run test:unit
 
-# Run full integration tests (server must be running)
-bun run test:integration:manual
+# Run full integration tests (server must be started manually)
+bun run test:integration
 
 # Check test quality with mutation testing
 bun run test:mutation
@@ -250,12 +250,11 @@ Integration tests verify end-to-end behavior with live services (MongoDB, MXF se
 
 ### Prerequisites
 
-The MXF server must be running:
+The MXF server must be started manually in a separate terminal. Tests never
+start it automatically because SystemLLM may use paid provider credits:
 
 ```bash
-bun run dev                          # Start server with infrastructure
-# or
-bun run test:integration             # Auto-starts server (slower)
+bun run dev
 ```
 
 ### Example
@@ -286,10 +285,14 @@ describe('Agent Connection', () => {
 ### Running Integration Tests
 
 ```bash
-bun run test:integration:manual      # Requires running server
-bun run test:integration             # Auto-starts server
-bun run test:ci                      # CI mode with auto-start
+bun run test:integration             # Requires the manually started server
+bun run test:integration -- --testPathPattern=agent
 ```
+
+Every Jest test process forces `NODE_ENV=test`, disables SystemLLM by default,
+and blocks outbound LLM-provider calls even if API keys are present. A test that
+deliberately exercises a live provider must be launched with the exact, explicit
+opt-in `MXF_TEST_ALLOW_EXTERNAL_LLM_CALLS=true`; this can incur provider charges.
 
 ### Test Suites (Socket.IO Based)
 
@@ -383,12 +386,12 @@ describe('API Tests', () => {
 
 ```bash
 # All API tests (requires server running)
-bun run test:integration:manual -- --testPathPattern=".api.test"
+bun run test:integration -- --testPathPattern=".api.test"
 
 # Specific API test suite
-bun run test:integration:manual -- --testPathPattern=agents.api
-bun run test:integration:manual -- --testPathPattern=channels.api
-bun run test:integration:manual -- --testPathPattern=tasks.api
+bun run test:integration -- --testPathPattern=agents.api
+bun run test:integration -- --testPathPattern=channels.api
+bun run test:integration -- --testPathPattern=tasks.api
 ```
 
 ### Authentication Patterns
@@ -540,14 +543,16 @@ it('throws for invalid input', () => {
 
 ```yaml
 jobs:
-  test:
+  verify:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-node@v3
-      - run: bun install
-      - run: bun run test:unit          # Fast tests first
-      - run: bun run test:ci             # Integration with auto-start
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - run: bun run build
+      - run: bun run lint:changed
+      - run: bun run check:migrations
+      - run: bun run test:unit:ci       # Unit + property; no server or secrets
 ```
 
 ### Pre-commit Hook

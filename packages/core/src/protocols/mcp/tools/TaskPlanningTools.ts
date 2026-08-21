@@ -6,82 +6,176 @@
  * You may obtain a copy of the License at
  *
  *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- *
- * @author Brad Anderson <BradA1878@pm.me>
- * @repository https://github.com/BradA1878/model-exchange-framework
- * @documentation https://mxf-dev.github.io/mxf/
  */
 
-/**
- * Task Planning Tools
- * 
- * Enhanced task creation tools that integrate with planning and completion monitoring
- */
-
+import type { Subscription } from 'rxjs';
 import type { ChannelTask } from '../../../types/TaskTypes.js';
-import { McpToolDefinition, McpToolHandlerContext, McpToolHandlerResult, McpToolResultContent } from '../McpServerTypes.js';
-import { McpToolInput } from '../IMcpClient.js';
+import type { TaskCompletionConfig } from '../../../types/TaskCompletionTypes.js';
+import {
+    McpToolDefinition,
+    McpToolHandlerContext,
+    McpToolHandlerResult,
+    McpToolResultContent
+} from '../McpServerTypes.js';
+import type { McpToolInput } from '../IMcpClient.js';
 import { Logger } from '../../../utils/Logger.js';
 import { EventBus } from '../../../events/EventBus.js';
 import { Events } from '../../../events/EventNames.js';
 import { TaskEvents } from '../../../events/event-definitions/TaskEvents.js';
 import { createTaskEventPayload } from '../../../schemas/EventPayloadSchema.js';
-import { TaskCompletionConfig } from '../../../types/TaskCompletionTypes.js';
-import { MemoryService } from '../../../services/MemoryService.js';
-import { firstValueFrom } from 'rxjs';
+import PlanModel from '../../../models/plan.js';
+import { Task } from '../../../models/task.js';
 import { v4 as uuidv4 } from 'uuid';
 
 const logger = new Logger('debug', 'TaskPlanningTools', 'server');
+const planUpdateLocks = new Set<string>();
 
-// Serialization locks to prevent parallel plan updates
-const planUpdateLocks = new Map<string, boolean>();
+interface PlanningIdentity {
+    agentId: string;
+    channelId: string;
+}
 
-/**
- * Create a task with a completion plan
- */
+interface CorrelatedTaskEventData {
+    requestId?: string;
+    taskId?: string;
+    task?: ChannelTask;
+    error?: string;
+}
+
+interface CompletionPlanStepInput {
+    title: string;
+    description?: string;
+    critical?: boolean;
+}
+
+const requireIdentity = (context: McpToolHandlerContext): PlanningIdentity => {
+    if (typeof context.agentId !== 'string' || context.agentId.trim().length === 0 ||
+        typeof context.channelId !== 'string' || context.channelId.trim().length === 0) {
+        throw new Error('Authenticated agentId and channelId are required');
+    }
+    return { agentId: context.agentId.trim(), channelId: context.channelId.trim() };
+};
+
+const readCorrelatedEvent = (payload: unknown): {
+    channelId?: string;
+    data: CorrelatedTaskEventData;
+} | null => {
+    if (!payload || typeof payload !== 'object' || !('data' in payload)) {
+        return null;
+    }
+    const candidate = payload as { channelId?: unknown; data?: unknown };
+    if (!candidate.data || typeof candidate.data !== 'object') {
+        return null;
+    }
+    return {
+        channelId: typeof candidate.channelId === 'string' ? candidate.channelId : undefined,
+        data: candidate.data as CorrelatedTaskEventData
+    };
+};
+
+const awaitTaskEvent = (
+    requestId: string,
+    channelId: string,
+    successEvent: typeof TaskEvents.CREATED | typeof TaskEvents.PROGRESS_UPDATED,
+    emitRequest: () => void
+): Promise<ChannelTask> => {
+    let successSubscription: Subscription | undefined;
+    let errorSubscription: Subscription | undefined;
+    const result = new Promise<ChannelTask>((resolve, reject) => {
+        const cleanup = (): void => {
+            successSubscription?.unsubscribe();
+            errorSubscription?.unsubscribe();
+        };
+        successSubscription = EventBus.server.on(successEvent, payload => {
+            const event = readCorrelatedEvent(payload);
+            if (event?.channelId !== channelId || event.data.requestId !== requestId) {
+                return;
+            }
+            if (!event.data.task?.id) {
+                cleanup();
+                reject(new Error(`${successEvent} ${requestId} returned no persisted task`));
+                return;
+            }
+            cleanup();
+            resolve(event.data.task);
+        });
+        errorSubscription = EventBus.server.on(TaskEvents.ERROR, payload => {
+            const event = readCorrelatedEvent(payload);
+            if (event?.channelId !== channelId || event.data.requestId !== requestId) {
+                return;
+            }
+            cleanup();
+            reject(new Error(event.data.error ?? `Task operation ${requestId} failed`));
+        });
+    });
+    try {
+        emitRequest();
+    } catch (error) {
+        successSubscription?.unsubscribe();
+        errorSubscription?.unsubscribe();
+        throw error;
+    }
+    return result;
+};
+
+const requireString = (value: unknown, field: string): string => {
+    if (typeof value !== 'string' || value.trim().length === 0) {
+        throw new Error(`${field} is required`);
+    }
+    return value.trim();
+};
+
+const requireAssignees = (value: unknown, defaultAgentId: string): string[] => {
+    if (value === undefined) {
+        return [defaultAgentId];
+    }
+    if (!Array.isArray(value) || value.length === 0 ||
+        value.some(agentId => typeof agentId !== 'string' || agentId.trim().length === 0)) {
+        throw new Error('assignTo must be a non-empty array of agent ids');
+    }
+    return Array.from(new Set(value.map(agentId => (agentId as string).trim())));
+};
+
+const emitCreateRequest = (
+    identity: PlanningIdentity,
+    requestId: string,
+    task: Partial<ChannelTask> & Pick<ChannelTask, 'title'>
+): Promise<ChannelTask> => awaitTaskEvent(
+    requestId,
+    identity.channelId,
+    TaskEvents.CREATED,
+    () => EventBus.server.emit(
+        TaskEvents.CREATE_REQUEST,
+        createTaskEventPayload(TaskEvents.CREATE_REQUEST, identity.agentId, identity.channelId, {
+            taskId: requestId,
+            requestId,
+            fromAgentId: identity.agentId,
+            toAgentId: task.assignedAgentIds?.[0] ?? identity.agentId,
+            task
+        })
+    )
+);
+
 export const task_create_with_plan: McpToolDefinition = {
     name: 'task_create_with_plan',
-    description: 'Create a task with built-in completion criteria based on a plan. The task will automatically complete when plan steps are done.',
+    description: 'Persist a task and completion plan, then monitor the task until its configured plan criteria are met.',
     inputSchema: {
         type: 'object',
         properties: {
-            title: {
-                type: 'string',
-                description: 'Title of the task'
-            },
-            description: {
-                type: 'string',
-                description: 'Detailed description of what needs to be done'
-            },
+            title: { type: 'string', description: 'Title of the task' },
+            description: { type: 'string', description: 'Detailed task description' },
             completionPlan: {
                 type: 'object',
-                description: 'Plan-based completion criteria',
                 properties: {
                     steps: {
                         type: 'array',
-                        description: 'Steps that need to be completed',
+                        minItems: 1,
                         items: {
                             type: 'object',
                             properties: {
-                                title: {
-                                    type: 'string',
-                                    description: 'Step title'
-                                },
-                                description: {
-                                    type: 'string',
-                                    description: 'Step description'
-                                },
-                                critical: {
-                                    type: 'boolean',
-                                    description: 'Is this step critical for completion?',
-                                    default: false
-                                }
+                                title: { type: 'string' },
+                                description: { type: 'string' },
+                                critical: { type: 'boolean', default: false }
                             },
                             required: ['title']
                         }
@@ -89,579 +183,408 @@ export const task_create_with_plan: McpToolDefinition = {
                     completionType: {
                         type: 'string',
                         enum: ['all_steps', 'critical_steps', 'percentage'],
-                        description: 'How to determine completion',
                         default: 'all_steps'
                     },
-                    percentage: {
-                        type: 'number',
-                        description: 'Required percentage for percentage type (0-100)',
-                        minimum: 0,
-                        maximum: 100
-                    }
-                }
+                    percentage: { type: 'number', minimum: 0, maximum: 100 }
+                },
+                required: ['steps']
             },
-            assignTo: {
-                type: 'array',
-                items: { type: 'string' },
-                description: 'Agent IDs to assign this task to. REQUIRED for delegation — without this, the task stays assigned to the calling agent and nobody else picks it up. Example: ["mxf-planner"]'
-            },
-            priority: {
-                type: 'string',
-                enum: ['low', 'medium', 'high'],
-                default: 'medium'
-            },
-            absoluteTimeout: {
-                type: 'number',
-                description: 'Maximum time in milliseconds before task times out'
-            }
+            assignTo: { type: 'array', minItems: 1, items: { type: 'string' } },
+            priority: { type: 'string', enum: ['low', 'medium', 'high'], default: 'medium' },
+            absoluteTimeout: { type: 'number', minimum: 1 }
         },
         required: ['title', 'description', 'completionPlan']
     },
     enabled: true,
     handler: async (input: McpToolInput, context: McpToolHandlerContext): Promise<McpToolHandlerResult> => {
+        const startedAt = Date.now();
+        const identity = requireIdentity(context);
+        const title = requireString(input.title, 'title');
+        const description = requireString(input.description, 'description');
+        const completionPlan = input.completionPlan as {
+            steps?: CompletionPlanStepInput[];
+            completionType?: 'all_steps' | 'critical_steps' | 'percentage';
+            percentage?: number;
+        };
+        if (!completionPlan || !Array.isArray(completionPlan.steps) || completionPlan.steps.length === 0) {
+            throw new Error('completionPlan.steps must contain at least one step');
+        }
+        for (const step of completionPlan.steps) {
+            requireString(step.title, 'completionPlan step title');
+        }
+        const completionType = completionPlan.completionType ?? 'all_steps';
+        if (completionType === 'percentage' &&
+            (typeof completionPlan.percentage !== 'number' ||
+                completionPlan.percentage < 0 || completionPlan.percentage > 100)) {
+            throw new Error('percentage must be between 0 and 100 for percentage completion');
+        }
+        if (completionType === 'critical_steps' && !completionPlan.steps.some(step => step.critical === true)) {
+            throw new Error('critical_steps completion requires at least one critical step');
+        }
+
+        const planId = uuidv4();
+        const planDoc = new PlanModel({
+            planId,
+            title: `${title} - Completion Plan`,
+            createdBy: identity.agentId,
+            channelId: identity.channelId,
+            items: completionPlan.steps.map((step, index) => ({
+                id: `item-${index + 1}`,
+                title: step.title.trim(),
+                description: step.description,
+                status: 'pending',
+                priority: step.critical ? 'high' : 'medium'
+            })),
+            metadata: { type: 'task_completion_plan', taskTitle: title }
+        });
+        await planDoc.save();
+
+        const completionConfig: TaskCompletionConfig = {
+            primary: {
+                type: 'plan-based',
+                planId,
+                completionType,
+                percentage: completionPlan.percentage
+            },
+            absoluteTimeout: typeof input.absoluteTimeout === 'number' ? input.absoluteTimeout : undefined,
+            timeoutBehavior: typeof input.absoluteTimeout === 'number' ? 'fail' : undefined,
+            allowManualCompletion: true
+        };
+        const assignees = requireAssignees(input.assignTo, identity.agentId);
+        const requestId = uuidv4();
+
         try {
-            const startTime = Date.now();
-            
-            // First create the plan
-            const planId = uuidv4();
-            const plan = {
-                id: planId,
-                title: `${input.title} - Completion Plan`,
-                createdBy: context.agentId,
-                createdAt: Date.now(),
-                items: input.completionPlan.steps.map((step: any, index: number) => ({
-                    id: uuidv4(),
-                    title: step.title,
-                    description: step.description,
-                    status: 'pending',
-                    priority: step.critical ? 'high' : 'medium',
-                    critical: step.critical || false,
-                    order: index
-                }))
-            };
-            
-            // Store plan in channel memory using MemoryService
-            const memoryService = MemoryService.getInstance();
-            const channelMemory = await firstValueFrom(memoryService.getChannelMemory(context.channelId!));
-            const currentSharedState = channelMemory.sharedState || {};
-            await firstValueFrom(memoryService.updateChannelMemory(context.channelId!, {
-                sharedState: {
-                    ...currentSharedState,
-                    [`plan:${planId}`]: {
-                        ...plan,
-                        metadata: {
-                            type: 'task_completion_plan',
-                            taskTitle: input.title
-                        }
-                    }
-                }
-            }));
-            
-            // Also store in planning tool's active plans for compatibility
-            const activePlans = (global as any).activePlans || new Map();
-            activePlans.set(planId, plan);
-            (global as any).activePlans = activePlans;
-            
-            // Create completion config
-            const completionConfig: TaskCompletionConfig = {
-                primary: {
-                    type: 'plan-based',
-                    planId: planId,
-                    completionType: input.completionPlan.completionType || 'all_steps',
-                    percentage: input.completionPlan.percentage
-                },
-                absoluteTimeout: input.absoluteTimeout,
-                timeoutBehavior: 'complete',
-                allowManualCompletion: true
-            };
-            
-            // Create the task with monitoring config
-            // If no assignTo specified and the caller is the orchestrator (Concierge),
-            // default to mxf-planner so the task actually gets picked up by the right agent
-            const callerIsOrchestrator = context.agentId?.includes('concierge') ||
-                (context as any).metadata?.role === 'orchestrator';
-            const defaultAssignee = callerIsOrchestrator ? 'mxf-planner' : (context.agentId || 'system');
-            const assignedAgentIds = input.assignTo || [defaultAssignee];
-
-            const taskId = uuidv4();
-            const taskPayload = createTaskEventPayload(
-                TaskEvents.CREATE_REQUEST,
-                context.agentId || 'system',
-                context.channelId || 'default',
-                {
-                    taskId: taskId,
-                    fromAgentId: context.agentId || 'system',
-                    toAgentId: assignedAgentIds[0],
-                    task: {
-                        channelId: context.channelId || 'default',
-                        title: input.title,
-                        description: `${input.description}\n\nThis task will automatically complete when the plan steps are finished.`,
-                        assignmentScope: assignedAgentIds.length > 1 ? 'multiple' : 'single',
-                        assignmentStrategy: 'manual',
-                        assignedAgentIds,
-                        coordinationMode: 'collaborative',
-                        priority: input.priority || 'medium',
-                        metadata: {
-                            completionConfig: completionConfig,
-                            planId: planId,
-                            enableMonitoring: true
-                        }
-                    } satisfies Partial<ChannelTask> & Pick<ChannelTask, 'title'>
-                }
-            );
-            
-            EventBus.server.emit(TaskEvents.CREATE_REQUEST, taskPayload);
-            
-            
-            const content: McpToolResultContent = {
-                type: 'text',
-                data: `Task created successfully with automatic completion monitoring.
-                    
-Task ID: ${taskId}
-Plan ID: ${planId}
-Total Steps: ${plan.items.length}
-Critical Steps: ${plan.items.filter((s: any) => s.critical).length}
-Completion Type: ${input.completionPlan.completionType || 'all_steps'}
-
-The task will automatically complete when the plan criteria are met.`
-            };
-            
+            const task = await emitCreateRequest(identity, requestId, {
+                channelId: identity.channelId,
+                title,
+                description,
+                assignmentScope: assignees.length > 1 ? 'multiple' : 'single',
+                assignmentStrategy: 'manual',
+                assignedAgentIds: assignees,
+                coordinationMode: 'collaborative',
+                priority: input.priority ?? 'medium',
+                metadata: { completionConfig, planId, enableMonitoring: true }
+            });
             return {
-                content,
-                metadata: {
-                    processingTime: Date.now() - startTime,
-                    taskId: taskId,
-                    planId: planId
-                }
-            } as McpToolHandlerResult;
-            
+                content: {
+                    type: 'application/json',
+                    data: {
+                        success: true,
+                        taskId: task.id,
+                        planId,
+                        totalSteps: planDoc.items.length,
+                        criticalSteps: planDoc.items.filter(item => item.priority === 'high').length,
+                        completionType
+                    }
+                },
+                metadata: { processingTime: Date.now() - startedAt, taskId: task.id, planId }
+            };
         } catch (error) {
-            logger.error(`Failed to create task with plan: ${error}`);
+            try {
+                await PlanModel.deleteOne({ planId, channelId: identity.channelId });
+            } catch (cleanupError) {
+                logger.error(`Failed to remove plan ${planId} after task creation failure: ${String(cleanupError)}`);
+            }
+            logger.error(`Failed to create task with plan: ${String(error)}`);
             throw error;
         }
     }
 };
 
-/**
- * Create a task with custom completion criteria
- */
 export const task_create_custom_completion: McpToolDefinition = {
     name: 'task_create_custom_completion',
-    description: 'Create a task with custom completion criteria (SystemLLM evaluation, output-based, time-based, etc.)',
+    description: 'Persist a task with a supported SystemLLM, output, or time-based completion monitor.',
     inputSchema: {
         type: 'object',
         properties: {
-            title: {
-                type: 'string',
-                description: 'Title of the task'
-            },
-            description: {
-                type: 'string',
-                description: 'Detailed description'
-            },
+            title: { type: 'string' },
+            description: { type: 'string' },
             completionStrategy: {
                 type: 'string',
-                enum: ['systemllm-eval', 'output-based', 'time-based', 'event-based'],
-                description: 'Type of completion strategy'
+                enum: ['systemllm-eval', 'output-based', 'time-based']
             },
             completionCriteria: {
                 type: 'object',
-                description: 'Strategy-specific criteria',
                 properties: {
-                    // For systemllm-eval
-                    objectives: {
-                        type: 'array',
-                        items: { type: 'string' },
-                        description: 'Objectives that must be met (for systemllm-eval)'
-                    },
-                    evaluationInterval: {
+                    objectives: { type: 'array', minItems: 1, items: { type: 'string' } },
+                    evaluationInterval: { type: 'number', minimum: 1, default: 30000 },
+                    confidenceThreshold: { type: 'number', minimum: 0, maximum: 1, default: 0.8 },
+                    maxEvaluations: {
                         type: 'number',
-                        description: 'How often to evaluate in ms (for systemllm-eval)',
-                        default: 30000
+                        minimum: 1,
+                        maximum: 100,
+                        description: 'Maximum SystemLLM evaluations before the task fails'
                     },
-                    confidenceThreshold: {
-                        type: 'number',
-                        description: 'Required confidence 0-1 (for systemllm-eval)',
-                        default: 0.8
-                    },
-                    // For output-based
                     requiredOutputs: {
                         type: 'array',
-                        description: 'Required outputs (for output-based)',
+                        minItems: 1,
                         items: {
                             type: 'object',
                             properties: {
-                                type: {
-                                    type: 'string',
-                                    enum: ['message', 'tool_call', 'file', 'memory_entry']
-                                },
-                                pattern: {
-                                    type: 'string',
-                                    description: 'Regex pattern to match'
-                                },
-                                count: {
-                                    type: 'number',
-                                    description: 'Required count',
-                                    default: 1
-                                }
-                            }
+                                type: { type: 'string', enum: ['message', 'tool_call'] },
+                                pattern: { type: 'string', maxLength: 256 },
+                                count: { type: 'number', minimum: 1, default: 1 }
+                            },
+                            required: ['type']
                         }
                     },
-                    // For time-based
-                    minimumDuration: {
-                        type: 'number',
-                        description: 'Minimum duration in ms (for time-based)'
-                    },
-                    maximumDuration: {
-                        type: 'number',
-                        description: 'Maximum duration in ms (for time-based)'
-                    },
-                    requireActivity: {
-                        type: 'boolean',
-                        description: 'Require some activity (for time-based)',
-                        default: true
-                    },
-                    // For event-based
-                    eventName: {
-                        type: 'string',
-                        description: 'Event name to watch for (for event-based)'
-                    }
+                    minimumDuration: { type: 'number', minimum: 0 },
+                    maximumDuration: { type: 'number', minimum: 1 },
+                    requireActivity: { type: 'boolean', default: true }
                 }
             },
-            assignTo: {
-                type: 'array',
-                items: { type: 'string' },
-                description: 'Agent IDs to assign to'
-            }
+            assignTo: { type: 'array', minItems: 1, items: { type: 'string' } }
         },
         required: ['title', 'description', 'completionStrategy', 'completionCriteria']
     },
     enabled: true,
     handler: async (input: McpToolInput, context: McpToolHandlerContext): Promise<McpToolHandlerResult> => {
-        try {
-            const startTime = Date.now();
-            
-            // Build completion config based on strategy
-            let primaryCriteria: any;
-            
-            switch (input.completionStrategy) {
-                case 'systemllm-eval':
-                    primaryCriteria = {
-                        type: 'systemllm-eval',
-                        objectives: input.completionCriteria.objectives || [],
-                        evaluationInterval: input.completionCriteria.evaluationInterval || 30000,
-                        confidenceThreshold: input.completionCriteria.confidenceThreshold || 0.8
-                    };
-                    break;
-                    
-                case 'output-based':
-                    primaryCriteria = {
-                        type: 'output-based',
-                        requiredOutputs: input.completionCriteria.requiredOutputs || []
-                    };
-                    break;
-                    
-                case 'time-based':
-                    primaryCriteria = {
-                        type: 'time-based',
-                        minimumDuration: input.completionCriteria.minimumDuration,
-                        maximumDuration: input.completionCriteria.maximumDuration || 300000, // 5 min default
-                        requireActivity: input.completionCriteria.requireActivity !== false
-                    };
-                    break;
-                    
-                case 'event-based':
-                    primaryCriteria = {
-                        type: 'event-based',
-                        eventName: input.completionCriteria.eventName
-                    };
-                    break;
-            }
-            
-            const completionConfig: TaskCompletionConfig = {
-                primary: primaryCriteria,
-                allowManualCompletion: true
-            };
-            
-            // Create the task
-            const taskId = uuidv4();
-            const taskPayload = createTaskEventPayload(
-                TaskEvents.CREATE_REQUEST,
-                context.agentId || 'system',
-                context.channelId || 'default',
-                {
-                    taskId: taskId,
-                    fromAgentId: context.agentId || 'system',
-                    toAgentId: input.assignTo?.[0] || context.agentId || 'system',
-                    task: {
-                        channelId: context.channelId || 'default',
-                        title: input.title,
-                        description: input.description,
-                        assignmentScope: input.assignTo && input.assignTo.length > 1 ? 'multiple' : 'single',
-                        assignmentStrategy: 'manual',
-                        assignedAgentIds: input.assignTo || [context.agentId || 'system'],
-                        coordinationMode: 'collaborative',
-                        metadata: {
-                            completionConfig: completionConfig,
-                            enableMonitoring: true
-                        }
-                    } satisfies Partial<ChannelTask> & Pick<ChannelTask, 'title'>
-                }
-            );
-            
-            EventBus.server.emit(TaskEvents.CREATE_REQUEST, taskPayload);
-            
-            
-            const content: McpToolResultContent = {
-                type: 'text',
-                data: `Task created with ${input.completionStrategy} completion monitoring.
-                    
-Task ID: ${taskId}
-Strategy: ${input.completionStrategy}
-${input.completionStrategy === 'systemllm-eval' ? `Objectives: ${input.completionCriteria.objectives?.length || 0}` : ''}
-${input.completionStrategy === 'time-based' ? `Duration: ${input.completionCriteria.minimumDuration || 0}-${input.completionCriteria.maximumDuration}ms` : ''}
-
-The task will be monitored and automatically completed when criteria are met.`
-            };
-            
-            return {
-                content,
-                metadata: {
-                    processingTime: Date.now() - startTime,
-                    taskId: taskId
-                }
-            } as McpToolHandlerResult;
-            
-        } catch (error) {
-            logger.error(`Failed to create task with custom completion: ${error}`);
-            throw error;
+        const startedAt = Date.now();
+        const identity = requireIdentity(context);
+        const title = requireString(input.title, 'title');
+        const description = requireString(input.description, 'description');
+        const criteria = input.completionCriteria as Record<string, unknown>;
+        if (!criteria || typeof criteria !== 'object') {
+            throw new Error('completionCriteria is required');
         }
+
+        let primary: TaskCompletionConfig['primary'];
+        if (input.completionStrategy === 'systemllm-eval') {
+            if (!Array.isArray(criteria.objectives) || criteria.objectives.length === 0 ||
+                criteria.objectives.some(objective => typeof objective !== 'string' || objective.trim().length === 0)) {
+                throw new Error('systemllm-eval requires at least one objective');
+            }
+            if (!Number.isInteger(criteria.maxEvaluations) ||
+                (criteria.maxEvaluations as number) < 1 ||
+                (criteria.maxEvaluations as number) > 100) {
+                throw new Error('systemllm-eval requires maxEvaluations between 1 and 100');
+            }
+            primary = {
+                type: 'systemllm-eval',
+                objectives: criteria.objectives as string[],
+                evaluationInterval: typeof criteria.evaluationInterval === 'number'
+                    ? criteria.evaluationInterval
+                    : 30_000,
+                confidenceThreshold: typeof criteria.confidenceThreshold === 'number'
+                    ? criteria.confidenceThreshold
+                    : 0.8,
+                maxEvaluations: criteria.maxEvaluations as number
+            };
+        } else if (input.completionStrategy === 'output-based') {
+            if (!Array.isArray(criteria.requiredOutputs) || criteria.requiredOutputs.length === 0) {
+                throw new Error('output-based completion requires at least one output');
+            }
+            primary = {
+                type: 'output-based',
+                requiredOutputs: criteria.requiredOutputs as Array<{
+                    type: 'message' | 'tool_call';
+                    pattern?: string;
+                    count?: number;
+                }>
+            };
+        } else if (input.completionStrategy === 'time-based') {
+            if (typeof criteria.maximumDuration !== 'number' || criteria.maximumDuration <= 0) {
+                throw new Error('time-based completion requires a positive maximumDuration');
+            }
+            primary = {
+                type: 'time-based',
+                minimumDuration: typeof criteria.minimumDuration === 'number'
+                    ? criteria.minimumDuration
+                    : undefined,
+                maximumDuration: criteria.maximumDuration,
+                requireActivity: criteria.requireActivity !== false
+            };
+        } else {
+            throw new Error(`Unsupported completion strategy: ${String(input.completionStrategy)}`);
+        }
+
+        const assignees = requireAssignees(input.assignTo, identity.agentId);
+        const requestId = uuidv4();
+        const task = await emitCreateRequest(identity, requestId, {
+            channelId: identity.channelId,
+            title,
+            description,
+            assignmentScope: assignees.length > 1 ? 'multiple' : 'single',
+            assignmentStrategy: 'manual',
+            assignedAgentIds: assignees,
+            coordinationMode: 'collaborative',
+            priority: 'medium',
+            metadata: {
+                completionConfig: { primary, allowManualCompletion: true } satisfies TaskCompletionConfig,
+                enableMonitoring: true
+            }
+        });
+        return {
+            content: {
+                type: 'application/json',
+                data: {
+                    success: true,
+                    taskId: task.id,
+                    strategy: primary.type,
+                    monitoringConfigured: true
+                }
+            },
+            metadata: { processingTime: Date.now() - startedAt, taskId: task.id }
+        };
     }
 };
 
-/**
- * Link an existing task to a plan
- */
 export const task_link_to_plan: McpToolDefinition = {
     name: 'task_link_to_plan',
-    // What this does: write the plan-based completion config onto the task's
-    // metadata. It does NOT itself start the completion monitor — the monitor is
-    // started by TaskService when a task is created with this metadata. The old
-    // description promised "the task will now automatically complete when plan
-    // criteria are met", which was untrue twice over: the event it emitted
-    // ('task:update_metadata') had no listeners anywhere, so not even the metadata
-    // was written.
-    description:
-        'Record a plan-based completion config on an existing task: which plan it is ' +
-        'linked to and what counts as done (all steps, critical steps, or a percentage). ' +
-        'Writing the config does not by itself start the completion monitor — check ' +
-        'task_monitoring_status to see whether the task is actually being monitored.',
+    description: 'Persist a plan-based completion config on an existing same-channel task and start monitoring it.',
     inputSchema: {
         type: 'object',
         properties: {
-            taskId: {
-                type: 'string',
-                description: 'ID of the existing task'
-            },
-            planId: {
-                type: 'string',
-                description: 'ID of the plan to link to'
-            },
+            taskId: { type: 'string' },
+            planId: { type: 'string' },
             completionType: {
                 type: 'string',
                 enum: ['all_steps', 'critical_steps', 'percentage'],
                 default: 'all_steps'
             },
-            percentage: {
-                type: 'number',
-                description: 'Required percentage (if using percentage type)',
-                minimum: 0,
-                maximum: 100
-            }
+            percentage: { type: 'number', minimum: 0, maximum: 100 }
         },
         required: ['taskId', 'planId']
     },
     enabled: true,
     handler: async (input: McpToolInput, context: McpToolHandlerContext): Promise<McpToolHandlerResult> => {
+        const startedAt = Date.now();
+        const identity = requireIdentity(context);
+        const taskId = requireString(input.taskId, 'taskId');
+        const planId = requireString(input.planId, 'planId');
+        const lockKey = `${identity.channelId}\0${planId}`;
+        if (planUpdateLocks.has(lockKey)) {
+            throw new Error(`Plan ${planId} is already being linked in this channel`);
+        }
+        planUpdateLocks.add(lockKey);
         try {
-            const startTime = Date.now();
-            
-            // Check for serialization lock
-            if (planUpdateLocks.get(input.planId)) {
-                const content: McpToolResultContent = {
-                    type: 'text',
-                    data: `Plan ${input.planId} is currently being updated. Please try again.`
-                };
-                return { content };
+            const completionType = input.completionType ?? 'all_steps';
+            if (completionType === 'percentage' && typeof input.percentage !== 'number') {
+                throw new Error('percentage is required for percentage completion');
             }
-            
-            // Acquire lock
-            planUpdateLocks.set(input.planId, true);
-            
-            try {
-                const completionType = input.completionType || 'all_steps';
+            const plan = await PlanModel.findOne({ planId, channelId: identity.channelId });
+            if (!plan) {
+                throw new Error(`Plan ${planId} not found in channel ${identity.channelId}`);
+            }
+            if (completionType === 'critical_steps' && !plan.items.some(item => item.priority === 'high')) {
+                throw new Error(`Plan ${planId} contains no critical steps`);
+            }
+            const task = await Task.findOne({ _id: taskId, channelId: identity.channelId });
+            if (!task) {
+                throw new Error(`Task ${taskId} not found in channel ${identity.channelId}`);
+            }
 
-                // 'percentage' completion needs a percentage. Without one the config
-                // is meaningless and the monitor could never decide the task is done.
-                if (completionType === 'percentage' && typeof input.percentage !== 'number') {
-                    throw new Error(
-                        'percentage is required when completionType is "percentage".'
-                    );
-                }
-
-                const completionConfig: TaskCompletionConfig = {
-                    primary: {
-                        type: 'plan-based',
-                        planId: input.planId,
-                        completionType,
-                        percentage: input.percentage
-                    },
-                    allowManualCompletion: true
-                } as TaskCompletionConfig;
-
-                // Emit the real task-update event.
-                //
-                // This used to emit the string literal 'task:update_metadata' with a
-                // raw object payload. No such event exists in EventNames.ts and
-                // nothing listens for it, so the emit was a no-op — the task metadata
-                // was never written — while the tool told the model the link had
-                // succeeded and monitoring was active.
-                //
-                // TaskEvents.UPDATE_REQUEST is a real event with a real listener
-                // (taskHandlers.handleTaskUpdate), which calls TaskService.updateTask
-                // and persists the metadata.
-                EventBus.server.emit(
+            const completionConfig: TaskCompletionConfig = {
+                primary: {
+                    type: 'plan-based',
+                    planId,
+                    completionType,
+                    percentage: typeof input.percentage === 'number' ? input.percentage : undefined
+                },
+                allowManualCompletion: true
+            };
+            const requestId = uuidv4();
+            const updatedTask = await awaitTaskEvent(
+                requestId,
+                identity.channelId,
+                TaskEvents.PROGRESS_UPDATED,
+                () => EventBus.server.emit(
                     Events.Task.UPDATE_REQUEST,
                     createTaskEventPayload(
                         Events.Task.UPDATE_REQUEST,
-                        context.agentId!,
-                        context.channelId!,
+                        identity.agentId,
+                        identity.channelId,
                         {
-                            taskId: input.taskId,
-                            metadata: {
-                                completionConfig,
-                                enableMonitoring: true
+                            taskId,
+                            requestId,
+                            fromAgentId: identity.agentId,
+                            toAgentId: task.assignedAgentId ?? identity.agentId,
+                            task: {
+                                taskId,
+                                requestId,
+                                metadata: {
+                                    ...(task.metadata ?? {}),
+                                    completionConfig,
+                                    planId,
+                                    enableMonitoring: true
+                                }
                             }
-                        } as any
+                        }
                     )
-                );
-
-                const content: McpToolResultContent = {
+                )
+            );
+            return {
+                content: {
                     type: 'application/json',
                     data: {
-                        taskId: input.taskId,
-                        planId: input.planId,
+                        success: true,
+                        taskId: updatedTask.id,
+                        planId,
                         completionType,
-                        percentage: input.percentage,
-                        completionConfigWritten: true,
-                        // Say only what is true. The write is asynchronous (it goes
-                        // through the task update handler), and starting the monitor
-                        // is a separate step owned by the task service.
-                        note:
-                            'The plan-based completion config has been submitted for this task. ' +
-                            'Call task_monitoring_status to confirm the task is being monitored.'
+                        monitoringConfigured: true
                     }
-                };
-
-                return {
-                    content,
-                    metadata: {
-                        processingTime: Date.now() - startTime
-                    }
-                } as McpToolHandlerResult;
-            } finally {
-                // Always release lock
-                planUpdateLocks.delete(input.planId);
-            }
-
-        } catch (error) {
-            logger.error(`Failed to link task to plan: ${error}`);
-            throw error;
+                },
+                metadata: { processingTime: Date.now() - startedAt }
+            };
+        } finally {
+            planUpdateLocks.delete(lockKey);
         }
     }
 };
 
-/**
- * Get task monitoring status
- */
 export const task_monitoring_status: McpToolDefinition = {
     name: 'task_monitoring_status',
-    description: 'Get the current monitoring status and progress of a task',
+    description: 'Read the persisted task state and automatic-completion configuration for a same-channel task.',
     inputSchema: {
         type: 'object',
-        properties: {
-            taskId: {
-                type: 'string',
-                description: 'ID of the task to check'
-            }
-        },
+        properties: { taskId: { type: 'string' } },
         required: ['taskId']
     },
     enabled: true,
     handler: async (input: McpToolInput, context: McpToolHandlerContext): Promise<McpToolHandlerResult> => {
-        try {
-            const startTime = Date.now();
-
-            const content: McpToolResultContent = {
-                type: 'text',
-                data: `Task monitoring status for ${input.taskId}:
-
-Use task_update to check task status, or listen for task completion events on the channel.
-Agent: ${context.agentId} | Channel: ${context.channelId}`
-            };
-
-            return {
-                content,
-                metadata: {
-                    processingTime: Date.now() - startTime
-                }
-            } as McpToolHandlerResult;
-
-        } catch (error) {
-            logger.error(`Failed to get monitoring status: ${error}`);
-            throw error;
+        const identity = requireIdentity(context);
+        const taskId = requireString(input.taskId, 'taskId');
+        const task = await Task.findOne({ _id: taskId, channelId: identity.channelId });
+        if (!task) {
+            throw new Error(`Task ${taskId} not found in channel ${identity.channelId}`);
         }
+        return {
+            content: {
+                type: 'application/json',
+                data: {
+                    taskId,
+                    channelId: identity.channelId,
+                    status: task.status,
+                    progress: task.progress,
+                    monitoringConfigured: task.metadata?.enableMonitoring === true &&
+                        task.metadata?.completionConfig !== undefined,
+                    completionConfig: task.metadata?.completionConfig
+                }
+            }
+        };
     }
 };
 
-/**
- * Yield control after delegating a task to another agent.
- *
- * Calling this tool tells the framework "I delegated my work and I'm done —
- * stop my LLM loop." Unlike task_complete, this does NOT mark the parent
- * task as completed, so downstream agents continue their work uninterrupted.
- *
- * The agent loop in MxfAgent.ts recognises this tool name and breaks the
- * iteration loop without setting the persistent taskCompleted flag.
- */
 export const task_delegate: McpToolDefinition = {
     name: 'task_delegate',
-    description: 'Signal that you have delegated your work to another agent and are done. Stops your processing loop without completing the parent task, so the downstream agent can continue.',
+    description: 'Signal that work was delegated and yield the current agent loop without completing the parent task.',
     inputSchema: {
         type: 'object',
-        properties: {
-            summary: {
-                type: 'string',
-                description: 'Brief summary of what was delegated and to whom'
-            }
-        },
+        properties: { summary: { type: 'string' } },
         required: ['summary']
     },
     enabled: true,
     handler: async (input: McpToolInput, context: McpToolHandlerContext): Promise<McpToolHandlerResult> => {
+        const identity = requireIdentity(context);
+        const summary = requireString(input.summary, 'summary');
         const content: McpToolResultContent = {
             type: 'text',
-            data: `Delegation acknowledged. Agent ${context.agentId} yielding control.\n\n${input.summary}`
+            data: `Delegation recorded for ${identity.agentId}.\n\n${summary}`
         };
-
-        return {
-            content,
-            metadata: { delegated: true }
-        } as McpToolHandlerResult;
+        return { content, metadata: { delegated: true } };
     }
 };
 
-// Export all task planning tools
 export const taskPlanningTools = [
     task_create_with_plan,
     task_create_custom_completion,

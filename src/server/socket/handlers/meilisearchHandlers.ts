@@ -37,6 +37,7 @@ import {
     MeilisearchBackfillEventData
 } from '@mxf-dev/core/schemas/EventPayloadSchema';
 import { v4 as uuidv4 } from 'uuid';
+import { authorizeMeilisearchSocketRequest } from '../security/MeilisearchIngressPolicy';
 
 const logger = new Logger('debug', 'MeilisearchHandlers', 'server');
 
@@ -64,13 +65,22 @@ export const setupMeilisearchHandlers = (): void => {
         const startTime = Date.now();
 
         try {
-            // Validate payload
-            if (!payload || !payload.data || !payload.data.metadata || !payload.data.metadata.message) {
-                throw new Error('Invalid indexing request payload - missing message data');
-            }
-
             const { agentId, channelId } = payload;
-            const message = payload.data.metadata.message;
+            const safeData = authorizeMeilisearchSocketRequest(
+                MeilisearchEvents.INDEX_REQUEST,
+                payload.data,
+                agentId,
+                channelId,
+                false
+            );
+            const safeMetadata = safeData.metadata as Record<string, unknown>;
+            const message = safeMetadata.message as {
+                id: string;
+                sourceDocumentId: string;
+                role: 'user' | 'assistant' | 'system' | 'tool';
+                content: string;
+                timestamp: number;
+            };
 
 
             // Get Meilisearch service instance (server has embedding generator)
@@ -84,7 +94,8 @@ export const setupMeilisearchHandlers = (): void => {
                 timestamp: message.timestamp,
                 metadata: {
                     agentId,
-                    channelId
+                    channelId,
+                    sourceDocumentId: message.sourceDocumentId
                 }
             });
 
@@ -106,14 +117,14 @@ export const setupMeilisearchHandlers = (): void => {
             };
 
             const successPayload = createMeilisearchIndexEventPayload(
-                'meilisearch:index',
+                MeilisearchEvents.INDEX,
                 agentId,
                 channelId,
                 eventData,
                 { source: 'MeilisearchHandlers' }
             );
 
-            EventBus.server.emit('meilisearch:index', successPayload);
+            EventBus.server.emit(MeilisearchEvents.INDEX, successPayload);
 
         } catch (error) {
             const duration = Date.now() - startTime;
@@ -135,14 +146,14 @@ export const setupMeilisearchHandlers = (): void => {
             };
 
             const errorPayload = createMeilisearchIndexEventPayload(
-                'meilisearch:index:error',
+                MeilisearchEvents.INDEX_ERROR,
                 payload.agentId,
                 payload.channelId,
                 eventData,
                 { source: 'MeilisearchHandlers' }
             );
 
-            EventBus.server.emit('meilisearch:index:error', errorPayload);
+            EventBus.server.emit(MeilisearchEvents.INDEX_ERROR, errorPayload);
 
             logger.error(`Failed to index message: ${error instanceof Error ? error.message : String(error)}`);
         }
@@ -159,20 +170,29 @@ export const setupMeilisearchHandlers = (): void => {
         let failedCount = 0;
 
         try {
-            // Validate payload
-            if (!payload || !payload.data || !payload.data.metadata || !payload.data.metadata.messages) {
-                throw new Error('Invalid backfill request payload - missing messages data');
-            }
-
             const { agentId, channelId } = payload;
-            const messages = payload.data.metadata.messages;
+            const safeData = authorizeMeilisearchSocketRequest(
+                MeilisearchEvents.BACKFILL_REQUEST,
+                payload.data,
+                agentId,
+                channelId,
+                false
+            );
+            const safeMetadata = safeData.metadata as Record<string, unknown>;
+            const messages = safeMetadata.messages as Array<{
+                id: string;
+                sourceDocumentId: string;
+                role: 'user' | 'assistant' | 'system' | 'tool';
+                content: string;
+                timestamp: number;
+            }>;
 
 
             // Get Meilisearch service instance (server has embedding generator)
             const meilisearch = MxfMeilisearchService.getInstance();
 
             // Index messages in batches
-            const batchSize = 100;
+            const batchSize = Math.min(25, messages.length);
             for (let i = 0; i < messages.length; i += batchSize) {
                 const batch = messages.slice(i, i + batchSize);
 
@@ -186,7 +206,8 @@ export const setupMeilisearchHandlers = (): void => {
                             timestamp: message.timestamp,
                             metadata: {
                                 agentId,
-                                channelId
+                                channelId,
+                                sourceDocumentId: message.sourceDocumentId
                             }
                         });
                         indexedCount++;
@@ -209,23 +230,19 @@ export const setupMeilisearchHandlers = (): void => {
                         };
 
                         const indexPayload = createMeilisearchIndexEventPayload(
-                            'meilisearch:index',
+                            MeilisearchEvents.INDEX,
                             agentId,
                             channelId,
                             indexEventData,
                             { source: 'MeilisearchHandlers:Backfill' }
                         );
 
-                        EventBus.server.emit('meilisearch:index', indexPayload);
+                        EventBus.server.emit(MeilisearchEvents.INDEX, indexPayload);
                     } catch (error) {
                         failedCount++;
                     }
                 }
 
-                // Small delay between batches
-                if (i + batchSize < messages.length) {
-                    await new Promise(resolve => setTimeout(resolve, 100));
-                }
             }
 
             const duration = Date.now() - startTime;
@@ -251,14 +268,17 @@ export const setupMeilisearchHandlers = (): void => {
             };
 
             const backfillPayload = createMeilisearchBackfillEventPayload(
-                success ? 'meilisearch:backfill:complete' : 'meilisearch:backfill:partial',
+                success ? MeilisearchEvents.BACKFILL_COMPLETE : MeilisearchEvents.BACKFILL_PARTIAL,
                 agentId,
                 channelId,
                 eventData,
                 { source: 'MeilisearchHandlers' }
             );
 
-            EventBus.server.emit(success ? 'meilisearch:backfill:complete' : 'meilisearch:backfill:partial', backfillPayload);
+            EventBus.server.emit(
+                success ? MeilisearchEvents.BACKFILL_COMPLETE : MeilisearchEvents.BACKFILL_PARTIAL,
+                backfillPayload
+            );
 
         } catch (error) {
             const duration = Date.now() - startTime;
@@ -282,14 +302,14 @@ export const setupMeilisearchHandlers = (): void => {
             };
 
             const errorPayload = createMeilisearchBackfillEventPayload(
-                'meilisearch:backfill:error',
+                MeilisearchEvents.BACKFILL_ERROR,
                 payload.agentId,
                 payload.channelId,
                 eventData,
                 { source: 'MeilisearchHandlers' }
             );
 
-            EventBus.server.emit('meilisearch:backfill:error', errorPayload);
+            EventBus.server.emit(MeilisearchEvents.BACKFILL_ERROR, errorPayload);
 
             logger.error(`Backfill failed: ${error instanceof Error ? error.message : String(error)}`);
         }

@@ -31,7 +31,11 @@ import { McpToolInput } from '../IMcpClient.js';
 import { Logger } from '../../../utils/Logger.js';
 import * as fs from 'fs';
 import * as path from 'path';
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
+import {
+    buildShellChildEnv,
+    resolveWorkspacePath
+} from '../security/McpToolPolicy.js';
 
 const logger = new Logger('info', 'ProjectContextTools', 'server');
 
@@ -128,10 +132,16 @@ function parseManifestInfo(filename: string, content: string): Record<string, an
  */
 function getGitInfo(dir: string): Record<string, any> | null {
     try {
-        const branch = execSync(`git -C "${dir}" rev-parse --abbrev-ref HEAD`, { encoding: 'utf-8' }).trim();
-        const logOutput = execSync(`git -C "${dir}" log --oneline -5`, { encoding: 'utf-8' }).trim();
+        const options = {
+            cwd: dir,
+            encoding: 'utf-8' as const,
+            env: buildShellChildEnv(),
+            timeout: 10_000
+        };
+        const branch = execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], options).trim();
+        const logOutput = execFileSync('git', ['log', '--oneline', '-5'], options).trim();
         const recentCommits = logOutput ? logOutput.split('\n') : [];
-        const statusOutput = execSync(`git -C "${dir}" status --porcelain`, { encoding: 'utf-8' }).trim();
+        const statusOutput = execFileSync('git', ['status', '--porcelain'], options).trim();
         const dirtyLines = statusOutput ? statusOutput.split('\n').filter(l => l.trim()) : [];
         const dirtyCount = dirtyLines.length;
 
@@ -154,11 +164,14 @@ function detectConfigFiles(dir: string): string[] {
     const found: string[] = [];
 
     for (const configFile of CONFIG_FILES) {
-        const fullPath = path.join(dir, configFile);
         try {
+            const fullPath = resolveWorkspacePath(
+                path.join(dir, configFile.replace(/\/$/, '')),
+                'project_context config file'
+            );
             // For directory entries (ending with /), check if it's a directory
             if (configFile.endsWith('/')) {
-                const stat = fs.statSync(fullPath.slice(0, -1));
+                const stat = fs.statSync(fullPath);
                 if (stat.isDirectory()) {
                     found.push(configFile);
                 }
@@ -188,7 +201,7 @@ export const project_context_tool: McpToolDefinition = {
         properties: {
             workingDirectory: {
                 type: 'string',
-                description: 'Absolute path to the directory to scan. Defaults to the current working directory if not provided.',
+                description: 'Directory under MXF_WORKSPACE_ROOT to scan. Defaults to MXF_WORKSPACE_ROOT.',
             },
         },
         additionalProperties: false,
@@ -208,9 +221,11 @@ export const project_context_tool: McpToolDefinition = {
         timeout: 10000,
     },
 
-    async handler(input: McpToolInput, context: McpToolHandlerContext): Promise<McpToolHandlerResult> {
-        const dir = (input as any).workingDirectory || process.cwd();
-        const resolvedDir = path.resolve(dir);
+    async handler(input: McpToolInput, _context: McpToolHandlerContext): Promise<McpToolHandlerResult> {
+        const resolvedDir = resolveWorkspacePath(
+            input.workingDirectory,
+            'project_context workingDirectory'
+        );
 
         logger.info('Scanning project context', { directory: resolvedDir });
 
@@ -266,8 +281,11 @@ export const project_context_tool: McpToolDefinition = {
         let manifestFile: string | null = null;
 
         for (const [filename, typeInfo] of Object.entries(MANIFEST_MAP)) {
-            const manifestPath = path.join(resolvedDir, filename);
             try {
+                const manifestPath = resolveWorkspacePath(
+                    path.join(resolvedDir, filename),
+                    'project_context manifest'
+                );
                 fs.accessSync(manifestPath, fs.constants.F_OK);
                 projectType = typeInfo.projectType;
                 language = typeInfo.language;
@@ -281,7 +299,10 @@ export const project_context_tool: McpToolDefinition = {
         // 3. If manifest found, read and parse basic info
         if (manifestFile) {
             try {
-                const manifestPath = path.join(resolvedDir, manifestFile);
+                const manifestPath = resolveWorkspacePath(
+                    path.join(resolvedDir, manifestFile),
+                    'project_context manifest read'
+                );
                 const content = fs.readFileSync(manifestPath, 'utf-8').slice(0, 500);
                 const parsed = parseManifestInfo(manifestFile, content);
                 manifest = {

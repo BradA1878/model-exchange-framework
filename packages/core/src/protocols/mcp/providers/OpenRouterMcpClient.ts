@@ -664,6 +664,7 @@ export class OpenRouterMcpClient extends BaseMcpClient {
         context: AgentContext,
         options?: Record<string, any>
     ): Promise<McpApiResponse> {
+        this.assertExternalLlmCallAllowed();
 
         // Structure messages for OpenRouter based on context (returns OpenRouter format)
         const openRouterMessages = this.structureMessagesFromContext(context);
@@ -729,6 +730,8 @@ export class OpenRouterMcpClient extends BaseMcpClient {
         options: Record<string, any>,
         onChunk: (chunk: McpStreamChunk) => void
     ): Promise<McpApiResponse> {
+        this.assertExternalLlmCallAllowed();
+
         // Structure and transform messages same as non-streaming path
         const openRouterMessages = this.structureMessagesFromContext(context);
         const converter = getMessageConverter('client');

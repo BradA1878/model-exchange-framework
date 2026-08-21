@@ -25,7 +25,7 @@
  * Integrates with ToolExecutionInterceptor and adds proactive validation layer.
  */
 
-import { Observable, Subject } from 'rxjs';
+import { Observable, Subject, Subscription } from 'rxjs';
 import { Logger } from '../utils/Logger.js';
 import { EventBus } from '../events/EventBus.js';
 import { Events } from '../events/EventNames.js';
@@ -127,8 +127,16 @@ export class ValidationMiddleware {
     
     // Emergency bypass tracking
     private emergencyBypassUntil = 0;
-    
-    private static instance: ValidationMiddleware;
+    private readonly subscriptions: Subscription[] = [];
+    private readonly pendingValidationTimeouts = new Map<
+        ReturnType<typeof setTimeout>,
+        (reason?: unknown) => void
+    >();
+    private metricsInterval?: ReturnType<typeof setInterval>;
+    private interceptionCleanupInterval?: ReturnType<typeof setInterval>;
+    private healthCheckInterval?: ReturnType<typeof setInterval>;
+
+    private static instance: ValidationMiddleware | undefined;
 
     private constructor() {
         this.logger = new Logger('info', 'ValidationMiddleware', 'server');
@@ -415,9 +423,9 @@ export class ValidationMiddleware {
         // This ensures all tool calls go through both validation and auto-correction
         
         // Listen to tool execution interceptor events
-        this.toolExecutionInterceptor.interceptionEvents.subscribe(event => {
+        this.subscriptions.push(this.toolExecutionInterceptor.interceptionEvents.subscribe(event => {
             this.handleToolExecutionEvent(event);
-        });
+        }));
         
     }
 
@@ -625,13 +633,19 @@ export class ValidationMiddleware {
     private async withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
         return new Promise((resolve, reject) => {
             const timer = setTimeout(() => {
+                this.pendingValidationTimeouts.delete(timer);
                 reject(new Error('TIMEOUT'));
             }, timeoutMs);
+            timer.unref?.();
+            this.pendingValidationTimeouts.set(timer, reject);
 
             promise
                 .then(resolve)
                 .catch(reject)
-                .finally(() => clearTimeout(timer));
+                .finally(() => {
+                    clearTimeout(timer);
+                    this.pendingValidationTimeouts.delete(timer);
+                });
         });
     }
 
@@ -689,31 +703,34 @@ export class ValidationMiddleware {
 
     private setupEventListeners(): void {
         // Listen to system events for emergency bypass triggers
-        EventBus.server.on(Events.System.MAINTENANCE_MODE, () => {
+        this.subscriptions.push(EventBus.server.on(Events.System.MAINTENANCE_MODE, () => {
             this.activateEmergencyBypass(30 * 60 * 1000); // 30 minutes
-        });
+        }));
 
         // Listen to validation performance events
-        this.proactiveValidationService.validationEvents.subscribe(event => {
+        this.subscriptions.push(this.proactiveValidationService.validationEvents.subscribe(_event => {
             // Could use these events for additional learning or optimization
-        });
+        }));
     }
 
     private startPeriodicTasks(): void {
         // Performance reporting
-        setInterval(() => {
+        this.metricsInterval = setInterval(() => {
             this.reportPerformanceMetrics();
         }, 60 * 1000); // Every minute
+        this.metricsInterval.unref?.();
 
         // Cleanup expired interceptions
-        setInterval(() => {
+        this.interceptionCleanupInterval = setInterval(() => {
             this.cleanupExpiredInterceptions();
         }, 5 * 60 * 1000); // Every 5 minutes
+        this.interceptionCleanupInterval.unref?.();
 
         // Health checks
-        setInterval(() => {
+        this.healthCheckInterval = setInterval(() => {
             this.performHealthCheck();
         }, 30 * 1000); // Every 30 seconds
+        this.healthCheckInterval.unref?.();
     }
 
     private reportPerformanceMetrics(): void {
@@ -872,5 +889,36 @@ export class ValidationMiddleware {
             averageValidationTime: 0,
             totalValidationTime: 0
         });
+    }
+
+    /** Release every timer and subscription owned by this singleton. */
+    public shutdown(): void {
+        if (this.metricsInterval) {
+            clearInterval(this.metricsInterval);
+            this.metricsInterval = undefined;
+        }
+        if (this.interceptionCleanupInterval) {
+            clearInterval(this.interceptionCleanupInterval);
+            this.interceptionCleanupInterval = undefined;
+        }
+        if (this.healthCheckInterval) {
+            clearInterval(this.healthCheckInterval);
+            this.healthCheckInterval = undefined;
+        }
+        for (const [timer, reject] of this.pendingValidationTimeouts) {
+            clearTimeout(timer);
+            reject(new Error('Validation middleware is shutting down'));
+        }
+        this.pendingValidationTimeouts.clear();
+        for (const subscription of this.subscriptions) {
+            subscription.unsubscribe();
+        }
+        this.subscriptions.length = 0;
+        this.activeInterceptions.clear();
+        this.middlewareEvents$.complete();
+
+        if (ValidationMiddleware.instance === this) {
+            ValidationMiddleware.instance = undefined;
+        }
     }
 }

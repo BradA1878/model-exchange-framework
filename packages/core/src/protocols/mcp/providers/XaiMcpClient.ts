@@ -426,6 +426,8 @@ export class XaiMcpClient extends BaseMcpClient {
         context: AgentContext,
         options?: Record<string, any>
     ): Promise<McpApiResponse> {
+        this.assertExternalLlmCallAllowed();
+
         // Structure messages for X.ai based on context
         const xaiMessages = this.structureMessagesFromContext(context);
 

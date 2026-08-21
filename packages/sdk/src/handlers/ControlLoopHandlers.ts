@@ -77,6 +77,10 @@ export class ControlLoopHandlers extends Handler {
      * @internal - This method is called internally by MxfClient
      */
     public initialize(): void {
+        if (this.subscriptions.length > 0) {
+            return;
+        }
+
         // Subscribe to control loop phase events
         this.subscriptions.push(EventBus.client.on(Events.ControlLoop.OBSERVATION, this.handleObservationEvent.bind(this)));
         this.subscriptions.push(EventBus.client.on(Events.ControlLoop.REASONING, this.handleReasoningEvent.bind(this)));
@@ -96,6 +100,7 @@ export class ControlLoopHandlers extends Handler {
      */
     public cleanup(): void {
         this.subscriptions.forEach(sub => sub.unsubscribe());
+        this.subscriptions = [];
     }
 
     /**
@@ -158,7 +163,7 @@ export class ControlLoopHandlers extends Handler {
             status: 'starting'
         };
         const payload = createControlLoopEventPayload(
-            Events.ControlLoop.STARTED,
+            Events.ControlLoop.START_REQUEST,
             this.agentId,
             this.channelId,
             controlLoopDataForStart
@@ -167,7 +172,7 @@ export class ControlLoopHandlers extends Handler {
         // Validate control loop payload before sending
         this.validator.assertIsControlLoopPayload(payload);
         
-        EventBus.client.emitOn(this.agentId,Events.ControlLoop.STARTED, payload);
+        EventBus.client.emitOn(this.agentId, Events.ControlLoop.START_REQUEST, payload);
     }
 
     /**
@@ -187,7 +192,7 @@ export class ControlLoopHandlers extends Handler {
             context: { reason: reason || 'Stopped by agent' }
         };
         const payload = createControlLoopEventPayload(
-            Events.ControlLoop.STOPPED,
+            Events.ControlLoop.STOP_REQUEST,
             this.agentId,
             this.channelId,
             controlLoopDataForStop
@@ -196,7 +201,7 @@ export class ControlLoopHandlers extends Handler {
         // Validate control loop payload before sending
         this.validator.assertIsControlLoopPayload(payload);
         
-        EventBus.client.emitOn(this.agentId,Events.ControlLoop.STOPPED, payload);
+        EventBus.client.emitOn(this.agentId, Events.ControlLoop.STOP_REQUEST, payload);
     }
     
     /**
@@ -234,7 +239,7 @@ export class ControlLoopHandlers extends Handler {
             context: { loopOwnerId: effectiveLoopOwnerId } 
         };
         const payload = createControlLoopEventPayload(
-            Events.ControlLoop.OBSERVATION,
+            Events.ControlLoop.OBSERVATION_SUBMIT,
             this.agentId,
             this.channelId,
             controlLoopDataForObservation
@@ -245,7 +250,7 @@ export class ControlLoopHandlers extends Handler {
         // Validate control loop payload before sending
         this.validator.assertIsControlLoopPayload(payload);
         
-        EventBus.client.emitOn(this.agentId,Events.ControlLoop.OBSERVATION, payload);
+        EventBus.client.emitOn(this.agentId, Events.ControlLoop.OBSERVATION_SUBMIT, payload);
 
         return Promise.resolve(true);
     }
@@ -267,7 +272,7 @@ export class ControlLoopHandlers extends Handler {
             action: action
         };
         const payload = createControlLoopEventPayload(
-            Events.ControlLoop.EXECUTION,
+            Events.ControlLoop.EXECUTION_REQUEST,
             this.agentId,
             this.channelId,
             controlLoopDataForExecution
@@ -276,7 +281,7 @@ export class ControlLoopHandlers extends Handler {
         // Validate control loop payload before sending
         this.validator.assertIsControlLoopPayload(payload);
         
-        EventBus.client.emitOn(this.agentId,Events.ControlLoop.EXECUTION, payload);
+        EventBus.client.emitOn(this.agentId, Events.ControlLoop.EXECUTION_REQUEST, payload);
 
         return Promise.resolve(true);
     }
@@ -571,13 +576,13 @@ export class ControlLoopHandlers extends Handler {
                 plan: plan
             };
             const payload = createControlLoopEventPayload(
-                Events.ControlLoop.PLAN,
+                Events.ControlLoop.PLAN_SUBMIT,
                 this.agentId,
                 this.channelId,
                 controlLoopDataForPlan
             );
             
-            EventBus.client.emitOn(this.agentId,Events.ControlLoop.PLAN, payload);
+            EventBus.client.emitOn(this.agentId, Events.ControlLoop.PLAN_SUBMIT, payload);
         } catch (error) {
             this.logger.error(`Error generating plan: ${error instanceof Error ? error.message : String(error)}`);
         }
@@ -701,13 +706,13 @@ export class ControlLoopHandlers extends Handler {
                 context: { reflection: reflection }
             };
             const payload = createControlLoopEventPayload(
-                Events.ControlLoop.REFLECTION,
+                Events.ControlLoop.REFLECTION_SUBMIT,
                 this.agentId,
                 this.channelId,
                 controlLoopDataForReflection
             );
             
-            EventBus.client.emitOn(this.agentId,Events.ControlLoop.REFLECTION, payload);
+            EventBus.client.emitOn(this.agentId, Events.ControlLoop.REFLECTION_SUBMIT, payload);
         } catch (error) {
             this.logger.error(`Error generating reflection: ${error instanceof Error ? error.message : String(error)}`);
         }

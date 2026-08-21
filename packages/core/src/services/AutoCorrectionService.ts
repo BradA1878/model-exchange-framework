@@ -30,7 +30,7 @@
  */
 
 import { v4 as uuidv4 } from 'uuid';
-import { Observable, Subject } from 'rxjs';
+import { Observable, Subject, Subscription } from 'rxjs';
 import { Logger } from '../utils/Logger.js';
 import { EventBus } from '../events/EventBus.js';
 import { Events } from '../events/EventNames.js';
@@ -123,10 +123,11 @@ export class AutoCorrectionService {
     
     // Correction strategies
     private readonly strategies = new Map<CorrectionStrategyType, CorrectionStrategy>();
+    private readonly eventSubscriptions: Subscription[] = [];
     
     // Separate instances for client and server contexts
-    private static serverInstance: AutoCorrectionService;
-    private static clientInstance: AutoCorrectionService;
+    private static serverInstance: AutoCorrectionService | undefined;
+    private static clientInstance: AutoCorrectionService | undefined;
 
     private constructor(isClient: boolean = false) {
         const context = isClient ? 'client' : 'server';
@@ -974,7 +975,7 @@ export class AutoCorrectionService {
      */
     private setupEventListeners(): void {
         // Listen for tool execution errors
-        EventBus.server.on(Events.Mcp.TOOL_ERROR, async (payload) => {
+        this.eventSubscriptions.push(EventBus.server.on(Events.Mcp.TOOL_ERROR, async (payload) => {
             if (!this.config.enabled) return;
 
             const { agentId, channelId, toolName, error, parameters } = payload;
@@ -982,7 +983,7 @@ export class AutoCorrectionService {
             
             // Auto-correction will be triggered by the ToolExecutionInterceptor
             // This listener is for monitoring and analytics
-        });
+        }));
 
     }
 
@@ -1078,5 +1079,23 @@ export class AutoCorrectionService {
         this.correctionAttempts.clear();
         this.retryTimers.forEach(timer => clearTimeout(timer));
         this.retryTimers.clear();
+    }
+
+    /** Cancel pending retries and detach this context from its event sources. */
+    public shutdown(): void {
+        this.clearCorrectionHistory();
+        for (const subscription of this.eventSubscriptions) {
+            subscription.unsubscribe();
+        }
+        this.eventSubscriptions.length = 0;
+        this.strategies.clear();
+        this.correctionEvents$.complete();
+
+        if (AutoCorrectionService.serverInstance === this) {
+            AutoCorrectionService.serverInstance = undefined;
+        }
+        if (AutoCorrectionService.clientInstance === this) {
+            AutoCorrectionService.clientInstance = undefined;
+        }
     }
 }

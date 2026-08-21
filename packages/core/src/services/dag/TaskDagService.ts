@@ -107,7 +107,7 @@ interface DagCacheEntry {
  * TaskDagService manages Task DAGs for all channels
  */
 export class TaskDagService {
-    private static instance: TaskDagService;
+    private static instance: TaskDagService | undefined;
     private logger: Logger;
     private enabled: boolean = false;
 
@@ -119,6 +119,7 @@ export class TaskDagService {
 
     // Cache cleanup interval
     private cleanupInterval: NodeJS.Timeout | null = null;
+    private shutdownComplete = false;
 
     private constructor() {
         this.logger = new Logger('info', 'TaskDagService', 'server');
@@ -133,6 +134,16 @@ export class TaskDagService {
             TaskDagService.instance = new TaskDagService();
         }
         return TaskDagService.instance;
+    }
+
+    /** Stop the live singleton without constructing one solely for teardown. */
+    public static shutdownExisting(): boolean {
+        const instance = TaskDagService.instance;
+        if (!instance) {
+            return false;
+        }
+        instance.shutdown();
+        return true;
     }
 
     /**
@@ -1048,12 +1059,20 @@ export class TaskDagService {
      * Shutdown the service
      */
     public shutdown(): void {
+        if (this.shutdownComplete) {
+            return;
+        }
+        this.shutdownComplete = true;
         if (this.cleanupInterval) {
             clearInterval(this.cleanupInterval);
             this.cleanupInterval = null;
         }
         this.channelLocks.clear();
         this.clearAllCaches();
+        this.enabled = false;
+        if (TaskDagService.instance === this) {
+            TaskDagService.instance = undefined;
+        }
         this.logger.info('TaskDagService shutdown complete');
     }
 }

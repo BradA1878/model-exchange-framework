@@ -12,51 +12,80 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
- *
- * @author Brad Anderson <BradA1878@pm.me>
- * @repository https://github.com/BradA1878/model-exchange-framework
- * @documentation https://mxf-dev.github.io/mxf/
  */
 
-/**
- * Task Completion Monitoring Service
- * 
- * Uses SystemLLM to intelligently monitor task progress and determine completion
- * Leverages existing planning tools and memory infrastructure
- */
-
+import { Subscription } from 'rxjs';
 import { Logger } from '@mxf-dev/core/utils/Logger';
 import { EventBus } from '@mxf-dev/core/events/EventBus';
 import { Events } from '@mxf-dev/core/events/EventNames';
 import { TaskEvents } from '@mxf-dev/core/events/event-definitions/TaskEvents';
-import { 
-    TaskCompletionConfig, 
-    TaskMonitoringState, 
-    CompletionStrategyType,
-    TaskCompletionEvent 
-} from '@mxf-dev/core/types/TaskCompletionTypes';
-import { TaskDocument } from '@mxf-dev/core/models/task';
-import { SystemLlmService } from './SystemLlmService';
-import { SystemLlmServiceManager } from './SystemLlmServiceManager';
-import { MemoryService } from '@mxf-dev/core/services/MemoryService';
-import { lastValueFrom } from 'rxjs';
+import type { PlanStepCompletedEventData } from '@mxf-dev/core/events/event-definitions/PlanEvents';
+import type {
+    AgentMessageDeliveredEventPayload,
+    BaseEventPayload,
+    McpToolResultEventPayload
+} from '@mxf-dev/core/schemas/EventPayloadSchema';
 import { createTaskEventPayload } from '@mxf-dev/core/schemas/EventPayloadSchema';
-import { v4 as uuidv4 } from 'uuid';
-import { PromptInput } from '@mxf-dev/core/types/LlmTypes';
+import {
+    CompletionStrategyType,
+    TaskCompletionConfig,
+    TaskCompletionEvent,
+    TaskMonitoringState
+} from '@mxf-dev/core/types/TaskCompletionTypes';
+import type { ChannelTask, TaskStatus } from '@mxf-dev/core/types/TaskTypes';
+import type { TaskDocument } from '@mxf-dev/core/models/task';
+import PlanModel from '@mxf-dev/core/models/plan';
+import { SystemLlmServiceManager } from './SystemLlmServiceManager';
 
+type MonitoredTask = TaskDocument | ChannelTask;
+
+export interface MonitoredTaskTransition {
+    taskId: string;
+    channelId: string;
+    status: Extract<TaskStatus, 'completed' | 'failed'>;
+    progress: number;
+    result: NonNullable<ChannelTask['result']>;
+}
+
+export type MonitoredTaskTransitionHandler = (
+    transition: MonitoredTaskTransition
+) => Promise<ChannelTask | null>;
+
+interface MonitoringEntry {
+    task: MonitoredTask;
+    config: TaskCompletionConfig;
+    state: TaskMonitoringState;
+    transition: MonitoredTaskTransitionHandler;
+    evaluating: boolean;
+    transitioning: boolean;
+}
+
+export interface TaskMonitoringStatus {
+    taskId: string;
+    channelId: string;
+    active: boolean;
+    startTime?: number;
+    lastActivityTime?: number;
+    activityCount?: number;
+    evaluationCount?: number;
+    strategy?: CompletionStrategyType;
+}
+
+/**
+ * Monitors configured tasks and asks TaskService to make an atomic persistent
+ * terminal transition before announcing completion. Every runtime key includes
+ * the authenticated channel, because task ids alone are not tenant identities.
+ */
 export class TaskCompletionMonitoringService {
-    private static instance: TaskCompletionMonitoringService;
-    private logger: Logger;
-    private monitoringStates: Map<string, TaskMonitoringState>;
-    private monitoringIntervals: Map<string, NodeJS.Timeout>;
-    private taskConfigs: Map<string, TaskCompletionConfig>;
+    private static instance: TaskCompletionMonitoringService | undefined;
+    private readonly logger = new Logger('debug', 'TaskCompletionMonitoring', 'server');
+    private readonly entries = new Map<string, MonitoringEntry>();
+    private readonly monitoringIntervals = new Map<string, ReturnType<typeof setInterval>>();
+    private eventSubscriptions: Subscription[] = [];
+    private listenersInitialized = false;
+    private shutdownComplete = false;
 
     private constructor() {
-        this.logger = new Logger('debug', 'TaskCompletionMonitoring', 'server');
-        this.monitoringStates = new Map();
-        this.monitoringIntervals = new Map();
-        this.taskConfigs = new Map();
-        
         this.setupEventListeners();
     }
 
@@ -67,397 +96,503 @@ export class TaskCompletionMonitoringService {
         return TaskCompletionMonitoringService.instance;
     }
 
-    /**
-     * Start monitoring a task for completion
-     */
-    public startMonitoring(task: TaskDocument, config: TaskCompletionConfig): void {
-        // Check if monitoring is disabled
+    /** Stop the live monitor without constructing one solely for teardown. */
+    public static shutdownExisting(): boolean {
+        if (!TaskCompletionMonitoringService.instance) {
+            return false;
+        }
+        TaskCompletionMonitoringService.instance.shutdown();
+        return true;
+    }
+
+    private monitoringKey(channelId: string, taskId: string): string {
+        if (channelId.trim().length === 0 || taskId.trim().length === 0) {
+            throw new Error('channelId and taskId are required for task monitoring');
+        }
+        return `${channelId}\0${taskId}`;
+    }
+
+    public startMonitoring(
+        task: MonitoredTask,
+        config: TaskCompletionConfig,
+        transition: MonitoredTaskTransitionHandler
+    ): void {
+        if (this.shutdownComplete || TaskCompletionMonitoringService.instance !== this) {
+            throw new Error('TaskCompletionMonitoringService has been shut down');
+        }
         if (config.enabled === false) {
             return;
         }
-        
-        
-        // Initialize monitoring state
+        if (!task.id || !task.channelId) {
+            throw new Error('Persisted task id and channelId are required for monitoring');
+        }
+
+        this.assertValidConfig(config);
+        this.setupEventListeners();
+
+        const key = this.monitoringKey(task.channelId, task.id);
+        if (this.entries.get(key)?.transitioning) {
+            throw new Error(`Task ${task.id} already has a terminal transition in progress`);
+        }
+        this.stopMonitoring(task.channelId, task.id);
+
+        const assignedAgentIds = Array.from(new Set([
+            ...(task.assignedAgentIds ?? []),
+            ...(task.assignedAgentId ? [task.assignedAgentId] : [])
+        ]));
+        const agentActivity = new Map<string, {
+            messageCount: number;
+            toolCallCount: number;
+            lastActive: number;
+        }>();
+        for (const agentId of assignedAgentIds) {
+            agentActivity.set(agentId, { messageCount: 0, toolCallCount: 0, lastActive: 0 });
+        }
+
+        const now = Date.now();
         const state: TaskMonitoringState = {
             taskId: task.id,
-            startTime: Date.now(),
-            lastActivityTime: Date.now(),
+            channelId: task.channelId,
+            assignedAgentIds,
+            startTime: now,
+            lastActivityTime: now,
             activityCount: 0,
-            evidence: {
-                messages: [],
-                toolCalls: [],
-                planProgress: undefined
-            },
+            evidence: { messages: [], toolCalls: [], planProgress: undefined },
             evaluations: [],
-            agentActivity: new Map()
+            agentActivity
         };
-        
-        this.monitoringStates.set(task.id, state);
-        this.taskConfigs.set(task.id, config);
-        
-        // Start evaluation based on primary strategy
-        this.startEvaluationLoop(task, config);
+
+        this.entries.set(key, {
+            task,
+            config,
+            state,
+            transition,
+            evaluating: false,
+            transitioning: false
+        });
+        this.startEvaluationLoop(key);
     }
 
-    /**
-     * Stop monitoring a task
-     */
-    public stopMonitoring(taskId: string): void {
-        
-        const interval = this.monitoringIntervals.get(taskId);
+    public stopMonitoring(channelId: string, taskId: string): void {
+        const key = this.monitoringKey(channelId, taskId);
+        const interval = this.monitoringIntervals.get(key);
         if (interval) {
             clearInterval(interval);
-            this.monitoringIntervals.delete(taskId);
+            this.monitoringIntervals.delete(key);
         }
-        
-        this.monitoringStates.delete(taskId);
-        this.taskConfigs.delete(taskId);
+        this.entries.delete(key);
     }
 
-    /**
-     * Setup event listeners for tracking agent activity
-     */
+    public getMonitoringStatus(channelId: string, taskId: string): TaskMonitoringStatus {
+        const entry = this.entries.get(this.monitoringKey(channelId, taskId));
+        if (!entry) {
+            return { taskId, channelId, active: false };
+        }
+        return {
+            taskId,
+            channelId,
+            active: true,
+            startTime: entry.state.startTime,
+            lastActivityTime: entry.state.lastActivityTime,
+            activityCount: entry.state.activityCount,
+            evaluationCount: entry.state.evaluations.length,
+            strategy: entry.config.primary.type
+        };
+    }
+
+    /** Dispose this service's own timers and EventBus subscriptions. */
+    public shutdown(): void {
+        if (this.shutdownComplete) {
+            return;
+        }
+        this.shutdownComplete = true;
+        for (const interval of this.monitoringIntervals.values()) {
+            clearInterval(interval);
+        }
+        this.monitoringIntervals.clear();
+        this.entries.clear();
+        for (const subscription of this.eventSubscriptions) {
+            subscription.unsubscribe();
+        }
+        this.eventSubscriptions = [];
+        this.listenersInitialized = false;
+        if (TaskCompletionMonitoringService.instance === this) {
+            TaskCompletionMonitoringService.instance = undefined;
+        }
+    }
+
+    public assertValidConfig(config: TaskCompletionConfig): void {
+        const primary = config.primary;
+        switch (primary.type) {
+            case 'plan-based':
+                if (!primary.planId || primary.planId.trim().length === 0) {
+                    throw new Error('planId is required for plan-based monitoring');
+                }
+                if (primary.completionType === 'percentage' &&
+                    (primary.percentage === undefined || primary.percentage < 0 || primary.percentage > 100)) {
+                    throw new Error('percentage must be between 0 and 100');
+                }
+                break;
+            case 'systemllm-eval':
+                if (primary.objectives.length === 0 || primary.evaluationInterval <= 0) {
+                    throw new Error('SystemLLM monitoring requires objectives and a positive evaluationInterval');
+                }
+                if (!Number.isInteger(primary.maxEvaluations) || primary.maxEvaluations < 1) {
+                    throw new Error('SystemLLM monitoring requires a positive maxEvaluations budget');
+                }
+                if (primary.confidenceThreshold < 0 || primary.confidenceThreshold > 1) {
+                    throw new Error('SystemLLM confidenceThreshold must be between 0 and 1');
+                }
+                break;
+            case 'output-based':
+                if (primary.requiredOutputs.length === 0 ||
+                    primary.requiredOutputs.some(output => !['message', 'tool_call'].includes(output.type))) {
+                    throw new Error('Output monitoring requires at least one message or tool_call output');
+                }
+                for (const output of primary.requiredOutputs) {
+                    if (output.pattern !== undefined) {
+                        if (output.pattern.length === 0 || output.pattern.length > 256) {
+                            throw new Error('Output patterns must contain between 1 and 256 characters');
+                        }
+                        try {
+                            new RegExp(output.pattern);
+                        } catch (error) {
+                            throw new Error(`Invalid output pattern ${output.pattern}: ${String(error)}`);
+                        }
+                    }
+                    if (output.count !== undefined &&
+                        (!Number.isInteger(output.count) || output.count < 1)) {
+                        throw new Error('Output counts must be positive integers');
+                    }
+                }
+                break;
+            case 'time-based':
+                if (primary.maximumDuration <= 0) {
+                    throw new Error('maximumDuration must be positive');
+                }
+                break;
+            case 'event-based':
+            case 'consensus':
+            case 'custom':
+                throw new Error(`Completion strategy ${primary.type} is not implemented`);
+        }
+        if (config.absoluteTimeout !== undefined && config.absoluteTimeout <= 0) {
+            throw new Error('absoluteTimeout must be positive');
+        }
+        if (config.absoluteTimeout !== undefined && config.timeoutBehavior !== 'fail') {
+            throw new Error('absoluteTimeout requires timeoutBehavior=fail');
+        }
+    }
+
     private setupEventListeners(): void {
-        // Track agent messages
-        EventBus.server.on(Events.Message.AGENT_MESSAGE_DELIVERED, (payload: any) => {
-            const { data } = payload;
-            const taskId = this.findTaskForAgent(data.fromAgentId, data.channelId);
-            if (taskId) {
-                this.recordAgentMessage(taskId, data.fromAgentId, data.content);
-            }
-        });
-
-        // Track tool calls
-        EventBus.server.on('tool:executed', (payload: any) => {
-            const { agentId, tool, result } = payload.data;
-            const taskId = this.findTaskForAgent(agentId, payload.channelId);
-            if (taskId) {
-                this.recordToolCall(taskId, agentId, tool, result);
-            }
-        });
-
-        // Track plan updates
-        EventBus.server.on('plan:step_completed', (payload: any) => {
-            const { planId, stepId } = payload.data;
-            this.updatePlanProgress(planId, stepId);
-        });
-    }
-
-    /**
-     * Start the evaluation loop based on strategy
-     */
-    private startEvaluationLoop(task: TaskDocument, config: TaskCompletionConfig): void {
-        let interval = 30000; // Default 30 seconds
-        
-        // Determine evaluation interval based on strategy
-        if (config.primary.type === 'systemllm-eval') {
-            interval = config.primary.evaluationInterval;
-        } else if (config.primary.type === 'time-based') {
-            interval = Math.min(10000, config.primary.maximumDuration / 10);
+        if (this.listenersInitialized) {
+            return;
         }
-        
-        const evaluationInterval = setInterval(async () => {
-            await this.evaluateTaskCompletion(task, config);
-        }, interval);
-        
-        this.monitoringIntervals.set(task.id, evaluationInterval);
-        
-        // Run first evaluation immediately
-        this.evaluateTaskCompletion(task, config);
+
+        try {
+            this.eventSubscriptions.push(
+                EventBus.server.on(Events.Message.AGENT_MESSAGE_DELIVERED, payload => {
+                const event = payload as unknown as AgentMessageDeliveredEventPayload;
+                const agentId = event.data?.fromAgentId;
+                if (typeof agentId !== 'string' || typeof event.channelId !== 'string') {
+                    return;
+                }
+                const key = this.findTaskForAgent(agentId, event.channelId);
+                if (key) {
+                    this.recordAgentMessage(key, agentId, String(event.data.content));
+                }
+                })
+            );
+            this.eventSubscriptions.push(
+                EventBus.server.on(Events.Mcp.TOOL_RESULT, payload => {
+                const event = payload as McpToolResultEventPayload;
+                if (typeof event.agentId !== 'string' || typeof event.channelId !== 'string' ||
+                    typeof event.data?.toolName !== 'string') {
+                    return;
+                }
+                const key = this.findTaskForAgent(event.agentId, event.channelId);
+                if (key) {
+                    this.recordToolCall(key, event.agentId, event.data.toolName, event.data.result);
+                }
+                })
+            );
+            this.eventSubscriptions.push(
+                EventBus.server.on(Events.Plan.PLAN_STEP_COMPLETED, payload => {
+                const event = payload as BaseEventPayload<PlanStepCompletedEventData>;
+                if (typeof event.channelId !== 'string' || typeof event.data?.planId !== 'string' ||
+                    typeof event.data.stepId !== 'string') {
+                    return;
+                }
+                this.updatePlanProgress(event.channelId, event.data.planId, event.data.stepId);
+                })
+            );
+            this.listenersInitialized = true;
+        } catch (error) {
+            for (const subscription of this.eventSubscriptions) {
+                subscription.unsubscribe();
+            }
+            this.eventSubscriptions = [];
+            throw error;
+        }
     }
 
-    /**
-     * Evaluate if task should be completed
-     */
-    private async evaluateTaskCompletion(task: TaskDocument, config: TaskCompletionConfig): Promise<void> {
-        const state = this.monitoringStates.get(task.id);
-        if (!state) return;
-        
-        
-        let isComplete = false;
-        let confidence = 0;
-        let reason = '';
-        
-        // Evaluate based on primary strategy
+    private startEvaluationLoop(key: string): void {
+        const entry = this.entries.get(key);
+        if (!entry) {
+            throw new Error(`Monitoring entry ${key} was not initialized`);
+        }
+
+        let intervalMs = 30_000;
+        if (entry.config.primary.type === 'systemllm-eval') {
+            intervalMs = entry.config.primary.evaluationInterval;
+        } else if (entry.config.primary.type === 'time-based') {
+            intervalMs = Math.max(1, Math.min(10_000, entry.config.primary.maximumDuration / 10));
+        }
+
+        const interval = setInterval(() => {
+            void this.runEvaluation(key).catch(error => {
+                this.logger.error(`Task monitoring evaluation failed for ${key}: ${String(error)}`);
+            });
+        }, intervalMs);
+        interval.unref?.();
+        this.monitoringIntervals.set(key, interval);
+
+        void this.runEvaluation(key).catch(error => {
+            this.logger.error(`Initial task monitoring evaluation failed for ${key}: ${String(error)}`);
+        });
+    }
+
+    private async runEvaluation(key: string): Promise<void> {
+        const entry = this.entries.get(key);
+        if (!entry || entry.evaluating || entry.transitioning) {
+            return;
+        }
+        entry.evaluating = true;
+        try {
+            await this.evaluateTaskCompletion(key, entry);
+        } catch (error) {
+            if (this.entries.get(key) === entry) {
+                const message = error instanceof Error ? error.message : String(error);
+                await this.transitionTask(
+                    key,
+                    entry,
+                    'failed',
+                    entry.config.primary.type,
+                    `Completion evaluation failed: ${message}`,
+                    0
+                );
+            }
+        } finally {
+            const current = this.entries.get(key);
+            if (current === entry) {
+                current.evaluating = false;
+            }
+        }
+    }
+
+    private async evaluateTaskCompletion(key: string, entry: MonitoringEntry): Promise<void> {
+        const { task, config, state } = entry;
+        let result: { complete: boolean; confidence: number; reason: string };
+
         switch (config.primary.type) {
             case 'plan-based':
-                const planResult = await this.evaluatePlanBasedCompletion(task, config.primary, state);
-                isComplete = planResult.complete;
-                confidence = planResult.confidence;
-                reason = planResult.reason;
+                result = await this.evaluatePlanBasedCompletion(task, config.primary, state);
                 break;
-                
             case 'systemllm-eval':
-                const llmResult = await this.evaluateSystemLLMCompletion(task, config.primary, state);
-                isComplete = llmResult.complete;
-                confidence = llmResult.confidence;
-                reason = llmResult.reason;
+                result = await this.evaluateSystemLLMCompletion(task, config.primary, state);
                 break;
-                
             case 'output-based':
-                const outputResult = this.evaluateOutputBasedCompletion(task, config.primary, state);
-                isComplete = outputResult.complete;
-                confidence = outputResult.confidence;
-                reason = outputResult.reason;
+                result = this.evaluateOutputBasedCompletion(config.primary, state);
                 break;
-                
             case 'time-based':
-                const timeResult = this.evaluateTimeBasedCompletion(task, config.primary, state);
-                isComplete = timeResult.complete;
-                confidence = timeResult.confidence;
-                reason = timeResult.reason;
+                result = this.evaluateTimeBasedCompletion(config.primary, state);
                 break;
+            case 'event-based':
+            case 'consensus':
+            case 'custom':
+                throw new Error(`Completion strategy ${config.primary.type} is not implemented`);
         }
-        
-        // Record evaluation
+
+        // A config update or shutdown may have replaced this entry while an
+        // asynchronous plan/LLM evaluation was running. Stale generations must
+        // never transition the newly configured task.
+        if (this.entries.get(key) !== entry) {
+            return;
+        }
+
         state.evaluations.push({
             timestamp: Date.now(),
             strategy: config.primary.type,
-            result: isComplete,
-            confidence,
-            reason
+            result: result.complete,
+            confidence: result.confidence,
+            reason: result.reason
         });
-        
-        // Complete task if criteria met
-        if (isComplete && confidence >= (config.primary.type === 'systemllm-eval' ? config.primary.confidenceThreshold : 0.8)) {
-            await this.completeTask(task, state, config.primary.type, reason);
+
+        const threshold = config.primary.type === 'systemllm-eval'
+            ? config.primary.confidenceThreshold
+            : 0.8;
+        if (result.complete && result.confidence >= threshold) {
+            await this.transitionTask(key, entry, 'completed', config.primary.type, result.reason, result.confidence);
+            return;
         }
-        
-        // Check absolute timeout
-        if (config.absoluteTimeout && Date.now() - state.startTime > config.absoluteTimeout) {
-            const timeoutReason = `Absolute timeout reached (${config.absoluteTimeout}ms)`;
-            if (config.timeoutBehavior === 'complete') {
-                await this.completeTask(task, state, 'time-based', timeoutReason);
-            } else if (config.timeoutBehavior === 'fail') {
-                await this.failTask(task, state, timeoutReason);
-            }
+
+        if (config.primary.type === 'systemllm-eval' &&
+            state.evaluations.length >= config.primary.maxEvaluations) {
+            await this.transitionTask(
+                key,
+                entry,
+                'failed',
+                config.primary.type,
+                `SystemLLM evaluation budget exhausted after ${state.evaluations.length} attempts`,
+                result.confidence
+            );
+            return;
+        }
+
+        if (config.absoluteTimeout !== undefined && Date.now() - state.startTime > config.absoluteTimeout) {
+            const reason = `Absolute timeout reached (${config.absoluteTimeout}ms)`;
+            await this.transitionTask(key, entry, 'failed', config.primary.type, reason, 1);
         }
     }
 
-    /**
-     * Evaluate plan-based completion
-     */
     private async evaluatePlanBasedCompletion(
-        task: TaskDocument, 
-        criteria: any, 
+        task: MonitoredTask,
+        criteria: Extract<TaskCompletionConfig['primary'], { type: 'plan-based' }>,
         state: TaskMonitoringState
     ): Promise<{ complete: boolean; confidence: number; reason: string }> {
-        // Get plan from channel memory
-        const memoryService = MemoryService.getInstance();
-        const channelMemoryObs = memoryService.getChannelMemory(task.channelId);
-        const channelMemory = await lastValueFrom(channelMemoryObs);
-        const plan = channelMemory?.customData?.[`plan:${criteria.planId}`];
-        
-        if (!plan || !plan.items) {
-            return { complete: false, confidence: 0, reason: 'Plan not found' };
+        const plan = await PlanModel.findOne({ planId: criteria.planId, channelId: task.channelId });
+        if (!plan || plan.items.length === 0) {
+            return { complete: false, confidence: 0, reason: 'Plan not found or contains no steps' };
         }
-        
-        const completedSteps = plan.items.filter((item: any) => item.status === 'completed');
-        const criticalSteps = plan.items.filter((item: any) => item.critical);
-        const criticalCompleted = criticalSteps.filter((item: any) => item.status === 'completed');
-        
+
+        const completedSteps = plan.items.filter(item => item.status === 'completed');
+        const criticalSteps = plan.items.filter(item => item.priority === 'high');
+        const criticalCompleted = criticalSteps.filter(item => item.status === 'completed');
         state.evidence.planProgress = {
-            completedSteps: completedSteps.map((s: any) => s.id),
+            completedSteps: completedSteps.map(step => step.id),
             totalSteps: plan.items.length,
             criticalStepsCompleted: criticalCompleted.length
         };
-        
-        switch (criteria.completionType) {
-            case 'all_steps':
-                const allComplete = completedSteps.length === plan.items.length;
-                return {
-                    complete: allComplete,
-                    confidence: allComplete ? 1.0 : completedSteps.length / plan.items.length,
-                    reason: `${completedSteps.length}/${plan.items.length} steps completed`
-                };
-                
-            case 'critical_steps':
-                const criticalComplete = criticalCompleted.length === criticalSteps.length;
-                return {
-                    complete: criticalComplete,
-                    confidence: criticalComplete ? 1.0 : criticalCompleted.length / criticalSteps.length,
-                    reason: `${criticalCompleted.length}/${criticalSteps.length} critical steps completed`
-                };
-                
-            case 'percentage':
-                const percentage = (completedSteps.length / plan.items.length) * 100;
-                const targetMet = percentage >= (criteria.percentage || 100);
-                return {
-                    complete: targetMet,
-                    confidence: percentage / 100,
-                    reason: `${percentage.toFixed(1)}% of steps completed`
-                };
+
+        if (criteria.completionType === 'all_steps') {
+            const complete = completedSteps.length === plan.items.length;
+            return {
+                complete,
+                confidence: completedSteps.length / plan.items.length,
+                reason: `${completedSteps.length}/${plan.items.length} steps completed`
+            };
         }
-        
-        return { complete: false, confidence: 0, reason: 'Unknown completion type' };
+        if (criteria.completionType === 'critical_steps') {
+            if (criticalSteps.length === 0) {
+                return { complete: false, confidence: 0, reason: 'Plan contains no critical steps' };
+            }
+            const complete = criticalCompleted.length === criticalSteps.length;
+            return {
+                complete,
+                confidence: criticalCompleted.length / criticalSteps.length,
+                reason: `${criticalCompleted.length}/${criticalSteps.length} critical steps completed`
+            };
+        }
+
+        const percentage = (completedSteps.length / plan.items.length) * 100;
+        return {
+            complete: percentage >= (criteria.percentage ?? 100),
+            confidence: percentage / 100,
+            reason: `${percentage.toFixed(1)}% of steps completed`
+        };
     }
 
-    /**
-     * Evaluate using SystemLLM (uses per-channel instance from SystemLlmServiceManager)
-     */
     private async evaluateSystemLLMCompletion(
-        task: TaskDocument, 
-        criteria: any, 
+        task: MonitoredTask,
+        criteria: Extract<TaskCompletionConfig['primary'], { type: 'systemllm-eval' }>,
         state: TaskMonitoringState
     ): Promise<{ complete: boolean; confidence: number; reason: string }> {
-        // Get the per-channel SystemLlmService instance
         const systemLlm = SystemLlmServiceManager.getInstance().getServiceForChannel(task.channelId);
         if (!systemLlm) {
-            return { complete: false, confidence: 0, reason: 'SystemLLM not available for channel' };
+            throw new Error(`SystemLLM is unavailable for channel ${task.channelId}`);
         }
-        
-        // Build context for LLM evaluation
-        const context = {
-            task: {
-                title: task.title,
-                description: task.description,
-                objectives: criteria.objectives,
-                assignedAgents: task.assignedAgentIds
-            },
-            evidence: {
-                duration: Date.now() - state.startTime,
-                messageCount: state.evidence.messages.length,
-                toolCallCount: state.evidence.toolCalls.length,
-                activeAgents: Array.from(state.agentActivity.keys()),
-                recentMessages: state.evidence.messages.slice(-10),
-                recentTools: state.evidence.toolCalls.slice(-10),
-                planProgress: state.evidence.planProgress
+
+        const prompt = `Evaluate whether every objective for this task is complete.\n\n` +
+            `Task: ${task.title}\nDescription: ${task.description}\n` +
+            `Objectives:\n${criteria.objectives.map(objective => `- ${objective}`).join('\n')}\n\n` +
+            `Evidence: ${state.evidence.messages.length} messages, ` +
+            `${state.evidence.toolCalls.length} tool calls.\n` +
+            'Respond exactly as: <complete>YES/NO</complete> ' +
+            '<confidence>0.X</confidence> <reason>Brief explanation</reason>';
+
+        const response = await systemLlm.sendLlmRequest(
+            prompt,
+            undefined,
+            {
+                model: systemLlm.getModelForOperation('reasoning'),
+                operationType: 'reasoning',
+                temperature: 0.3,
+                maxTokens: 200
             }
-        };
-        
-        const prompt = `Evaluate if this task is complete based on the objectives and evidence.
-
-Task: ${task.title}
-Description: ${task.description}
-
-Objectives that must be met:
-${criteria.objectives.map((o: string) => `- ${o}`).join('\n')}
-
-Evidence of progress:
-- Duration: ${Math.round(context.evidence.duration / 1000)}s
-- Messages sent: ${context.evidence.messageCount}
-- Tools used: ${context.evidence.toolCallCount}
-- Active agents: ${context.evidence.activeAgents.join(', ')}
-
-Recent activity:
-${context.evidence.recentMessages.map((m: any) => `- ${m.agentId}: ${m.content.substring(0, 100)}...`).join('\n')}
-
-Based on this evidence, are ALL objectives complete? Respond with:
-1. YES/NO
-2. Confidence (0-1)
-3. Brief reason
-
-Format: <complete>YES/NO</complete> <confidence>0.X</confidence> <reason>...</reason>`;
-
-        try {
-            // Use SystemLLM's processPrompt method for evaluation
-            const promptInput: PromptInput = {
-                prompt: prompt,
-                systemPrompt: 'You are a task completion evaluator. Analyze if the task objectives have been met based on the evidence. Respond EXACTLY in this format: <complete>YES/NO</complete> <confidence>0.X</confidence> <reason>Brief explanation</reason>',
-                options: {
-                    temperature: 0.3,
-                    maxTokens: 200
-                }
-            };
-            
-            // Call the private processPrompt method using bind to access it
-            const processPromptMethod = (systemLlm as any).processPrompt.bind(systemLlm);
-            const responseObservable = processPromptMethod(promptInput);
-            
-            const responseText = await lastValueFrom(responseObservable);
-            
-            // Parse response (ensure responseText is a string)
-            const responseStr = String(responseText);
-            const completeMatch = responseStr.match(/<complete>(YES|NO)<\/complete>/);
-            const confidenceMatch = responseStr.match(/<confidence>([\d.]+)<\/confidence>/);
-            const reasonMatch = responseStr.match(/<reason>(.*?)<\/reason>/s);
-            
-            return {
-                complete: completeMatch?.[1] === 'YES',
-                confidence: parseFloat(confidenceMatch?.[1] || '0'),
-                reason: reasonMatch?.[1] || 'No reason provided'
-            };
-        } catch (error) {
-            this.logger.error(`SystemLLM evaluation failed: ${error}`);
-            return { complete: false, confidence: 0, reason: 'Evaluation error' };
+        );
+        const parsed = response.trim().match(
+            /^<complete>(YES|NO)<\/complete>\s*<confidence>([^<]+)<\/confidence>\s*<reason>(.+)<\/reason>$/s
+        );
+        if (!parsed) {
+            throw new Error('SystemLLM completion response did not match the required format');
         }
+        const confidence = Number(parsed[2]);
+        if (!Number.isFinite(confidence) || confidence < 0 || confidence > 1) {
+            throw new Error('SystemLLM completion confidence must be between 0 and 1');
+        }
+        const reason = parsed[3].trim();
+        if (reason.length === 0) {
+            throw new Error('SystemLLM completion response requires a reason');
+        }
+        return {
+            complete: parsed[1] === 'YES',
+            confidence,
+            reason
+        };
     }
 
-    /**
-     * Evaluate output-based completion
-     */
     private evaluateOutputBasedCompletion(
-        task: TaskDocument, 
-        criteria: any, 
+        criteria: Extract<TaskCompletionConfig['primary'], { type: 'output-based' }>,
         state: TaskMonitoringState
     ): { complete: boolean; confidence: number; reason: string } {
-        const requiredOutputs = criteria.requiredOutputs || [];
         let metCount = 0;
-        
-        for (const required of requiredOutputs) {
-            let found = 0;
-            
-            if (required.type === 'message') {
-                found = state.evidence.messages.filter((m: any) => 
-                    !required.pattern || new RegExp(required.pattern).test(m.content)
-                ).length;
-            } else if (required.type === 'tool_call') {
-                found = state.evidence.toolCalls.filter((t: any) => 
-                    !required.pattern || new RegExp(required.pattern).test(t.toolName)
-                ).length;
-            }
-            
-            if (found >= (required.count || 1)) {
-                metCount++;
+        for (const required of criteria.requiredOutputs) {
+            const pattern = required.pattern ? new RegExp(required.pattern) : undefined;
+            const found = required.type === 'message'
+                ? state.evidence.messages.filter(message => !pattern || pattern.test(message.content)).length
+                : state.evidence.toolCalls.filter(call => !pattern || pattern.test(call.toolName)).length;
+            if (found >= (required.count ?? 1)) {
+                metCount += 1;
             }
         }
-        
-        const allMet = metCount === requiredOutputs.length;
+        const confidence = metCount / criteria.requiredOutputs.length;
         return {
-            complete: allMet,
-            confidence: requiredOutputs.length > 0 ? metCount / requiredOutputs.length : 0,
-            reason: `${metCount}/${requiredOutputs.length} required outputs found`
+            complete: metCount === criteria.requiredOutputs.length,
+            confidence,
+            reason: `${metCount}/${criteria.requiredOutputs.length} required outputs found`
         };
     }
 
-    /**
-     * Evaluate time-based completion
-     */
     private evaluateTimeBasedCompletion(
-        task: TaskDocument, 
-        criteria: any, 
+        criteria: Extract<TaskCompletionConfig['primary'], { type: 'time-based' }>,
         state: TaskMonitoringState
     ): { complete: boolean; confidence: number; reason: string } {
         const elapsed = Date.now() - state.startTime;
         const inactiveTime = Date.now() - state.lastActivityTime;
-        
-        // Check minimum duration
-        if (criteria.minimumDuration && elapsed < criteria.minimumDuration) {
+        if (criteria.minimumDuration !== undefined && elapsed < criteria.minimumDuration) {
             return {
                 complete: false,
                 confidence: elapsed / criteria.minimumDuration,
                 reason: `Minimum duration not met (${elapsed}ms < ${criteria.minimumDuration}ms)`
             };
         }
-        
-        // Check maximum duration
         if (elapsed >= criteria.maximumDuration) {
             if (criteria.requireActivity && state.activityCount === 0) {
-                return {
-                    complete: false,
-                    confidence: 0,
-                    reason: 'No activity detected'
-                };
+                return { complete: false, confidence: 0, reason: 'No activity detected' };
             }
-            return {
-                complete: true,
-                confidence: 1.0,
-                reason: `Maximum duration reached (${elapsed}ms)`
-            };
+            return { complete: true, confidence: 1, reason: `Maximum duration reached (${elapsed}ms)` };
         }
-        
-        // Check for inactivity completion
-        const inactivityThreshold = criteria.maximumDuration / 4; // 25% of max duration
+        const inactivityThreshold = criteria.maximumDuration / 4;
         if (inactiveTime > inactivityThreshold && state.activityCount > 0) {
             return {
                 complete: true,
@@ -465,190 +600,154 @@ Format: <complete>YES/NO</complete> <confidence>0.X</confidence> <reason>...</re
                 reason: `Inactive for ${inactiveTime}ms after ${state.activityCount} activities`
             };
         }
-        
         return {
             complete: false,
             confidence: elapsed / criteria.maximumDuration,
-            reason: `Elapsed: ${elapsed}ms, Inactive: ${inactiveTime}ms`
+            reason: `Elapsed: ${elapsed}ms, inactive: ${inactiveTime}ms`
         };
     }
 
-    /**
-     * Complete a task
-     */
-    private async completeTask(
-        task: TaskDocument, 
-        state: TaskMonitoringState, 
+    private async transitionTask(
+        key: string,
+        entry: MonitoringEntry,
+        status: Extract<TaskStatus, 'completed' | 'failed'>,
         strategy: CompletionStrategyType,
-        reason: string
+        reason: string,
+        confidence: number
     ): Promise<void> {
-        
-        // Stop monitoring
-        this.stopMonitoring(task.id);
-        
-        // Emit completion event
+        if (entry.transitioning) {
+            return;
+        }
+        entry.transitioning = true;
+
         const completionEvent: TaskCompletionEvent = {
-            taskId: task.id,
+            taskId: entry.task.id,
             completedBy: 'system',
             completionStrategy: strategy,
-            evidence: state.evidence,
-            confidence: 1.0,
+            evidence: entry.state.evidence,
+            confidence,
             reason,
-            duration: Date.now() - state.startTime
+            duration: Date.now() - entry.state.startTime
         };
-        
-        // Ensure task has all required fields for the event payload
-        const completeTask = {
-            id: task.id,
-            channelId: task.channelId,
-            title: task.title || 'Untitled Task',
-            description: task.description || '',
-            status: 'completed' as const,
-            priority: task.priority || 'medium',
-            assignmentScope: task.assignmentScope || 'single',
-            assignedAgentIds: task.assignedAgentIds || [],
-            assignmentStrategy: task.assignmentStrategy || 'manual',
-            coordinationMode: task.coordinationMode || 'collaborative',
-            createdBy: task.createdBy || 'system',
-            createdAt: task.createdAt || Date.now(),
-            updatedAt: Date.now(),
-            progress: 100,
-            metadata: task.metadata || {},
-            tags: task.tags || [],
-            result: {
-                summary: `Task automatically completed: ${reason}`,
-                completionEvent
+        const result: NonNullable<ChannelTask['result']> = status === 'completed'
+            ? {
+                success: true,
+                output: { summary: `Task automatically completed: ${reason}`, completionEvent },
+                completedAt: Date.now(),
+                completedBy: 'system'
             }
-        };
-        
-        // Emit task completion using existing event
-        const payload = createTaskEventPayload(
-            TaskEvents.COMPLETED,
-            'system',
-            task.channelId,
-            {
-                taskId: task.id,
-                fromAgentId: 'system',
-                toAgentId: 'system',
-                task: completeTask
-            }
-        );
-        
-        EventBus.server.emit(TaskEvents.COMPLETED, payload);
-    }
+            : {
+                success: false,
+                error: reason,
+                completedAt: Date.now(),
+                completedBy: 'system'
+            };
 
-    /**
-     * Fail a task
-     */
-    private async failTask(task: TaskDocument, state: TaskMonitoringState, reason: string): Promise<void> {
-        this.logger.error(`❌ Failing task ${task.id}: ${reason}`);
-        
-        // Stop monitoring
-        this.stopMonitoring(task.id);
-        
-        // Emit failure event
-        const payload = createTaskEventPayload(
-            TaskEvents.FAILED,
-            'system',
-            task.channelId,
-            {
-                taskId: task.id,
-                fromAgentId: 'system',
-                toAgentId: 'system',
-                task: {
-                    channelId: task.channelId,
-                    id: task.id,
-                    title: task.title,
-                    description: task.description,
-                    status: 'failed',
-                    error: reason
+        try {
+            const updatedTask = await entry.transition({
+                taskId: entry.task.id,
+                channelId: entry.task.channelId,
+                status,
+                progress: status === 'completed' ? 100 : entry.task.progress ?? 0,
+                result
+            });
+            if (!updatedTask) {
+                if (this.entries.get(key) === entry) {
+                    this.stopMonitoring(entry.task.channelId, entry.task.id);
                 }
+                return;
             }
-        );
-        
-        EventBus.server.emit(TaskEvents.FAILED, payload);
+
+            if (this.entries.get(key) !== entry) {
+                return;
+            }
+            this.stopMonitoring(entry.task.channelId, entry.task.id);
+            const targetAgentId = updatedTask.assignedAgentId ??
+                updatedTask.assignedAgentIds?.[0] ??
+                updatedTask.createdBy;
+            const eventName = status === 'completed' ? TaskEvents.COMPLETED : TaskEvents.FAILED;
+            EventBus.server.emit(
+                eventName,
+                createTaskEventPayload(eventName, 'system', updatedTask.channelId, {
+                    taskId: updatedTask.id,
+                    fromAgentId: 'system',
+                    toAgentId: targetAgentId,
+                    task: updatedTask
+                })
+            );
+        } finally {
+            const current = this.entries.get(key);
+            if (current === entry) {
+                current.transitioning = false;
+            }
+        }
     }
 
-    /**
-     * Record agent message
-     */
-    private recordAgentMessage(taskId: string, agentId: string, content: string): void {
-        const state = this.monitoringStates.get(taskId);
-        if (!state) return;
-        
-        state.evidence.messages.push({
-            agentId,
-            content,
-            timestamp: Date.now()
-        });
-        
-        state.lastActivityTime = Date.now();
-        state.activityCount++;
-        
-        // Update agent activity
-        const agentActivity = state.agentActivity.get(agentId) || {
-            messageCount: 0,
-            toolCallCount: 0,
-            lastActive: 0
-        };
-        agentActivity.messageCount++;
-        agentActivity.lastActive = Date.now();
-        state.agentActivity.set(agentId, agentActivity);
+    private recordAgentMessage(key: string, agentId: string, content: string): void {
+        const state = this.entries.get(key)?.state;
+        if (!state) {
+            return;
+        }
+        state.evidence.messages.push({ agentId, content, timestamp: Date.now() });
+        this.recordActivity(state, agentId, 'message');
     }
 
-    /**
-     * Record tool call
-     */
-    private recordToolCall(taskId: string, agentId: string, toolName: string, result: any): void {
-        const state = this.monitoringStates.get(taskId);
-        if (!state) return;
-        
-        state.evidence.toolCalls.push({
-            agentId,
-            toolName,
-            result,
-            timestamp: Date.now()
-        });
-        
-        state.lastActivityTime = Date.now();
-        state.activityCount++;
-        
-        // Update agent activity
-        const agentActivity = state.agentActivity.get(agentId) || {
-            messageCount: 0,
-            toolCallCount: 0,
-            lastActive: 0
-        };
-        agentActivity.toolCallCount++;
-        agentActivity.lastActive = Date.now();
-        state.agentActivity.set(agentId, agentActivity);
+    private recordToolCall(key: string, agentId: string, toolName: string, result: unknown): void {
+        const state = this.entries.get(key)?.state;
+        if (!state) {
+            return;
+        }
+        state.evidence.toolCalls.push({ agentId, toolName, result, timestamp: Date.now() });
+        this.recordActivity(state, agentId, 'tool');
     }
 
-    /**
-     * Update plan progress
-     */
-    private updatePlanProgress(planId: string, stepId: string): void {
-        // Find tasks monitoring this plan
-        for (const [taskId, config] of this.taskConfigs) {
-            if (config.primary.type === 'plan-based' && config.primary.planId === planId) {
-                const state = this.monitoringStates.get(taskId);
-                if (state && state.evidence.planProgress) {
-                    state.evidence.planProgress.completedSteps.push(stepId);
-                }
+    private recordActivity(state: TaskMonitoringState, agentId: string, kind: 'message' | 'tool'): void {
+        const now = Date.now();
+        state.lastActivityTime = now;
+        state.activityCount += 1;
+        const activity = state.agentActivity.get(agentId);
+        if (!activity) {
+            return;
+        }
+        if (kind === 'message') {
+            activity.messageCount += 1;
+        } else {
+            activity.toolCallCount += 1;
+        }
+        activity.lastActive = now;
+    }
+
+    private updatePlanProgress(channelId: string, planId: string, stepId: string): void {
+        for (const entry of this.entries.values()) {
+            if (entry.state.channelId !== channelId || entry.config.primary.type !== 'plan-based' ||
+                entry.config.primary.planId !== planId) {
+                continue;
+            }
+            const progress = entry.state.evidence.planProgress;
+            if (progress && !progress.completedSteps.includes(stepId)) {
+                progress.completedSteps.push(stepId);
             }
         }
     }
 
     /**
-     * Find task for an agent in a channel
+     * Activity events do not contain a task id. Attribute them only when exactly
+     * one monitored task in the exact channel is assigned to the agent; guessing
+     * among concurrent tasks would manufacture completion evidence.
      */
     private findTaskForAgent(agentId: string, channelId: string): string | null {
-        // This would query the task service - simplified for now
-        for (const [taskId, state] of this.monitoringStates) {
-            if (state.agentActivity.has(agentId)) {
-                return taskId;
+        const matches = Array.from(this.entries.entries())
+            .filter(([, entry]) => entry.state.channelId === channelId &&
+                entry.state.assignedAgentIds.includes(agentId));
+        if (matches.length !== 1) {
+            if (matches.length > 1) {
+                this.logger.warn(
+                    `Ignoring ambiguous activity for ${agentId} in ${channelId}: ` +
+                    `${matches.length} monitored tasks are assigned`
+                );
             }
+            return null;
         }
-        return null;
+        return matches[0][0];
     }
 }

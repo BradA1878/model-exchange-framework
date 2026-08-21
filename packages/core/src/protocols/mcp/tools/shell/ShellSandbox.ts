@@ -38,11 +38,11 @@
  * silent fallback to host execution.
  */
 
-import * as path from 'path';
 import crypto from 'crypto';
 import Docker from 'dockerode';
 import { Logger } from '../../../../utils/Logger.js';
 import { ContainerExecutionManager } from '../../../../services/ContainerExecutionManager.js';
+import { resolveWorkspacePath } from '../../security/McpToolPolicy.js';
 
 const logger = new Logger('info', 'ShellSandbox', 'server');
 
@@ -155,6 +155,10 @@ export async function executeInSandbox(
         ...DEFAULT_SHELL_SANDBOX_CONFIG,
         ...config
     };
+    const workspaceDirectory = resolveWorkspacePath(
+        options.workingDirectory,
+        'ShellSandbox workingDirectory'
+    );
 
     // Verify Docker is available — fail fast, never fall back to host execution
     const available = await isSandboxAvailable();
@@ -176,7 +180,7 @@ export async function executeInSandbox(
     }
 
     // Build Docker volume mounts
-    const binds = buildBindMounts(mergedConfig, options.workingDirectory);
+    const binds = buildBindMounts(mergedConfig, workspaceDirectory);
 
     // Build environment variables for the container
     const envVars = options.environment
@@ -184,9 +188,7 @@ export async function executeInSandbox(
         : [];
 
     // Determine the working directory inside the container
-    const containerWorkDir = options.workingDirectory
-        ? mapHostPathToContainer(options.workingDirectory)
-        : '/workspace';
+    const containerWorkDir = '/workspace';
 
     const containerId = `mxf-shell-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
     const timeout = options.timeout || 30000;
@@ -346,48 +348,28 @@ async function checkShellExecutorImageExists(): Promise<boolean> {
  */
 function buildBindMounts(
     config: ShellSandboxConfig,
-    workingDirectory?: string
+    workingDirectory: string
 ): string[] {
     const binds: string[] = [];
 
     // Mount the project directory (or working directory) as read-only at /workspace
-    const projectDir = workingDirectory || process.cwd();
+    const projectDir = resolveWorkspacePath(workingDirectory, 'ShellSandbox project mount');
     binds.push(`${projectDir}:/workspace:ro`);
 
     // Mount writable paths — each gets mounted at the same path inside the container
     for (const writablePath of config.writablePaths) {
-        binds.push(`${writablePath}:${writablePath}:rw`);
+        const hostPath = resolveWorkspacePath(writablePath, 'ShellSandbox writable mount');
+        binds.push(`${hostPath}:${hostPath}:rw`);
     }
 
     // Mount custom mount configurations
     for (const mount of config.mountPaths) {
         const mode = mount.readOnly ? 'ro' : 'rw';
-        binds.push(`${mount.host}:${mount.container}:${mode}`);
+        const hostPath = resolveWorkspacePath(mount.host, 'ShellSandbox custom mount');
+        binds.push(`${hostPath}:${mount.container}:${mode}`);
     }
 
     return binds;
-}
-
-/**
- * Map a host filesystem path to its corresponding container path.
- * The project root (process.cwd()) is mounted at /workspace, so subdirectories
- * are resolved as relative paths under /workspace.
- *
- * @param hostPath - The host filesystem path
- * @returns The corresponding path inside the container
- */
-function mapHostPathToContainer(hostPath: string): string {
-    const projectRoot = process.cwd();
-    const resolved = path.resolve(hostPath);
-
-    // If the host path is within the project root, compute relative path
-    if (resolved.startsWith(projectRoot)) {
-        const relative = resolved.substring(projectRoot.length);
-        return `/workspace${relative}`;
-    }
-
-    // Path is outside the project root — default to /workspace
-    return '/workspace';
 }
 
 /**

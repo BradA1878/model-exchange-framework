@@ -32,8 +32,90 @@ import { EntityExtractionService } from '../../../services/kg/EntityExtractionSe
 import { OrparGraphIntegration } from '../../../services/kg/OrparGraphIntegration.js';
 import { isKnowledgeGraphEnabled } from '../../../config/knowledge-graph.config.js';
 import { EntityType, RelationshipType } from '../../../types/KnowledgeGraphTypes.js';
+import { McpToolHandlerContext } from '../McpServerTypes.js';
 
 const logger = new Logger('info', 'KnowledgeGraphTools', 'server');
+
+interface KnowledgeGraphIdentity {
+    agentId: string;
+    channelId: string;
+}
+
+export interface KnowledgeGraphToolArguments extends Record<string, unknown> {
+    channelId?: string;
+    entityId?: string;
+    name?: string;
+    exact?: boolean;
+    limit?: number;
+    direction?: 'incoming' | 'outgoing' | 'both';
+    relationshipType?: RelationshipType;
+    fromEntityId?: string;
+    toEntityId?: string;
+    maxHops?: number;
+    taskId?: string;
+    keywords?: string[];
+    type?: string;
+    aliases?: string[];
+    description?: string;
+    confidence?: number;
+    label?: string;
+    text?: string;
+    sourceId?: string;
+    memoryId?: string;
+    memoryContent?: string;
+    phase?: 'observation' | 'reasoning' | 'planning' | 'action' | 'reflection';
+    taskContent?: string;
+    entityIds?: string[];
+    threshold?: number;
+    targetEntityId?: string;
+    sourceEntityIds?: string[];
+}
+
+function requireKnowledgeGraphIdentity(
+    args: { channelId?: unknown },
+    context: McpToolHandlerContext
+): KnowledgeGraphIdentity {
+    if (typeof context.agentId !== 'string' || context.agentId.trim().length === 0 ||
+        typeof context.channelId !== 'string' || context.channelId.trim().length === 0) {
+        throw new Error('Authenticated agentId and channelId are required for Knowledge Graph tools');
+    }
+    const agentId = context.agentId.trim();
+    const channelId = context.channelId.trim();
+    if (args.channelId !== undefined && (
+        typeof args.channelId !== 'string' || args.channelId.trim() !== channelId
+    )) {
+        throw new Error('channelId must match the authenticated tool context');
+    }
+    return { agentId, channelId };
+}
+
+const errorMessage = (error: unknown): string => (
+    error instanceof Error ? error.message : String(error)
+);
+
+const requireStringArgument = (
+    args: KnowledgeGraphToolArguments,
+    name: keyof KnowledgeGraphToolArguments
+): string => {
+    const value = args[name];
+    if (typeof value !== 'string' || value.trim().length === 0) {
+        throw new Error(`${String(name)} must be a non-empty string`);
+    }
+    return value.trim();
+};
+
+const requireStringArrayArgument = (
+    args: KnowledgeGraphToolArguments,
+    name: keyof KnowledgeGraphToolArguments
+): string[] => {
+    const value = args[name];
+    if (!Array.isArray(value) || value.length === 0 || value.some(item => (
+        typeof item !== 'string' || item.trim().length === 0
+    ))) {
+        throw new Error(`${String(name)} must be a non-empty array of non-empty strings`);
+    }
+    return value.map(item => (item as string).trim());
+};
 
 /**
  * Helper to get Knowledge Graph service
@@ -72,8 +154,12 @@ export const kg_get_entity = {
         },
         required: ['entityId'],
     },
-    handler: async (args: any, context: any) => {
+    handler: async (
+        args: KnowledgeGraphToolArguments,
+        context: McpToolHandlerContext
+    ): Promise<Record<string, unknown>> => {
         try {
+            const identity = requireKnowledgeGraphIdentity(args, context);
             if (!isKnowledgeGraphEnabled()) {
                 return {
                     success: false,
@@ -83,13 +169,14 @@ export const kg_get_entity = {
             }
 
             const kgService = getKgService();
-            const entity = await kgService.getEntity(args.entityId);
+            const entityId = requireStringArgument(args, 'entityId');
+            const entity = await kgService.getEntity(entityId, identity.channelId);
 
             if (!entity) {
                 return {
                     success: false,
                     entity: null,
-                    message: `Entity not found: ${args.entityId}`,
+                    message: `Entity not found: ${entityId}`,
                 };
             }
 
@@ -98,13 +185,13 @@ export const kg_get_entity = {
                 entity,
                 message: `Found entity: ${entity.name} (${entity.type})`,
             };
-        } catch (error: any) {
-            logger.error('Failed to get entity', { error: error.message });
+        } catch (error: unknown) {
+            logger.error('Failed to get entity', { error: errorMessage(error) });
             return {
                 success: false,
                 entity: null,
                 message: 'Failed to get entity',
-                error: error.message,
+                error: errorMessage(error),
             };
         }
     },
@@ -142,8 +229,12 @@ export const kg_find_entity = {
         },
         required: ['name'],
     },
-    handler: async (args: any, context: any) => {
+    handler: async (
+        args: KnowledgeGraphToolArguments,
+        context: McpToolHandlerContext
+    ): Promise<Record<string, unknown>> => {
         try {
+            const identity = requireKnowledgeGraphIdentity(args, context);
             if (!isKnowledgeGraphEnabled()) {
                 return {
                     success: false,
@@ -152,19 +243,11 @@ export const kg_find_entity = {
                 };
             }
 
-            const channelId = args.channelId || context.channelId;
-            if (!channelId) {
-                return {
-                    success: false,
-                    entities: [],
-                    message: 'channelId is required but not provided',
-                };
-            }
-
             const kgService = getKgService();
+            const name = requireStringArgument(args, 'name');
             const entities = await kgService.findEntityByName(
-                channelId,
-                args.name,
+                identity.channelId,
+                name,
                 args.exact || false
             );
 
@@ -176,16 +259,16 @@ export const kg_find_entity = {
                 count: limitedEntities.length,
                 totalFound: entities.length,
                 message: entities.length > 0
-                    ? `Found ${entities.length} entities matching "${args.name}"`
-                    : `No entities found matching "${args.name}"`,
+                    ? `Found ${entities.length} entities matching "${name}"`
+                    : `No entities found matching "${name}"`,
             };
-        } catch (error: any) {
-            logger.error('Failed to find entity', { error: error.message });
+        } catch (error: unknown) {
+            logger.error('Failed to find entity', { error: errorMessage(error) });
             return {
                 success: false,
                 entities: [],
                 message: 'Failed to find entity',
-                error: error.message,
+                error: errorMessage(error),
             };
         }
     },
@@ -224,8 +307,12 @@ export const kg_get_neighbors = {
         },
         required: ['entityId'],
     },
-    handler: async (args: any, context: any) => {
+    handler: async (
+        args: KnowledgeGraphToolArguments,
+        context: McpToolHandlerContext
+    ): Promise<Record<string, unknown>> => {
         try {
+            const identity = requireKnowledgeGraphIdentity(args, context);
             if (!isKnowledgeGraphEnabled()) {
                 return {
                     success: false,
@@ -236,11 +323,21 @@ export const kg_get_neighbors = {
             }
 
             const kgService = getKgService();
-            const result = await kgService.getNeighbors(args.entityId, {
+            const entityId = requireStringArgument(args, 'entityId');
+            const entity = await kgService.getEntity(entityId, identity.channelId);
+            if (!entity) {
+                return {
+                    success: false,
+                    entities: [],
+                    relationships: [],
+                    message: `Entity not found: ${entityId}`,
+                };
+            }
+            const result = await kgService.getNeighbors(entityId, {
                 direction: args.direction || 'both',
                 relationshipType: args.relationshipType as RelationshipType | undefined,
                 limit: args.limit || 20,
-            });
+            }, identity.channelId);
 
             return {
                 success: true,
@@ -250,14 +347,14 @@ export const kg_get_neighbors = {
                 relationshipCount: result.relationships.length,
                 message: `Found ${result.entities.length} connected entities`,
             };
-        } catch (error: any) {
-            logger.error('Failed to get neighbors', { error: error.message });
+        } catch (error: unknown) {
+            logger.error('Failed to get neighbors', { error: errorMessage(error) });
             return {
                 success: false,
                 entities: [],
                 relationships: [],
                 message: 'Failed to get neighbors',
-                error: error.message,
+                error: errorMessage(error),
             };
         }
     },
@@ -290,8 +387,12 @@ export const kg_find_path = {
         },
         required: ['fromEntityId', 'toEntityId'],
     },
-    handler: async (args: any, context: any) => {
+    handler: async (
+        args: KnowledgeGraphToolArguments,
+        context: McpToolHandlerContext
+    ): Promise<Record<string, unknown>> => {
         try {
+            const identity = requireKnowledgeGraphIdentity(args, context);
             if (!isKnowledgeGraphEnabled()) {
                 return {
                     success: false,
@@ -301,10 +402,25 @@ export const kg_find_path = {
             }
 
             const kgService = getKgService();
+            const fromEntityId = requireStringArgument(args, 'fromEntityId');
+            const toEntityId = requireStringArgument(args, 'toEntityId');
+            const [fromEntity, toEntity] = await Promise.all([
+                kgService.getEntity(fromEntityId, identity.channelId),
+                kgService.getEntity(toEntityId, identity.channelId)
+            ]);
+            if (!fromEntity || !toEntity) {
+                return {
+                    success: false,
+                    path: null,
+                    found: false,
+                    message: 'Both path endpoints must belong to the authenticated channel',
+                };
+            }
             const path = await kgService.findPath(
-                args.fromEntityId,
-                args.toEntityId,
-                args.maxHops || 5
+                fromEntityId,
+                toEntityId,
+                args.maxHops || 5,
+                identity.channelId
             );
 
             if (!path) {
@@ -316,6 +432,18 @@ export const kg_find_path = {
                 };
             }
 
+            const pathEntities = await Promise.all(
+                path.entityIds.map(entityId => kgService.getEntity(entityId, identity.channelId))
+            );
+            if (pathEntities.some(entity => !entity)) {
+                return {
+                    success: false,
+                    path: null,
+                    found: false,
+                    message: 'The resolved path is not wholly contained in the authenticated channel',
+                };
+            }
+
             return {
                 success: true,
                 path,
@@ -323,13 +451,13 @@ export const kg_find_path = {
                 hopCount: path.relationshipIds.length,
                 message: `Found path with ${path.relationshipIds.length} hops`,
             };
-        } catch (error: any) {
-            logger.error('Failed to find path', { error: error.message });
+        } catch (error: unknown) {
+            logger.error('Failed to find path', { error: errorMessage(error) });
             return {
                 success: false,
                 path: null,
                 message: 'Failed to find path',
-                error: error.message,
+                error: errorMessage(error),
             };
         }
     },
@@ -360,8 +488,12 @@ export const kg_get_context = {
         },
         required: [],
     },
-    handler: async (args: any, context: any) => {
+    handler: async (
+        args: KnowledgeGraphToolArguments,
+        context: McpToolHandlerContext
+    ): Promise<Record<string, unknown>> => {
         try {
+            const identity = requireKnowledgeGraphIdentity(args, context);
             if (!isKnowledgeGraphEnabled()) {
                 return {
                     success: false,
@@ -370,18 +502,9 @@ export const kg_get_context = {
                 };
             }
 
-            const channelId = args.channelId || context.channelId;
-            if (!channelId) {
-                return {
-                    success: false,
-                    context: null,
-                    message: 'channelId is required but not provided',
-                };
-            }
-
             const kgService = getKgService();
             const graphContext = await kgService.getGraphContext(
-                channelId,
+                identity.channelId,
                 args.taskId,
                 args.keywords
             );
@@ -392,13 +515,13 @@ export const kg_get_context = {
                 stats: graphContext.stats,
                 message: `Retrieved context with ${graphContext.stats.entityCount} entities and ${graphContext.stats.relationshipCount} relationships`,
             };
-        } catch (error: any) {
-            logger.error('Failed to get context', { error: error.message });
+        } catch (error: unknown) {
+            logger.error('Failed to get context', { error: errorMessage(error) });
             return {
                 success: false,
                 context: null,
                 message: 'Failed to get context',
-                error: error.message,
+                error: errorMessage(error),
             };
         }
     },
@@ -427,8 +550,12 @@ export const kg_get_high_utility_entities = {
         },
         required: [],
     },
-    handler: async (args: any, context: any) => {
+    handler: async (
+        args: KnowledgeGraphToolArguments,
+        context: McpToolHandlerContext
+    ): Promise<Record<string, unknown>> => {
         try {
+            const identity = requireKnowledgeGraphIdentity(args, context);
             if (!isKnowledgeGraphEnabled()) {
                 return {
                     success: false,
@@ -437,18 +564,9 @@ export const kg_get_high_utility_entities = {
                 };
             }
 
-            const channelId = args.channelId || context.channelId;
-            if (!channelId) {
-                return {
-                    success: false,
-                    entities: [],
-                    message: 'channelId is required but not provided',
-                };
-            }
-
             const kgService = getKgService();
             const entities = await kgService.getHighUtilityEntities(
-                channelId,
+                identity.channelId,
                 args.limit || 10
             );
 
@@ -458,13 +576,13 @@ export const kg_get_high_utility_entities = {
                 count: entities.length,
                 message: `Found ${entities.length} high-utility entities`,
             };
-        } catch (error: any) {
-            logger.error('Failed to get high utility entities', { error: error.message });
+        } catch (error: unknown) {
+            logger.error('Failed to get high utility entities', { error: errorMessage(error) });
             return {
                 success: false,
                 entities: [],
                 message: 'Failed to get high utility entities',
-                error: error.message,
+                error: errorMessage(error),
             };
         }
     },
@@ -511,8 +629,12 @@ export const kg_create_entity = {
         },
         required: ['name', 'type'],
     },
-    handler: async (args: any, context: any) => {
+    handler: async (
+        args: KnowledgeGraphToolArguments,
+        context: McpToolHandlerContext
+    ): Promise<Record<string, unknown>> => {
         try {
+            const identity = requireKnowledgeGraphIdentity(args, context);
             if (!isKnowledgeGraphEnabled()) {
                 return {
                     success: false,
@@ -521,27 +643,20 @@ export const kg_create_entity = {
                 };
             }
 
-            const channelId = args.channelId || context.channelId;
-            if (!channelId) {
-                return {
-                    success: false,
-                    entity: null,
-                    message: 'channelId is required but not provided',
-                };
-            }
-
             const kgService = getKgService();
+            const name = requireStringArgument(args, 'name');
+            const type = requireStringArgument(args, 'type') as EntityType;
             const entity = await kgService.findOrCreateEntity(
                 {
-                    channelId,
-                    name: args.name,
-                    type: args.type as EntityType,
+                    channelId: identity.channelId,
+                    name,
+                    type,
                     aliases: args.aliases,
                     description: args.description,
                     confidence: args.confidence || 0.8,
                     source: 'manual',
                 },
-                context.agentId
+                identity.agentId
             );
 
             return {
@@ -549,13 +664,13 @@ export const kg_create_entity = {
                 entity,
                 message: `Created entity: ${entity.name} (${entity.type})`,
             };
-        } catch (error: any) {
-            logger.error('Failed to create entity', { error: error.message });
+        } catch (error: unknown) {
+            logger.error('Failed to create entity', { error: errorMessage(error) });
             return {
                 success: false,
                 entity: null,
                 message: 'Failed to create entity',
-                error: error.message,
+                error: errorMessage(error),
             };
         }
     },
@@ -601,8 +716,12 @@ export const kg_create_relationship = {
         },
         required: ['fromEntityId', 'toEntityId', 'type'],
     },
-    handler: async (args: any, context: any) => {
+    handler: async (
+        args: KnowledgeGraphToolArguments,
+        context: McpToolHandlerContext
+    ): Promise<Record<string, unknown>> => {
         try {
+            const identity = requireKnowledgeGraphIdentity(args, context);
             if (!isKnowledgeGraphEnabled()) {
                 return {
                     success: false,
@@ -611,41 +730,46 @@ export const kg_create_relationship = {
                 };
             }
 
-            const channelId = args.channelId || context.channelId;
-            if (!channelId) {
+            const kgService = getKgService();
+            const fromEntityId = requireStringArgument(args, 'fromEntityId');
+            const toEntityId = requireStringArgument(args, 'toEntityId');
+            const type = requireStringArgument(args, 'type') as RelationshipType;
+            const [fromEntity, toEntity] = await Promise.all([
+                kgService.getEntity(fromEntityId, identity.channelId),
+                kgService.getEntity(toEntityId, identity.channelId)
+            ]);
+            if (!fromEntity || !toEntity) {
                 return {
                     success: false,
                     relationship: null,
-                    message: 'channelId is required but not provided',
+                    message: 'Both relationship endpoints must belong to the authenticated channel',
                 };
             }
-
-            const kgService = getKgService();
             const relationship = await kgService.createRelationship(
                 {
-                    channelId,
-                    fromEntityId: args.fromEntityId,
-                    toEntityId: args.toEntityId,
-                    type: args.type as RelationshipType,
+                    channelId: identity.channelId,
+                    fromEntityId,
+                    toEntityId,
+                    type,
                     label: args.label,
                     confidence: args.confidence || 0.8,
                     source: 'manual',
                 },
-                context.agentId
+                identity.agentId
             );
 
             return {
                 success: true,
                 relationship,
-                message: `Created relationship: ${args.type}`,
+                message: `Created relationship: ${type}`,
             };
-        } catch (error: any) {
-            logger.error('Failed to create relationship', { error: error.message });
+        } catch (error: unknown) {
+            logger.error('Failed to create relationship', { error: errorMessage(error) });
             return {
                 success: false,
                 relationship: null,
                 message: 'Failed to create relationship',
-                error: error.message,
+                error: errorMessage(error),
             };
         }
     },
@@ -675,8 +799,12 @@ export const kg_extract_from_text = {
         },
         required: ['text'],
     },
-    handler: async (args: any, context: any) => {
+    handler: async (
+        args: KnowledgeGraphToolArguments,
+        context: McpToolHandlerContext
+    ): Promise<Record<string, unknown>> => {
         try {
+            const identity = requireKnowledgeGraphIdentity(args, context);
             if (!isKnowledgeGraphEnabled()) {
                 return {
                     success: false,
@@ -685,19 +813,11 @@ export const kg_extract_from_text = {
                 };
             }
 
-            const channelId = args.channelId || context.channelId;
-            if (!channelId) {
-                return {
-                    success: false,
-                    result: null,
-                    message: 'channelId is required but not provided',
-                };
-            }
-
             const extractionService = getExtractionService();
+            const text = requireStringArgument(args, 'text');
             const result = await extractionService.extractFromText(
-                channelId,
-                args.text,
+                identity.channelId,
+                text,
                 args.sourceId
             );
 
@@ -709,13 +829,13 @@ export const kg_extract_from_text = {
                 executionTimeMs: result.executionTimeMs,
                 message: `Extracted ${result.entitiesExtracted} entities and ${result.relationshipsExtracted} relationships`,
             };
-        } catch (error: any) {
-            logger.error('Failed to extract from text', { error: error.message });
+        } catch (error: unknown) {
+            logger.error('Failed to extract from text', { error: errorMessage(error) });
             return {
                 success: false,
                 result: null,
                 message: 'Failed to extract from text',
-                error: error.message,
+                error: errorMessage(error),
             };
         }
     },
@@ -745,8 +865,12 @@ export const kg_extract_from_memory = {
         },
         required: ['memoryId', 'memoryContent'],
     },
-    handler: async (args: any, context: any) => {
+    handler: async (
+        args: KnowledgeGraphToolArguments,
+        context: McpToolHandlerContext
+    ): Promise<Record<string, unknown>> => {
         try {
+            const identity = requireKnowledgeGraphIdentity(args, context);
             if (!isKnowledgeGraphEnabled()) {
                 return {
                     success: false,
@@ -755,20 +879,13 @@ export const kg_extract_from_memory = {
                 };
             }
 
-            const channelId = args.channelId || context.channelId;
-            if (!channelId) {
-                return {
-                    success: false,
-                    result: null,
-                    message: 'channelId is required but not provided',
-                };
-            }
-
             const extractionService = getExtractionService();
+            const memoryId = requireStringArgument(args, 'memoryId');
+            const memoryContent = requireStringArgument(args, 'memoryContent');
             const result = await extractionService.processMemory(
-                channelId,
-                args.memoryId,
-                args.memoryContent
+                identity.channelId,
+                memoryId,
+                memoryContent
             );
 
             return {
@@ -779,13 +896,13 @@ export const kg_extract_from_memory = {
                 executionTimeMs: result.executionTimeMs,
                 message: `Extracted ${result.entitiesExtracted} entities and ${result.relationshipsExtracted} relationships from memory`,
             };
-        } catch (error: any) {
-            logger.error('Failed to extract from memory', { error: error.message });
+        } catch (error: unknown) {
+            logger.error('Failed to extract from memory', { error: errorMessage(error) });
             return {
                 success: false,
                 result: null,
                 message: 'Failed to extract from memory',
-                error: error.message,
+                error: errorMessage(error),
             };
         }
     },
@@ -821,8 +938,12 @@ export const kg_get_phase_context = {
         },
         required: ['phase'],
     },
-    handler: async (args: any, context: any) => {
+    handler: async (
+        args: KnowledgeGraphToolArguments,
+        context: McpToolHandlerContext
+    ): Promise<Record<string, unknown>> => {
         try {
+            const identity = requireKnowledgeGraphIdentity(args, context);
             if (!isKnowledgeGraphEnabled()) {
                 return {
                     success: false,
@@ -831,22 +952,37 @@ export const kg_get_phase_context = {
                 };
             }
 
-            const channelId = args.channelId || context.channelId;
-            if (!channelId) {
-                return {
-                    success: false,
-                    phaseContext: null,
-                    message: 'channelId is required but not provided',
-                };
+            if (args.entityIds !== undefined && (
+                !Array.isArray(args.entityIds) ||
+                args.entityIds.some((entityId: unknown) => (
+                    typeof entityId !== 'string' || entityId.trim().length === 0
+                ))
+            )) {
+                throw new Error('entityIds must contain only non-empty entity identifiers');
+            }
+            const entityIds = (args.entityIds || []) as string[];
+            if (entityIds.length > 0) {
+                const kgService = getKgService();
+                const scopedEntities = await Promise.all(
+                    entityIds.map(entityId => kgService.getEntity(entityId, identity.channelId))
+                );
+                if (scopedEntities.some(entity => !entity)) {
+                    return {
+                        success: false,
+                        phaseContext: null,
+                        message: 'Every phase-context entity must belong to the authenticated channel',
+                    };
+                }
             }
 
             const orparIntegration = getOrparIntegration();
+            const phase = requireStringArgument(args, 'phase') as KnowledgeGraphToolArguments['phase'];
             const phaseContext = await orparIntegration.getPhaseContext(
-                channelId,
-                context.agentId,
-                args.phase,
+                identity.channelId,
+                identity.agentId,
+                phase!,
                 args.taskContent,
-                args.entityIds
+                entityIds
             );
 
             return {
@@ -858,13 +994,13 @@ export const kg_get_phase_context = {
                 executionTimeMs: phaseContext.executionTimeMs,
                 message: phaseContext.summary,
             };
-        } catch (error: any) {
-            logger.error('Failed to get phase context', { error: error.message });
+        } catch (error: unknown) {
+            logger.error('Failed to get phase context', { error: errorMessage(error) });
             return {
                 success: false,
                 phaseContext: null,
                 message: 'Failed to get phase context',
-                error: error.message,
+                error: errorMessage(error),
             };
         }
     },
@@ -893,8 +1029,12 @@ export const kg_find_duplicates = {
         },
         required: [],
     },
-    handler: async (args: any, context: any) => {
+    handler: async (
+        args: KnowledgeGraphToolArguments,
+        context: McpToolHandlerContext
+    ): Promise<Record<string, unknown>> => {
         try {
+            const identity = requireKnowledgeGraphIdentity(args, context);
             if (!isKnowledgeGraphEnabled()) {
                 return {
                     success: false,
@@ -903,18 +1043,9 @@ export const kg_find_duplicates = {
                 };
             }
 
-            const channelId = args.channelId || context.channelId;
-            if (!channelId) {
-                return {
-                    success: false,
-                    duplicates: [],
-                    message: 'channelId is required but not provided',
-                };
-            }
-
             const kgService = getKgService();
             const duplicates = await kgService.findSimilarEntities(
-                channelId,
+                identity.channelId,
                 args.threshold || 0.8
             );
 
@@ -926,13 +1057,13 @@ export const kg_find_duplicates = {
                     ? `Found ${duplicates.length} potential duplicate pairs`
                     : 'No potential duplicates found',
             };
-        } catch (error: any) {
-            logger.error('Failed to find duplicates', { error: error.message });
+        } catch (error: unknown) {
+            logger.error('Failed to find duplicates', { error: errorMessage(error) });
             return {
                 success: false,
                 duplicates: [],
                 message: 'Failed to find duplicates',
-                error: error.message,
+                error: errorMessage(error),
             };
         }
     },
@@ -959,8 +1090,12 @@ export const kg_merge_entities = {
         },
         required: ['targetEntityId', 'sourceEntityIds'],
     },
-    handler: async (args: any, context: any) => {
+    handler: async (
+        args: KnowledgeGraphToolArguments,
+        context: McpToolHandlerContext
+    ): Promise<Record<string, unknown>> => {
         try {
+            const identity = requireKnowledgeGraphIdentity(args, context);
             if (!isKnowledgeGraphEnabled()) {
                 return {
                     success: false,
@@ -970,26 +1105,40 @@ export const kg_merge_entities = {
             }
 
             const kgService = getKgService();
+            const targetEntityId = requireStringArgument(args, 'targetEntityId');
+            const sourceEntityIds = requireStringArrayArgument(args, 'sourceEntityIds');
+            const entityIds = [targetEntityId, ...sourceEntityIds];
+            const scopedEntities = await Promise.all(
+                entityIds.map((entityId: string) => kgService.getEntity(entityId, identity.channelId))
+            );
+            if (scopedEntities.some(entity => !entity)) {
+                return {
+                    success: false,
+                    result: null,
+                    message: 'Every merged entity must belong to the authenticated channel',
+                };
+            }
             const result = await kgService.mergeEntities(
-                args.targetEntityId,
-                args.sourceEntityIds,
-                context.agentId
+                targetEntityId,
+                sourceEntityIds,
+                identity.agentId,
+                identity.channelId
             );
 
             return {
                 success: result.success,
                 result,
                 message: result.success
-                    ? `Successfully merged ${args.sourceEntityIds.length} entities into target`
+                    ? `Successfully merged ${sourceEntityIds.length} entities into target`
                     : result.error || 'Merge failed',
             };
-        } catch (error: any) {
-            logger.error('Failed to merge entities', { error: error.message });
+        } catch (error: unknown) {
+            logger.error('Failed to merge entities', { error: errorMessage(error) });
             return {
                 success: false,
                 result: null,
                 message: 'Failed to merge entities',
-                error: error.message,
+                error: errorMessage(error),
             };
         }
     },

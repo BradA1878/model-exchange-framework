@@ -52,6 +52,9 @@ export interface TaskContext {
     title?: string;
     description?: string;
     leadAgentId?: string;
+    /** Agent designated to report the task's terminal outcome; the server enforces it. */
+    completionAgentId?: string;
+    assignedAgentIds?: string[];
     metadata?: {
         isCompletionAgent?: boolean;
         multiAgentTask?: boolean;
@@ -89,7 +92,7 @@ export class ToolHelpers {
 
         // FIRST: Apply agent-specific tool filtering (allowedTools takes precedence)
         let filteredTools = allTools;
-        if (context.allowedTools && context.allowedTools.length > 0) {
+        if (context.allowedTools !== undefined) {
             filteredTools = allTools.filter(tool => {
                 const toolName = tool.name || tool.function?.name || '';
                 const isAllowed = context.allowedTools!.includes(toolName);
@@ -628,6 +631,13 @@ export class TaskHelpers {
                 return true;
             }
             
+            // The task's own designation is what the server checks for complete and
+            // fail alike, and it is the only signal on the direct-assignment path
+            // (createTask with assignedAgentIds), where no role metadata exists.
+            if (typeof currentTask.completionAgentId === 'string' && currentTask.completionAgentId.length > 0) {
+                return currentTask.completionAgentId === context.agentId;
+            }
+
             // Check task metadata for completion designation
             const metadata = currentTask.metadata;
             

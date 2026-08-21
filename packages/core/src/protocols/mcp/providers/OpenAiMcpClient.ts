@@ -601,6 +601,8 @@ export class OpenAiMcpClient extends BaseMcpClient {
         context: AgentContext,
         options?: Record<string, any>
     ): Promise<McpApiResponse> {
+        this.assertExternalLlmCallAllowed();
+
         // Structure messages for OpenAI based on context
         const openAiMessages = this.structureMessagesFromContext(context);
 

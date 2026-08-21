@@ -25,6 +25,10 @@
 
 import { BrowserManager, BrowserConfig } from './BrowserManager.js';
 import { ContentProcessor, OptimizationOptions } from './ContentProcessor.js';
+import {
+    installBrowserTargetGuard,
+    requireAllowedBrowserTarget
+} from '../protocols/mcp/security/BrowserTargetGuard.js';
 // Type-only: erased at compile time, so puppeteer stays an optional peer dependency.
 import type { Page } from 'puppeteer';
 
@@ -90,6 +94,7 @@ export class WebSearchService {
             try {
                 // Set user agent
                 await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36');
+                await installBrowserTargetGuard(page);
                 
                 // Perform search based on engine
                 let results: SearchResult[] = [];
@@ -131,6 +136,7 @@ export class WebSearchService {
 
     async navigate(args: WebNavigationArgs): Promise<any> {
         try {
+            await requireAllowedBrowserTarget(args.url);
             const browserInstance = await this.browserManager.getBrowser();
             const browser = browserInstance.browser;
             const page = await browser.newPage();
@@ -138,6 +144,7 @@ export class WebSearchService {
             try {
                 // Set viewport if needed
                 await page.setViewport({ width: 1280, height: 720 });
+                await installBrowserTargetGuard(page);
                 
                 // Navigate to URL
                 const response = await page.goto(args.url, {
@@ -223,6 +230,7 @@ export class WebSearchService {
 
     async screenshot(args: WebScreenshotArgs): Promise<Buffer> {
         try {
+            await requireAllowedBrowserTarget(args.url);
             const browserInstance = await this.browserManager.getBrowser();
             const browser = browserInstance.browser;
             const page = await browser.newPage();
@@ -233,6 +241,7 @@ export class WebSearchService {
                     width: args.width || 1280, 
                     height: args.height || 720 
                 });
+                await installBrowserTargetGuard(page);
                 
                 // Navigate to URL
                 await page.goto(args.url, {
@@ -261,7 +270,8 @@ export class WebSearchService {
 
     private async searchGoogle(page: Page, query: string, maxResults: number): Promise<SearchResult[]> {
         const searchUrl = `https://www.google.com/search?q=${encodeURIComponent(query)}&num=${maxResults}`;
-        
+
+        await requireAllowedBrowserTarget(searchUrl);
         await page.goto(searchUrl, { waitUntil: 'networkidle2' });
         
         // Extract search results
@@ -291,7 +301,8 @@ export class WebSearchService {
 
     private async searchBing(page: Page, query: string, maxResults: number): Promise<SearchResult[]> {
         const searchUrl = `https://www.bing.com/search?q=${encodeURIComponent(query)}&count=${maxResults}`;
-        
+
+        await requireAllowedBrowserTarget(searchUrl);
         await page.goto(searchUrl, { waitUntil: 'networkidle2' });
         
         // Extract search results
@@ -320,7 +331,8 @@ export class WebSearchService {
 
     private async searchDuckDuckGo(page: Page, query: string, maxResults: number): Promise<SearchResult[]> {
         const searchUrl = `https://duckduckgo.com/?q=${encodeURIComponent(query)}`;
-        
+
+        await requireAllowedBrowserTarget(searchUrl);
         await page.goto(searchUrl, { waitUntil: 'networkidle2' });
         
         // Extract search results

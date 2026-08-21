@@ -31,6 +31,111 @@ import { EventBus } from '@mxf-dev/core/events/EventBus';
 import { TaskEvents } from '@mxf-dev/core/events/event-definitions/TaskEvents';
 import { createTaskEventPayload } from '@mxf-dev/core/schemas/EventPayloadSchema';
 import { v4 as uuidv4 } from 'uuid';
+import type { Subscription } from 'rxjs';
+
+interface TaskOperationEventData {
+    requestId?: string;
+    taskId?: string;
+    task?: { id?: string; status?: string };
+    error?: string;
+}
+
+interface TaskOperationEventEnvelope {
+    agentId?: string;
+    channelId?: string;
+    data: TaskOperationEventData;
+}
+
+interface PendingTaskOperation {
+    agentId: string;
+    channelId: string;
+    cancel: (error: Error) => void;
+}
+
+const pendingTaskOperations = new Map<string, PendingTaskOperation>();
+
+const readTaskOperationEvent = (payload: unknown): TaskOperationEventEnvelope | null => {
+    if (!payload || typeof payload !== 'object' || !('data' in payload)) {
+        return null;
+    }
+    const data = (payload as { data?: unknown }).data;
+    if (!data || typeof data !== 'object') {
+        return null;
+    }
+    return {
+        agentId: (payload as { agentId?: unknown }).agentId as string | undefined,
+        channelId: (payload as { channelId?: unknown }).channelId as string | undefined,
+        data: data as TaskOperationEventData
+    };
+};
+
+const waitForAuthoritativeTaskEvent = (
+    successEvent: string,
+    requestId: string,
+    agentId: string,
+    channelId: string,
+    expectedTaskId?: string
+): Promise<TaskOperationEventData> => {
+    let successSubscription: Subscription | undefined;
+    let errorSubscription: Subscription | undefined;
+
+    return new Promise<TaskOperationEventData>((resolve, reject) => {
+        const cleanup = (): void => {
+            successSubscription?.unsubscribe();
+            errorSubscription?.unsubscribe();
+            pendingTaskOperations.delete(requestId);
+        };
+        const matches = (payload: unknown): TaskOperationEventData | null => {
+            const envelope = readTaskOperationEvent(payload);
+            if (envelope?.agentId !== agentId || envelope.channelId !== channelId ||
+                envelope.data.requestId !== requestId) {
+                return null;
+            }
+            if (expectedTaskId !== undefined && expectedTaskId !== 'current' &&
+                envelope.data.taskId !== expectedTaskId) {
+                return null;
+            }
+            return envelope.data;
+        };
+
+        successSubscription = EventBus.client.on(successEvent, response => {
+            const data = matches(response);
+            if (!data) {
+                return;
+            }
+            cleanup();
+            resolve(data);
+        });
+        errorSubscription = EventBus.client.on(TaskEvents.ERROR, response => {
+            const data = matches(response);
+            if (!data) {
+                return;
+            }
+            cleanup();
+            reject(new Error(data.error ?? `Task request ${requestId} failed`));
+        });
+        pendingTaskOperations.set(requestId, {
+            agentId,
+            channelId,
+            cancel: error => {
+                cleanup();
+                reject(error);
+            }
+        });
+    });
+};
+
+const cancelPendingOperation = (requestId: string, error: unknown): void => {
+    pendingTaskOperations.get(requestId)?.cancel(
+        error instanceof Error ? error : new Error(String(error))
+    );
+};
+
+const assertTaskSocketConnected = (agentId: string): void => {
+    if (!EventBus.client.isRegisteredSocketConnected(agentId)) {
+        throw new Error(`Cannot send task request: agent socket ${agentId} is not connected`);
+    }
+};
 
 /**
  * Task configuration interface
@@ -40,14 +145,14 @@ export interface TaskConfig {
     description: string;
     assignedAgentIds: string[];
     assignmentScope?: 'single' | 'multiple';
-    assignmentStrategy?: 'auto' | 'manual';
+    assignmentStrategy?: 'intelligent' | 'manual';
     leadAgentId?: string;
     completionAgentId?: string;
     coordinationMode?: 'collaborative' | 'competitive' | 'sequential';
     priority?: 'low' | 'medium' | 'high';
     requiredCapabilities?: string[];
     tags?: string[];
-    metadata?: Record<string, any>;
+    metadata?: Record<string, unknown>;
 }
 
 /**
@@ -68,22 +173,25 @@ export const TaskHelper = {
         config: TaskConfig,
         creatorAgentId: string
     ): Promise<string> => {
-        // Generate unique task ID
-        const taskId = `task-${Date.now()}-${uuidv4().substring(0, 8)}`;
-        
+        assertTaskSocketConnected(creatorAgentId);
+        // This is a correlation id, not a task id. Only the server's persisted
+        // CREATED event contains the authoritative Mongo task identity.
+        const requestId = uuidv4();
+
         // Create task payload using existing schema function
         const payload = createTaskEventPayload(
             TaskEvents.CREATE_REQUEST,
             creatorAgentId,
             channelId,
             {
-                taskId,
+                taskId: requestId,
                 task: {
                     channelId,
                     title: config.title,
                     description: config.description,
                     assignedAgentIds: config.assignedAgentIds,
-                    assignmentScope: config.assignmentScope || 'multiple',
+                    assignmentScope: config.assignmentScope ||
+                        (config.assignedAgentIds.length > 1 ? 'multiple' : 'single'),
                     assignmentStrategy: config.assignmentStrategy || 'manual',
                     leadAgentId: config.leadAgentId,
                     completionAgentId: config.completionAgentId,
@@ -99,10 +207,33 @@ export const TaskHelper = {
                 }
             }
         );
+        const createdTask = waitForAuthoritativeTaskEvent(
+            TaskEvents.CREATED,
+            requestId,
+            creatorAgentId,
+            channelId
+        );
         
-        EventBus.client.emitOn(creatorAgentId, TaskEvents.CREATE_REQUEST, payload);
+        try {
+            EventBus.client.emitOn(creatorAgentId, TaskEvents.CREATE_REQUEST, payload);
+        } catch (error) {
+            cancelPendingOperation(requestId, error);
+        }
 
-        return taskId;
+        const data = await createdTask;
+        if (typeof data.task?.id !== 'string' || data.task.id.trim().length === 0) {
+            throw new Error(`Task creation ${requestId} returned no persisted task id`);
+        }
+        return data.task.id;
+    },
+
+    /** Reject and dispose task requests that can no longer receive a response. */
+    cancelPendingOperations: (channelId: string, agentId: string, reason: string): void => {
+        for (const pending of Array.from(pendingTaskOperations.values())) {
+            if (pending.channelId === channelId && pending.agentId === agentId) {
+                pending.cancel(new Error(reason));
+            }
+        }
     },
 
     /**
@@ -129,22 +260,37 @@ export const TaskHelper = {
         taskId: string,
         agentId: string,
         channelId: string,
-        result: Record<string, any>
+        result: Record<string, unknown>
     ): Promise<void> => {
+        assertTaskSocketConnected(agentId);
+        const requestId = uuidv4();
         const payload = createTaskEventPayload(
             TaskEvents.COMPLETE_REQUEST,
             agentId,
             channelId,
             {
                 taskId,
+                requestId,
                 completingAgentId: agentId,
                 result,
                 completedAt: Date.now(),
                 task: `Task ${taskId} completed by ${agentId}`
             }
         );
+        const acknowledgement = waitForAuthoritativeTaskEvent(
+            TaskEvents.COMPLETED,
+            requestId,
+            agentId,
+            channelId,
+            taskId
+        );
 
-        EventBus.client.emitOn(agentId, TaskEvents.COMPLETE_REQUEST, payload);
+        try {
+            EventBus.client.emitOn(agentId, TaskEvents.COMPLETE_REQUEST, payload);
+        } catch (error) {
+            cancelPendingOperation(requestId, error);
+        }
+        await acknowledgement;
     },
 
     /**
@@ -166,20 +312,35 @@ export const TaskHelper = {
         channelId: string,
         error: string
     ): Promise<void> => {
+        assertTaskSocketConnected(agentId);
+        const requestId = uuidv4();
         const payload = createTaskEventPayload(
             TaskEvents.FAIL_REQUEST,
             agentId,
             channelId,
             {
                 taskId,
+                requestId,
                 failingAgentId: agentId,
                 error,
                 failedAt: Date.now(),
                 task: `Task ${taskId} failed: ${error}`
             }
         );
+        const acknowledgement = waitForAuthoritativeTaskEvent(
+            TaskEvents.FAILED,
+            requestId,
+            agentId,
+            channelId,
+            taskId
+        );
 
-        EventBus.client.emitOn(agentId, TaskEvents.FAIL_REQUEST, payload);
+        try {
+            EventBus.client.emitOn(agentId, TaskEvents.FAIL_REQUEST, payload);
+        } catch (emitError) {
+            cancelPendingOperation(requestId, emitError);
+        }
+        await acknowledgement;
     },
 
     /**
@@ -196,19 +357,34 @@ export const TaskHelper = {
         channelId: string,
         reason?: string
     ): Promise<void> => {
+        assertTaskSocketConnected(agentId);
+        const requestId = uuidv4();
         const payload = createTaskEventPayload(
             TaskEvents.CANCEL_REQUEST,
             agentId,
             channelId,
             {
                 taskId,
+                requestId,
                 cancellingAgentId: agentId,
                 reason,
                 cancelledAt: Date.now(),
                 task: `Task ${taskId} cancelled by ${agentId}${reason ? `: ${reason}` : ''}`
             }
         );
+        const acknowledgement = waitForAuthoritativeTaskEvent(
+            TaskEvents.CANCELLED,
+            requestId,
+            agentId,
+            channelId,
+            taskId
+        );
 
-        EventBus.client.emitOn(agentId, TaskEvents.CANCEL_REQUEST, payload);
+        try {
+            EventBus.client.emitOn(agentId, TaskEvents.CANCEL_REQUEST, payload);
+        } catch (emitError) {
+            cancelPendingOperation(requestId, emitError);
+        }
+        await acknowledgement;
     }
 };

@@ -84,6 +84,8 @@ import {
     PostCompactionRestoredPayload,
     CompactionSummaryGeneratedPayload,
 } from '../events/event-definitions/CompactionEvents.js';
+import { TaskEvents } from '../events/event-definitions/TaskEvents.js';
+import type { SdkReconnectedEventData } from '../events/event-definitions/SdkEvents.js';
 
 // Create logger instance for event payload schema
 const logger = new Logger('warn', 'EventPayloadSchema', 'server');
@@ -327,8 +329,12 @@ export type SubscriptionEventPayload = BaseEventPayload<SubscriptionEventData>;
  */
 export interface TaskEventData {
     taskId: string;
+    /** Correlates an asynchronous request with its authoritative server result. */
+    requestId?: string;
     fromAgentId?: AgentId; // Agent initiating the task (could be different from BaseEventPayload.agentId if event is relayed)
     toAgentId?: AgentId;   // Agent designated to perform the task
+    targetAgentId?: AgentId;
+    targetChannelId?: ChannelId;
     task: any;            // The task content/details — typing this union is the head of the SDK-API typing pass (15 sender contract drifts to reconcile)
 }
 export type TaskEventPayload = BaseEventPayload<TaskEventData>;
@@ -723,6 +729,39 @@ export function createAgentEventPayload(
 }
 
 /**
+ * Channel id carried by SDK connection events. The SDK's user connection is
+ * not bound to a channel; payload validation still requires a non-empty id.
+ */
+export const SDK_CONNECTION_CHANNEL_ID: ChannelId = 'system';
+
+/**
+ * Creates the payload for SdkEvents.RECONNECTED.
+ *
+ * The SDK's user connection has no agent; the authenticated user id stands in
+ * the agentId slot, as the SDK's other user-level payloads do.
+ *
+ * @param eventType - SdkEvents.RECONNECTED.
+ * @param userId - Server-confirmed user id of the re-authenticated connection.
+ * @param data - Reconnect details.
+ * @param options - Optional base event payload options.
+ */
+export function createSdkReconnectedEventPayload(
+    eventType: EventName | string,
+    userId: string,
+    data: SdkReconnectedEventData,
+    options: { source?: string; eventId?: string; timestamp?: number; } = {}
+): BaseEventPayload<SdkReconnectedEventData> {
+    const validator = createStrictValidator('createSdkReconnectedEventPayload');
+    validator.assertIsNonEmptyString(data.userId, 'data.userId');
+    if (data.attempt !== null && (!Number.isInteger(data.attempt) || data.attempt < 0)) {
+        throw new Error('data.attempt must be a non-negative integer or null');
+    }
+    return createBaseEventPayload<SdkReconnectedEventData>(
+        eventType, userId, SDK_CONNECTION_CHANNEL_ID, data, options
+    );
+}
+
+/**
  * Creates an AllowedToolsUpdateEventPayload.
  * Used when dynamically changing an agent's allowed tools during runtime.
  *
@@ -938,7 +977,10 @@ export function createTaskEventPayload<TData extends TaskEventData>(
     // Task content is either a plain instruction string (simple request flow)
     // or a creation-fields object — validate per shape.
     const task = taskData.task;
-    if (typeof task === 'string') {
+    if (eventType === TaskEvents.UPDATE_REQUEST) {
+        validator.assertIsObject(task, 'Task update content must be an object');
+        validator.assertIsNonEmptyString(task.taskId, 'Task update taskId is required');
+    } else if (typeof task === 'string') {
         validator.assertIsNonEmptyString(task, 'Task instruction must be a non-empty string');
     } else {
     validator.assertIsObject(task, 'Task content must be an object');
@@ -3105,6 +3147,7 @@ export interface MeilisearchIndexEventData {
     success: boolean;             // Whether indexing succeeded
     duration?: number;            // Time taken to index in milliseconds
     error?: string;               // Error message if indexing failed
+    retryAfterMs?: number;        // Set when the server throttled the request: retry after this delay
     metadata?: {                  // Additional context
         messageCount?: number;    // For batch operations
         agentId?: string;
@@ -3148,6 +3191,7 @@ export interface MeilisearchBackfillEventData {
     success: boolean;             // Whether backfill completed successfully
     source: 'mongodb' | 'memory' | 'other'; // Source of backfilled data
     error?: string;               // Error message if backfill failed
+    retryAfterMs?: number;        // Set when the server throttled the request: retry after this delay
     metadata?: {                  // Additional context
         agentId?: string;
         channelId?: string;

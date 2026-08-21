@@ -3,10 +3,10 @@
 
 ## Installation
 
-Install the SDK from npm:
+Install the SDK package:
 
 ```bash
-npm install @mxf-dev/sdk    # or: bun add @mxf-dev/sdk
+bun add @mxf-dev/sdk
 # (@mxf-dev/core is pulled in automatically)
 ```
 
@@ -15,7 +15,7 @@ To build from source instead (for contributing):
 ```bash
 git clone https://github.com/BradA1878/model-exchange-framework.git
 cd mxf
-npm install
+bun install
 
 # Build the project
 bun run build
@@ -513,7 +513,7 @@ MXF_DOMAIN_KEY=your-generated-64-char-domain-key
 # Optional
 OPENROUTER_API_KEY=your-openrouter-key
 MXP_ENCRYPTION_KEY=your-mxp-encryption-key
-PORT=3001
+MXF_PORT=3001
 NODE_ENV=production
 ```
 
@@ -571,14 +571,14 @@ async function testAuthentication(): Promise<void> {
             keyId: process.env.TEST_KEY_ID!,
             secretKey: process.env.TEST_SECRET_KEY!,
             llmProvider: 'openrouter',
-            defaultModel: 'anthropic/claude-3.5-sonnet'
+            defaultModel: '~anthropic/claude-sonnet-latest'
         });
         
         await agent.connect();
         console.log('✓ Agent authentication successful');
         
         // Test basic operation
-        await agent.channelService.sendMessage('Test message');
+        await agent.mxfService.sendMessage('Test message');
         console.log('✓ Agent operations working');
         
         // Cleanup

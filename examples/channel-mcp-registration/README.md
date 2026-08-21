@@ -1,239 +1,112 @@
-# Channel-Scoped MCP Server Registration Example
+# Channel-Scoped MCP Registration Demo
 
-This directory contains a complete working example of registering **channel-scoped** MCP servers via the SDK.
+This demo registers a child-process MCP server for one channel, connects two agents,
+and has both agents call tools from the shared process.
 
-## Key Difference: Channel vs Global MCP Servers
+## Security requirements
 
-| Feature | Global MCP Server | Channel MCP Server |
-|---------|------------------|-------------------|
-| **Scope** | Available to all agents | Only agents in the channel |
-| **Lifecycle** | Manual start/stop | Auto-start when first agent joins |
-| **Cleanup** | Manual unregister | Auto-stop with keepAlive after last agent leaves |
-| **Use Case** | System-wide tools | Channel-specific collaboration tools |
-| **Server ID** | Simple: `my-server` | Namespaced: `channelId:my-server` |
+Runtime process management is disabled by default. Before starting MXF, set:
+
+```bash
+MXF_UNSAFE_STDIO_MCP_ENABLED=true
+```
+
+The access token used by the demo must belong to an `administrator`. Registration is
+performed by the user-authenticated `MxfSDK`; agent credentials cannot start or stop
+host processes.
+
+MXF supports runtime MCP registration over child-process `stdio` only. The demo does
+not register an HTTP MCP endpoint.
 
 ## Files
 
-- **`channel-mcp-demo.ts`** - Complete demo showing:
-  - Creating a channel
-  - Registering a channel-scoped MCP server
-  - Multiple agents joining and using the same server instance
-  - Automatic server lifecycle management
-  - Reference counting and keepAlive cleanup
+- `channel-mcp-demo.ts` creates a channel, connects two agents, registers and
+  unregisters the channel process, and executes its tools.
+- `simple-custom-mcp-server.ts` implements line-delimited MCP over stdin/stdout and
+  exposes `reverse_string`, `uppercase`, and `word_count`.
 
-- **`simple-custom-mcp-server.ts`** - Minimal MCP server (reused from external-mcp-registration)
-  - Provides 3 simple tools: `reverse_string`, `uppercase`, `word_count`
-  - Used for testing channel-scoped registration
+## Run
 
-## Running the Demo
-
-### Prerequisites
-
-1. MXF server running:
-   ```bash
-   bun run dev
-   ```
-
-2. Environment variables set in `.env`:
-   ```
-   MXF_DOMAIN_KEY=your-domain-key
-   MXF_DEMO_USERNAME=demo-user
-   MXF_DEMO_PASSWORD=demo-password-1234
-   OPENROUTER_API_KEY=your-api-key
-   ```
-
-### Run
+Start the MXF server manually, then run the demo from another terminal:
 
 ```bash
 bun run demo:channel-mcp
 ```
 
-### Expected Output
+Configure the administrator credentials and provider key in `.env`:
 
-```
-🧪 Channel-Scoped MCP Server Registration Demo
-═══════════════════════════════════════════════
-
-📡 Step 1: Creating channel and agents...
-✅ Channel 'game-room' created
-✅ Agent 1 connected to channel
-✅ Agent 2 connected to channel
-
-📦 Step 2: Agent 1 registers channel MCP server...
-✅ Channel MCP server registered successfully!
-   Tools discovered: reverse_string, uppercase, word_count
-
-🔧 Step 3: Both agents can use the same MCP server...
-   Agent 1 executing: reverse_string
-   Result: !FXM olleH
-
-   Agent 2 executing: uppercase
-   Result: HELLO WORLD
-
-📊 Step 4: Server lifecycle demonstration...
-✅ Agent 1 leaves channel (1 agent remaining)
-   Server still running (reference count: 1)
-
-✅ Agent 2 leaves channel (0 agents remaining)
-   KeepAlive timer started (5 minutes)
-   Server will auto-stop after keepAlive expires
-
-🎉 Demo complete!
+```dotenv
+MXF_DOMAIN_KEY=your-domain-key
+MXF_DEMO_USERNAME=admin-user
+MXF_DEMO_PASSWORD=admin-password
+OPENROUTER_API_KEY=your-api-key
 ```
 
-## What This Demonstrates
+## Registration flow
 
-✅ **Channel-Scoped Servers** - MCP server only available to agents in the channel
-✅ **Shared Instance** - Multiple agents share the same server process
-✅ **Auto-Start** - Server starts when first agent joins channel
-✅ **Reference Counting** - Tracks how many agents are using the server
-✅ **KeepAlive Cleanup** - Graceful shutdown after last agent leaves
-✅ **Tool Isolation** - Tools only visible to channel members
+The demo uses the administrator SDK directly:
 
-## Use Cases
-
-This pattern enables:
-
-### 1. **Game Servers**
 ```typescript
-// Chess channel
-await agent.registerChannelMcpServer({
-  id: 'chess-game',
-  name: 'Chess Server',
-  command: 'npx',
-  args: ['-y', '@mcp/chess'],
-  keepAliveMinutes: 30  // Keep game state for 30min
+import { MxfSDK } from '@mxf-dev/sdk';
+
+const sdk = new MxfSDK({
+    serverUrl: 'http://localhost:3001',
+    domainKey: process.env.MXF_DOMAIN_KEY!,
+    accessToken: process.env.MXF_ADMIN_ACCESS_TOKEN!
 });
+
+await sdk.connect();
+
+const registration = await sdk.registerChannelMcpServer('game-room', {
+    id: 'game-tools',
+    name: 'Game Tools MCP Server',
+    transport: 'stdio',
+    command: 'bun',
+    args: ['run', './examples/channel-mcp-registration/simple-custom-mcp-server.ts'],
+    autoStart: true,
+    restartOnCrash: false,
+    keepAliveMinutes: 5
+});
+
+console.log(registration.toolsDiscovered);
+// ['reverse_string', 'uppercase', 'word_count']
 ```
 
-### 2. **Collaborative Tools**
+Registration rejects on failure. Its result has `toolsDiscovered`; it does not have a
+`success` property.
+
+The process is shared by authorized agents in `game-room`. Agents use the raw names
+returned in `toolsDiscovered`:
+
 ```typescript
-// Design review channel
-await agent.registerChannelMcpServer({
-  id: 'figma-integration',
-  name: 'Figma Collaboration',
-  command: 'npx',
-  args: ['-y', '@mcp/figma'],
-  keepAliveMinutes: 15
-});
+await agent1.executeTool('reverse_string', { text: 'Hello MXF!' });
+await agent2.executeTool('uppercase', { text: 'hello world' });
 ```
 
-### 3. **Project-Specific Integrations**
+Cleanup also uses the administrator SDK:
+
 ```typescript
-// Project XYZ channel
-await agent.registerChannelMcpServer({
-  id: 'project-database',
-  name: 'Project XYZ Database',
-  command: 'npx',
-  args: ['-y', '@mcp/postgresql'],
-  environmentVariables: {
-    DB_NAME: 'project_xyz'
-  },
-  keepAliveMinutes: 10
-});
+await sdk.unregisterChannelMcpServer('game-room', 'game-tools');
 ```
 
-## Architecture
-
-**Hybrid Communication** (EventBus for writes, REST API for reads):
-```
-SDK (Agent 1)                    Server                    MCP Server Process
-    │                               │                              │
-    ├─ registerChannelMcpServer()   │                              │
-    ├─ CHANNEL_SERVER_REGISTER ────>│                              │
-    │                               ├─ Spawn process ─────────────>│
-    │                               ├─ Initialize MCP               │
-    │                               ├─ Discover tools               │
-    │<─ CHANNEL_SERVER_REGISTERED ──│                              │
-    │                               │                              │
-SDK (Agent 2) joins channel         │                              │
-    │                               │                              │
-    ├─ joinChannel() ──────────────>│                              │
-    │                               ├─ onAgentJoinChannel()        │
-    │                               ├─ Reference count: 2           │
-    │                               ├─ Server already running ✓     │
-    │<─ Tools available ────────────│                              │
-    │                               │                              │
-    ├─ executeTool('uppercase')────>│──────────────────────────────>│
-    │<─ Result ──────────────────────│<──────────────────────────────│
-```
-
-## Configuration Options
+## Configuration
 
 ```typescript
 interface ChannelMcpServerConfig {
-  id: string;                       // Unique server ID within channel
-  name: string;                     // Display name
-  command?: string;                 // Command to execute (e.g., 'npx', 'node')
-  args?: string[];                  // Command arguments
-  transport?: 'stdio' | 'http';     // Communication protocol (default: stdio)
-  url?: string;                     // HTTP URL if transport is 'http'
-  autoStart?: boolean;              // Auto-start on registration (default: true)
-  environmentVariables?: Record<string, string>;  // Environment variables
-  restartOnCrash?: boolean;         // Restart after an unexpected exit (default: true)
-  maxRestartAttempts?: number;      // Restart budget (default: 3)
-  keepAliveMinutes?: number;        // Minutes to keep alive after last agent leaves (default: 5)
+    id: string;
+    name: string;
+    command?: string;
+    args?: string[];
+    transport?: 'stdio';
+    autoStart?: boolean;
+    environmentVariables?: Record<string, string>;
+    restartOnCrash?: boolean;
+    keepAliveMinutes?: number;
 }
 ```
 
-## Tool Names
+Registration resolves only after the process starts, completes the MCP initialize
+handshake, and reports its tools. Unexpected exits remove those tools before any
+configured restart. Exhausting the restart budget unregisters the process.
 
-Agents call channel server tools by the raw name the server reports — the names that come back in `toolsDiscovered` (`reverse_string`, `uppercase`, `word_count` in this demo). Use those names in `allowedTools` and in `executeTool()`.
-
-The registry stores each external tool under a canonical namespaced name, `<serverId>__<toolName>`, where a channel server's registry id is `<channelId>:<serverId>` — `game-room:channel-mcp-demo__uppercase`, for example. Allowlists accept either form, but prefer the raw name: LLM providers reject `:` in function names.
-
-## Lifecycle Notes
-
-- Registration resolves after the MCP handshake and tool discovery, so a resolved call means the discovered tools are in the registry.
-- An unexpected exit is logged at error level and the server's tools are removed from the registry; with `restartOnCrash` the server restarts and re-discovers its tools, up to `maxRestartAttempts`. A completed startup resets the restart count.
-- Exhausting the restart budget unregisters the server (record and channel scope removed) — re-register it to get the tools back.
-- Agent join verifies the server is alive (probe with `tools/list`) and starts or restarts it as needed before counting the agent as connected.
-- Unregistration is idempotent and clears the record, the scope entry, and any keepAlive timer.
-
-## API Reference
-
-### SDK Methods
-
-```typescript
-// Register channel-scoped MCP server
-await agent.registerChannelMcpServer(config);
-
-// List channel MCP servers
-const servers = await agent.listChannelMcpServers(channelId?);
-
-// Unregister channel MCP server
-await agent.unregisterChannelMcpServer(serverId, channelId?);
-
-// List tools (includes channel-scoped tools)
-const tools = await agent.listTools();
-
-// Execute channel tool (same as any other tool)
-const result = await agent.executeTool('tool_name', { ...params });
-```
-
-### REST API Endpoints
-
-```http
-# Register channel MCP server
-POST /api/channels/:channelId/mcp-servers
-Content-Type: application/json
-{ "id": "server-id", "name": "Server Name", ... }
-
-# List channel MCP servers
-GET /api/channels/:channelId/mcp-servers
-
-# Unregister channel MCP server
-DELETE /api/channels/:channelId/mcp-servers/:serverId
-```
-
-## Next Steps
-
-To create your own channel-scoped MCP server:
-
-1. **Create your MCP server** (see `simple-custom-mcp-server.ts` as template)
-2. **Define your tools** in the `tools/list` response
-3. **Implement tool execution** in the `tools/call` handler
-4. **Register via SDK**: `await agent.registerChannelMcpServer({ ... })`
-5. **Tools automatically available** to all channel members
-
-See `docs/sdk/external-mcp-servers.md` for the complete API reference, including the tool naming contract and server lifecycle rules.
+See `docs/sdk/external-mcp-servers.md` for the complete process-management contract.

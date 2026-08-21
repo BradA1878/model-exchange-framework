@@ -77,6 +77,7 @@ export interface ChannelTask {
     // Task coordination
     coordinationMode?: 'independent' | 'collaborative' | 'sequential' | 'hierarchical';
     leadAgentId?: AgentId;             // Primary coordinator for collaborative tasks
+    completionAgentId?: AgentId;       // Agent authorized to report the terminal outcome
     
     // Agent selection criteria
     agentSelectionCriteria?: {
@@ -147,6 +148,7 @@ export interface CreateTaskRequest {
     // Task coordination
     coordinationMode?: 'independent' | 'collaborative' | 'sequential' | 'hierarchical';
     leadAgentId?: AgentId;             // Primary coordinator for collaborative tasks
+    completionAgentId?: AgentId;       // Agent authorized to report the terminal outcome
     
     // Agent selection criteria
     agentSelectionCriteria?: {
@@ -175,6 +177,16 @@ export interface UpdateTaskRequest {
     metadata?: Record<string, any>;
     tags?: string[];
 }
+
+/**
+ * Fields that may be changed without performing a task lifecycle transition.
+ * Status and assignment changes go through dedicated operations so actor
+ * authorization and legal-state predicates remain on the database write.
+ */
+export type NonLifecycleTaskUpdateRequest = Omit<
+    UpdateTaskRequest,
+    'status' | 'assignedAgentId'
+>;
 
 /**
  * Agent assignment analysis from SystemLLM
@@ -275,7 +287,6 @@ export interface TaskOrchestrationConfig {
     // SystemLLM integration
     enableLlmAssignment: boolean;
     llmConfidenceThreshold: number;     // Minimum confidence for LLM assignments
-    fallbackStrategy: AssignmentStrategy;
     
     // Coordination behavior
     enableTaskDependencies: boolean;

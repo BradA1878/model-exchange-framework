@@ -51,7 +51,7 @@ This demo showcases:
 
 ### 1. Prerequisites
 
-- Node.js 18+ and npm
+- Bun
 - **Running MXF server** (see main project README):
   ```bash
   cd /path/to/mxf
@@ -64,11 +64,11 @@ This demo showcases:
 ```bash
 # Install game server dependencies
 cd examples/fog-of-war-game
-npm install
+bun install
 
 # Install Vue 3 client dependencies
 cd client
-npm install
+bun install
 cd ..
 ```
 
@@ -84,11 +84,16 @@ Edit `.env`:
 ```env
 MXF_SERVER_URL=http://localhost:3001
 MXF_DOMAIN_KEY=your-domain-key
-MXF_USERNAME=demo-user
-MXF_PASSWORD=demo-password-1234
+MXF_USERNAME=admin-user
+MXF_PASSWORD=admin-password
+MXF_UNSAFE_STDIO_MCP_ENABLED=true
 OPENROUTER_API_KEY=your-api-key
 GAME_SERVER_PORT=3002
 ```
+
+`MXF_UNSAFE_STDIO_MCP_ENABLED` belongs in the MXF server environment, and the
+configured user must have the `administrator` role. The flag permits the SDK to
+start the demo's MCP child process on the MXF host.
 
 ### 4. Run the Demo
 
@@ -218,7 +223,7 @@ This demo uses the **Model Context Protocol (MCP)** to expose game tools to AI a
 3. **AI Agents** - Use tools seamlessly via OpenRouter
 
 **Key Files**:
-- `server/mcp/FogOfWarMcpServer.ts` - MCP server with 7 game tools
+- `server/mcp/FogOfWarMcpServerHttp.ts` - stdio MCP adapter with 7 game tools
 - `connect-agents.ts` - Main entry point connecting everything
 - `docs/MCP_INTEGRATION.md` - Detailed integration guide
 
@@ -227,21 +232,27 @@ This demo uses the **Model Context Protocol (MCP)** to expose game tools to AI a
 ### Example: Creating a Commander Agent
 
 ```typescript
-import { MxfSDK } from 'mxf-sdk';
+import { MxfSDK } from '@mxf-dev/sdk';
 
 const sdk = new MxfSDK({
   serverUrl: process.env.MXF_SERVER_URL!,
-  domainKey: process.env.MXF_DOMAIN_KEY!
+  domainKey: process.env.MXF_DOMAIN_KEY!,
+  accessToken: process.env.MXF_ADMIN_ACCESS_TOKEN!
 });
 
 await sdk.connect();
 
 // Register custom MCP server with game tools
-const mcpResult = await adminAgent.registerExternalMcpServer({
+const mcpResult = await sdk.registerChannelMcpServer(channelId, {
   id: 'fog-of-war-game-server',
-  command: 'ts-node',
-  args: ['./server/mcp/FogOfWarMcpServer.ts'],
-  autoStart: true
+  name: 'Fog of War Game Tools',
+  transport: 'stdio',
+  command: 'bun',
+  args: ['run', './examples/fog-of-war-game/server/mcp/FogOfWarMcpServerHttp.ts'],
+  autoStart: true,
+  environmentVariables: {
+    GAME_SERVER_URL: 'http://localhost:3002'
+  }
 });
 
 // Create commander agent with game tools

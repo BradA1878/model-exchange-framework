@@ -24,11 +24,16 @@ jest.mock('@mxf-dev/core/schemas/ShellExecutionEventPayloads', () => ({
 import { BackgroundTaskManager } from '@mxf-dev/core/services/BackgroundTaskManager';
 
 /** Helper: wait for a task to leave the 'running' state */
-function waitForCompletion(manager: BackgroundTaskManager, taskId: string, timeoutMs = 5000): Promise<void> {
+function waitForCompletion(
+    manager: BackgroundTaskManager,
+    taskId: string,
+    principal: { agentId: string; channelId: string },
+    timeoutMs = 5000
+): Promise<void> {
     return new Promise((resolve, reject) => {
         const start = Date.now();
         const interval = setInterval(() => {
-            const status = manager.getTaskStatus(taskId);
+            const status = manager.getTaskStatus(taskId, principal);
             if (!status || status.status !== 'running') {
                 clearInterval(interval);
                 resolve();
@@ -42,6 +47,7 @@ function waitForCompletion(manager: BackgroundTaskManager, taskId: string, timeo
 
 describe('BackgroundTaskManager', () => {
     let manager: BackgroundTaskManager;
+    let originalWorkspaceRoot: string | undefined;
 
     const ctx = {
         agentId: 'test-agent',
@@ -50,11 +56,18 @@ describe('BackgroundTaskManager', () => {
     };
 
     beforeAll(() => {
+        originalWorkspaceRoot = process.env.MXF_WORKSPACE_ROOT;
+        process.env.MXF_WORKSPACE_ROOT = process.cwd();
         manager = BackgroundTaskManager.getInstance();
     });
 
-    afterAll(() => {
-        manager.shutdown();
+    afterAll(async (): Promise<void> => {
+        await manager.shutdown();
+        if (originalWorkspaceRoot === undefined) {
+            delete process.env.MXF_WORKSPACE_ROOT;
+        } else {
+            process.env.MXF_WORKSPACE_ROOT = originalWorkspaceRoot;
+        }
     });
 
     // ---- Singleton ----
@@ -74,7 +87,7 @@ describe('BackgroundTaskManager', () => {
             const { taskId } = await manager.startBackground('echo hello', {}, ctx);
             expect(typeof taskId).toBe('string');
             expect(taskId.length).toBeGreaterThan(0);
-            await waitForCompletion(manager, taskId);
+            await waitForCompletion(manager, taskId, ctx);
         });
 
         it('generates unique taskIds for each invocation', async () => {
@@ -82,8 +95,8 @@ describe('BackgroundTaskManager', () => {
             const { taskId: id2 } = await manager.startBackground('echo b', {}, ctx);
             expect(id1).not.toBe(id2);
             await Promise.all([
-                waitForCompletion(manager, id1),
-                waitForCompletion(manager, id2)
+                waitForCompletion(manager, id1, ctx),
+                waitForCompletion(manager, id2, ctx)
             ]);
         });
     });
@@ -92,12 +105,12 @@ describe('BackgroundTaskManager', () => {
 
     describe('getTaskStatus', () => {
         it('returns null for an unknown taskId', () => {
-            expect(manager.getTaskStatus('nonexistent-id')).toBeNull();
+            expect(manager.getTaskStatus('nonexistent-id', ctx)).toBeNull();
         });
 
         it('returns running status immediately after start for a slow command', async () => {
             const { taskId } = await manager.startBackground('sleep 2', {}, ctx);
-            const status = manager.getTaskStatus(taskId);
+            const status = manager.getTaskStatus(taskId, ctx);
             expect(status).not.toBeNull();
             expect(status!.status).toBe('running');
             expect(status!.command).toBe('sleep 2');
@@ -106,14 +119,14 @@ describe('BackgroundTaskManager', () => {
             expect(status!.startTime).toBeGreaterThan(0);
             expect(status!.exitCode).toBeUndefined();
             // Clean up: cancel the long-running task
-            manager.cancelTask(taskId);
-            await waitForCompletion(manager, taskId);
+            manager.cancelTask(taskId, ctx);
+            await waitForCompletion(manager, taskId, ctx);
         });
 
         it('shows completed status with exitCode 0 after successful command', async () => {
             const { taskId } = await manager.startBackground('echo done', {}, ctx);
-            await waitForCompletion(manager, taskId);
-            const status = manager.getTaskStatus(taskId);
+            await waitForCompletion(manager, taskId, ctx);
+            const status = manager.getTaskStatus(taskId, ctx);
             expect(status).not.toBeNull();
             expect(status!.status).toBe('completed');
             expect(status!.exitCode).toBe(0);
@@ -123,8 +136,8 @@ describe('BackgroundTaskManager', () => {
 
         it('shows failed status for a command that exits non-zero', async () => {
             const { taskId } = await manager.startBackground('exit 1', {}, ctx);
-            await waitForCompletion(manager, taskId);
-            const status = manager.getTaskStatus(taskId);
+            await waitForCompletion(manager, taskId, ctx);
+            const status = manager.getTaskStatus(taskId, ctx);
             expect(status).not.toBeNull();
             expect(status!.status).toBe('failed');
             expect(status!.exitCode).toBe(1);
@@ -136,8 +149,8 @@ describe('BackgroundTaskManager', () => {
                 { description: 'My task description' },
                 ctx
             );
-            await waitForCompletion(manager, taskId);
-            const status = manager.getTaskStatus(taskId);
+            await waitForCompletion(manager, taskId, ctx);
+            const status = manager.getTaskStatus(taskId, ctx);
             expect(status!.description).toBe('My task description');
         });
     });
@@ -146,13 +159,13 @@ describe('BackgroundTaskManager', () => {
 
     describe('getTaskOutput', () => {
         it('returns null for an unknown taskId', () => {
-            expect(manager.getTaskOutput('nonexistent-id')).toBeNull();
+            expect(manager.getTaskOutput('nonexistent-id', ctx)).toBeNull();
         });
 
         it('returns the command output after completion', async () => {
             const { taskId } = await manager.startBackground('echo hello_world', {}, ctx);
-            await waitForCompletion(manager, taskId);
-            const output = manager.getTaskOutput(taskId);
+            await waitForCompletion(manager, taskId, ctx);
+            const output = manager.getTaskOutput(taskId, ctx);
             expect(output).not.toBeNull();
             expect(output!.trim()).toBe('hello_world');
         });
@@ -163,11 +176,46 @@ describe('BackgroundTaskManager', () => {
                 {},
                 ctx
             );
-            await waitForCompletion(manager, taskId);
-            const output = manager.getTaskOutput(taskId);
+            await waitForCompletion(manager, taskId, ctx);
+            const output = manager.getTaskOutput(taskId, ctx);
             expect(output).toContain('line1');
             expect(output).toContain('line2');
             expect(output).toContain('line3');
+        });
+    });
+
+    describe('principal ownership', () => {
+        it('allows the exact agent and channel to read its task', async () => {
+            const { taskId } = await manager.startBackground('echo owner_only', {}, ctx);
+            await waitForCompletion(manager, taskId, ctx);
+
+            expect(manager.getTaskStatus(taskId, ctx)?.taskId).toBe(taskId);
+            expect(manager.getTaskOutput(taskId, ctx)?.trim()).toBe('owner_only');
+        });
+
+        it('hides task status and output from another agent or channel', async () => {
+            const { taskId } = await manager.startBackground('echo private', {}, ctx);
+            await waitForCompletion(manager, taskId, ctx);
+
+            const wrongAgent = { agentId: 'other-agent', channelId: ctx.channelId };
+            const wrongChannel = { agentId: ctx.agentId, channelId: 'other-channel' };
+
+            expect(manager.getTaskStatus(taskId, wrongAgent)).toBeNull();
+            expect(manager.getTaskOutput(taskId, wrongAgent)).toBeNull();
+            expect(manager.getTaskStatus(taskId, wrongChannel)).toBeNull();
+            expect(manager.getTaskOutput(taskId, wrongChannel)).toBeNull();
+            expect(manager.listTasks(wrongAgent).some(task => task.taskId === taskId)).toBe(false);
+            expect(manager.listTasks(wrongChannel).some(task => task.taskId === taskId)).toBe(false);
+        });
+
+        it('denies cross-principal cancellation without affecting the owner task', async () => {
+            const { taskId } = await manager.startBackground('sleep 30', {}, ctx);
+            const foreignPrincipal = { agentId: 'other-agent', channelId: ctx.channelId };
+
+            expect(manager.cancelTask(taskId, foreignPrincipal)).toBe(false);
+            expect(manager.getTaskStatus(taskId, ctx)?.status).toBe('running');
+            expect(manager.cancelTask(taskId, ctx)).toBe(true);
+            await waitForCompletion(manager, taskId, ctx);
         });
     });
 
@@ -175,23 +223,23 @@ describe('BackgroundTaskManager', () => {
 
     describe('cancelTask', () => {
         it('returns false for an unknown taskId', () => {
-            expect(manager.cancelTask('nonexistent-id')).toBe(false);
+            expect(manager.cancelTask('nonexistent-id', ctx)).toBe(false);
         });
 
         it('returns false for an already-completed task', async () => {
             const { taskId } = await manager.startBackground('echo fast', {}, ctx);
-            await waitForCompletion(manager, taskId);
-            expect(manager.cancelTask(taskId)).toBe(false);
+            await waitForCompletion(manager, taskId, ctx);
+            expect(manager.cancelTask(taskId, ctx)).toBe(false);
         });
 
         it('returns true and cancels a running task', async () => {
             const { taskId } = await manager.startBackground('sleep 30', {}, ctx);
             // Give the process a moment to start
             await new Promise(r => setTimeout(r, 100));
-            const cancelled = manager.cancelTask(taskId);
+            const cancelled = manager.cancelTask(taskId, ctx);
             expect(cancelled).toBe(true);
-            await waitForCompletion(manager, taskId);
-            const status = manager.getTaskStatus(taskId);
+            await waitForCompletion(manager, taskId, ctx);
+            const status = manager.getTaskStatus(taskId, ctx);
             expect(status!.status).toBe('cancelled');
         });
     });
@@ -200,14 +248,14 @@ describe('BackgroundTaskManager', () => {
 
     describe('listTasks', () => {
         it('returns an array', () => {
-            const tasks = manager.listTasks();
+            const tasks = manager.listTasks(ctx);
             expect(Array.isArray(tasks)).toBe(true);
         });
 
         it('includes tasks started in this test run', async () => {
             const { taskId } = await manager.startBackground('echo listed', {}, ctx);
-            await waitForCompletion(manager, taskId);
-            const tasks = manager.listTasks();
+            await waitForCompletion(manager, taskId, ctx);
+            const tasks = manager.listTasks(ctx);
             const found = tasks.find(t => t.taskId === taskId);
             expect(found).toBeDefined();
             expect(found!.command).toBe('echo listed');
@@ -220,12 +268,12 @@ describe('BackgroundTaskManager', () => {
             const { taskId: idA } = await manager.startBackground('echo a', {}, ctxA);
             const { taskId: idB } = await manager.startBackground('echo b', {}, ctxB);
             await Promise.all([
-                waitForCompletion(manager, idA),
-                waitForCompletion(manager, idB)
+                waitForCompletion(manager, idA, ctxA),
+                waitForCompletion(manager, idB, ctxB)
             ]);
 
-            const tasksA = manager.listTasks('agent-AAA');
-            const tasksB = manager.listTasks('agent-BBB');
+            const tasksA = manager.listTasks(ctxA);
+            const tasksB = manager.listTasks(ctxB);
 
             expect(tasksA.some(t => t.taskId === idA)).toBe(true);
             expect(tasksA.some(t => t.taskId === idB)).toBe(false);
@@ -244,10 +292,10 @@ describe('BackgroundTaskManager', () => {
             const startPromises: Promise<{ taskId: string }>[] = [];
 
             // First, cancel any remaining running tasks to get a clean slate
-            const currentTasks = manager.listTasks();
+            const currentTasks = manager.listTasks(ctx);
             for (const t of currentTasks) {
                 if (t.status === 'running') {
-                    manager.cancelTask(t.taskId);
+                    manager.cancelTask(t.taskId, ctx);
                 }
             }
             // Wait briefly for cancellations to settle
@@ -274,28 +322,47 @@ describe('BackgroundTaskManager', () => {
 
             // Clean up: cancel all long-running tasks
             for (const id of longTaskIds) {
-                manager.cancelTask(id);
+                manager.cancelTask(id, {
+                    agentId: `limit-test-${longTaskIds.indexOf(id)}`,
+                    channelId: 'ch'
+                });
             }
-            await Promise.all(longTaskIds.map(id => waitForCompletion(manager, id)));
+            await Promise.all(longTaskIds.map((id, index) => waitForCompletion(
+                manager,
+                id,
+                { agentId: `limit-test-${index}`, channelId: 'ch' }
+            )));
         });
     });
 
     // ---- Shutdown ----
 
     describe('shutdown', () => {
-        it('cancels running tasks on shutdown', async () => {
+        it('cancels and drains running tasks on shutdown', async () => {
             // Get a fresh-ish manager (same singleton, but we can still test behavior)
             const { taskId } = await manager.startBackground('sleep 30', {}, ctx);
             await new Promise(r => setTimeout(r, 100));
 
-            const statusBefore = manager.getTaskStatus(taskId);
+            const statusBefore = manager.getTaskStatus(taskId, ctx);
             expect(statusBefore!.status).toBe('running');
 
-            manager.shutdown();
+            const activeManager = manager;
+            const shutdown = manager.shutdown();
+            expect(BackgroundTaskManager.getInstance()).toBe(activeManager);
+            const concurrentShutdown = BackgroundTaskManager.shutdownExisting();
+            await expect(activeManager.startBackground('echo too-late', {}, ctx))
+                .rejects.toThrow('is shutting down');
+            await shutdown;
+            await expect(concurrentShutdown).resolves.toBe(true);
 
-            const statusAfter = manager.getTaskStatus(taskId);
+            const statusAfter = activeManager.getTaskStatus(taskId, ctx);
             expect(statusAfter!.status).toBe('cancelled');
             expect(statusAfter!.endTime).toBeGreaterThan(0);
+            expect(await BackgroundTaskManager.shutdownExisting()).toBe(false);
+
+            manager = BackgroundTaskManager.getInstance();
+            expect(manager).not.toBe(activeManager);
+            await manager.shutdown();
         });
     });
 });

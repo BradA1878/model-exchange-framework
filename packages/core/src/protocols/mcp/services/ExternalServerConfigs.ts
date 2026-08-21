@@ -74,8 +74,8 @@ export const SEQUENTIAL_THINKING_SERVER_CONFIG: ExternalServerConfig = {
 /**
  * Configuration for the Filesystem MCP Server.
  *
- * The allowed roots are the configured workspace directory plus a scratch
- * directory. This used to pass `os.homedir()`, which handed every agent read
+ * The only allowed root is the configured workspace directory. This used to
+ * pass `os.homedir()`, which handed every agent read
  * access to the entire home directory — including ~/.ssh, ~/.aws, and
  * ~/.mxf/config.json, which is where the MXF CLI stores its own credentials.
  *
@@ -95,8 +95,7 @@ export const FILESYSTEM_SERVER_CONFIG: ExternalServerConfig = {
         '@modelcontextprotocol/server-filesystem',
         // Empty when unset. getFilesystemServerConfig() below is what callers
         // should use — it fails fast rather than spawning a server with no root.
-        getWorkspaceRoot() ?? '',
-        '/tmp/mcp-workspace'
+        getWorkspaceRoot() ?? ''
     ].filter(arg => arg.length > 0),
     // Only auto-start when a workspace is configured.
     autoStart: getWorkspaceRoot() !== undefined,
@@ -119,7 +118,12 @@ export const GIT_SERVER_CONFIG: ExternalServerConfig = {
     version: '0.6.0',
     description: 'Git repository reading, searching, and manipulation',
     command: 'uvx',
-    args: ['mcp-server-git', '--repository', process.cwd()],
+    // This disabled legacy config must not silently inherit the server cwd if a
+    // caller imports and starts it directly. With no configured root, uvx gets
+    // no server arguments and fails instead of opening an implicit repository.
+    args: getWorkspaceRoot()
+        ? ['mcp-server-git', '--repository', getWorkspaceRoot()!]
+        : [],
     autoStart: false, // DISABLED: MCP protocol integration issues
     restartOnCrash: true,
     healthCheckInterval: 30000,
@@ -239,6 +243,19 @@ export const TIME_SERVER_CONFIG: ExternalServerConfig = {
 };
 
 /**
+ * Whether an n8n API key is configured.
+ *
+ * Gates N8N_SERVER_CONFIG's autoStart: n8n starts only when an API key is
+ * configured; without one the server cannot authenticate against any n8n
+ * instance and cannot do anything, and its `search_nodes` tool shadows the
+ * memory server's tool of the same name (see HybridMcpToolRegistry's
+ * raw-name collision handling).
+ */
+const hasN8nApiKey = (): boolean => {
+    return (process.env.N8N_API_KEY ?? '').trim().length > 0;
+};
+
+/**
  * Configuration for the n8n MCP Server
  * Provides workflow automation with 400+ service integrations
  * Supports both self-hosted (free) and cloud deployments
@@ -250,7 +267,9 @@ export const N8N_SERVER_CONFIG: ExternalServerConfig = {
     description: 'Workflow automation and management with 400+ integrations including Gmail, Slack, Airtable, Notion, GitHub, Stripe, and more',
     command: 'npx',
     args: ['-y', 'n8n-mcp@latest'],
-    autoStart: true, // Enable for workflow automation capabilities
+    // n8n starts only when an API key is configured; without one the server
+    // cannot do anything and its search_nodes shadows the memory server's.
+    autoStart: hasN8nApiKey(),
     restartOnCrash: true,
     healthCheckInterval: 30000,
     maxRestartAttempts: 3,
@@ -341,8 +360,7 @@ export const getFilesystemServerConfig = (): ExternalServerConfig => {
         args: [
             '-y',
             '@modelcontextprotocol/server-filesystem',
-            workspaceRoot,
-            '/tmp/mcp-workspace'
+            workspaceRoot
         ],
         autoStart: true
     };

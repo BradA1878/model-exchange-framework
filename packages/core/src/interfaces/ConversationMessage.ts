@@ -41,6 +41,11 @@ export type MessageType =
     | 'agent-message-received'  // Message received from another agent
     | 'tool-result'             // Result from tool execution
     | 'system-notice'           // System intervention or notice
+    | 'system-event'            // Framework event injected into conversation context
+    | 'systemllm-coordination'  // Ephemeral SystemLLM coordination context
+    | 'channel-message-immediate' // Channel notification awaiting agent review
+    | 'error_feedback'          // Validation or execution feedback
+    | 'error_correction_trigger' // Prompt to correct an earlier invalid action
     | 'action-history'          // Historical action summary
     | 'llm-response';           // Direct LLM response
 

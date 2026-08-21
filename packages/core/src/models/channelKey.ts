@@ -51,6 +51,11 @@ export interface IChannelKey extends Document {
     // chose its own agentId, so one shared key let a client present any agent identity.
     agentId: string;
 
+    // Maximum tool capability carried by this credential. A connecting agent
+    // may narrow this list, but can never grant itself tools outside it.
+    // Omission means the curated core-tool maximum; [] denies every tool.
+    allowedTools?: string[];
+
     // Optional name for the key (for user reference)
     name?: string;
     
@@ -92,6 +97,11 @@ const ChannelKeySchema: Schema = new Schema({
         type: String,
         required: true,
         index: true,
+    },
+    allowedTools: {
+        type: [String],
+        required: false,
+        default: undefined,
     },
     name: {
         type: String,

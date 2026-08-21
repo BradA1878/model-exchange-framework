@@ -29,7 +29,7 @@
  * - Prevent infinite correction loops
  */
 
-import { Observable, Subject } from 'rxjs';
+import { Observable, Subject, Subscription } from 'rxjs';
 import { Logger } from '../utils/Logger.js';
 import { EventBus } from '../events/EventBus.js';
 import { Events } from '../events/EventNames.js';
@@ -96,8 +96,13 @@ export class ToolExecutionInterceptor {
     
     // Configuration
     private config: InterceptorConfig;
-    
-    private static instance: ToolExecutionInterceptor;
+    private readonly subscriptions: Subscription[] = [];
+    private readonly pendingDelays = new Map<
+        ReturnType<typeof setTimeout>,
+        (reason?: unknown) => void
+    >();
+
+    private static instance: ToolExecutionInterceptor | undefined;
 
     private constructor() {
         this.logger = new Logger('info', 'ToolExecutionInterceptor', 'server');
@@ -340,7 +345,14 @@ export class ToolExecutionInterceptor {
      * Add delay for retry attempts
      */
     private delay(ms: number): Promise<void> {
-        return new Promise(resolve => setTimeout(resolve, ms));
+        return new Promise((resolve, reject) => {
+            const timer = setTimeout(() => {
+                this.pendingDelays.delete(timer);
+                resolve();
+            }, ms);
+            timer.unref?.();
+            this.pendingDelays.set(timer, reject);
+        });
     }
 
     /**
@@ -362,16 +374,16 @@ export class ToolExecutionInterceptor {
      */
     private setupEventListeners(): void {
         // Listen to auto-correction events for additional processing
-        this.autoCorrectionService.correctionEvents.subscribe(attempt => {
+        this.subscriptions.push(this.autoCorrectionService.correctionEvents.subscribe(_attempt => {
             if (this.config.enableLearning) {
             }
-        });
+        }));
 
         // Listen to general tool errors for monitoring
-        EventBus.server.on(Events.Mcp.TOOL_ERROR, (payload) => {
+        this.subscriptions.push(EventBus.server.on(Events.Mcp.TOOL_ERROR, (_payload) => {
             if (this.config.logAllInterceptions) {
             }
-        });
+        }));
 
     }
 
@@ -476,6 +488,25 @@ export class ToolExecutionInterceptor {
     public clearExecutionHistory(): void {
         this.executionHistory.clear();
         this.activeExecutions.clear();
+    }
+
+    /** Cancel pending retry delays and detach every owned subscription. */
+    public shutdown(): void {
+        for (const [timer, reject] of this.pendingDelays) {
+            clearTimeout(timer);
+            reject(new Error('Tool execution interceptor is shutting down'));
+        }
+        this.pendingDelays.clear();
+        for (const subscription of this.subscriptions) {
+            subscription.unsubscribe();
+        }
+        this.subscriptions.length = 0;
+        this.clearExecutionHistory();
+        this.interceptionEvents$.complete();
+
+        if (ToolExecutionInterceptor.instance === this) {
+            ToolExecutionInterceptor.instance = undefined;
+        }
     }
 
     /**

@@ -83,31 +83,31 @@ These tools enable agents to **explicitly structure their thinking** using the O
 **Example:**
 ```typescript
 // Document observation
-await agent.callTool('orpar_observe', {
+await agent.executeTool('orpar_observe', {
     observations: 'Q1: "Is it alive?" → YES',
     keyFacts: ['The secret is alive']
 });
 
 // Document reasoning (required after observe)
-await agent.callTool('orpar_reason', {
+await agent.executeTool('orpar_reason', {
     analysis: 'Based on answers, likely a pet animal.',
     confidence: 0.7
 });
 
 // Document plan (required after reason)
-await agent.callTool('orpar_plan', {
+await agent.executeTool('orpar_plan', {
     plan: 'Ask about size to narrow possibilities.'
 });
 
 // Execute action and document
-await agent.callTool('game_askQuestion', { question: 'Is it small?' });
-await agent.callTool('orpar_act', {
+await agent.executeTool('game_askQuestion', { question: 'Is it small?' });
+await agent.executeTool('orpar_act', {
     action: 'Asked size question',
     outcome: 'YES'
 });
 
 // Document reflection (completes cycle)
-await agent.callTool('orpar_reflect', {
+await agent.executeTool('orpar_reflect', {
     reflection: 'It is a small, living pet. Likely hamster or mouse.'
 });
 ```

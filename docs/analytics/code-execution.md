@@ -662,7 +662,7 @@ async function benchmarkCode(agent: MxfClient, code: string, iterations: number 
     console.log(`Running ${iterations} iterations...`);
 
     for (let i = 0; i < iterations; i++) {
-        const result = await agent.callTool('code_execute', { code });
+        const result = await agent.executeTool('code_execute', { code });
 
         if (result.success) {
             times.push(result.executionTime);

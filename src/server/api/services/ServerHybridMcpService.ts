@@ -156,6 +156,15 @@ export class ServerHybridMcpService {
     }
 
     /**
+     * Return the running singleton without creating process-management state.
+     * Lifecycle cleanup uses this to avoid booting the hybrid MCP subsystem
+     * merely because a channel with no live processes is being deleted.
+     */
+    public static getExistingInstance(): ServerHybridMcpService | null {
+        return ServerHybridMcpService.instance;
+    }
+
+    /**
      * Ensure required directories exist for external MCP servers
      */
     private async ensureRequiredDirectories(): Promise<void> {
@@ -324,13 +333,15 @@ export class ServerHybridMcpService {
     public async getInternalTools(): Promise<HybridToolInfo[]> {
         try {
             const tools = await firstValueFrom(McpToolRegistry.getInstance().listTools());
-            return tools.map(tool => ({
-                name: tool.name,
-                description: tool.description,
-                inputSchema: tool.inputSchema,
-                source: 'internal' as const,
-                enabled: tool.enabled
-            }));
+            return tools
+                .filter(tool => !tool.providerId?.startsWith('external-mcp:'))
+                .map(tool => ({
+                    name: tool.name,
+                    description: tool.description,
+                    inputSchema: tool.inputSchema,
+                    source: 'internal' as const,
+                    enabled: tool.enabled
+                }));
         } catch (error) {
             logger.error(`Failed to get internal tools: ${error instanceof Error ? error.message : String(error)}`);
             return [];
@@ -390,16 +401,21 @@ export class ServerHybridMcpService {
      * Shutdown the service
      */
     public async shutdown(): Promise<void> {
-        
         try {
-            // Clear the published registry
+            // Stop exposing this instance before tearing down its subjects. The
+            // late-bound provider otherwise retains a closure to a completed
+            // HybridMcpToolRegistry after shutdown.
             clearHybridMcpToolRegistry();
+            McpToolRegistry.getInstance().clearExternalToolsProvider();
+            await this.hybridRegistry.shutdown();
 
             // Shutdown external servers
             await this.externalServerManager.shutdown();
-            
+
             this.initialized = false;
+            ServerHybridMcpService.instance = null;
         } catch (error) {
+            ServerHybridMcpService.instance = null;
             logger.error(`❌ Error during ServerHybridMcpService shutdown: ${error instanceof Error ? error.message : String(error)}`);
             throw error;
         }

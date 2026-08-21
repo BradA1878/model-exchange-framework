@@ -25,8 +25,8 @@
  * Pure database operations service - no caching.
  */
 
-import { Observable, from, of, throwError } from 'rxjs';
-import { map, catchError, tap, switchMap } from 'rxjs/operators';
+import { Observable, from, throwError } from 'rxjs';
+import { map, catchError, switchMap } from 'rxjs/operators';
 import { v4 as uuidv4 } from 'uuid';
 
 import { 
@@ -51,7 +51,11 @@ import {
 } from '@mxf-dev/core/models/memoryStrata';
 import { MemoryUtility } from '@mxf-dev/core/models/memoryUtility';
 import { MemoryUtilitySubdocument } from '@mxf-dev/core/types/MemoryUtilityTypes';
-import { IMemoryPersistence } from '@mxf-dev/core/interfaces/IMemoryPersistence';
+import {
+    ChannelMemoryAtomicMutation,
+    ChannelMemoryAtomicMutationResult,
+    IMemoryPersistence
+} from '@mxf-dev/core/interfaces/IMemoryPersistence';
 
 /**
  * Memory Persistence Service interface
@@ -84,6 +88,12 @@ export interface IMemoryPersistenceService {
      * @returns Observable of saved channel memory
      */
     saveChannelMemory(memory: IChannelMemory): Observable<IChannelMemory>;
+
+    /** Atomically mutate one reserved field in a channel-memory document. */
+    mutateChannelMemory(
+        channelId: string,
+        mutation: ChannelMemoryAtomicMutation
+    ): Observable<ChannelMemoryAtomicMutationResult>;
     
     /**
      * Get relationship memory from persistent storage
@@ -125,6 +135,21 @@ export class MemoryPersistenceService implements IMemoryPersistenceService, IMem
     
     // Logger
     private logger = new Logger('debug', 'MemoryPersistenceService', 'server');
+
+    private isChannelIdentityConflict(error: unknown, channelId: string): boolean {
+        if (!error || typeof error !== 'object') {
+            return false;
+        }
+        const duplicate = error as {
+            code?: unknown;
+            keyPattern?: Record<string, unknown>;
+            keyValue?: Record<string, unknown>;
+        };
+        return duplicate.code === 11000 && (
+            duplicate.keyPattern?.channelId === 1 ||
+            duplicate.keyValue?.channelId === channelId
+        );
+    }
     
     /**
      * Private constructor for singleton pattern
@@ -160,8 +185,6 @@ export class MemoryPersistenceService implements IMemoryPersistenceService, IMem
                 }
                 return doc.toObject() as IAgentMemory;
             }),
-            tap(memory => {
-            }),
             catchError(error => {
                 this.logger.error(`Error getting agent memory for ${agentId}`, error);
                 return throwError(() => error);
@@ -177,126 +200,42 @@ export class MemoryPersistenceService implements IMemoryPersistenceService, IMem
     public saveAgentMemory(memory: IAgentMemory): Observable<IAgentMemory> {
         this.validator.assertIsObject(memory, 'Memory must be an object');
         this.validator.assertIsNonEmptyString(memory.agentId, 'Agent ID must be a non-empty string');
-
-
-        // Prepare update data - exclude _id, id, createdAt, and conversationHistory
-        const { id, _id, createdAt, conversationHistory, ...updateData } = memory as any;
-
-        // Build update operation
-        const updateOp: any = {
-            $set: {
-                ...updateData,
-                updatedAt: new Date()
-            },
-            $setOnInsert: {
-                id: memory.id || uuidv4(),
-                createdAt: memory.createdAt || new Date()
-            }
-        };
-
-        // CRITICAL: Check document size before appending to prevent MongoDB 16MB limit
-        // Append conversation history with size-based cleanup if needed
-        if (conversationHistory && Array.isArray(conversationHistory) && conversationHistory.length > 0) {
-            // First, get existing document to check size
-            return from(AgentMemory.findOne({ agentId: memory.agentId }).exec()).pipe(
-                switchMap(existingDoc => {
-                    // Calculate current document size
-                    const currentSize = existingDoc ? Buffer.byteLength(JSON.stringify(existingDoc.toObject()), 'utf8') : 0;
-                    const newMessagesSize = Buffer.byteLength(JSON.stringify(conversationHistory), 'utf8');
-                    const projectedSize = currentSize + newMessagesSize;
-
-                    // MongoDB 16MB limit, use 12MB as safe threshold (75%)
-                    const MONGODB_SAFE_LIMIT = 12 * 1024 * 1024;
-
-                    if (projectedSize > MONGODB_SAFE_LIMIT) {
-                        this.logger.warn(
-                            `⚠️  Agent ${memory.agentId} memory would exceed limit! ` +
-                            `Current: ${(currentSize / 1024 / 1024).toFixed(2)}MB, ` +
-                            `New: ${(newMessagesSize / 1024 / 1024).toFixed(2)}MB, ` +
-                            `Projected: ${(projectedSize / 1024 / 1024).toFixed(2)}MB. ` +
-                            `Using REPLACE instead of APPEND.`
-                        );
-
-                        // Use $set to REPLACE conversation history instead of appending
-                        // Keep only the new messages to prevent overflow
-                        updateOp.$set = {
-                            ...updateOp.$set,
-                            conversationHistory: conversationHistory  // Replace entire history
-                        };
-                    } else {
-                        // Safe to append
-                        updateOp.$push = {
-                            conversationHistory: { $each: conversationHistory }
-                        };
-                    }
-
-                    return from(
-                        AgentMemory.findOneAndUpdate(
-                            { agentId: memory.agentId },
-                            updateOp,
-                            { upsert: true, new: true }
-                        ).exec()
-                    );
-                }),
-                map(doc => doc.toObject() as IAgentMemory),
-                tap(savedMemory => {
-                }),
-                catchError(error => {
-                    // Handle duplicate key errors gracefully (race condition on concurrent saves)
-                    if (error.code === 11000 && error.message?.includes('id_1 dup key')) {
-                        // Silently retry once - the document now exists so update will succeed
-                        return from(
-                            AgentMemory.findOneAndUpdate(
-                                { agentId: memory.agentId },
-                                updateOp,
-                                { upsert: false, new: true } // Don't upsert, just update
-                            ).exec()
-                        ).pipe(
-                            map(doc => {
-                                if (!doc) {
-                                    throw new Error(`Agent memory document disappeared during retry for ${memory.agentId}`);
-                                }
-                                return doc.toObject() as IAgentMemory;
-                            })
-                        );
-                    }
-                    //this.logger.error(`Error saving agent memory for ${memory.agentId}`, error);
-                    return throwError(() => error);
-                })
-            );
+        if (!Array.isArray(memory.conversationHistory)) {
+            throw new Error('Agent memory save requires an authoritative conversation history array');
         }
 
-        // No conversation history to save, just update other fields
+        // The SDK sends the full authoritative snapshot. Persist it with `$set` so a
+        // second save cannot append the already-stored prefix or make a clear a no-op.
+        const updateData: Record<string, unknown> = { ...memory };
+        delete updateData.id;
+        delete updateData._id;
+        delete updateData.createdAt;
+        const now = new Date();
         return from(
             AgentMemory.findOneAndUpdate(
                 { agentId: memory.agentId },
-                updateOp,
-                { upsert: true, new: true }
+                {
+                    $set: {
+                        ...updateData,
+                        conversationHistory: [...memory.conversationHistory],
+                        updatedAt: now
+                    },
+                    $setOnInsert: {
+                        id: memory.id || uuidv4(),
+                        createdAt: memory.createdAt || now
+                    }
+                },
+                { upsert: true, new: true, setDefaultsOnInsert: true }
             ).exec()
         ).pipe(
-            map(doc => doc.toObject() as IAgentMemory),
-            tap(savedMemory => {
+            map(document => {
+                if (!document) {
+                    throw new Error(`Agent memory save returned no document for ${memory.agentId}`);
+                }
+                return document.toObject() as IAgentMemory;
             }),
             catchError(error => {
-                // Handle duplicate key errors gracefully (race condition on concurrent saves)
-                if (error.code === 11000 && error.message?.includes('id_1 dup key')) {
-                    // Silently retry once - the document now exists so update will succeed
-                    return from(
-                        AgentMemory.findOneAndUpdate(
-                            { agentId: memory.agentId },
-                            updateOp,
-                            { upsert: false, new: true } // Don't upsert, just update
-                        ).exec()
-                    ).pipe(
-                        map(doc => {
-                            if (!doc) {
-                                throw new Error(`Agent memory document disappeared during retry for ${memory.agentId}`);
-                            }
-                            return doc.toObject() as IAgentMemory;
-                        })
-                    );
-                }
-                //this.logger.error(`Error saving agent memory for ${memory.agentId}`, error);
+                this.logger.error(`Error saving agent memory for ${memory.agentId}`, error);
                 return throwError(() => error);
             })
         );
@@ -331,8 +270,6 @@ export class MemoryPersistenceService implements IMemoryPersistenceService, IMem
                 }
                 return doc.toObject() as IChannelMemory;
             }),
-            tap(memory => {
-            }),
             catchError(error => {
                 this.logger.error(`Error getting channel memory for ${channelId}`, error);
                 return throwError(() => error);
@@ -358,10 +295,179 @@ export class MemoryPersistenceService implements IMemoryPersistenceService, IMem
             ).exec()
         ).pipe(
             map(doc => doc.toObject() as IChannelMemory),
-            tap(savedMemory => {
-            }),
             catchError(error => {
                 this.logger.error(`Error saving channel memory for ${memory.channelId}`, error);
+                return throwError(() => error);
+            })
+        );
+    }
+
+    /**
+     * Atomically mutate a reserved keyed-channel field.
+     *
+     * Message and history batches use MongoDB's document-level `$push`, so two
+     * writers can never overwrite one another with stale read/modify/write
+     * snapshots. Context replacement uses a single `$set`. Every branch returns
+     * the database's post-update document as the authoritative result.
+     */
+    public mutateChannelMemory(
+        channelId: string,
+        mutation: ChannelMemoryAtomicMutation
+    ): Observable<ChannelMemoryAtomicMutationResult> {
+        this.validator.assertIsNonEmptyString(channelId, 'Channel ID must be a non-empty string');
+
+        const now = new Date();
+        const insertFields = {
+            id: uuidv4(),
+            channelId,
+            createdAt: now,
+            persistenceLevel: MemoryPersistenceLevel.PERSISTENT
+        };
+        let query: Record<string, unknown> = { channelId };
+        let update: Record<string, unknown>;
+        let upsert = true;
+
+        switch (mutation.kind) {
+            case 'append_messages':
+                if (mutation.messages.length === 0) {
+                    throw new Error('At least one channel message is required');
+                }
+                update = {
+                    $set: { updatedAt: now },
+                    $setOnInsert: insertFields,
+                    $push: { conversationHistory: { $each: mutation.messages } }
+                };
+                break;
+            case 'replace_context':
+                if (!mutation.context || typeof mutation.context !== 'object') {
+                    throw new Error('Channel context must be an object');
+                }
+                if (
+                    mutation.expectedUpdatedAt !== undefined &&
+                    (!Number.isFinite(mutation.expectedUpdatedAt) || mutation.expectedUpdatedAt < 0)
+                ) {
+                    throw new Error('Expected context updatedAt must be a non-negative number');
+                }
+                query = mutation.expectedUpdatedAt === undefined
+                    ? { channelId, 'sharedState.context': { $exists: false } }
+                    : {
+                        channelId,
+                        'sharedState.context.updatedAt': mutation.expectedUpdatedAt
+                    };
+                upsert = mutation.expectedUpdatedAt === undefined;
+                update = {
+                    $set: { 'sharedState.context': mutation.context, updatedAt: now },
+                    ...(upsert ? { $setOnInsert: insertFields } : {})
+                };
+                break;
+            case 'append_context_history':
+                if (mutation.entries.length === 0) {
+                    throw new Error('At least one channel context history entry is required');
+                }
+                if (!Number.isInteger(mutation.retainLast) || mutation.retainLast <= 0) {
+                    throw new Error('Context history retention must be a positive integer');
+                }
+                update = {
+                    $set: { updatedAt: now },
+                    $setOnInsert: insertFields,
+                    $push: {
+                        'customData.contextHistory': {
+                            $each: mutation.entries,
+                            $slice: -mutation.retainLast
+                        }
+                    }
+                };
+                break;
+            case 'delete_messages':
+                query = { channelId, conversationHistory: { $exists: true } };
+                update = { $set: { conversationHistory: [], updatedAt: now } };
+                upsert = false;
+                break;
+            case 'delete_context':
+                query = { channelId, 'sharedState.context': { $exists: true } };
+                update = {
+                    $set: { updatedAt: now },
+                    $unset: { 'sharedState.context': 1 }
+                };
+                upsert = false;
+                break;
+            case 'delete_context_history':
+                query = { channelId, 'customData.contextHistory': { $exists: true } };
+                update = {
+                    $set: { updatedAt: now },
+                    $unset: { 'customData.contextHistory': 1 }
+                };
+                upsert = false;
+                break;
+        }
+
+        return from(
+            ChannelMemory.findOneAndUpdate(
+                query,
+                update,
+                { upsert, new: true, setDefaultsOnInsert: upsert }
+            ).exec()
+        ).pipe(
+            map(document => {
+                if (!document) {
+                    return { found: false, memory: null, value: null };
+                }
+                const memory = document.toObject() as IChannelMemory;
+                let value: unknown;
+                switch (mutation.kind) {
+                    case 'append_messages':
+                    case 'delete_messages':
+                        value = memory.conversationHistory ?? [];
+                        break;
+                    case 'replace_context':
+                    case 'delete_context':
+                        value = memory.sharedState?.context ?? null;
+                        break;
+                    case 'append_context_history':
+                    case 'delete_context_history':
+                        value = memory.customData?.contextHistory ?? null;
+                        break;
+                }
+                return { found: true, memory, value };
+            }),
+            catchError(error => {
+                if (
+                    mutation.kind === 'replace_context' &&
+                    mutation.expectedUpdatedAt === undefined &&
+                    this.isChannelIdentityConflict(error, channelId)
+                ) {
+                    // A create-only CAS races by upserting against
+                    // `{channelId, context: {$exists: false}}`. If another writer
+                    // already owns that unique channel identity, MongoDB reports
+                    // E11000. Normalize only that exact identity collision into a
+                    // stale-writer result and return the winner's authoritative
+                    // context; every other database exception still propagates.
+                    return from(ChannelMemory.findOne({ channelId }).exec()).pipe(
+                        map(document => {
+                            const memory = document?.toObject() as IChannelMemory | undefined;
+                            const currentContext = memory?.sharedState?.context;
+                            if (!memory || currentContext === undefined) {
+                                throw error;
+                            }
+                            return {
+                                found: false,
+                                memory,
+                                value: currentContext
+                            };
+                        }),
+                        catchError(readError => {
+                            this.logger.error(
+                                `Error resolving create conflict for channel memory ${channelId}`,
+                                readError
+                            );
+                            return throwError(() => readError);
+                        })
+                    );
+                }
+                this.logger.error(
+                    `Error applying ${mutation.kind} to channel memory ${channelId}`,
+                    error
+                );
                 return throwError(() => error);
             })
         );
@@ -380,7 +486,7 @@ export class MemoryPersistenceService implements IMemoryPersistenceService, IMem
         
         const [sortedId1, sortedId2] = [agentId1, agentId2].sort();
         
-        const query: any = {
+        const query: Record<string, string> = {
             agentId1: sortedId1,
             agentId2: sortedId2
         };
@@ -410,8 +516,6 @@ export class MemoryPersistenceService implements IMemoryPersistenceService, IMem
                 }
                 return doc.toObject() as IRelationshipMemory;
             }),
-            tap(memory => {
-            }),
             catchError(error => {
                 this.logger.error(`Error getting relationship memory for ${sortedId1}:${sortedId2}${channelId ? `:${channelId}` : ''}`, error);
                 return throwError(() => error);
@@ -439,7 +543,7 @@ export class MemoryPersistenceService implements IMemoryPersistenceService, IMem
         };
         
         
-        const query: any = {
+        const query: Record<string, string> = {
             agentId1: sortedId1,
             agentId2: sortedId2
         };
@@ -456,8 +560,6 @@ export class MemoryPersistenceService implements IMemoryPersistenceService, IMem
             ).exec()
         ).pipe(
             map(doc => doc.toObject() as IRelationshipMemory),
-            tap(savedMemory => {
-            }),
             catchError(error => {
                 this.logger.error(`Error saving relationship memory for ${sortedId1}:${sortedId2}${memory.channelId ? `:${memory.channelId}` : ''}`, error);
                 return throwError(() => error);
@@ -472,13 +574,17 @@ export class MemoryPersistenceService implements IMemoryPersistenceService, IMem
      * @returns Observable of success status
      */
     public deleteMemory(scope: MemoryScope, id: string | string[]): Observable<boolean> {
-        
+        this.validator.validateMemoryScope(scope);
+
         switch (scope) {
-            case MemoryScope.AGENT:
-                if (typeof id === 'string') {
-                    // Delete from base AgentMemory collection
-                    return from(AgentMemory.deleteOne({ agentId: id }).exec()).pipe(
-                        switchMap(baseResult => {
+            case MemoryScope.AGENT: {
+                if (typeof id !== 'string') {
+                    throw new Error('Agent memory deletion requires one agent ID');
+                }
+                this.validator.assertIsNonEmptyString(id, 'Agent ID must be a non-empty string');
+                // Delete from base AgentMemory collection
+                return from(AgentMemory.deleteOne({ agentId: id }).exec()).pipe(
+                    switchMap(baseResult => {
                             // Delete from all strata collections in parallel
                             const strataDeletePromises = Promise.all([
                                 MemoryEntryModel.deleteMany({ agentId: id }).exec(),
@@ -512,58 +618,58 @@ export class MemoryPersistenceService implements IMemoryPersistenceService, IMem
                                     return baseResult.deletedCount > 0 || totalDeleted > 0;
                                 })
                             );
-                        }),
-                        catchError(error => {
-                            this.logger.error(`Error deleting agent memory for ${id}`, error);
-                            return of(false);
-                        })
+                    }),
+                    catchError(error => {
+                        this.logger.error(`Error deleting agent memory for ${id}`, error);
+                        return throwError(() => error);
+                    })
+                );
+            }
+            case MemoryScope.CHANNEL: {
+                if (typeof id !== 'string') {
+                    throw new Error('Channel memory deletion requires one channel ID');
+                }
+                this.validator.assertIsNonEmptyString(id, 'Channel ID must be a non-empty string');
+                return from(ChannelMemory.deleteOne({ channelId: id }).exec()).pipe(
+                    map(result => result.deletedCount > 0),
+                    catchError(error => {
+                        this.logger.error(`Error deleting channel memory for ${id}`, error);
+                        return throwError(() => error);
+                    })
+                );
+            }
+            case MemoryScope.RELATIONSHIP: {
+                if (!Array.isArray(id) || (id.length !== 2 && id.length !== 3)) {
+                    throw new Error(
+                        'Relationship memory deletion requires two agent IDs and an optional channel ID'
                     );
                 }
-                break;
-                
-            case MemoryScope.CHANNEL:
-                if (typeof id === 'string') {
-                    return from(ChannelMemory.deleteOne({ channelId: id }).exec()).pipe(
-                        map(result => result.deletedCount > 0),
-                        tap(success => {
-                        }),
-                        catchError(error => {
-                            this.logger.error(`Error deleting channel memory for ${id}`, error);
-                            return of(false);
-                        })
+                id.forEach((part, index) => {
+                    this.validator.assertIsNonEmptyString(
+                        part,
+                        `Relationship memory ID part ${index} must be a non-empty string`
                     );
+                });
+                const [agentId1, agentId2, channelId] = id;
+                const [sortedId1, sortedId2] = [agentId1, agentId2].sort();
+                const query: Record<string, string> = {
+                    agentId1: sortedId1,
+                    agentId2: sortedId2
+                };
+
+                if (channelId) {
+                    query.channelId = channelId;
                 }
-                break;
-                
-            case MemoryScope.RELATIONSHIP:
-                if (Array.isArray(id) && id.length >= 2) {
-                    const [agentId1, agentId2] = id;
-                    const channelId = id.length > 2 ? id[2] : undefined;
-                    const [sortedId1, sortedId2] = [agentId1, agentId2].sort();
-                    
-                    const query: any = {
-                        agentId1: sortedId1,
-                        agentId2: sortedId2
-                    };
-                    
-                    if (channelId) {
-                        query.channelId = channelId;
-                    }
-                    
-                    return from(RelationshipMemory.deleteOne(query).exec()).pipe(
-                        map(result => result.deletedCount > 0),
-                        tap(success => {
-                        }),
-                        catchError(error => {
-                            this.logger.error(`Error deleting relationship memory for ${sortedId1}:${sortedId2}${channelId ? `:${channelId}` : ''}`, error);
-                            return of(false);
-                        })
-                    );
-                }
-                break;
+
+                return from(RelationshipMemory.deleteOne(query).exec()).pipe(
+                    map(result => result.deletedCount > 0),
+                    catchError(error => {
+                        this.logger.error(`Error deleting relationship memory for ${sortedId1}:${sortedId2}${channelId ? `:${channelId}` : ''}`, error);
+                        return throwError(() => error);
+                    })
+                );
+            }
         }
-        
-        return of(false);
     }
     
     /**

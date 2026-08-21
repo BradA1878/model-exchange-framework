@@ -5,15 +5,15 @@
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
-    "build:client": "cd client && npm run build",
-    "build:all": "npm run build && npm run build:client",
-    "dev": "ts-node server/index.ts",
-    "dev:client": "cd client && npm run dev",
-    "connect-agents": "ts-node connect-agents.ts",
-    "game": "npm run connect-agents & PID=$!; cd client && npm run dev; kill $PID 2>/dev/null; lsof -ti:3006 | xargs kill -9 2>/dev/null; echo 'Cleaned up'",
-    "start": "node dist/index.js",
+    "build:client": "bun run --cwd client build",
+    "build:all": "bun run build && bun run build:client",
+    "dev": "bun run server/index.ts",
+    "dev:client": "bun run --cwd client dev",
+    "connect-agents": "NODE_ENV=development bun run connect-agents.ts",
+    "game": "bun run run-demo.ts",
+    "start": "bun run dist/index.js",
     "clean": "rm -rf dist && rm -rf client/dist",
-    "rebuild": "npm run clean && npm run build:all"
+    "rebuild": "bun run clean && bun run build:all"
   },
   "keywords": ["mxf", "multi-agent", "game", "go-fish", "cards", "demo"],
   "author": "MXF Team",

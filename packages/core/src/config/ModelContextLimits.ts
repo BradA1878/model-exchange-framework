@@ -39,7 +39,13 @@ const DEFAULT_CONTEXT_LIMIT = 128_000;
  * then walks prefixes so "claude-3.5-sonnet-20241022" matches "claude-3.5-sonnet".
  */
 const MODEL_CONTEXT_LIMITS: Record<string, number> = {
-    // Claude models
+    // Claude models. The `-latest` rows are OpenRouter's `~anthropic/...-latest`
+    // aliases, which resolve to the newest model in each family. Windows are
+    // as OpenRouter listed them on 2026-08-21; they move with each release.
+    'claude-fable-latest': 1_000_000,
+    'claude-opus-latest': 1_000_000,
+    'claude-sonnet-latest': 1_000_000,
+    'claude-haiku-latest': 200_000,
     'claude-opus-4': 200_000,
     'claude-sonnet-4': 200_000,
     'claude-3.5-sonnet': 200_000,

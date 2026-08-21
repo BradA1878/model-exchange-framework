@@ -32,10 +32,17 @@ import { Logger } from '@mxf-dev/core/utils/Logger';
 import { AgentId, ChannelId } from '@mxf-dev/core/types/ChannelContext';
 
 const logger = new Logger('info', 'ValidationAnalyticsController', 'server');
-const validationService = ValidationPerformanceService.getInstance();
-const analyticsService = ValidationAnalyticsService.getInstance();
-const optimizationService = PerformanceOptimizationService.getInstance();
-const predictiveService = PredictiveAnalyticsService.getInstance();
+
+// Resolve explicitly bootstrapped server singletons at request time. Importing a
+// route module must never start background workers before the server lifecycle owns them.
+const getValidationService = (): ValidationPerformanceService =>
+    ValidationPerformanceService.getInstance();
+const getAnalyticsService = (): ValidationAnalyticsService =>
+    ValidationAnalyticsService.getInstance();
+const getOptimizationService = (): PerformanceOptimizationService =>
+    PerformanceOptimizationService.getInstance();
+const getPredictiveService = (): PredictiveAnalyticsService =>
+    PredictiveAnalyticsService.getInstance();
 
 /**
  * Get validation metrics for an agent
@@ -52,13 +59,13 @@ export const getValidationMetrics = async (req: Request, res: Response) => {
 
 
         // Get base validation metrics
-        const metrics = await validationService.getValidationMetrics(agentId, channelId);
+        const metrics = await getValidationService().getValidationMetrics(agentId, channelId);
         
         // Get performance analysis
-        const analysis = await validationService.analyzeValidationPerformance(agentId, channelId);
+        const analysis = await getValidationService().analyzeValidationPerformance(agentId, channelId);
         
         // Get enhanced tool metrics
-        const enhancedMetrics = await validationService.getEnhancedToolMetrics(agentId, channelId);
+        const enhancedMetrics = await getValidationService().getEnhancedToolMetrics(agentId, channelId);
 
         // Combine all data for dashboard
         const response = {
@@ -119,7 +126,7 @@ export const getValidationEventStream = async (req: Request, res: Response) => {
         
         
         // Subscribe to validation events
-        const subscription = validationService.validationEvents.subscribe(event => {
+        const subscription = getValidationService().validationEvents.subscribe(event => {
             // Filter events for this agent/channel
             if (event.agentId === agentId && event.channelId === channelId) {
                 res.write(`data: ${JSON.stringify(event)}\n\n`);
@@ -156,7 +163,7 @@ export const getChannelValidationMetrics = async (req: Request, res: Response) =
 
 
         // Channel-wide aggregation using ValidationPerformanceService aggregate metrics
-        const aggregateMetrics = validationService.getAggregateMetrics();
+        const aggregateMetrics = getValidationService().getAggregateMetrics();
 
         const response = {
             channelId,
@@ -195,7 +202,7 @@ export const getValidationTrends = async (req: Request, res: Response) => {
         
 
         // Return current snapshot metrics (time-series requires persistent storage infrastructure)
-        const metrics = await validationService.getValidationMetrics(agentId, channelId);
+        const metrics = await getValidationService().getValidationMetrics(agentId, channelId);
         
         const response = {
             agentId,
@@ -234,9 +241,9 @@ export const exportValidationReport = async (req: Request, res: Response) => {
         
 
         // Get all metrics
-        const metrics = await validationService.getValidationMetrics(agentId, channelId);
-        const analysis = await validationService.analyzeValidationPerformance(agentId, channelId);
-        const enhanced = await validationService.getEnhancedToolMetrics(agentId, channelId);
+        const metrics = await getValidationService().getValidationMetrics(agentId, channelId);
+        const analysis = await getValidationService().analyzeValidationPerformance(agentId, channelId);
+        const enhanced = await getValidationService().getEnhancedToolMetrics(agentId, channelId);
 
         const report = {
             generatedAt: new Date().toISOString(),
@@ -305,7 +312,7 @@ export const getAggregatedAnalytics = async (req: Request, res: Response) => {
         const { timeRange = 'day' } = req.query;
         
 
-        const aggregated = await analyticsService.aggregateValidationMetrics(
+        const aggregated = await getAnalyticsService().aggregateValidationMetrics(
             timeRange as TimeRange
         );
 
@@ -334,7 +341,7 @@ export const getTrendAnalysis = async (req: Request, res: Response) => {
         }
 
 
-        const trends = await analyticsService.analyzeTrends(
+        const trends = await getAnalyticsService().analyzeTrends(
             metric as string,
             timeRange as TimeRange
         );
@@ -358,7 +365,7 @@ export const getABTestResults = async (req: Request, res: Response) => {
         const { testId } = req.params;
         
 
-        const results = analyticsService.getABTestResults(testId);
+        const results = getAnalyticsService().getABTestResults(testId);
         
         if (!results) {
             return res.status(404).json({
@@ -385,7 +392,7 @@ export const calculateROI = async (req: Request, res: Response) => {
         const { metric = 'validation_improvements', timeRange = 'month' } = req.query;
         
 
-        const roi = await analyticsService.calculateROI(
+        const roi = await getAnalyticsService().calculateROI(
             metric as string,
             timeRange as TimeRange
         );
@@ -407,13 +414,13 @@ export const calculateROI = async (req: Request, res: Response) => {
 export const getPerformanceBottlenecks = async (req: Request, res: Response) => {
     try {
 
-        const bottlenecks = await optimizationService.detectBottlenecks();
-        const recommendations = await optimizationService.generateRecommendations();
+        const bottlenecks = await getOptimizationService().detectBottlenecks();
+        const recommendations = await getOptimizationService().generateRecommendations();
 
         res.json({
             bottlenecks,
             recommendations: recommendations.slice(0, 10), // Top 10 recommendations
-            metrics: optimizationService.getMetrics()
+            metrics: getOptimizationService().getMetrics()
         });
         
     } catch (error) {
@@ -433,7 +440,7 @@ export const startPerformanceProfile = async (req: Request, res: Response) => {
         const { name } = req.body;
         
 
-        const profileId = optimizationService.startProfile(name);
+        const profileId = getOptimizationService().startProfile(name);
 
         res.json({
             profileId,
@@ -457,7 +464,7 @@ export const endPerformanceProfile = async (req: Request, res: Response) => {
         const { profileId } = req.params;
         
 
-        const profile = await optimizationService.endProfile(profileId);
+        const profile = await getOptimizationService().endProfile(profileId);
 
         res.json(profile);
         
@@ -484,7 +491,7 @@ export const predictErrors = async (req: Request, res: Response) => {
         }
 
 
-        const prediction = await predictiveService.predictErrors(
+        const prediction = await getPredictiveService().predictErrors(
             agentId as AgentId,
             channelId as ChannelId,
             toolName,
@@ -510,7 +517,7 @@ export const detectAnomalies = async (req: Request, res: Response) => {
         const { agentId, channelId, toolName, parameters, executionMetrics } = req.body;
         
 
-        const anomalies = await predictiveService.detectAnomalies(
+        const anomalies = await getPredictiveService().detectAnomalies(
             agentId as AgentId,
             channelId as ChannelId,
             toolName,
@@ -541,7 +548,7 @@ export const getProactiveSuggestions = async (req: Request, res: Response) => {
         const context = req.body;
         
 
-        const suggestions = await predictiveService.generateProactiveSuggestions(
+        const suggestions = await getPredictiveService().generateProactiveSuggestions(
             agentId as AgentId,
             channelId as ChannelId,
             context
@@ -575,7 +582,7 @@ export const calculateRiskScore = async (req: Request, res: Response) => {
         }
 
 
-        const riskScore = await predictiveService.calculateRiskScore(
+        const riskScore = await getPredictiveService().calculateRiskScore(
             agentId as AgentId,
             channelId as ChannelId,
             operation
@@ -600,7 +607,7 @@ export const generateCustomReport = async (req: Request, res: Response) => {
         const { reportId } = req.params;
         
 
-        const report = await analyticsService.generateCustomReport(reportId);
+        const report = await getAnalyticsService().generateCustomReport(reportId);
 
         res.json(report);
         
@@ -619,7 +626,7 @@ export const generateCustomReport = async (req: Request, res: Response) => {
 export const getModelMetadata = async (req: Request, res: Response) => {
     try {
 
-        const models = predictiveService.getModelMetadata();
+        const models = getPredictiveService().getModelMetadata();
 
         res.json({
             models,

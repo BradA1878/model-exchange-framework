@@ -30,7 +30,7 @@ import { Logger } from '../../../utils/Logger.js';
 import { createStrictValidator } from '../../../utils/validation.js';
 import { JSON_TOOLS } from '../../../constants/ToolNames.js';
 import fs from 'fs/promises';
-import path from 'path';
+import { resolveWorkspacePath } from '../security/McpToolPolicy.js';
 
 const logger = new Logger('info', 'JsonTools', 'server');
 const validator = createStrictValidator('JsonTools');
@@ -134,7 +134,7 @@ export const jsonAppendTool = {
                 throw new Error('entry must be provided');
             }
 
-            const filePath = path.resolve(input.path);
+            const filePath = resolveWorkspacePath(input.path, 'json_append path');
 
             let jsonData: any;
 
@@ -200,7 +200,10 @@ export const jsonAppendTool = {
             }
 
             // Write back to file atomically (write to temp, then rename)
-            const tempPath = `${filePath}.tmp.${Date.now()}`;
+            const tempPath = resolveWorkspacePath(
+                `${filePath}.tmp.${Date.now()}`,
+                'json_append temporary path'
+            );
             const jsonString = JSON.stringify(jsonData, null, 2);
 
             await fs.writeFile(tempPath, jsonString, 'utf-8');
@@ -305,7 +308,7 @@ export const jsonReadTool = {
         try {
             validator.assertIsString(input.path, 'path');
 
-            const filePath = path.resolve(input.path);
+            const filePath = resolveWorkspacePath(input.path, 'json_read path');
 
             const fileContent = await fs.readFile(filePath, 'utf-8');
             let jsonData = JSON.parse(fileContent);

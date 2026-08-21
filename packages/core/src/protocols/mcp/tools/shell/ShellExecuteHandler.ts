@@ -26,7 +26,7 @@
  * event emission. Replaces the inline handler in InfrastructureTools.ts.
  *
  * Key improvements over the original inline handler:
- * - Uses spawn() instead of exec() — streams output, no maxBuffer limit
+ * - Runs arbitrary commands only inside the Docker shell sandbox
  * - Interprets exit codes semantically (e.g., grep returning 1 = no matches, not error)
  * - Classifies commands (read-only, silent, category) for downstream decision-making
  * - Emits lifecycle events (started, completed, failed, destructive warning)
@@ -34,7 +34,6 @@
  * - Surfaces destructive command warnings as informational events
  */
 
-import { spawn } from 'child_process';
 import crypto from 'crypto';
 
 import { Events } from '../../../../events/EventNames.js';
@@ -48,10 +47,11 @@ import {
 import { getSecurityGuard, SecurityContext } from '../../security/McpSecurityGuard.js';
 import { getConfirmationManager } from '../../security/McpConfirmationManager.js';
 import {
+    assertCommandAllowlisted,
     buildShellChildEnv,
-    getShellAllowedCommands,
-    hasShellAllowlist,
-    isShellSandboxEnabled
+    isShellSandboxEnabled,
+    requireWorkspaceRoot,
+    resolveWorkspacePath
 } from '../../security/McpToolPolicy.js';
 import { Logger } from '../../../../utils/Logger.js';
 import { createStrictValidator } from '../../../../utils/validation.js';
@@ -61,7 +61,6 @@ import { classifyCommand } from './CommandClassification.js';
 import { getDestructiveWarnings } from './DestructiveCommandWarnings.js';
 import { interpretExitCode } from './CommandSemantics.js';
 import { processOutput } from './LargeOutputHandler.js';
-import { extractEffectiveCommands } from './ShellCommandParser.js';
 import { executeInSandbox } from './ShellSandbox.js';
 
 const logger = new Logger('info', 'ShellExecuteHandler', 'server');
@@ -184,50 +183,6 @@ function buildFullCommand(command: string, args?: string[]): string {
     return `${command} ${escapedArgs}`;
 }
 
-/**
- * Execute a command using spawn() wrapped in a Promise.
- * Returns stdout, stderr, and exit code once the process closes.
- */
-function spawnCommand(
-    fullCommand: string,
-    cwd: string,
-    env: NodeJS.ProcessEnv,
-    timeout: number
-): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-    return new Promise((resolve, reject) => {
-        const child = spawn(fullCommand, [], {
-            shell: true,
-            cwd,
-            env,
-            timeout
-        });
-
-        const stdoutChunks: Buffer[] = [];
-        const stderrChunks: Buffer[] = [];
-
-        child.stdout.on('data', (chunk: Buffer) => {
-            stdoutChunks.push(chunk);
-        });
-
-        child.stderr.on('data', (chunk: Buffer) => {
-            stderrChunks.push(chunk);
-        });
-
-        child.on('error', (err: Error) => {
-            // Spawn-level error (e.g., command not found, ENOENT)
-            reject(err);
-        });
-
-        child.on('close', (exitCode: number | null) => {
-            resolve({
-                stdout: Buffer.concat(stdoutChunks).toString('utf-8'),
-                stderr: Buffer.concat(stderrChunks).toString('utf-8'),
-                exitCode: exitCode ?? 1
-            });
-        });
-    });
-}
-
 // ---------------------------------------------------------------------------
 // Main execute function
 // ---------------------------------------------------------------------------
@@ -252,6 +207,16 @@ export async function execute(
     try {
         // ── 1. Validate input ──────────────────────────────────────────────
         validator.assertIsString(input.command, 'command');
+        if (!isShellSandboxEnabled()) {
+            throw new Error(
+                'shell_execute requires MXF_SHELL_SANDBOX_ENABLED=true; ' +
+                'host shell execution is not workspace-contained'
+            );
+        }
+        const workingDirectory = resolveWorkspacePath(
+            input.workingDirectory,
+            'shell_execute workingDirectory'
+        );
 
         // ── 2. Classify the command ────────────────────────────────────────
         const classification = classifyCommand(input.command);
@@ -261,7 +226,7 @@ export async function execute(
         const warningMessages = destructiveWarnings.map(w => w.warning);
 
         // ── 4. Security validation ─────────────────────────────────────────
-        const securityGuard = getSecurityGuard();
+        const securityGuard = getSecurityGuard(requireWorkspaceRoot('shell_execute'));
         const confirmationManager = getConfirmationManager();
 
         const securityContext: SecurityContext = {
@@ -320,23 +285,7 @@ export async function execute(
         // The allowlist comes from MXF_SHELL_ALLOWED_COMMANDS, not from the tool
         // input. An allowlist passed as an argument is chosen by the model it is
         // meant to restrict, which makes it decorative.
-        if (hasShellAllowlist()) {
-            const allowedCommands = getShellAllowedCommands();
-            // Use the parser to extract the effective command, handling env
-            // prefixes (FOO=bar cmd) and wrappers (sudo cmd, timeout 5 cmd)
-            const effectiveCommands = extractEffectiveCommands(input.command);
-            for (const effectiveCmd of effectiveCommands) {
-                // extractEffectiveCommands yields the full command line; compare
-                // on the base binary so `git status` matches an allowlisted `git`.
-                const baseCommand = effectiveCmd.trim().split(/\s+/)[0];
-                if (!allowedCommands.includes(baseCommand)) {
-                    throw new Error(
-                        `Command '${baseCommand}' is not in the configured allowlist ` +
-                        `(MXF_SHELL_ALLOWED_COMMANDS). Allowed: ${allowedCommands.join(', ')}`
-                    );
-                }
-            }
-        }
+        assertCommandAllowlisted(input.command);
 
         // ── 7. Build command string and compute hash ───────────────────────
         const fullCommand = buildFullCommand(input.command, input.args);
@@ -382,22 +331,15 @@ export async function execute(
             // container with no network, a read-only root, dropped capabilities
             // and resource limits. If Docker is unavailable, executeInSandbox
             // throws — it never falls back to running on the host.
-            const result = isShellSandboxEnabled()
-                ? await executeInSandbox(
-                    fullCommand,
-                    { enabled: true },
-                    {
-                        timeout,
-                        workingDirectory: input.workingDirectory,
-                        environment: childEnv as Record<string, string>
-                    }
-                )
-                : await spawnCommand(
-                    fullCommand,
-                    input.workingDirectory || process.cwd(),
-                    childEnv,
-                    timeout
-                );
+            const result = await executeInSandbox(
+                fullCommand,
+                { enabled: true },
+                {
+                    timeout,
+                    workingDirectory,
+                    environment: childEnv as Record<string, string>
+                }
+            );
             stdout = result.stdout;
             stderr = result.stderr;
             exitCode = result.exitCode;

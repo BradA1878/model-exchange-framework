@@ -29,7 +29,7 @@ Unlike demos that use direct `executeTool()` calls, this demo lets the agent **a
 [Agent Response] Problem 1 is simple, using current settings...
 [Tool Call] request_inference_params  ← Agent upgrades for Problem 2
    Reason: This architecture design requires multi-step reasoning
-   Suggested: { model: "anthropic/claude-3.5-sonnet", ... }
+   Suggested: { model: "~anthropic/claude-sonnet-latest", ... }
 [Agent Response] <detailed architecture design>
 [Tool Call] reset_inference_params    ← Agent resets to save costs
 [Agent Response] Problem 3 is simple...
@@ -115,7 +115,7 @@ const governance = {
   maxCostPerCall: 0.50,       // Max $0.50 per call
   maxCostPerTask: 5.00,       // Max $5.00 per task
   maxRequestsPerPhase: 3,     // Max 3 changes per phase
-  allowedModels: ['anthropic/claude-3.5-haiku', 'anthropic/claude-3.5-sonnet'],
+  allowedModels: ['~anthropic/claude-haiku-latest', '~anthropic/claude-sonnet-latest'],
   maxReasoningTokens: 8000
 };
 ```

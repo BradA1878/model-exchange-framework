@@ -12,10 +12,10 @@
  * - Security validation
  * - Timeout protection
  *
- * Run with: npm run demo:code-execution
+ * Run with: bun run demo:code-execution
  */
 
-import { MxfSDK } from '@mxf-dev/sdk/MxfSDK';
+import { MxfSDK } from '@mxf-dev/sdk';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -69,7 +69,7 @@ async function demo() {
       allowedTools: ['code_execute'],
       llmProvider: 'openrouter' as any,
       apiKey: process.env.OPENROUTER_API_KEY || '',
-      defaultModel: 'anthropic/claude-3.5-haiku'
+      defaultModel: '~anthropic/claude-haiku-latest'
     });
 
     await agent.connect();

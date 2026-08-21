@@ -22,7 +22,7 @@ This document provides a complete guide for the Meilisearch semantic search inte
 - **MongoDB** - Port 27017
 - **Meilisearch** - Port 7700
 - **Redis** (caching) - Port 6379
-- **Dashboard** (Vue.js, separate package: `npx @mxf-dev/dashboard`) - Port 4173
+- **Dashboard** (Vue.js, separate package: `bunx @mxf-dev/dashboard`) - Port 4173
 
 ### 2. **Meilisearch Service** (Server-side)
 
@@ -180,14 +180,14 @@ const agent = await sdk.createAgent({
   keyId: process.env.AGENT_KEY_ID!,
   secretKey: process.env.AGENT_SECRET_KEY!,
   llmProvider: 'openrouter',
-  defaultModel: 'anthropic/claude-3.5-sonnet',
+  defaultModel: '~anthropic/claude-sonnet-latest',
   apiKey: process.env.OPENROUTER_API_KEY!
 });
 await agent.connect();
 
-// Send some messages to index
-await agent.sendMessage('Hello, testing authentication discussion', 'dev-channel');
-await agent.sendMessage('We should use JWT tokens for auth', 'dev-channel');
+// Send messages to the agent's authenticated channel for indexing
+await agent.mxfService.sendMessage('Hello, testing authentication discussion');
+await agent.mxfService.sendMessage('We should use JWT tokens for auth');
 
 // Wait for indexing (usually <1 second)
 await new Promise(resolve => setTimeout(resolve, 2000));
@@ -238,13 +238,28 @@ console.log('Search results:', results);
 ### Dual-Write Strategy
 
 Every conversation message:
-1. **Saved to MongoDB** for persistence
-2. **Indexed in Meilisearch** for semantic search
+1. **Saved to MongoDB** for persistence — `addConversationMessage()` returns once this is done
+2. **Indexed in Meilisearch** for semantic search — queued behind the conversation
 
-This ensures:
-- ✅ No data loss (MongoDB is source of truth)
-- ✅ Fast semantic search (Meilisearch optimized for search)
-- ✅ Graceful degradation (if Meilisearch fails, MongoDB continues)
+MongoDB is the source of truth. Indexing runs from a per-agent queue in
+`MxfMemoryManager`, one request at a time in arrival order, so an index problem
+never aborts the agent's turn:
+
+- a request the server throttled carries `retryAfterMs` (`MeilisearchEvents.INDEX_ERROR`);
+  the queue waits that long and sends the same document again
+- any other rejection is final for that document: it is logged and published as
+  `MeilisearchEvents.INDEX_ERROR`, and the queue moves on
+- when the agent socket is not connected nothing is sent; queued documents are
+  dropped with one log line and indexed from persisted history at the next
+  memory load, which backfills the whole conversation
+- `agent.disconnect()` waits for the queue to drain while the socket is still
+  open, then stops indexing
+
+`memoryManager.pendingIndexCount()` and `flushIndexQueue()` expose the queue for
+callers that need to wait for search to catch up (tests, shutdown hooks).
+
+Before 3.0 the index request was awaited inline, and one throttled request
+failed the agent's whole generation loop.
 
 ---
 
@@ -351,8 +366,11 @@ describe('Meilisearch Integration', () => {
 
 Run tests:
 ```bash
-npm test tests/meilisearch-integration.test.ts
+MXF_TEST_ALLOW_EXTERNAL_LLM_CALLS=true bun run test:meilisearch
 ```
+
+The explicit opt-in is required because this standalone integration test can make
+paid provider calls.
 
 ### Integration Tests
 

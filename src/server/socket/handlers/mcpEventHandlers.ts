@@ -29,28 +29,36 @@
 import { Socket } from 'socket.io';
 import { Logger } from '@mxf-dev/core/utils/Logger';
 import { createStrictValidator } from '@mxf-dev/core/utils/validation';
-import { Events } from '@mxf-dev/core/events/EventNames';
+import { CoreSocketEvents, Events } from '@mxf-dev/core/events/EventNames';
 import { EventBus } from '@mxf-dev/core/events/EventBus';
-import { McpSocketExecutor } from '../services/McpSocketExecutor';
-import { v4 as uuidv4 } from 'uuid';
 import {
-    createMcpToolCallPayload,
-    createMcpToolResultPayload,
-    createMcpToolErrorPayload,
-    createMcpResourceResultPayload,
-    createMcpToolRegisteredPayload,
+    createMcpResourceErrorPayload,
     McpToolCallCompletedLocalData
 } from '@mxf-dev/core/schemas/EventPayloadSchema';
 import { McpToolExecution } from '@mxf-dev/core/models/mcpToolExecution';
-
-// Constants
-const MCP_TOOL_EXECUTION_TIMEOUT_MS = 30000; // 30 seconds timeout for tool execution
 
 // Create logger
 const logger = new Logger('debug', 'McpEventHandlers', 'server');
 
 // Create validator
 const validate = createStrictValidator('McpEventHandlers');
+
+const requireRecord = (value: unknown): Record<string, unknown> => {
+    validate.assertIsObject(value);
+    return value as Record<string, unknown>;
+};
+
+const requireNonEmptyString = (value: unknown): string => {
+    validate.assertIsNonEmptyString(value);
+    return value as string;
+};
+
+const requireNonNegativeNumber = (value: unknown, name: string): number => {
+    if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+        throw new Error(`${name} must be a finite non-negative number`);
+    }
+    return value;
+};
 
 /**
  * Set up MCP event handlers for EventBus events
@@ -60,215 +68,29 @@ const validate = createStrictValidator('McpEventHandlers');
  */
 export const setupMcpEventHandlers = (socket: Socket, agentId: string, channelId: string): void => {
 
-    // Handle tool call events from EventBus
-    // This per-agent handler is the primary executor for built-in tools (~95 tools).
-    // The global handler in McpSocketExecutor.setupEventHandlers() only handles
-    // dynamically registered tools (its this.tools guard drops built-in tool events).
-    const toolCallHandler = (payload: any) => {
-        try {
-
-            // Validate this event is for this agent/channel
-            if (payload.agentId !== agentId || payload.channelId !== channelId) {
-                return; // Ignore events for other agents/channels
-            }
-
-            validate.assertIsObject(payload);
-            validate.assertIsObject(payload.data);
-            validate.assertIsNonEmptyString(payload.data.toolName);
-            validate.assertIsNonEmptyString(payload.data.callId);
-
-
-            // Get the tool executor and execute the tool
-            const executor = McpSocketExecutor.getInstance();
-            executor.executeTool(
-                payload.data.toolName,
-                payload.data.arguments || {},
-                {
-                    requestId: payload.data.callId,
-                    agentId,
-                    channelId
-                }
-            ).subscribe({
-                next: (result) => {
-                    // Emit tool result event through EventBus
-                    EventBus.server.emit(Events.Mcp.TOOL_RESULT, createMcpToolResultPayload(
-                        Events.Mcp.TOOL_RESULT,
-                        agentId,
-                        channelId,
-                        {
-                            toolName: payload.data.toolName,
-                            callId: payload.data.callId,
-                            result: result.content
-                        }
-                    ));
-                },
-                error: (error) => {
-                    // Emit tool error event through EventBus
-                    EventBus.server.emit(Events.Mcp.TOOL_ERROR, createMcpToolErrorPayload(
-                        Events.Mcp.TOOL_ERROR,
-                        agentId,
-                        channelId,
-                        {
-                            toolName: payload.data.toolName,
-                            callId: payload.data.callId,
-                            error: error instanceof Error ? error.message : String(error)
-                        }
-                    ));
-                }
-            });
-
-        } catch (error) {
-            logger.error(`MCP tool call handler error: ${error instanceof Error ? error.message : String(error)}`);
-        }
-    };
-
-    // Handle tool registration events from EventBus
-    const toolRegisterHandler = (payload: any) => {
-        try {
-            // Validate this event is for this agent/channel
-            if (payload.agentId !== agentId || payload.channelId !== channelId) {
-                return; // Ignore events for other agents/channels
-            }
-
-            // Validate payload structure
-            validate.assertIsObject(payload);
-            validate.assertIsObject(payload.data);
-            validate.assertIsNonEmptyString(payload.data.toolName);
-            validate.assertIsNonEmptyString(payload.data.description);
-            validate.assertIsObject(payload.data.inputSchema);
-            
-            
-            // Get the tool executor and register the tool
-            const executor = McpSocketExecutor.getInstance();
-            executor.registerTool(
-                payload.data.toolName,
-                payload.data.description,
-                payload.data.inputSchema,
-                async (input, context) => {
-                    // Route tool execution back to the registering agent via EventBus
-                    // This allows the actual tool implementation to be executed on the client side
-                    
-                    const callId = context.requestId || uuidv4();
-                    
-                    // Emit tool call event to the registering agent
-                    EventBus.server.emit(Events.Mcp.TOOL_CALL, createMcpToolCallPayload(
-                        Events.Mcp.TOOL_CALL,
-                        agentId, // Route back to the agent that registered this tool
-                        channelId,
-                        {
-                            toolName: payload.data.toolName,
-                            callId: callId,
-                            arguments: input
-                        }
-                    ));
-                    
-                    // Return a promise that resolves when we get the result back
-                    return new Promise((resolve, reject) => {
-                        // Single settle path: whichever of result/error/timeout
-                        // fires first clears the other two, so no timer or
-                        // EventBus subscription outlives the call.
-                        const cleanup = (): void => {
-                            clearTimeout(timeoutHandle);
-                            resultSubscription.unsubscribe();
-                            errorSubscription.unsubscribe();
-                        };
-
-                        const resultSubscription = EventBus.server.on(Events.Mcp.TOOL_RESULT, (resultPayload: any) => {
-                            if (resultPayload.data.callId === callId) {
-                                cleanup();
-                                resolve(resultPayload.data.result);
-                            }
-                        });
-
-                        const errorSubscription = EventBus.server.on(Events.Mcp.TOOL_ERROR, (errorPayload: any) => {
-                            if (errorPayload.data.callId === callId) {
-                                cleanup();
-                                reject(new Error(errorPayload.data.error));
-                            }
-                        });
-
-                        const timeoutHandle = setTimeout(() => {
-                            cleanup();
-                            reject(new Error(`Tool execution timeout for ${payload.data.toolName}`));
-                        }, MCP_TOOL_EXECUTION_TIMEOUT_MS);
-                    });
-                }
-            ).subscribe({
-                next: (success) => {
-                    
-                    // Emit success response back to client
-                    EventBus.server.emit(Events.Mcp.TOOL_REGISTERED, createMcpToolRegisteredPayload(
-                        Events.Mcp.TOOL_REGISTERED,
-                        agentId,
-                        channelId,
-                        {
-                            toolName: payload.data.toolName,
-                            success: true
-                        }
-                    ));
-                },
-                error: (error) => {
-                    // This is often expected when tool already exists from database loading
-                    const errorMsg = error instanceof Error ? error.message : String(error);
-                    if (errorMsg.includes('already exists')) {
-                        
-                        // Emit success response since tool is already registered
-                        EventBus.server.emit(Events.Mcp.TOOL_REGISTERED, createMcpToolRegisteredPayload(
-                            Events.Mcp.TOOL_REGISTERED,
-                            agentId,
-                            channelId,
-                            {
-                                toolName: payload.data.toolName,
-                                success: true
-                            }
-                        ));
-                    } else {
-                        logger.error(`MCP executor registration failed for ${payload.data.toolName}: ${errorMsg}`);
-                        
-                        // Emit error response back to client
-                        EventBus.server.emit(Events.Mcp.TOOL_REGISTERED, createMcpToolRegisteredPayload(
-                            Events.Mcp.TOOL_REGISTERED,
-                            agentId,
-                            channelId,
-                            {
-                                toolName: payload.data.toolName,
-                                success: false,
-                                error: errorMsg
-                            }
-                        ));
-                    }
-                }
-            });
-            
-        } catch (error) {
-            logger.error(`MCP tool registration handler error: ${error instanceof Error ? error.message : String(error)}`);
-        }
-    };
-
     // Handle resource get events from EventBus
-    const resourceGetHandler = (payload: any) => {
+    const resourceGetHandler = (payload: unknown): void => {
         try {
+            const event = requireRecord(payload);
             // Validate this event is for this agent/channel
-            if (payload.agentId !== agentId || payload.channelId !== channelId) {
+            if (event.agentId !== agentId || event.channelId !== channelId) {
                 return; // Ignore events for other agents/channels
             }
 
-            // Validate payload structure
-            validate.assertIsObject(payload);
-            validate.assertIsObject(payload.data);
-            validate.assertIsNonEmptyString(payload.data.resourceUri);
-            validate.assertIsNonEmptyString(payload.data.requestId);
-            
-            
-            // Emit resource result (placeholder implementation)
-            EventBus.server.emit(Events.Mcp.RESOURCE_RESULT, createMcpResourceResultPayload(
-                Events.Mcp.RESOURCE_RESULT,
+            const data = requireRecord(event.data);
+            const resourceUri = requireNonEmptyString(data.resourceUri);
+            const requestId = requireNonEmptyString(data.requestId);
+            EventBus.server.emit(Events.Mcp.RESOURCE_ERROR, createMcpResourceErrorPayload(
+                Events.Mcp.RESOURCE_ERROR,
                 agentId,
                 channelId,
                 {
-                    resourceUri: payload.data.resourceUri,
-                    requestId: payload.data.requestId,
-                    data: { content: `Resource ${payload.data.resourceUri} content`, mimeType: 'text/plain' }
+                    resourceUri,
+                    requestId,
+                    error: {
+                        code: 'MCP_RESOURCE_PROVIDER_UNAVAILABLE',
+                        message: 'MCP resource retrieval is unavailable because no authoritative resource provider is configured'
+                    }
                 }
             ));
             
@@ -278,28 +100,27 @@ export const setupMcpEventHandlers = (socket: Socket, agentId: string, channelId
     };
 
     // Handle resource list events from EventBus
-    const resourceListHandler = (payload: any) => {
+    const resourceListHandler = (payload: unknown): void => {
         try {
+            const event = requireRecord(payload);
             // Validate this event is for this agent/channel
-            if (payload.agentId !== agentId || payload.channelId !== channelId) {
+            if (event.agentId !== agentId || event.channelId !== channelId) {
                 return; // Ignore events for other agents/channels
             }
 
-            // Validate payload structure
-            validate.assertIsObject(payload);
-            validate.assertIsObject(payload.data);
-            validate.assertIsNonEmptyString(payload.data.requestId);
-            
-            
-            // Emit resource list result (placeholder implementation)
-            EventBus.server.emit(Events.Mcp.RESOURCE_LIST_RESULT, createMcpResourceResultPayload(
-                Events.Mcp.RESOURCE_LIST_RESULT,
+            const data = requireRecord(event.data);
+            const requestId = requireNonEmptyString(data.requestId);
+            EventBus.server.emit(Events.Mcp.RESOURCE_ERROR, createMcpResourceErrorPayload(
+                Events.Mcp.RESOURCE_ERROR,
                 agentId,
                 channelId,
                 {
                     resourceUri: 'list',
-                    requestId: payload.data.requestId,
-                    data: { resources: [] } // Empty list for now
+                    requestId,
+                    error: {
+                        code: 'MCP_RESOURCE_PROVIDER_UNAVAILABLE',
+                        message: 'MCP resource listing is unavailable because no authoritative resource provider is configured'
+                    }
                 }
             ));
             
@@ -311,19 +132,30 @@ export const setupMcpEventHandlers = (socket: Socket, agentId: string, channelId
     // Handle client-side tool completion events — persist to MongoDB for history/dashboard.
     // The SDK fires these after executing a tool locally (no server round-trip for execution,
     // but the completion event is sent so the DB has a complete record).
-    const toolCallCompletedLocalHandler = (payload: any) => {
+    const toolCallCompletedLocalHandler = (payload: unknown): void => {
         try {
-            validate.assertIsObject(payload);
-            validate.assertIsObject(payload.data);
+            const event = requireRecord(payload);
 
             // Validate this event is for this agent/channel
-            if (payload.agentId !== agentId || payload.channelId !== channelId) {
+            if (event.agentId !== agentId || event.channelId !== channelId) {
                 return;
             }
-            validate.assertIsNonEmptyString(payload.data.toolName);
-            validate.assertIsNonEmptyString(payload.data.callId);
-
-            const data: McpToolCallCompletedLocalData = payload.data;
+            const eventData = requireRecord(event.data);
+            const timestamp = requireNonNegativeNumber(event.timestamp, 'timestamp');
+            const durationMs = requireNonNegativeNumber(eventData.durationMs, 'durationMs');
+            const sourceType = requireNonEmptyString(eventData.source);
+            if (sourceType !== 'internal' && sourceType !== 'external-mcp') {
+                throw new Error('source must be internal or external-mcp');
+            }
+            const data: McpToolCallCompletedLocalData = {
+                callId: requireNonEmptyString(eventData.callId),
+                toolName: requireNonEmptyString(eventData.toolName),
+                input: eventData.input,
+                result: eventData.result,
+                durationMs,
+                source: sourceType,
+                executedOn: 'client'
+            };
 
             // Determine source type for the DB record
             const source = data.source === 'external-mcp' ? 'client-external' : 'client-internal';
@@ -333,13 +165,13 @@ export const setupMcpEventHandlers = (socket: Socket, agentId: string, channelId
                 requestId: data.callId,
                 toolName: data.toolName,
                 source,
-                agentId: payload.agentId,
-                channelId: payload.channelId,
+                agentId,
+                channelId,
                 parameters: data.input || {},
                 result: data.result,
                 status: 'completed',
-                startedAt: new Date(payload.timestamp - (data.durationMs || 0)),
-                completedAt: new Date(payload.timestamp),
+                startedAt: new Date(timestamp - data.durationMs),
+                completedAt: new Date(timestamp),
                 durationMs: data.durationMs,
                 metadata: {
                     executedOn: 'client',
@@ -354,28 +186,28 @@ export const setupMcpEventHandlers = (socket: Socket, agentId: string, channelId
     };
 
     // Register EventBus listeners
-    EventBus.server.on(Events.Mcp.TOOL_CALL, toolCallHandler);
-    EventBus.server.on(Events.Mcp.TOOL_REGISTER, toolRegisterHandler);
     EventBus.server.on(Events.Mcp.RESOURCE_GET, resourceGetHandler);
     EventBus.server.on(Events.Mcp.RESOURCE_LIST, resourceListHandler);
 
     // Listen for client-side tool completions arriving via socket.
     // The socket event is forwarded to EventBus.server so the handler above picks it up.
-    socket.on(Events.Mcp.TOOL_CALL_COMPLETED_LOCAL, (payload: any) => {
-        // Inject agentId/channelId from the authenticated socket context
-        const enrichedPayload = { ...payload, agentId, channelId };
-        toolCallCompletedLocalHandler(enrichedPayload);
+    socket.on(Events.Mcp.TOOL_CALL_COMPLETED_LOCAL, (payload: unknown): void => {
+        try {
+            // Inject agentId/channelId from the authenticated socket context.
+            const event = requireRecord(payload);
+            toolCallCompletedLocalHandler({ ...event, agentId, channelId });
+        } catch (error) {
+            logger.error(`Client tool completion socket payload error: ${error instanceof Error ? error.message : String(error)}`);
+        }
     });
 
     // Register EventBus handler for client-side completions (for internal server-side forwarding)
     EventBus.server.on(Events.Mcp.TOOL_CALL_COMPLETED_LOCAL, toolCallCompletedLocalHandler);
 
     // Handle disconnection - clean up EventBus handlers
-    socket.on('disconnect', () => {
+    socket.on(CoreSocketEvents.DISCONNECT, (): void => {
 
         // Remove EventBus listeners
-        EventBus.server.off(Events.Mcp.TOOL_CALL, toolCallHandler);
-        EventBus.server.off(Events.Mcp.TOOL_REGISTER, toolRegisterHandler);
         EventBus.server.off(Events.Mcp.RESOURCE_GET, resourceGetHandler);
         EventBus.server.off(Events.Mcp.RESOURCE_LIST, resourceListHandler);
         EventBus.server.off(Events.Mcp.TOOL_CALL_COMPLETED_LOCAL, toolCallCompletedLocalHandler);

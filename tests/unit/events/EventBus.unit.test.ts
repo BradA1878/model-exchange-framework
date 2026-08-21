@@ -96,6 +96,70 @@ describe('EventBus', () => {
             expect(exploding).toHaveBeenCalledTimes(2);
             expect(healthy).toHaveBeenCalledTimes(2);
         });
+
+        it('drains accepted async handler work before resources are closed', async () => {
+            let releaseHandler!: () => void;
+            const handlerFinished = new Promise<void>(resolve => {
+                releaseHandler = resolve;
+            });
+            const handler = jest.fn(async (): Promise<void> => {
+                await handlerFinished;
+            });
+            EventBus.server.on(TEST_EVENT, handler);
+
+            EventBus.server.emit(TEST_EVENT, payload());
+            expect(EventBus.server.pendingHandlerCount()).toBe(1);
+
+            const drained = jest.fn();
+            const drainPromise = EventBus.drain().then(drained);
+            await Promise.resolve();
+            expect(drained).not.toHaveBeenCalled();
+
+            releaseHandler();
+            await drainPromise;
+            expect(drained).toHaveBeenCalledTimes(1);
+            expect(EventBus.server.pendingHandlerCount()).toBe(0);
+        });
+
+        it('drains re-entrant work published to the other bus', async () => {
+            let releaseNested!: () => void;
+            const nestedFinished = new Promise<void>(resolve => {
+                releaseNested = resolve;
+            });
+
+            EventBus.server.on(TEST_EVENT, async (): Promise<void> => {
+                await Promise.resolve();
+                EventBus.client.on(OTHER_EVENT, async (): Promise<void> => {
+                    await nestedFinished;
+                });
+                EventBus.server.emit(
+                    OTHER_EVENT,
+                    createBaseEventPayload(OTHER_EVENT, 'agent-1', 'channel-1', {})
+                );
+            });
+
+            EventBus.server.emit(TEST_EVENT, payload());
+            const drainPromise = EventBus.drain();
+            await Promise.resolve();
+            await Promise.resolve();
+
+            expect(EventBus.client.pendingHandlerCount()).toBe(1);
+            releaseNested();
+            await drainPromise;
+            expect(EventBus.client.pendingHandlerCount()).toBe(0);
+        });
+
+        it('observes rejected handlers and still completes the drain', async () => {
+            EventBus.server.on(TEST_EVENT, async (): Promise<void> => {
+                throw new Error('async persistence failed');
+            });
+
+            EventBus.server.emit(TEST_EVENT, payload());
+            await expect(EventBus.drain()).resolves.toBeUndefined();
+            expect(consoleErrorSpy.mock.calls.some((call: unknown[]) => call.some((argument: unknown) =>
+                String(argument).includes("Async handler for 'agent:status:change' rejected")
+            ))).toBe(true);
+        });
     });
 
     describe('once()', () => {
@@ -229,28 +293,40 @@ describe('EventBus', () => {
             ['null', null],
             ['undefined', undefined]
         ])('throws when the payload is %s', (_label, badPayload) => {
-            expect(() => EventBus.server.emit(TEST_EVENT, badPayload as any)).toThrow(
+            expect(() => EventBus.server.emit(
+                TEST_EVENT,
+                badPayload as unknown as ReturnType<typeof payload>
+            )).toThrow(
                 /null|undefined/
             );
         });
 
         it('throws on a raw object payload that skipped the schema helpers', () => {
             expect(() =>
-                EventBus.server.emit(TEST_EVENT, { status: 'ready' } as any)
+                EventBus.server.emit(
+                    TEST_EVENT,
+                    { status: 'ready' } as unknown as ReturnType<typeof payload>
+                )
             ).toThrow(/Invalid payload/);
         });
 
         it('throws on an empty event name', () => {
-            expect(() => EventBus.server.emit('' as any, payload())).toThrow();
+            expect(() => EventBus.server.emit('' as typeof TEST_EVENT, payload())).toThrow();
         });
 
         it('applies the SAME contract on the client bus', () => {
             // The client bus used to swallow this and push a raw, helper-less
             // payload straight into the Subject, bypassing the validation that
             // had just rejected the caller.
-            expect(() => EventBus.client.emit(TEST_EVENT, null as any)).toThrow();
+            expect(() => EventBus.client.emit(
+                TEST_EVENT,
+                null as unknown as ReturnType<typeof payload>
+            )).toThrow();
             expect(() =>
-                EventBus.client.emit(TEST_EVENT, { status: 'ready' } as any)
+                EventBus.client.emit(
+                    TEST_EVENT,
+                    { status: 'ready' } as unknown as ReturnType<typeof payload>
+                )
             ).toThrow(/Invalid payload/);
         });
 
@@ -262,7 +338,10 @@ describe('EventBus', () => {
             const errorHandler = jest.fn();
             EventBus.server.on(Events.Agent.ERROR, errorHandler);
 
-            expect(() => EventBus.server.emit(TEST_EVENT, {} as any)).toThrow();
+            expect(() => EventBus.server.emit(
+                TEST_EVENT,
+                {} as unknown as ReturnType<typeof payload>
+            )).toThrow();
 
             expect(errorHandler).toHaveBeenCalledTimes(1);
             const errorPayload = errorHandler.mock.calls[0][0];
@@ -300,14 +379,25 @@ describe('EventBus', () => {
         });
 
         it('drops the count when a subscription is unsubscribed directly', () => {
-            const subscription = EventBus.server.on(TEST_EVENT, jest.fn());
+            const handler = jest.fn();
+            const subscription = EventBus.server.on(TEST_EVENT, handler);
             expect(EventBus.server.listenerCount(TEST_EVENT)).toBe(1);
 
             subscription.unsubscribe();
 
-            // Unsubscribing the RxJS handle stops delivery immediately.
+            expect(EventBus.server.listenerCount(TEST_EVENT)).toBe(0);
+            EventBus.server.emit(TEST_EVENT, payload());
+            expect(handler).not.toHaveBeenCalled();
+        });
+
+        it('drops a pending once handler when its subscription is unsubscribed directly', () => {
             const handler = jest.fn();
-            EventBus.server.on(OTHER_EVENT, handler);
+            const subscription = EventBus.server.once(TEST_EVENT, handler);
+            expect(EventBus.server.listenerCount(TEST_EVENT)).toBe(1);
+
+            subscription.unsubscribe();
+
+            expect(EventBus.server.listenerCount(TEST_EVENT)).toBe(0);
             EventBus.server.emit(TEST_EVENT, payload());
             expect(handler).not.toHaveBeenCalled();
         });
@@ -325,6 +415,15 @@ describe('EventBus', () => {
             );
 
             expect(seen).toEqual([TEST_EVENT, OTHER_EVENT]);
+        });
+
+        it('drops registry bookkeeping when unsubscribed directly', () => {
+            const subscription = EventBus.server.onAll(jest.fn());
+            expect(EventBus.server.allListenerCount()).toBe(1);
+
+            subscription.unsubscribe();
+
+            expect(EventBus.server.allListenerCount()).toBe(0);
         });
     });
 
@@ -397,6 +496,150 @@ describe('EventBus', () => {
             EventBus.server.emit(TEST_EVENT, payload());
 
             expect(clientHandler).toHaveBeenCalledTimes(1);
+        });
+    });
+
+    describe('process-global client socket ingress', () => {
+        const socket = (): {
+            connected: boolean;
+            on: jest.Mock;
+            off: jest.Mock;
+            emit: jest.Mock;
+            onAny: jest.Mock;
+            offAny: jest.Mock;
+            disconnect: jest.Mock;
+            deliver: (event: string, eventPayload: unknown) => void;
+            anyListenerCount: () => number;
+        } => {
+            const inboundHandlers = new Set<(event: string, eventPayload: unknown) => void>();
+            return {
+                connected: true,
+                on: jest.fn(),
+                off: jest.fn(),
+                emit: jest.fn(),
+                onAny: jest.fn(handler => {
+                    inboundHandlers.add(handler);
+                }),
+                offAny: jest.fn((handler?: (event: string, eventPayload: unknown) => void) => {
+                    if (handler) {
+                        inboundHandlers.delete(handler);
+                    } else {
+                        inboundHandlers.clear();
+                    }
+                }),
+                disconnect: jest.fn(),
+                deliver: (event, eventPayload): void => {
+                    for (const handler of inboundHandlers) {
+                        handler(event, eventPayload);
+                    }
+                },
+                anyListenerCount: (): number => inboundHandlers.size,
+            };
+        };
+
+        it('detaches only EventBus transport listeners during reset', () => {
+            const primarySocket = socket();
+            const namedSocket = socket();
+            const externalPrimaryListener = jest.fn();
+            const externalNamedListener = jest.fn();
+            primarySocket.onAny(externalPrimaryListener);
+            namedSocket.onAny(externalNamedListener);
+
+            EventBus.client.setClientSocket(primarySocket);
+            EventBus.client.registerSocket('agent-1', namedSocket);
+            expect(primarySocket.anyListenerCount()).toBe(2);
+            expect(namedSocket.anyListenerCount()).toBe(2);
+
+            EventBus.reset();
+
+            expect(primarySocket.anyListenerCount()).toBe(1);
+            expect(namedSocket.anyListenerCount()).toBe(1);
+            primarySocket.deliver(TEST_EVENT, payload());
+            namedSocket.deliver(TEST_EVENT, payload());
+            expect(externalPrimaryListener).toHaveBeenCalledTimes(1);
+            expect(externalNamedListener).toHaveBeenCalledTimes(1);
+
+            const freshHandler = jest.fn();
+            EventBus.client.on(TEST_EVENT, freshHandler);
+            EventBus.client.setClientSocket(primarySocket);
+            primarySocket.deliver(TEST_EVENT, payload());
+
+            expect(primarySocket.anyListenerCount()).toBe(2);
+            expect(externalPrimaryListener).toHaveBeenCalledTimes(2);
+            expect(freshHandler).toHaveBeenCalledTimes(1);
+        });
+
+        it('publishes one typed room envelope once across multiple local sockets', () => {
+            const firstSocket = socket();
+            const secondSocket = socket();
+            const handler = jest.fn();
+            EventBus.client.on(TEST_EVENT, handler);
+            EventBus.client.registerSocket('agent-1', firstSocket);
+            EventBus.client.registerSocket('agent-2', secondSocket);
+
+            const firstEnvelope = createBaseEventPayload(
+                TEST_EVENT,
+                'agent-1',
+                'channel-1',
+                { status: 'first' },
+                { eventId: 'shared-room-event-1' }
+            );
+            firstSocket.deliver(TEST_EVENT, firstEnvelope);
+            secondSocket.deliver(TEST_EVENT, firstEnvelope);
+            secondSocket.deliver(TEST_EVENT, firstEnvelope);
+
+            expect(handler).toHaveBeenCalledTimes(1);
+            expect(handler).toHaveBeenLastCalledWith(firstEnvelope);
+
+            const secondEnvelope = createBaseEventPayload(
+                TEST_EVENT,
+                'agent-1',
+                'channel-1',
+                { status: 'second' },
+                { eventId: 'shared-room-event-2' }
+            );
+            firstSocket.deliver(TEST_EVENT, secondEnvelope);
+            secondSocket.deliver(TEST_EVENT, secondEnvelope);
+
+            expect(handler).toHaveBeenCalledTimes(2);
+            expect(handler).toHaveBeenLastCalledWith(secondEnvelope);
+        });
+
+        it('does not conflate legacy raw socket deliveries without an eventId', () => {
+            const firstSocket = socket();
+            const secondSocket = socket();
+            const handler = jest.fn();
+            EventBus.client.on(TEST_EVENT, handler);
+            EventBus.client.registerSocket('agent-1', firstSocket);
+            EventBus.client.registerSocket('agent-2', secondSocket);
+            const rawPayload = { status: 'legacy-raw' };
+
+            firstSocket.deliver(TEST_EVENT, rawPayload);
+            secondSocket.deliver(TEST_EVENT, rawPayload);
+
+            expect(handler).toHaveBeenCalledTimes(2);
+        });
+
+        it('clears exact-envelope history on disconnect', () => {
+            const firstSocket = socket();
+            const handler = jest.fn();
+            EventBus.client.on(TEST_EVENT, handler);
+            EventBus.client.registerSocket('agent-1', firstSocket);
+            const envelope = createBaseEventPayload(
+                TEST_EVENT,
+                'agent-1',
+                'channel-1',
+                { status: 'reconnect' },
+                { eventId: 'replayed-after-reconnect' }
+            );
+            firstSocket.deliver(TEST_EVENT, envelope);
+
+            EventBus.client.disconnect();
+            const reconnectedSocket = socket();
+            EventBus.client.registerSocket('agent-1', reconnectedSocket);
+            reconnectedSocket.deliver(TEST_EVENT, envelope);
+
+            expect(handler).toHaveBeenCalledTimes(2);
         });
     });
 });

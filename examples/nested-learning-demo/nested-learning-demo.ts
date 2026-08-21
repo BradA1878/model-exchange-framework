@@ -14,17 +14,13 @@
  * - Calculates promotion scores and explains decisions
  *
  * @prerequisites
- * - MXF server running (`npm run dev`)
+ * - MXF server running (`bun run dev`)
  * - Environment variables configured
  *
  * @example
  * ```bash
- * cd examples/nested-learning-demo
- * cp .env.example .env
- * npx ts-node nested-learning-demo.ts
+ * bun run demo:nested-learning
  * ```
- *
- * Run with: npm run demo:nested-learning
  */
 
 import { MxfSDK, Events, LlmProviderType } from '@mxf-dev/sdk';
@@ -345,7 +341,7 @@ const createSERCAgent = async (
         // LLM configuration
         llmProvider: LlmProviderType.OPENROUTER,
         apiKey: process.env.OPENROUTER_API_KEY!,
-        defaultModel: 'anthropic/claude-3.5-sonnet',
+        defaultModel: '~anthropic/claude-sonnet-latest',
         temperature: 0.3,
         maxTokens: 8000,
 

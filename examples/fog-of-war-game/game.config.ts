@@ -38,7 +38,7 @@ const config: GameConfig = {
     // LLM models to use (randomly assigned to each agent)
     availableModels: [
         'google/gemini-2.5-flash',
-        'anthropic/claude-haiku-4.5',
+        '~anthropic/claude-haiku-latest',
         'openai/gpt-5-nano'
     ]
 };

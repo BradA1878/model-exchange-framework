@@ -96,20 +96,97 @@ jest.mock('@mxf-dev/sdk/services/MxfToolService', () => ({
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { EventBus } from '@mxf-dev/core/events/EventBus';
-import { MxfClient } from '@mxf-dev/sdk/MxfClient';
+import {
+    AgentMcpProcessManagementError,
+    MxfClient
+} from '@mxf-dev/sdk/MxfClient';
 import { Events } from '@mxf-dev/core/events/EventNames';
+import { UserInputEvents } from '@mxf-dev/core/events/event-definitions/UserInputEvents';
+import {
+    IAgentMemory,
+    IChannelMemory,
+    IRelationshipMemory,
+    MemoryScope
+} from '@mxf-dev/core/types/MemoryTypes';
+import type { AgentConfig } from '@mxf-dev/core/interfaces/AgentInterfaces';
+import { ConnectionStatus } from '@mxf-dev/core/types/types';
 
 const bus = EventBus.client as any;
 
-const CONFIG = {
+const CONFIG: AgentConfig = {
     agentId: 'test-agent',
     name: 'Test Agent',
     channelId: 'test-channel',
     keyId: 'key-1',
     secretKey: 'secret-1',
+    host: 'localhost',
+    port: 3001,
+    secure: false,
+    apiUrl: 'http://localhost:3001/api',
+    apiKey: '',
+    agentConfigPrompt: ''
 };
 
-const newClient = () => new MxfClient({ ...CONFIG } as any);
+const newClient = (): MxfClient => new MxfClient({ ...CONFIG });
+
+class MemoryBoundaryClient extends MxfClient {
+    public readAgentMemory(): Promise<IAgentMemory> {
+        return this.getMemory();
+    }
+
+    public writeAgentMemory(update: Partial<IAgentMemory>): Promise<IAgentMemory> {
+        return this.updateMemory(update);
+    }
+
+    public readChannelMemory(channelId: string): Promise<IChannelMemory> {
+        return this.getChannelMemory(channelId);
+    }
+
+    public writeChannelMemory(
+        channelId: string,
+        update: Partial<IChannelMemory>
+    ): Promise<IChannelMemory> {
+        return this.updateChannelMemory(channelId, update);
+    }
+
+    public readRelationshipMemory(
+        otherAgentId: string,
+        channelId?: string
+    ): Promise<IRelationshipMemory> {
+        return this.getRelationshipMemory(otherAgentId, channelId);
+    }
+
+    public writeRelationshipMemory(
+        otherAgentId: string,
+        update: Partial<IRelationshipMemory>,
+        channelId?: string
+    ): Promise<IRelationshipMemory> {
+        return this.updateRelationshipMemory(otherAgentId, update, channelId);
+    }
+
+    public deleteOwnAgentMemory(): Promise<boolean> {
+        return this.deleteMemoryEntry(MemoryScope.AGENT);
+    }
+
+    public deleteOwnChannelMemory(channelId: string): Promise<boolean> {
+        return this.deleteMemoryEntry(MemoryScope.CHANNEL, channelId);
+    }
+
+    public deleteOwnRelationshipMemory(
+        otherAgentId: string,
+        channelId?: string
+    ): Promise<boolean> {
+        return this.deleteMemoryEntry(MemoryScope.RELATIONSHIP, otherAgentId, channelId);
+    }
+
+    public deleteAgentMemoryWithForgedTarget(targetAgentId: string): Promise<boolean> {
+        const forgedCall = this.deleteMemoryEntry as unknown as (
+            scope: MemoryScope,
+            target: string
+        ) => Promise<boolean>;
+        return forgedCall.call(this, MemoryScope.AGENT, targetAgentId);
+    }
+}
 
 describe('MxfClient.connect()', () => {
     beforeEach(() => {
@@ -154,6 +231,60 @@ describe('MxfClient.connect()', () => {
     });
 });
 
+describe('MxfClient connection status on a dropped socket', () => {
+    class StatusClient extends MxfClient {
+        public currentStatus(): ConnectionStatus {
+            return this.status;
+        }
+    }
+
+    const connectClient = async (client: MxfClient): Promise<void> => {
+        mockServiceConnect.mockImplementation(async () => {
+            setImmediate(() => {
+                bus._deliver(Events.Agent.CONNECTED, { agentId: CONFIG.agentId });
+                bus._deliver(Events.Agent.REGISTERED, { agentId: CONFIG.agentId });
+            });
+        });
+        await client.connect();
+    };
+
+    it('marks the client disconnected on the local agent:disconnect the socket layer emits', async () => {
+        const client = new StatusClient({ ...CONFIG });
+        await connectClient(client);
+        expect(client.currentStatus()).toBe(ConnectionStatus.REGISTERED);
+        bus.emitOn.mockClear();
+
+        // MxfService emits this locally when the agent socket drops. The server's
+        // agent:disconnected goes to the other sockets and never reaches this one.
+        bus._deliver(Events.Agent.DISCONNECT, {
+            agentId: CONFIG.agentId,
+            data: { status: 'disconnected', reason: 'transport close' }
+        });
+
+        expect(client.currentStatus()).toBe(ConnectionStatus.DISCONNECTED);
+        expect(bus.emitOn).toHaveBeenCalledWith(
+            CONFIG.agentId,
+            Events.Agent.STATUS_CHANGE,
+            expect.objectContaining({ data: expect.objectContaining({ status: 'disconnected' }) })
+        );
+
+        // A later connect() must actually reconnect instead of seeing a stale CONNECTED.
+        mockServiceConnect.mockClear();
+        await connectClient(client);
+        expect(mockServiceConnect).toHaveBeenCalledTimes(1);
+        expect(client.currentStatus()).toBe(ConnectionStatus.REGISTERED);
+    });
+
+    it('ignores another agent\'s disconnect', async () => {
+        const client = new StatusClient({ ...CONFIG });
+        await connectClient(client);
+
+        bus._deliver(Events.Agent.DISCONNECT, { agentId: 'someone-else', data: { status: 'disconnected' } });
+
+        expect(client.currentStatus()).toBe(ConnectionStatus.REGISTERED);
+    });
+});
+
 describe('MxfClient public event whitelist', () => {
     beforeEach(() => {
         bus._reset();
@@ -192,6 +323,119 @@ describe('MxfClient public event whitelist', () => {
     it('on() returns the client for chaining', () => {
         const client = newClient();
         expect(client.on(Events.Task.ASSIGNED, () => { /* noop */ })).toBe(client);
+    });
+});
+
+describe('MxfClient MCP process-management boundary', () => {
+    beforeEach(() => {
+        bus._reset();
+        jest.clearAllMocks();
+    });
+
+    it('rejects all agent-key process-management methods immediately without emitting', async () => {
+        const client = newClient();
+        const attempts: Array<() => Promise<unknown>> = [
+            (): Promise<unknown> => client.registerExternalMcpServer({ id: 'global-tools', name: 'Global Tools' }),
+            (): Promise<unknown> => client.unregisterExternalMcpServer('global-tools'),
+            (): Promise<unknown> => client.registerChannelMcpServer({ id: 'channel-tools', name: 'Channel Tools' }),
+            (): Promise<unknown> => client.unregisterChannelMcpServer('channel-tools')
+        ];
+
+        for (const attempt of attempts) {
+            const rejection = attempt();
+            await expect(rejection).rejects.toEqual(expect.objectContaining({
+                name: 'AgentMcpProcessManagementError',
+                code: 'MXF_ADMIN_MCP_REQUIRED',
+                message: expect.stringContaining('MxfSDK')
+            }));
+            await expect(rejection).rejects.toBeInstanceOf(AgentMcpProcessManagementError);
+        }
+
+        expect(bus.emit).not.toHaveBeenCalled();
+        expect(bus.emitOn).not.toHaveBeenCalled();
+        expect(mockServiceConnect).not.toHaveBeenCalled();
+    });
+});
+
+describe('MxfClient authoritative memory boundary', () => {
+    beforeEach(() => {
+        bus._reset();
+        jest.clearAllMocks();
+    });
+
+    it('deletes exact-self memory without a target and rejects a forged target', async () => {
+        const client = new MemoryBoundaryClient({ ...CONFIG });
+        const deleteAgentMemory = jest.fn().mockResolvedValue(true);
+        Object.assign(client as unknown as Record<string, unknown>, {
+            isFullyConnected: true,
+            status: ConnectionStatus.CONNECTED,
+            memoryHandlers: { deleteAgentMemory }
+        });
+
+        await expect(client.deleteOwnAgentMemory()).resolves.toBe(true);
+        expect(deleteAgentMemory).toHaveBeenCalledWith();
+
+        const disconnectedClient = new MemoryBoundaryClient({ ...CONFIG });
+        await expect(disconnectedClient.deleteAgentMemoryWithForgedTarget('victim-agent'))
+            .rejects.toThrow(/self-scoped/);
+        expect(deleteAgentMemory).toHaveBeenCalledTimes(1);
+        expect(mockServiceConnect).not.toHaveBeenCalled();
+    });
+
+    it('propagates authoritative GET, UPDATE, and DELETE failures for every scope', async () => {
+        const client = new MemoryBoundaryClient({ ...CONFIG });
+        const storageFailure = new Error('authoritative memory storage unavailable');
+        const memoryHandlers = {
+            getAgentMemory: jest.fn().mockRejectedValue(storageFailure),
+            updateAgentMemory: jest.fn().mockRejectedValue(storageFailure),
+            deleteAgentMemory: jest.fn().mockRejectedValue(storageFailure),
+            getChannelMemory: jest.fn().mockRejectedValue(storageFailure),
+            updateChannelMemory: jest.fn().mockRejectedValue(storageFailure),
+            deleteChannelMemory: jest.fn().mockRejectedValue(storageFailure),
+            getRelationshipMemory: jest.fn().mockRejectedValue(storageFailure),
+            updateRelationshipMemory: jest.fn().mockRejectedValue(storageFailure),
+            deleteRelationshipMemory: jest.fn().mockRejectedValue(storageFailure)
+        };
+        Object.assign(client as unknown as Record<string, unknown>, {
+            isFullyConnected: true,
+            status: ConnectionStatus.CONNECTED,
+            memoryHandlers
+        });
+        const operations: Array<() => Promise<unknown>> = [
+            (): Promise<unknown> => client.readAgentMemory(),
+            (): Promise<unknown> => client.writeAgentMemory({ notes: { key: 'value' } }),
+            (): Promise<unknown> => client.deleteOwnAgentMemory(),
+            (): Promise<unknown> => client.readChannelMemory(CONFIG.channelId),
+            (): Promise<unknown> => client.writeChannelMemory(
+                CONFIG.channelId,
+                { notes: { key: 'value' } }
+            ),
+            (): Promise<unknown> => client.deleteOwnChannelMemory(CONFIG.channelId),
+            (): Promise<unknown> => client.readRelationshipMemory('peer-agent'),
+            (): Promise<unknown> => client.writeRelationshipMemory(
+                'peer-agent',
+                { notes: { key: 'value' } }
+            ),
+            (): Promise<unknown> => client.deleteOwnRelationshipMemory('peer-agent')
+        ];
+
+        for (const operation of operations) {
+            await expect(operation()).rejects.toThrow('authoritative memory storage unavailable');
+        }
+    });
+
+    it('rejects a disconnected memory operation instead of returning null or false', async () => {
+        const client = new MemoryBoundaryClient({ ...CONFIG });
+        const getAgentMemory = jest.fn();
+        Object.assign(client as unknown as Record<string, unknown>, {
+            isFullyConnected: true,
+            status: ConnectionStatus.CONNECTED,
+            mxfService: { isConnected: () => false },
+            memoryHandlers: { getAgentMemory }
+        });
+
+        await expect(client.readAgentMemory()).rejects.toThrow(/socket is not connected/);
+        expect(getAgentMemory).not.toHaveBeenCalled();
     });
 });
 
@@ -260,6 +504,20 @@ describe('MxfClient subscription lifecycle', () => {
         // Every disconnect()/connect() cycle used to stack another full set of
         // agent-lifecycle listeners, so each status change fired N times.
         expect(afterReconnect).toBe(afterFirstConnect);
+    });
+
+    it('restores a lazily registered user-input handler after reconnect', async () => {
+        const client = newClient();
+        client.onUserInput(async () => 'approved');
+
+        expect(bus._handlerCount(UserInputEvents.REQUEST)).toBe(1);
+
+        await client.connect();
+        await client.disconnect();
+        expect(bus._handlerCount(UserInputEvents.REQUEST)).toBe(0);
+
+        await client.connect();
+        expect(bus._handlerCount(UserInputEvents.REQUEST)).toBe(1);
     });
 
     it('drops consumer listeners registered with on() when disconnect() runs', async () => {

@@ -51,7 +51,7 @@ Messages with importance >= 60 are preserved in full regardless of their tier, a
 3. Run the demo:
    ```bash
    bun run prompt-compaction-demo.ts
-   # Or use npm script:
+   # Or use the root package script:
    bun run demo:prompt-compaction
    ```
 

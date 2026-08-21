@@ -21,17 +21,60 @@
 import { Logger } from '@mxf-dev/core/utils/Logger';
 import { TaskService } from '../../socket/services/TaskService';
 import { normalizeSummaryInput } from './helpers/toolInputNormalization';
-import { 
-    ChannelTask, 
-    TaskPriority, 
-    TaskStatus, 
-    AssignmentStrategy,
+import { requireExactToolTenantContext } from './helpers/toolTenantContext';
+import { McpToolHandlerContext } from '@mxf-dev/core/protocols/mcp/McpServerTypes';
+import {
     CreateTaskRequest,
-    UpdateTaskRequest,
     TaskQueryFilters
 } from '@mxf-dev/core/types/TaskTypes';
 
 const logger = new Logger('info', 'TaskBridgeTools', 'server');
+
+export type TaskToolResult = Record<string, unknown>;
+
+export interface CreateTaskToolArgs extends Record<string, unknown> {
+    title: string;
+    description: string;
+    assignTo?: string;
+    channelId?: string;
+    priority?: CreateTaskRequest['priority'];
+    dependsOn?: unknown;
+}
+
+export interface QueryTasksToolArgs extends Record<string, unknown> {
+    channelId?: string;
+    status?: TaskQueryFilters['status'];
+    assignedAgentId?: string;
+}
+
+export interface UpdateTaskToolArgs extends Record<string, unknown> {
+    taskId: string;
+    channelId?: string;
+    progress: number;
+}
+
+export interface CompleteTaskToolArgs extends Record<string, unknown> {
+    summary: unknown;
+    success?: boolean;
+}
+
+export interface TaskStatusToolArgs extends Record<string, unknown> {
+    taskId: string;
+    channelId?: string;
+}
+
+const getErrorMessage = (error: unknown): string =>
+    error instanceof Error ? error.message : String(error);
+
+const normalizeToolSummary = (summary: unknown): string | undefined => {
+    if (typeof summary === 'string') {
+        return normalizeSummaryInput(summary);
+    }
+    if (summary !== null && typeof summary === 'object' && !Array.isArray(summary)) {
+        return normalizeSummaryInput(summary as Record<string, unknown>);
+    }
+    throw new Error('summary must be a string or object');
+};
 
 /**
  * Task Bridge Tools for MXF
@@ -81,15 +124,31 @@ export const createTaskTool = {
         },
         required: ['title', 'description']
     },
-    handler: async (args: any, context: any) => {
+    handler: async (
+        args: CreateTaskToolArgs,
+        context: McpToolHandlerContext
+    ): Promise<TaskToolResult> => {
         try {
             const taskService = getTaskService();
-            
-            // Auto-populate channelId from context if not provided
-            const channelId = args.channelId || context.channelId;
-            
-            if (!channelId) {
-                throw new Error('channelId is required but not provided and not available in context');
+
+            const { agentId, channelId } = requireExactToolTenantContext(context, args.channelId);
+            let dependsOn: string[] | undefined;
+            if (args.dependsOn !== undefined) {
+                if (!Array.isArray(args.dependsOn)) {
+                    throw new Error('dependsOn must be an array of task IDs');
+                }
+                dependsOn = args.dependsOn.map((taskId: unknown) => {
+                    if (typeof taskId !== 'string' || taskId.trim() === '') {
+                        throw new Error('dependsOn must contain only non-empty task IDs');
+                    }
+                    return taskId;
+                });
+                const dependencies = await Promise.all(
+                    dependsOn.map((taskId) => taskService.getTaskInChannel(taskId, channelId))
+                );
+                if (dependencies.some((task) => task === null)) {
+                    throw new Error('One or more dependency tasks were not found in the authenticated channel');
+                }
             }
             
             const createRequest: CreateTaskRequest = {
@@ -100,10 +159,10 @@ export const createTaskTool = {
                 assignedAgentId: args.assignTo,
                 assignmentStrategy: args.assignTo ? 'manual' : 'none',
                 assignmentScope: 'single',
-                dependsOn: args.dependsOn,
+                dependsOn,
             };
             
-            const task = await taskService.createTask(createRequest, context.agentId);
+            const task = await taskService.createTask(createRequest, agentId);
             
             
             return {
@@ -113,9 +172,10 @@ export const createTaskTool = {
                 message: `Task "${args.title}" created successfully with ID: ${task.id}`
             };
             
-        } catch (error: any) {
+        } catch (error: unknown) {
+            const errorMessage = getErrorMessage(error);
             logger.error('Failed to create task via task_create tool', {
-                error: error.message,
+                error: errorMessage,
                 agentId: context.agentId,
                 title: args.title
             });
@@ -123,7 +183,7 @@ export const createTaskTool = {
             return {
                 success: false,
                 message: 'Failed to create task',
-                error: error.message
+                error: errorMessage
             };
         }
     }
@@ -150,12 +210,16 @@ export const queryTasksTool = {
             }
         }
     },
-    handler: async (args: any, context: any) => {
+    handler: async (
+        args: QueryTasksToolArgs,
+        context: McpToolHandlerContext
+    ): Promise<TaskToolResult> => {
         try {
             const taskService = getTaskService();
-            
+            const { channelId } = requireExactToolTenantContext(context, args.channelId);
+
             const filters: TaskQueryFilters = {
-                channelId: args.channelId,
+                channelId,
                 status: args.status,
                 assignedAgentId: args.assignedAgentId
             };
@@ -170,9 +234,10 @@ export const queryTasksTool = {
                 message: `Found ${tasks.length} tasks matching the criteria`
             };
             
-        } catch (error: any) {
+        } catch (error: unknown) {
+            const errorMessage = getErrorMessage(error);
             logger.error('Failed to query tasks via task_query tool', {
-                error: error.message,
+                error: errorMessage,
                 agentId: context.agentId
             });
             
@@ -181,7 +246,7 @@ export const queryTasksTool = {
                 tasks: [],
                 count: 0,
                 message: 'Failed to query tasks',
-                error: error.message
+                error: errorMessage
             };
         }
     }
@@ -197,11 +262,6 @@ export const updateTaskTool = {
                 type: 'string',
                 description: 'ID of the task to update'
             },
-            status: {
-                type: 'string',
-                enum: ['pending', 'assigned', 'in_progress', 'completed', 'failed', 'cancelled'],
-                description: 'New task status'
-            },
             progress: {
                 type: 'number',
                 minimum: 0,
@@ -209,26 +269,30 @@ export const updateTaskTool = {
                 description: 'Task progress percentage (0-100)'
             }
         },
-        required: ['taskId']
+        required: ['taskId', 'progress']
     },
-    handler: async (args: any, context: any) => {
+    handler: async (
+        args: UpdateTaskToolArgs,
+        context: McpToolHandlerContext
+    ): Promise<TaskToolResult> => {
         try {
             const taskService = getTaskService();
-            
-            const { taskId, ...updateData } = args;
-            
-            const task = await taskService.updateTask(taskId, updateData);
+            const { channelId } = requireExactToolTenantContext(context, args.channelId);
+            const updateData = { progress: args.progress };
+
+            const task = await taskService.updateTaskInChannel(args.taskId, channelId, updateData);
             
             
             return {
                 success: true,
                 task,
-                message: `Task ${taskId} updated successfully`
+                message: `Task ${args.taskId} updated successfully`
             };
             
-        } catch (error: any) {
+        } catch (error: unknown) {
+            const errorMessage = getErrorMessage(error);
             logger.error('Failed to update task via task_update tool', {
-                error: error.message,
+                error: errorMessage,
                 agentId: context.agentId,
                 taskId: args.taskId
             });
@@ -236,7 +300,7 @@ export const updateTaskTool = {
             return {
                 success: false,
                 message: 'Failed to update task',
-                error: error.message
+                error: errorMessage
             };
         }
     }
@@ -263,17 +327,25 @@ export const completeTaskBridgeTool = {
         },
         required: ['summary']
     },
-    handler: async (args: any, context: any) => {
+    handler: async (
+        args: CompleteTaskToolArgs,
+        context: McpToolHandlerContext
+    ): Promise<TaskToolResult> => {
         try {
             const taskService = getTaskService();
+            const { agentId, channelId } = requireExactToolTenantContext(context);
+            const summary = normalizeToolSummary(args.summary);
+            if (summary === undefined) {
+                throw new Error('Task completion summary is required');
+            }
 
             // Use the task service's completion handler. Objects are stored as
             // their JSON string; handleTaskCompletion requires a plain string.
             const result = await taskService.handleTaskCompletion(
-                context.agentId,
-                context.channelId,
+                agentId,
+                channelId,
                 {
-                    summary: normalizeSummaryInput(args.summary) || 'Task completed',
+                    summary,
                     success: args.success,
                     requestId: `bridge-${Date.now()}`
                 }
@@ -282,16 +354,17 @@ export const completeTaskBridgeTool = {
             
             return result;
             
-        } catch (error: any) {
+        } catch (error: unknown) {
+            const errorMessage = getErrorMessage(error);
             logger.error('Failed to complete task via task_complete_bridge tool', {
-                error: error.message,
+                error: errorMessage,
                 agentId: context.agentId
             });
             
             return {
                 status: 'error',
                 message: 'Failed to complete task',
-                error: error.message
+                error: errorMessage
             };
         }
     }
@@ -310,12 +383,14 @@ export const getTaskStatusTool = {
         },
         required: ['taskId']
     },
-    handler: async (args: any, context: any) => {
+    handler: async (
+        args: TaskStatusToolArgs,
+        context: McpToolHandlerContext
+    ): Promise<TaskToolResult> => {
         try {
             const taskService = getTaskService();
-            
-            const tasks = await taskService.getTasks({});
-            const task = tasks.find(t => t.id === args.taskId);
+            const { channelId } = requireExactToolTenantContext(context, args.channelId);
+            const task = await taskService.getTaskInChannel(args.taskId, channelId);
             
             if (!task) {
                 return {
@@ -331,9 +406,10 @@ export const getTaskStatusTool = {
                 message: `Task ${args.taskId} status: ${task.status}`
             };
             
-        } catch (error: any) {
+        } catch (error: unknown) {
+            const errorMessage = getErrorMessage(error);
             logger.error('Failed to get task status via task_status tool', {
-                error: error.message,
+                error: errorMessage,
                 agentId: context.agentId,
                 taskId: args.taskId
             });
@@ -341,7 +417,7 @@ export const getTaskStatusTool = {
             return {
                 success: false,
                 message: 'Failed to get task status',
-                error: error.message
+                error: errorMessage
             };
         }
     }

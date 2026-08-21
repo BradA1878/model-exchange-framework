@@ -32,12 +32,25 @@ import express from 'express';
 import { PersonalAccessTokenService } from '../services/PersonalAccessTokenService';
 import { createStrictValidator } from '@mxf-dev/core/utils/validation';
 import { Logger } from '@mxf-dev/core/utils/Logger';
+import { UserRole } from '@mxf-dev/core/models/user';
+import { requireUserPrincipal } from '../middleware/resourceOwnership';
+import { authorizationService } from '../services/AuthorizationService';
 
 // Create validator and logger
 const validator = createStrictValidator('TokenRoutes');
 const logger = new Logger('info', 'TokenRoutes', 'server');
 
 const router = express.Router();
+
+// Global API authentication accepts either JWT users or channel-bound agent
+// keys. PAT lifecycle and validation are user-account operations, so the router
+// must narrow that broader principal before any body parsing or service work.
+router.use(requireUserPrincipal);
+
+const getAuthenticatedUserId = (req: express.Request): string | null => {
+    const principal = authorizationService.readPrincipal(req);
+    return principal.kind === 'user' ? principal.userId : null;
+};
 
 /**
  * Create a new personal access token
@@ -82,7 +95,7 @@ router.post('/', async (req, res) => {
         }
 
         // Extract userId from authenticated user context
-        const userId = (req as any).user?.id?.toString();
+        const userId = getAuthenticatedUserId(req);
         if (!userId) {
             return res.status(401).json({
                 success: false,
@@ -160,7 +173,7 @@ router.post('/', async (req, res) => {
 router.get('/', async (req, res) => {
     try {
         // Extract userId from authenticated user context
-        const userId = (req as any).user?.id?.toString();
+        const userId = getAuthenticatedUserId(req);
         if (!userId) {
             return res.status(401).json({
                 success: false,
@@ -199,7 +212,7 @@ router.get('/:tokenId', async (req, res) => {
         validator.assertIsNonEmptyString(tokenId, 'tokenId is required');
 
         // Extract userId from authenticated user context
-        const userId = (req as any).user?.id?.toString();
+        const userId = getAuthenticatedUserId(req);
         if (!userId) {
             return res.status(401).json({
                 success: false,
@@ -255,7 +268,7 @@ router.delete('/:tokenId', async (req, res) => {
         }
 
         // Extract userId from authenticated user context
-        const userId = (req as any).user?.id?.toString();
+        const userId = getAuthenticatedUserId(req);
         if (!userId) {
             return res.status(401).json({
                 success: false,
@@ -320,8 +333,21 @@ router.post('/validate', async (req, res) => {
 
         const [tokenId, secret] = parts;
 
+        const principal = authorizationService.readPrincipal(req);
+        if (principal.kind !== 'user') {
+            // `requireUserPrincipal` above makes this unreachable in normal route
+            // execution; keep the controller boundary fail-closed if reused.
+            return res.status(403).json({
+                success: false,
+                error: 'A user account is required to validate personal access tokens'
+            });
+        }
+
         const tokenService = PersonalAccessTokenService.getInstance();
-        const result = await tokenService.validateToken(tokenId, secret);
+        const result = await tokenService.validateTokenForRequester(tokenId, secret, {
+            userId: principal.userId,
+            isAdmin: principal.role === UserRole.ADMIN
+        });
 
         res.json({
             success: true,

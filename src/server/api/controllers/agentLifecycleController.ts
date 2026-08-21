@@ -30,7 +30,7 @@ import { createStrictValidator } from '@mxf-dev/core/utils/validation';
 import { Logger } from '@mxf-dev/core/utils/Logger';
 import { EventBus } from '@mxf-dev/core/events/EventBus';
 import { Events } from '@mxf-dev/core/events/EventNames';
-import { MemoryPersistenceService } from '../services/MemoryPersistenceService';
+import { MemoryService } from '@mxf-dev/core/services/MemoryService';
 import { MemoryScope } from '@mxf-dev/core/types/MemoryTypes';
 import { firstValueFrom } from 'rxjs';
 
@@ -362,10 +362,11 @@ export const deleteAgentMemory = async (req: Request, res: Response): Promise<vo
         const { agentId } = req.params;
         validate.assertIsNonEmptyString(agentId);
 
-        // Delete agent memory using the persistence service
-        const memoryPersistenceService = MemoryPersistenceService.getInstance();
+        // Delete through the canonical service so persistent storage and every
+        // in-process cache are invalidated as one acknowledged operation.
+        const memoryService = MemoryService.getInstance();
         const deleted = await firstValueFrom(
-            memoryPersistenceService.deleteMemory(MemoryScope.AGENT, agentId)
+            memoryService.deleteMemory(MemoryScope.AGENT, agentId)
         );
 
         if (deleted) {

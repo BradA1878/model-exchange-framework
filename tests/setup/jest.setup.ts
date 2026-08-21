@@ -16,7 +16,7 @@ beforeAll(async () => {
     // Auth middleware fail-fast validation requires a secret; tests provide
     // a fixture value only when the environment has none (real .env wins).
     if (!process.env.JWT_SECRET) {
-        process.env.JWT_SECRET = 'test-jwt-secret-for-tests-only';
+        process.env.JWT_SECRET = 'test-jwt-secret-for-tests-only-never-for-production';
     }
     if (!process.env.MXF_DEMO_USERNAME) {
         process.env.MXF_DEMO_USERNAME = 'demo-user';

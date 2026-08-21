@@ -49,7 +49,7 @@ The `#` prefix in the header row indicates TOON format. Subsequent rows contain 
 3. Run the demo:
    ```bash
    bun run toon-optimization-demo.ts
-   # Or use npm script:
+   # Or use the root package script:
    bun run demo:toon-optimization
    ```
 

@@ -34,6 +34,7 @@ import { Events } from '../../../events/EventNames.js';
 import { createChannelMessageEventPayload, createAgentMessageEventPayload, createPlanStepCompletedEventPayload } from '../../../schemas/EventPayloadSchema.js';
 import { createChannelMessage, createAgentMessage } from '../../../schemas/MessageSchemas.js';
 import PlanModel from '../../../models/plan.js';
+import { Channel } from '../../../models/channel.js';
 
 const logger = new Logger('debug', 'PlanningTools', 'server');
 
@@ -52,9 +53,10 @@ export interface Plan {
     id: string;
     title: string;
     createdBy: string;
+    channelId: string;
     createdAt: number;
     items: PlanItem[];
-    metadata?: Record<string, any>;
+    metadata?: Record<string, unknown>;
 }
 
 /**
@@ -78,13 +80,31 @@ const LOCK_CLEANUP_INTERVAL_MS = 60000;
 // Serialization locks to prevent parallel plan updates (like Cascade)
 const planUpdateLocks = new Map<string, PlanLock>();
 
+interface PlanningIdentity {
+    agentId: string;
+    channelId: string;
+}
+
+const requirePlanningIdentity = (context: McpToolHandlerContext): PlanningIdentity => {
+    if (typeof context.agentId !== 'string' || context.agentId.trim().length === 0 ||
+        typeof context.channelId !== 'string' || context.channelId.trim().length === 0) {
+        throw new Error('Authenticated agentId and channelId are required for planning tools');
+    }
+    return {
+        agentId: context.agentId.trim(),
+        channelId: context.channelId.trim()
+    };
+};
+
+const planLockKey = (channelId: string, planId: string): string => `${channelId}\0${planId}`;
+
 /**
  * Acquire a lock for a plan with TTL-based expiration.
  * Returns true if lock acquired, false if plan is already locked.
  */
-function acquirePlanLock(planId: string, agentId?: string): boolean {
+function acquirePlanLock(lockKey: string, agentId?: string): boolean {
     const now = Date.now();
-    const existingLock = planUpdateLocks.get(planId);
+    const existingLock = planUpdateLocks.get(lockKey);
 
     // Check if existing lock has expired
     if (existingLock && (now - existingLock.acquiredAt) < LOCK_TIMEOUT_MS) {
@@ -93,29 +113,29 @@ function acquirePlanLock(planId: string, agentId?: string): boolean {
     }
 
     // Acquire or renew lock
-    planUpdateLocks.set(planId, { acquiredAt: now, agentId });
+    planUpdateLocks.set(lockKey, { acquiredAt: now, agentId });
     return true;
 }
 
 /**
  * Release a lock for a plan.
  */
-function releasePlanLock(planId: string): void {
-    planUpdateLocks.delete(planId);
+function releasePlanLock(lockKey: string): void {
+    planUpdateLocks.delete(lockKey);
 }
 
 /**
  * Check if a plan is currently locked.
  * Returns lock info if locked, undefined if not locked.
  */
-function getPlanLockInfo(planId: string): PlanLock | undefined {
-    const lock = planUpdateLocks.get(planId);
+function getPlanLockInfo(lockKey: string): PlanLock | undefined {
+    const lock = planUpdateLocks.get(lockKey);
     if (!lock) return undefined;
 
     const now = Date.now();
     if ((now - lock.acquiredAt) >= LOCK_TIMEOUT_MS) {
         // Lock has expired, clean it up
-        planUpdateLocks.delete(planId);
+        planUpdateLocks.delete(lockKey);
         return undefined;
     }
 
@@ -203,8 +223,12 @@ export const planning_create: McpToolDefinition = {
     enabled: true,
     handler: async (input: McpToolInput, context: McpToolHandlerContext): Promise<McpToolHandlerResult> => {
         try {
+            const identity = requirePlanningIdentity(context);
             const planId = uuidv4();
-            const planItems = (input.items || []).map((item: any, index: number) => ({
+            if (!Array.isArray(input.items)) {
+                throw new Error('items must be an array');
+            }
+            const planItems: PlanItem[] = (input.items as Array<Partial<PlanItem>>).map((item, index) => ({
                 id: `item-${index + 1}`,
                 title: item.title || 'Untitled Item',
                 description: item.description,
@@ -219,8 +243,8 @@ export const planning_create: McpToolDefinition = {
             const planDoc = new PlanModel({
                 planId,
                 title: input.title,
-                createdBy: context.agentId || 'system',
-                channelId: context.channelId,
+                createdBy: identity.agentId,
+                channelId: identity.channelId,
                 items: planItems,
                 metadata: input.metadata
             });
@@ -230,17 +254,18 @@ export const planning_create: McpToolDefinition = {
             const plan: Plan = {
                 id: planId,
                 title: input.title,
-                createdBy: context.agentId || 'system',
+                createdBy: identity.agentId,
+                channelId: identity.channelId,
                 createdAt: planDoc.createdAt.getTime(),
                 items: planItems,
                 metadata: input.metadata
             };
             
             // Emit planning event
-            if (context.channelId && context.agentId) {
+            {
                 const channelMessage = createChannelMessage(
-                    context.channelId,
-                    context.agentId,
+                    identity.channelId,
+                    identity.agentId,
                     `📋 Created plan: ${plan.title} with ${plan.items.length} items`,
                     {
                         context: { 
@@ -254,7 +279,7 @@ export const planning_create: McpToolDefinition = {
                 EventBus.server.emit(Events.Message.CHANNEL_MESSAGE, 
                     createChannelMessageEventPayload(
                         Events.Message.CHANNEL_MESSAGE,
-                        context.agentId,
+                        identity.agentId,
                         channelMessage
                     )
                 );
@@ -276,6 +301,7 @@ export const planning_create: McpToolDefinition = {
             const content: McpToolResultContent = {
                 type: 'application/json',
                 data: {
+                    success: false,
                     error: `Failed to create plan: ${error instanceof Error ? error.message : String(error)}`
                 }
             };
@@ -316,13 +342,16 @@ export const planning_update_item: McpToolDefinition = {
     enabled: true,
     handler: async (input: McpToolInput, context: McpToolHandlerContext): Promise<McpToolHandlerResult> => {
         try {
+            const identity = requirePlanningIdentity(context);
+            const lockKey = planLockKey(identity.channelId, input.planId);
             // Check for serialization lock with TTL
-            const existingLock = getPlanLockInfo(input.planId);
+            const existingLock = getPlanLockInfo(lockKey);
             if (existingLock) {
                 const lockAgeMs = Date.now() - existingLock.acquiredAt;
                 const content: McpToolResultContent = {
                     type: 'application/json',
                     data: {
+                        success: false,
                         error: `Plan ${input.planId} is currently being updated by another operation (locked ${Math.round(lockAgeMs / 1000)}s ago${existingLock.agentId ? ` by ${existingLock.agentId}` : ''}). Please try again.`
                     }
                 };
@@ -330,10 +359,11 @@ export const planning_update_item: McpToolDefinition = {
             }
 
             // Acquire lock with TTL
-            if (!acquirePlanLock(input.planId, context.agentId)) {
+            if (!acquirePlanLock(lockKey, identity.agentId)) {
                 const content: McpToolResultContent = {
                     type: 'application/json',
                     data: {
+                        success: false,
                         error: `Failed to acquire lock for plan ${input.planId}. Please try again.`
                     }
                 };
@@ -342,22 +372,27 @@ export const planning_update_item: McpToolDefinition = {
             
             try {
                 // Fetch plan from MongoDB
-                const planDoc = await PlanModel.findOne({ planId: input.planId });
+                const planDoc = await PlanModel.findOne({
+                    planId: input.planId,
+                    channelId: identity.channelId
+                });
                 if (!planDoc) {
                     const content: McpToolResultContent = {
                         type: 'application/json',
                         data: {
+                            success: false,
                             error: `Plan not found: ${input.planId}`
                         }
                     };
                     return { content };
                 }
 
-            const item = planDoc.items.find((i: any) => i.id === input.itemId);
+            const item = planDoc.items.find(i => i.id === input.itemId);
             if (!item) {
                 const content: McpToolResultContent = {
                     type: 'application/json',
                     data: {
+                        success: false,
                         error: `Item not found: ${input.itemId} in plan ${input.planId}`
                     }
                 };
@@ -372,31 +407,31 @@ export const planning_update_item: McpToolDefinition = {
             await planDoc.save();
 
             // Emit update event
-            if (context.channelId && context.agentId) {
+            {
                 const updateMessage = createChannelMessage(
-                    context.channelId,
-                    context.agentId,
+                    identity.channelId,
+                    identity.agentId,
                     `✅ Updated plan item: ${item.title} → ${input.status || 'updated'}${input.notes ? ` (${input.notes})` : ''}`,
                     { context: { planId: input.planId, itemId: input.itemId, status: input.status, toolName: 'planning_update_item' } }
                 );
                 EventBus.server.emit(
                     Events.Message.CHANNEL_MESSAGE,
-                    createChannelMessageEventPayload(Events.Message.CHANNEL_MESSAGE, context.agentId, updateMessage)
+                    createChannelMessageEventPayload(Events.Message.CHANNEL_MESSAGE, identity.agentId, updateMessage)
                 );
             }
             
             // Emit plan step completion event for monitoring service
-            if (input.status === 'completed' && context.agentId && context.channelId) {
+            if (input.status === 'completed') {
                 EventBus.server.emit(
                     Events.Plan.PLAN_STEP_COMPLETED,
                     createPlanStepCompletedEventPayload(
                         Events.Plan.PLAN_STEP_COMPLETED,
-                        context.agentId,
-                        context.channelId,
+                        identity.agentId,
+                        identity.channelId,
                         {
                             planId: input.planId,
                             stepId: input.itemId,
-                            completedBy: context.agentId
+                            completedBy: identity.agentId
                         }
                     )
                 );
@@ -415,13 +450,14 @@ export const planning_update_item: McpToolDefinition = {
             return { content };
             } finally {
                 // Always release lock
-                releasePlanLock(input.planId);
+                releasePlanLock(lockKey);
             }
         } catch (error) {
             logger.error(`Error updating plan item: ${error}`);
             const content: McpToolResultContent = {
                 type: 'application/json',
                 data: {
+                    success: false,
                     error: `Failed to update plan item: ${error instanceof Error ? error.message : String(error)}`
                 }
             };
@@ -448,13 +484,18 @@ export const planning_view: McpToolDefinition = {
     enabled: true,
     handler: async (input: McpToolInput, context: McpToolHandlerContext): Promise<McpToolHandlerResult> => {
         try {
+            const identity = requirePlanningIdentity(context);
             if (input.planId) {
                 // Fetch specific plan from MongoDB
-                const planDoc = await PlanModel.findOne({ planId: input.planId });
+                const planDoc = await PlanModel.findOne({
+                    planId: input.planId,
+                    channelId: identity.channelId
+                });
                 if (!planDoc) {
                     const content: McpToolResultContent = {
                         type: 'application/json',
                         data: {
+                            success: false,
                             error: `Plan not found: ${input.planId}`
                         }
                     };
@@ -472,10 +513,10 @@ export const planning_view: McpToolDefinition = {
 
                 const summary = {
                     total: plan.items.length,
-                    pending: plan.items.filter((i: any) => i.status === 'pending').length,
-                    inProgress: plan.items.filter((i: any) => i.status === 'in_progress').length,
-                    completed: plan.items.filter((i: any) => i.status === 'completed').length,
-                    blocked: plan.items.filter((i: any) => i.status === 'blocked').length
+                    pending: plan.items.filter(i => i.status === 'pending').length,
+                    inProgress: plan.items.filter(i => i.status === 'in_progress').length,
+                    completed: plan.items.filter(i => i.status === 'completed').length,
+                    blocked: plan.items.filter(i => i.status === 'blocked').length
                 };
 
                 const content: McpToolResultContent = {
@@ -490,9 +531,9 @@ export const planning_view: McpToolDefinition = {
                 return { content };
             } else {
                 // Return all plans for this channel from MongoDB
-                const planDocs = context.channelId
-                    ? await PlanModel.find({ channelId: context.channelId }).sort({ createdAt: -1 })
-                    : await PlanModel.find({ createdBy: context.agentId }).sort({ createdAt: -1 });
+                const planDocs = await PlanModel.find({
+                    channelId: identity.channelId
+                }).sort({ createdAt: -1 });
 
                 const channelPlans = planDocs.map(doc => ({
                     id: doc.planId,
@@ -502,10 +543,6 @@ export const planning_view: McpToolDefinition = {
                     items: doc.items,
                     metadata: doc.metadata
                 }));
-
-                const allPlansFiltered = channelPlans.filter(
-                    p => !context.channelId || p.metadata?.channelId === context.channelId
-                );
 
                 const content: McpToolResultContent = {
                     type: 'application/json',
@@ -528,6 +565,7 @@ export const planning_view: McpToolDefinition = {
             const content: McpToolResultContent = {
                 type: 'application/json',
                 data: {
+                    success: false,
                     error: `Failed to view plan: ${error instanceof Error ? error.message : String(error)}`
                 }
             };
@@ -564,12 +602,17 @@ export const planning_share: McpToolDefinition = {
     enabled: true,
     handler: async (input: McpToolInput, context: McpToolHandlerContext): Promise<McpToolHandlerResult> => {
         try {
+            const identity = requirePlanningIdentity(context);
             // Fetch plan from MongoDB
-            const planDoc = await PlanModel.findOne({ planId: input.planId });
+            const planDoc = await PlanModel.findOne({
+                planId: input.planId,
+                channelId: identity.channelId
+            });
             if (!planDoc) {
                 const content: McpToolResultContent = {
                     type: 'application/json',
                     data: {
+                        success: false,
                         error: `Plan not found: ${input.planId}`
                     }
                 };
@@ -577,7 +620,7 @@ export const planning_share: McpToolDefinition = {
             }
 
             const planSummary = `📋 **${planDoc.title}**\n` +
-                planDoc.items.map((item: any, idx: number) =>
+                planDoc.items.map((item, idx: number) =>
                     `${idx + 1}. ${item.title} [${item.status}]${item.assignee ? ` - @${item.assignee}` : ''}`
                 ).join('\n');
 
@@ -585,44 +628,77 @@ export const planning_share: McpToolDefinition = {
                 ? `${input.message}\n\n${planSummary}`
                 : planSummary;
 
-            if (input.agentIds && input.agentIds.length > 0) {
-                // Send to specific agents
-                if (context.agentId && context.channelId) {
-                    for (const targetAgentId of input.agentIds) {
+            if (input.agentIds !== undefined && !Array.isArray(input.agentIds)) {
+                throw new Error('agentIds must be an array when provided');
+            }
+
+            if (Array.isArray(input.agentIds) && input.agentIds.length > 0) {
+                if (input.agentIds.some(
+                    (targetAgentId: unknown) => typeof targetAgentId !== 'string' || targetAgentId.trim().length === 0
+                )) {
+                    throw new Error('agentIds must contain only non-empty agent identifiers');
+                }
+                const targetAgentIds = [...new Set(
+                    input.agentIds.map((targetAgentId: string) => targetAgentId.trim())
+                )];
+                const allTargetsAreCurrentParticipants = await Channel.exists({
+                    channelId: identity.channelId,
+                    active: true,
+                    participants: { $all: targetAgentIds }
+                });
+                if (!allTargetsAreCurrentParticipants) {
+                    const content: McpToolResultContent = {
+                        type: 'application/json',
+                        data: {
+                            success: false,
+                            error: 'Every share target must be a current participant of the authenticated channel'
+                        }
+                    };
+                    return { content };
+                }
+
+                // Send only after all targets pass authorization so a mixed list
+                // cannot partially disclose the plan before reporting failure.
+                for (const targetAgentId of targetAgentIds) {
                         const agentMessage = createAgentMessage(
-                            context.agentId,
+                            identity.agentId,
                             targetAgentId,
                             fullMessage,
                             { context: { planId: input.planId, planShared: true, toolName: 'planning_share' } }
                         );
                         EventBus.server.emit(
                             Events.Message.AGENT_MESSAGE,
-                            createAgentMessageEventPayload(Events.Message.AGENT_MESSAGE, context.agentId, context.channelId, agentMessage)
+                            createAgentMessageEventPayload(
+                                Events.Message.AGENT_MESSAGE,
+                                identity.agentId,
+                                identity.channelId,
+                                agentMessage
+                            )
                         );
-                    }
                 }
 
                 const content: McpToolResultContent = {
                     type: 'application/json',
                     data: {
                         success: true,
-                        message: `Shared plan with ${input.agentIds.length} agents`,
-                        sharedWith: input.agentIds
+                        message: `Queued plan delivery for ${targetAgentIds.length} channel participants`,
+                        sharedWith: targetAgentIds,
+                        deliveryConfirmed: false
                     }
                 };
                 return { content };
             } else {
                 // Broadcast to channel
-                if (context.channelId && context.agentId) {
+                {
                     const channelMessage = createChannelMessage(
-                        context.channelId,
-                        context.agentId,
+                        identity.channelId,
+                        identity.agentId,
                         fullMessage,
                         { context: { planId: input.planId, planShared: true, toolName: 'planning_share' } }
                     );
                     EventBus.server.emit(
                         Events.Message.CHANNEL_MESSAGE,
-                        createChannelMessageEventPayload(Events.Message.CHANNEL_MESSAGE, context.agentId, channelMessage)
+                        createChannelMessageEventPayload(Events.Message.CHANNEL_MESSAGE, identity.agentId, channelMessage)
                     );
                 }
 
@@ -630,7 +706,8 @@ export const planning_share: McpToolDefinition = {
                     type: 'application/json',
                     data: {
                         success: true,
-                        message: 'Broadcast plan to all agents in channel'
+                        message: 'Queued plan broadcast to the authenticated channel',
+                        deliveryConfirmed: false
                     }
                 };
                 return { content };
@@ -640,6 +717,7 @@ export const planning_share: McpToolDefinition = {
             const content: McpToolResultContent = {
                 type: 'application/json',
                 data: {
+                    success: false,
                     error: `Failed to share plan: ${error instanceof Error ? error.message : String(error)}`
                 }
             };

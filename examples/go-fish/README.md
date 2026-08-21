@@ -12,7 +12,7 @@ Watch AI players with distinct personalities play Go Fish:
 
 ### Prerequisites
 
-- Node.js 18+
+- Bun
 - Running MXF server (`bun run dev` in main project)
 - OpenRouter API key
 
@@ -22,10 +22,10 @@ Watch AI players with distinct personalities play Go Fish:
 cd examples/go-fish
 
 # Install server dependencies
-npm install
+bun install
 
 # Install client dependencies
-cd client && npm install && cd ..
+cd client && bun install && cd ..
 ```
 
 ### Configuration

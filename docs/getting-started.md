@@ -16,8 +16,8 @@ The Model Exchange Framework (MXF) is a platform for building autonomous multi-a
 - **ORPAR Control Loop**: Structured cognitive cycle for intelligent decision-making
 - **TensorFlow.js Integration**: On-device ML models for error prediction, anomaly detection, and more (opt-in)
 
-> **SDK install**: the SDK is published to npm — `npm install @mxf-dev/sdk`
-> (or `bun add @mxf-dev/sdk`) — and imported as `import { MxfSDK } from '@mxf-dev/sdk'`.
+> **SDK install**: the SDK is published to the npm registry — `bun add @mxf-dev/sdk` —
+> and imported as `import { MxfSDK } from '@mxf-dev/sdk'`.
 > See `/examples` for working patterns.
 
 ## Prerequisites
@@ -48,7 +48,7 @@ The Model Exchange Framework (MXF) is a platform for building autonomous multi-a
 
 ### Option A: Docker Deployment (Recommended)
 
-**This deploys the MXF stack: Server + MongoDB + Meilisearch + Redis** (the dashboard is a separate package — `npx @mxf-dev/dashboard`)
+**This deploys the MXF stack: Server + MongoDB + Meilisearch + Redis** (the dashboard is a separate package — `bunx @mxf-dev/dashboard`)
 
 #### 1. Clone Repository
 
@@ -107,7 +107,7 @@ bun run docker:health
 #### 4. Access Services
 
 - **MXF Server**: `http://localhost:3001`
-- **Dashboard** (separate package, `npx @mxf-dev/dashboard`): `http://localhost:4173`
+- **Dashboard** (separate package, `bunx @mxf-dev/dashboard`): `http://localhost:4173`
 - **Meilisearch**: `http://localhost:7700`
 - **MongoDB**: `localhost:27017`
 - **Redis**: `localhost:6379`
@@ -140,7 +140,7 @@ bun install
 bun run build
 ```
 
-> **Note:** MXF uses Bun for both package management and server execution. Both `bun install` and `npm install` work for dependencies.
+> **Note:** MXF uses Bun for both package management and server execution. Install dependencies with `bun install`.
 
 #### 2. Configure Environment
 
@@ -187,21 +187,34 @@ MXF_DOMAIN_KEY=generate_with_server_cli_below
 # OLLAMA_BASE_URL=http://localhost:11434
 
 # SystemLLM Configuration (for ORPAR control loop, pattern learning, coordination)
-# Master switch to enable/disable SystemLLM features
+# Master switch. SystemLLM is on unless this is exactly "false" - an unset variable means on.
 SYSTEMLLM_ENABLED=true
 # Provider for SystemLLM operations (openrouter, azure-openai, openai, anthropic, gemini, xai, ollama)
 SYSTEMLLM_PROVIDER=openrouter
-# Default model for SystemLLM (optional - defaults to provider-specific model)
-# SYSTEMLLM_DEFAULT_MODEL=google/gemini-2.5-flash
-# Enable dynamic model selection based on complexity (recommended for OpenRouter only)
-SYSTEMLLM_DYNAMIC_MODEL_SELECTION=true
+# Required whenever SystemLLM is on - there is no built-in model, and the server
+# refuses to boot without it. Check your provider's current model list before choosing an id.
+SYSTEMLLM_DEFAULT_MODEL=~anthropic/claude-sonnet-latest
+# Optional per-operation overrides - each replaces the default model for one ORPAR
+# operation (observation/reasoning/action/planning/reflection). A variable that is
+# set but blank is a boot error.
+# SYSTEMLLM_MODEL_OBSERVATION=
+# SYSTEMLLM_MODEL_REASONING=
+# SYSTEMLLM_MODEL_ACTION=
+# SYSTEMLLM_MODEL_PLANNING=
+# SYSTEMLLM_MODEL_REFLECTION=
+# Complexity-based upgrades into the latest Claude aliases; off by default, opt in with true
+# SYSTEMLLM_DYNAMIC_MODEL_SELECTION=true
+# Hard daily spend ceiling in USD; calls are refused once spend reaches it (default: 10)
+SYSTEMLLM_DAILY_BUDGET_USD=10
+# Fraction of the ceiling at which a warning is logged (default: 0.8)
+SYSTEMLLM_BUDGET_WARN_AT=0.8
 
 # MXP Protocol (Optional)
-MXP_ENCRYPTION_KEY=generate_with_npm_run_mxp_generate_key
+MXP_ENCRYPTION_KEY=generate_with_bun_run_mxp_generate_key
 MXP_ENCRYPTION_ENABLED=true
 
 # Server Configuration
-PORT=3001
+MXF_PORT=3001
 NODE_ENV=development
 ```
 
@@ -328,7 +341,7 @@ Q-value weighted memory retrieval where memories are ranked by learned utility s
 ### 1. Install the SDK (If Using as Package)
 
 ```bash
-npm install @mxf-dev/sdk
+bun add @mxf-dev/sdk
 ```
 
 **Note**: `@mxf-dev/sdk` pulls in `@mxf-dev/core` automatically. To build the SDK from source instead, see the [contributing guide](https://github.com/BradA1878/model-exchange-framework).
@@ -424,7 +437,7 @@ const agent = await sdk.createAgent({
     keyId: 'key-abc123',
     secretKey: 'secret-xyz789',
     llmProvider: 'openrouter',  // Options: 'openrouter', 'anthropic', 'openai', 'gemini', 'xai', 'ollama'
-    defaultModel: 'anthropic/claude-3.5-sonnet',
+    defaultModel: '~anthropic/claude-sonnet-latest',
     apiKey: process.env.OPENROUTER_API_KEY  // Use appropriate key for your provider
 });
 
@@ -433,13 +446,22 @@ await agent.connect();
 
 // 4. Listen to events
 agent.on(Events.Message.AGENT_MESSAGE, (payload) => {
-    console.log('Received:', payload.data.content);
+    console.log('Received:', payload.data.content.data);
     console.log('From:', payload.data.senderId);
 });
 
 // 5. Send messages
-await agent.channelService.sendMessage('Hello from my first agent!');
+await agent.mxfService.sendMessage('Hello from my first agent!');
 ```
+
+> **Note:** Model ids change often. The ids in these docs are a snapshot of what was
+> available when they were written; providers add, rename, and retire models all the
+> time. Check your provider's current list before relying on an id — for OpenRouter,
+> <https://openrouter.ai/models>. For Claude on OpenRouter, `~anthropic/claude-opus-latest`,
+> `~anthropic/claude-sonnet-latest`, and `~anthropic/claude-haiku-latest` resolve to the
+> newest release in each family, so they are the ids to use unless you need a specific
+> version. `~anthropic/claude-fable-latest` is the same kind of alias for the top-tier
+> family; it is priced well above the others and nothing in MXF selects it by default.
 
 ### LLM-Powered Agent
 
@@ -547,7 +569,7 @@ const pmAgent = await sdk.createAgent({
     keyId: 'pm-key',
     secretKey: 'pm-secret',
     llmProvider: 'openrouter',
-    defaultModel: 'anthropic/claude-3.5-sonnet',
+    defaultModel: '~anthropic/claude-sonnet-latest',
     apiKey: process.env.OPENROUTER_API_KEY,
     
     agentConfigPrompt: `You are Sarah, an experienced project manager.
@@ -575,7 +597,7 @@ const devAgent = await sdk.createAgent({
     keyId: 'dev-key',
     secretKey: 'dev-secret',
     llmProvider: 'openrouter',
-    defaultModel: 'anthropic/claude-3.5-sonnet',
+    defaultModel: '~anthropic/claude-sonnet-latest',
     apiKey: process.env.OPENROUTER_API_KEY,
     
     agentConfigPrompt: `You are Alex, a senior software developer.
@@ -610,8 +632,7 @@ Agents collaborate using goal-oriented task descriptions:
 
 ```typescript
 // PM creates a task for the team
-await pmAgent.channelService.createTask({
-    taskId: 'auth-system',
+const taskId = await pmAgent.mxfService.createTask({
     title: 'Build User Authentication',
     description: `
         Team: Build a secure user authentication system.
@@ -620,7 +641,7 @@ await pmAgent.channelService.createTask({
         
         When complete, call task_complete with your results.
     `,
-    assignedAgents: ['dev-alex'],
+    assignedAgentIds: ['dev-alex'],
     priority: 'high',
     metadata: {
         deadline: '2025-12-31',
@@ -644,7 +665,7 @@ server with no clone or build:
 
 ```bash
 # In a separate terminal
-npx @mxf-dev/dashboard --api-url http://localhost:3001
+bunx @mxf-dev/dashboard --api-url http://localhost:3001
 ```
 
 Access the dashboard at `http://localhost:4173`. It lives in its own repo:
@@ -681,7 +702,7 @@ await agent.connect();
 agent.on(Events.Message.AGENT_MESSAGE, (payload) => {
     console.log('Message from:', payload.data.senderId);
     console.log('Channel:', payload.channelId);
-    console.log('Content:', payload.data.content);
+    console.log('Content:', payload.data.content.data);
 });
 
 // Listen to task assignments
@@ -708,17 +729,17 @@ Listen to events specific to this agent's operations in its channel:
 
 ```typescript
 // Events for this agent's channel activities
-agent.channelService.on(Events.Message.AGENT_MESSAGE, (payload) => {
+agent.mxfService.on(Events.Message.AGENT_MESSAGE, (payload) => {
     // Events related to this agent's channel operations
-    console.log('Message in my channel:', payload.data.content);
+    console.log('Message in my channel:', payload.data.content.data);
 });
 
-agent.channelService.on(Events.Channel.AGENT_JOINED, (payload) => {
+agent.mxfService.on(Events.Channel.AGENT_JOINED, (payload) => {
     console.log('Agent joined:', payload.data.agentId);
 });
 
 // Remove event listener
-agent.channelService.off(Events.Message.AGENT_MESSAGE);
+agent.mxfService.off(Events.Message.AGENT_MESSAGE);
 ```
 
 #### Channel Monitor (All Channel Events)
@@ -727,7 +748,7 @@ Monitor ALL public events from ALL agents in a channel (useful for orchestration
 
 ```typescript
 // Create a channel monitor to observe all channel activity
-const monitor = sdk.createChannelMonitor('my-channel');
+const monitor = await sdk.createChannel('my-channel', { name: 'My Channel' });
 
 // Listen to all messages from all agents in the channel
 monitor.on(Events.Message.AGENT_MESSAGE, (payload) => {
@@ -797,11 +818,10 @@ const agent = await sdk.createAgent({ /* ... */ });
 await agent.connect();
 
 // Create and assign a task
-await agent.channelService.createTask({
-    taskId: 'sales-analysis',
+const taskId = await agent.mxfService.createTask({
     title: 'Analyze Sales Data',
     description: 'Analyze Q4 sales data and provide insights',
-    assignedAgents: ['data-analyst'],
+    assignedAgentIds: ['data-analyst'],
     priority: 'high',
     metadata: {
         deadline: '2025-12-31',
@@ -823,27 +843,23 @@ agent.on(Events.Task.PROGRESS_UPDATED, (payload) => {
 ### Memory Management
 
 ```typescript
-// Memory operations are handled through the channel service
-// Agent-private memory (specific to this agent)
-await agent.channelService.updateMemory('agent', 'preferences', {
-    theme: 'dark',
-    language: 'en',
-    notifications: true
+// Canonical channel memory resolves to the persisted document.
+await agent.mxfService.updateSharedMemory({
+    notes: { projectName: 'User Auth System' },
+    sharedState: { phase: 'development' }
 });
+const projectContext = await agent.mxfService.getSharedMemory();
 
-// Channel-shared memory (visible to all agents in channel)
-await agent.channelService.updateMemory('channel', 'project-context', {
-    projectName: 'User Auth System',
-    phase: 'development',
-    deadline: '2025-12-31'
+// Agent-private key/value memory uses explicitly authorized MCP tools.
+await agent.executeTool('agent_memory_write', {
+    key: 'preferences',
+    value: { theme: 'dark', language: 'en' },
+    memorySection: 'notes'
 });
-
-// Retrieve memory
-const preferences = await agent.channelService.getMemory('agent', 'preferences');
-const projectContext = await agent.channelService.getMemory('channel', 'project-context');
-
-// Delete memory
-await agent.channelService.deleteMemory('agent', 'old-preference');
+const preferences = await agent.executeTool('agent_memory_read', {
+    key: 'preferences',
+    memorySection: 'notes'
+});
 ```
 
 ### Tool Discovery
@@ -861,7 +877,8 @@ agent.on(Events.Mcp.TOOL_RESULT, (payload) => {
     console.log('Tool result:', payload.data.result);
 });
 
-// Agents with allowedTools will only see their permitted tools
+// allowedTools can only narrow the authenticated key grant. Omitted means the
+// curated core set; [] means no tools.
 ```
 
 ### Error Handling
@@ -870,13 +887,6 @@ agent.on(Events.Mcp.TOOL_RESULT, (payload) => {
 // Handle agent errors
 agent.on(Events.Agent.ERROR, (payload) => {
     console.error('Agent error:', payload.data.error);
-    
-    // Attempt reconnection for connection errors
-    if (payload.data.type === 'connection') {
-        setTimeout(async () => {
-            await agent.connect();
-        }, 5000);
-    }
 });
 
 // Handle message send failures
@@ -995,7 +1005,7 @@ const agent = await sdk.createAgent({
 });
 
 // Check tool availability
-const tools = await agent.toolService.getAvailableTools();
+const tools = await agent.listTools();
 console.log('Available tools:', tools.map(t => t.name));
 ```
 
@@ -1028,7 +1038,7 @@ echo $XAI_API_KEY
 
 1. **Clear Identity**: Provide descriptive `agentConfigPrompt` defining role and responsibilities
 2. **Tool Filtering**: Use `allowedTools` for security (principle of least privilege)
-3. **Event Handling**: Use `agent.on()` for agent-specific events, `sdk.createChannelMonitor()` for monitoring all channel activity
+3. **Event Handling**: Use `agent.on()` for agent-specific events and the monitor returned by `sdk.createChannel()` for a channel-filtered view
 4. **Error Handling**: Listen to `Events.Agent.ERROR` and implement reconnection logic
 5. **Memory Management**: Use appropriate scopes (agent vs channel memory)
 6. **Dynamic Templates**: System prompts support 17 dynamic templates (date/time, context, config) that update on every API request
@@ -1047,7 +1057,7 @@ echo $XAI_API_KEY
 
 1. **Enable MXP 2.0**: Configure token and bandwidth optimization when needed
 2. **Tool Filtering**: Reduce context size with `allowedTools` array
-3. **Channel Monitoring**: Use `sdk.createChannelMonitor()` to observe all channel activity efficiently
+3. **Channel Monitoring**: Use the `MxfChannelMonitor` returned by `sdk.createChannel()` to filter channel events received by this process
 4. **Connection Reuse**: Connect SDK once, create multiple agents from same instance
 5. **Efficient Prompts**: Keep `agentConfigPrompt` concise but informative
 
@@ -1076,7 +1086,7 @@ bun run build           # Build for production
 bun run start           # Production server
 
 # Dashboard (separate package)
-npx @mxf-dev/dashboard --api-url http://localhost:3001
+bunx @mxf-dev/dashboard --api-url http://localhost:3001
 
 # Demos (20 available — see Running Example Demos section above)
 bun run demo:first-contact
@@ -1107,14 +1117,21 @@ AZURE_OPENAI_ENDPOINT   # Azure endpoint (if using Azure)
 OLLAMA_BASE_URL         # or Ollama (local)
 
 # Optional - SystemLLM Configuration
-SYSTEMLLM_ENABLED              # Enable/disable SystemLLM (default: true)
+SYSTEMLLM_ENABLED              # Enable/disable SystemLLM (default: true - unset means on, only "false" turns it off)
 SYSTEMLLM_PROVIDER             # Provider for SystemLLM (default: openrouter)
-SYSTEMLLM_DEFAULT_MODEL        # Model override (optional)
-SYSTEMLLM_DYNAMIC_MODEL_SELECTION  # Complexity-based model switching (default: true)
+SYSTEMLLM_DEFAULT_MODEL        # Model for SystemLLM - REQUIRED when SystemLLM is on, no built-in default
+SYSTEMLLM_MODEL_OBSERVATION    # Per-operation override for the observation phase (optional)
+SYSTEMLLM_MODEL_REASONING      # Per-operation override for the reasoning phase (optional)
+SYSTEMLLM_MODEL_ACTION         # Per-operation override for the action phase (optional)
+SYSTEMLLM_MODEL_PLANNING       # Per-operation override for the planning phase (optional)
+SYSTEMLLM_MODEL_REFLECTION     # Per-operation override for the reflection phase (optional)
+SYSTEMLLM_DYNAMIC_MODEL_SELECTION  # Complexity-based upgrades into the latest Claude aliases (default: false)
+SYSTEMLLM_DAILY_BUDGET_USD     # Daily spend ceiling in USD; calls refused past it (default: 10)
+SYSTEMLLM_BUDGET_WARN_AT       # Fraction of the ceiling that triggers a warning (default: 0.8)
 
 # Optional - Other
 MXP_ENCRYPTION_KEY      # MXP encryption key
-PORT                    # Server port (default: 3001)
+MXF_PORT                # Server port (default: 3001)
 NODE_ENV                # Environment (development/production)
 ```
 

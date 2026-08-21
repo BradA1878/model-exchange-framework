@@ -25,7 +25,7 @@
  * These models define the database structure for different memory types.
  */
 
-import mongoose, { Schema, Document, Model } from 'mongoose';
+import mongoose, { Schema, Model } from 'mongoose';
 import { v4 as uuidv4 } from 'uuid';
 
 import {
@@ -37,8 +37,6 @@ import {
 } from '../types/MemoryTypes.js';
 import {
     MemoryUtilitySubdocument,
-    QValueHistoryEntry,
-    QValueInitSource,
     DEFAULT_UTILITY_SUBDOCUMENT
 } from '../types/MemoryUtilityTypes.js';
 
@@ -51,7 +49,7 @@ const baseMemorySchema = new Schema({
         type: String,
         required: true,
         unique: true,
-        default: () => uuidv4()
+        default: (): string => uuidv4()
     },
     
     // Creation timestamp
@@ -131,14 +129,10 @@ const baseMemorySchema = new Schema({
                 default: 'default'
             }
         }, { _id: false }),
-        default: () => ({
-            qValue: 0.5,
+        default: (): MemoryUtilitySubdocument => ({
+            ...DEFAULT_UTILITY_SUBDOCUMENT,
             qValueHistory: [],
-            retrievalCount: 0,
-            successCount: 0,
-            failureCount: 0,
             lastRewardAt: new Date(),
-            initializedFrom: 'default'
         })
     }
 }, {
@@ -146,7 +140,7 @@ const baseMemorySchema = new Schema({
     strict: false, // Allow for flexible schema evolution
     id: false, // Don't create default MongoDB _id field
     toJSON: {
-        transform: (doc, ret) => {
+        transform: (_document: unknown, ret: Record<string, unknown>): Record<string, unknown> => {
             delete ret._id; // Remove MongoDB _id when converting to JSON
             return ret;
         }
@@ -160,8 +154,7 @@ const agentMemorySchema = new Schema({
     // Reference to Agent ID
     agentId: {
         type: String,
-        required: true,
-        index: true
+        required: true
     },
     
     // Conversation history
@@ -178,8 +171,7 @@ const channelMemorySchema = new Schema({
     // Reference to Channel ID
     channelId: {
         type: String,
-        required: true,
-        index: true
+        required: true
     },
     
     // Shared state visible to all agents in the channel
@@ -223,9 +215,6 @@ const relationshipMemorySchema = new Schema({
     }
 });
 
-// Create compound index for relationship memory
-relationshipMemorySchema.index({ agentId1: 1, agentId2: 1, channelId: 1 }, { unique: true });
-
 // Complete memory models by combining base and specific schemas
 const AgentMemorySchema = new Schema({
     ...baseMemorySchema.obj,
@@ -241,6 +230,14 @@ const RelationshipMemorySchema = new Schema({
     ...baseMemorySchema.obj,
     ...relationshipMemorySchema.obj
 });
+
+// Enforce one authoritative document for every memory identity on the final schemas.
+AgentMemorySchema.index({ agentId: 1 }, { unique: true });
+ChannelMemorySchema.index({ channelId: 1 }, { unique: true });
+RelationshipMemorySchema.index(
+    { agentId1: 1, agentId2: 1, channelId: 1 },
+    { unique: true }
+);
 
 // Create indexes for Q-value queries (MULS optimization)
 // Index for sorting by Q-value descending (top performers)
@@ -296,7 +293,9 @@ export const RelationshipMemory: Model<RelationshipMemoryDocument> =
  * @param scope Memory scope
  * @returns The corresponding memory model
  */
-export const getMemoryModelByScope = (scope: MemoryScope): Model<any> => {
+export const getMemoryModelByScope = (
+    scope: MemoryScope
+): Model<AgentMemoryDocument> | Model<ChannelMemoryDocument> | Model<RelationshipMemoryDocument> => {
     switch (scope) {
         case MemoryScope.AGENT:
             return AgentMemory;

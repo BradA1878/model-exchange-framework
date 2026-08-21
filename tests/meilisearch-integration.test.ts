@@ -9,19 +9,23 @@
  * - Event emissions for indexing operations
  *
  * Prerequisites:
- * 1. MXF server running: npm run start:dev
- * 2. Meilisearch running: npm run docker:infra:up
- * 3. Demo user created: npm run server:cli -- demo:setup
+ * 1. MXF server running: bun run start:dev
+ * 2. Meilisearch running: bun run docker:infra:up
+ * 3. Demo user created: bun run server:cli -- demo:setup
  *
  * Run:
- * NODE_ENV=test ts-node tests/meilisearch-integration.test.ts
+ * MXF_TEST_ALLOW_EXTERNAL_LLM_CALLS=true bun run test:meilisearch
  */
 
-import { MxfSDK, Events, LlmProviderType, MxfChannelMonitor, ConfigManager } from '@mxf-dev/sdk';
+import { MxfSDK, LlmProviderType, MxfChannelMonitor } from '@mxf-dev/sdk';
 import type { AgentCreationConfig, MxfAgent } from '@mxf-dev/sdk';
 import dotenv from 'dotenv';
 import { enableClientLogging } from '@mxf-dev/core/utils/Logger';
+import { assertExternalLlmTestAuthorized } from '../scripts/lib/ExternalLlmTestAuthorization';
 
+// Check the caller's environment before `.env` is loaded so a repository file
+// cannot silently authorize paid provider traffic.
+assertExternalLlmTestAuthorized(process.env, 'Meilisearch integration test');
 dotenv.config();
 
 // Enable client logging temporarily for debugging
@@ -86,7 +90,7 @@ const agentConfigurations: { [key: string]: AgentCreationConfig } = {
 
         llmProvider: LlmProviderType.OPENROUTER,
         apiKey: process.env.OPENROUTER_API_KEY!,
-        defaultModel: 'anthropic/claude-haiku-4.5',
+        defaultModel: '~anthropic/claude-haiku-latest',
         temperature: 0.7,
         maxTokens: 4000,
 
@@ -128,7 +132,7 @@ Be concise and focus on testing the search functionality.`
 
         llmProvider: LlmProviderType.OPENROUTER,
         apiKey: process.env.OPENROUTER_API_KEY!,
-        defaultModel: 'anthropic/claude-haiku-4.5',
+        defaultModel: '~anthropic/claude-haiku-latest',
         temperature: 0.5,
         maxTokens: 4000,
 
@@ -180,19 +184,12 @@ const setupChannel = async (sdk: MxfSDK): Promise<MxfChannelMonitor> => {
         isPrivate: false,
         requireApproval: false,
         maxAgents: 10,
+        systemLlmEnabled: false,
         metadata: {
             test: 'meilisearch-integration',
             timestamp: Date.now()
         }
     });
-
-    // Disable SystemLLM for this channel - agents handle their own coordination
-    const configManager = ConfigManager.getInstance();
-    configManager.setChannelSystemLlmEnabled(
-        false,
-        config.channelId,  // FIXED: Pass channelId as second parameter
-        'Meilisearch Integration Test - agents handle their own coordination'
-    );
 
     log('Channel created successfully', 'success');
 

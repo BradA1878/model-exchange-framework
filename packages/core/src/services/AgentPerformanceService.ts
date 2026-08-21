@@ -25,7 +25,7 @@
  * Simplified version that integrates with existing MXF services
  */
 
-import { Observable, BehaviorSubject, of, throwError } from 'rxjs';
+import { Observable, BehaviorSubject, lastValueFrom, of, throwError, type Subscription } from 'rxjs';
 import { v4 as uuidv4 } from 'uuid';
 
 import { Logger } from '../utils/Logger.js';
@@ -59,6 +59,9 @@ export class AgentPerformanceService {
     // Reactive subjects for real-time updates
     private readonly performanceUpdates$ = new BehaviorSubject<AgentPerformanceMetrics[]>([]);
 
+    // EventBus subscriptions owned by this singleton, released by shutdown()
+    private readonly eventSubscriptions: Subscription[] = [];
+
     private constructor() {
         this.logger = new Logger('info', 'AgentPerformanceService', 'server');
         this.memoryService = MemoryService.getInstance();
@@ -76,44 +79,70 @@ export class AgentPerformanceService {
         return AgentPerformanceService.instance;
     }
 
-    private static instance: AgentPerformanceService;
+    private getPerformanceKey(agentId: AgentId, channelId: ChannelId): string {
+        return JSON.stringify([agentId, channelId]);
+    }
+
+    private getPhaseKey(agentId: AgentId, channelId: ChannelId, phase: string): string {
+        return JSON.stringify([agentId, channelId, phase]);
+    }
+
+    private static instance: AgentPerformanceService | undefined;
+
+    /** Release every EventBus subscription and cached state owned by this singleton. */
+    public shutdown(): void {
+        for (const subscription of this.eventSubscriptions) {
+            subscription.unsubscribe();
+        }
+        this.eventSubscriptions.length = 0;
+        this.phaseStartTimes.clear();
+        this.performanceCache.clear();
+        this.performanceUpdates$.complete();
+
+        if (AgentPerformanceService.instance === this) {
+            AgentPerformanceService.instance = undefined;
+        }
+    }
 
     // =============================================================================
     // EVENT LISTENERS FOR PERFORMANCE TRACKING
     // =============================================================================
 
     private setupEventListeners(): void {
+        // Every handler returns its promise so the EventBus shutdown drain waits
+        // for the metrics write it may trigger, and so a rejection is logged by
+        // the bus instead of surfacing as an unhandled rejection.
+
         // Track ORPAR phase timing
-        EventBus.server.on(Events.ControlLoop.OBSERVATION, (payload) => {
-            this.trackPhaseStart(payload.agentId, payload.channelId, 'observation');
-        });
+        this.eventSubscriptions.push(EventBus.server.on(Events.ControlLoop.OBSERVATION, (payload) =>
+            this.trackPhaseStart(payload.agentId, payload.channelId, 'observation')
+        ));
 
-        EventBus.server.on(Events.ControlLoop.REASONING, (payload) => {
-            this.trackPhaseTransition(payload.agentId, payload.channelId, 'observation', 'reasoning');
-        });
+        this.eventSubscriptions.push(EventBus.server.on(Events.ControlLoop.REASONING, (payload) =>
+            this.trackPhaseTransition(payload.agentId, payload.channelId, 'observation', 'reasoning')
+        ));
 
-        EventBus.server.on(Events.ControlLoop.PLAN, (payload) => {
-            this.trackPhaseTransition(payload.agentId, payload.channelId, 'reasoning', 'planning');
-        });
+        this.eventSubscriptions.push(EventBus.server.on(Events.ControlLoop.PLAN, (payload) =>
+            this.trackPhaseTransition(payload.agentId, payload.channelId, 'reasoning', 'planning')
+        ));
 
-        EventBus.server.on(Events.ControlLoop.ACTION, (payload) => {
-            this.trackPhaseTransition(payload.agentId, payload.channelId, 'planning', 'action');
-        });
+        this.eventSubscriptions.push(EventBus.server.on(Events.ControlLoop.ACTION, (payload) =>
+            this.trackPhaseTransition(payload.agentId, payload.channelId, 'planning', 'action')
+        ));
 
         // Track tool usage - only track on result or error, not on call
-        EventBus.server.on(Events.Mcp.TOOL_RESULT, (payload) => {
-            this.trackToolUsage(payload.agentId, payload.channelId, payload.data?.toolName || payload.toolName, true);
-        });
+        this.eventSubscriptions.push(EventBus.server.on(Events.Mcp.TOOL_RESULT, (payload) =>
+            this.trackToolUsage(payload.agentId, payload.channelId, payload.data?.toolName || payload.toolName, true)
+        ));
 
-        EventBus.server.on(Events.Mcp.TOOL_ERROR, (payload) => {
-            this.trackToolUsage(payload.agentId, payload.channelId, payload.data?.toolName || payload.toolName, false);
-        });
+        this.eventSubscriptions.push(EventBus.server.on(Events.Mcp.TOOL_ERROR, (payload) =>
+            this.trackToolUsage(payload.agentId, payload.channelId, payload.data?.toolName || payload.toolName, false)
+        ));
 
         // Track collaboration
-        EventBus.server.on(Events.Message.CHANNEL_MESSAGE, (payload) => {
-            this.trackMessageActivity(payload.agentId, payload.channelId, 'sent');
-        });
-
+        this.eventSubscriptions.push(EventBus.server.on(Events.Message.CHANNEL_MESSAGE, (payload) =>
+            this.trackMessageActivity(payload.agentId, payload.channelId, 'sent')
+        ));
     }
 
     // =============================================================================
@@ -132,7 +161,7 @@ export class AgentPerformanceService {
                 throw new Error('Agent ID and Channel ID are required');
             }
             
-            const cacheKey = `${agentId}:${channelId}`;
+            const cacheKey = this.getPerformanceKey(agentId, channelId);
             
             // Check cache first
             const cached = this.performanceCache.get(cacheKey);
@@ -150,6 +179,23 @@ export class AgentPerformanceService {
             this.logger.error(` Error getting performance metrics: ${error}`);
             return throwError(() => error);
         }
+    }
+
+    /**
+     * Read metrics that were already tracked for one exact agent and channel.
+     * Analytics queries must not manufacture an empty performance record merely
+     * because no observations exist yet.
+     */
+    public getTrackedPerformanceMetrics(
+        agentId: AgentId,
+        channelId: ChannelId
+    ): AgentPerformanceMetrics | null {
+        if (!agentId?.trim() || !channelId?.trim() ||
+            agentId !== agentId.trim() || channelId !== channelId.trim()) {
+            throw new Error('Agent ID and Channel ID are required');
+        }
+
+        return this.performanceCache.get(this.getPerformanceKey(agentId, channelId)) ?? null;
     }
 
     /**
@@ -213,7 +259,7 @@ export class AgentPerformanceService {
     // =============================================================================
 
     private async trackPhaseStart(agentId: AgentId, channelId: ChannelId, phase: string): Promise<void> {
-        const key = `${agentId}:${channelId}:${phase}`;
+        const key = this.getPhaseKey(agentId, channelId, phase);
         this.phaseStartTimes.set(key, Date.now());
         
     }
@@ -224,7 +270,7 @@ export class AgentPerformanceService {
         fromPhase: string, 
         toPhase: string
     ): Promise<void> {
-        const fromKey = `${agentId}:${channelId}:${fromPhase}`;
+        const fromKey = this.getPhaseKey(agentId, channelId, fromPhase);
         const startTime = this.phaseStartTimes.get(fromKey);
         
         if (startTime) {
@@ -590,16 +636,19 @@ export class AgentPerformanceService {
     }
 
     private async storeMetrics(metrics: AgentPerformanceMetrics): Promise<void> {
-        // Store in agent memory using existing MemoryService structure
-        this.memoryService.updateAgentMemory(metrics.agentId, {
-            [`performance_${metrics.channelId}`]: JSON.stringify(metrics)
-        }).subscribe({
-            next: () => null,
-            error: (error) => this.logger.warn(` Failed to persist performance metrics: ${error}`)
-        });
-        
+        // Store in agent memory using existing MemoryService structure. The write
+        // is awaited so the handler promise (and the shutdown drain behind it)
+        // covers it; a failure is reported, not thrown.
+        try {
+            await lastValueFrom(this.memoryService.updateAgentMemory(metrics.agentId, {
+                [`performance_${metrics.channelId}`]: JSON.stringify(metrics)
+            }), { defaultValue: undefined });
+        } catch (error) {
+            this.logger.warn(` Failed to persist performance metrics: ${error}`);
+        }
+
         // Update cache
-        const cacheKey = `${metrics.agentId}:${metrics.channelId}`;
+        const cacheKey = this.getPerformanceKey(metrics.agentId, metrics.channelId);
         this.performanceCache.set(cacheKey, metrics);
         
         // Emit update

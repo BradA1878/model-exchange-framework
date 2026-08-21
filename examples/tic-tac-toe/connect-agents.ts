@@ -40,7 +40,7 @@
  * 
  * PREREQUISITES:
  * --------------
- * 1. MXF Server running on port 3001 (npm start in root)
+ * 1. MXF Server running on port 3001 (`bun run dev` in the repository root)
  * 2. MongoDB running locally
  * 3. Environment variables set in .env:
  *    - MXF_DOMAIN_KEY
@@ -50,7 +50,7 @@
  * USAGE:
  * ------
  *   cd examples/tic-tac-toe
- *   npm run game
+ *   bun run game
  * 
  * @module examples/tic-tac-toe/connect-agents
  */
@@ -343,7 +343,7 @@ async function connectAgents() {
     // This creates more interesting gameplay with diverse AI behaviors
     const availableModels = [
         'google/gemini-2.5-flash',
-        'anthropic/claude-haiku-4.5'
+        '~anthropic/claude-haiku-latest'
     ].sort(() => Math.random() - 0.5);
 
     const agents: any[] = [];
@@ -625,12 +625,7 @@ async function connectAgents() {
 
             // Step 9b: Clear conversation history for fresh context
             // This prevents context overflow and keeps decisions focused
-            try {
-                const memoryManager = currentAgent.getMemoryManager?.();
-                if (memoryManager?.clearConversationHistory) {
-                    memoryManager.clearConversationHistory();
-                }
-            } catch (e) {}
+            await currentAgent.getMemoryManager().clearConversationHistory();
 
             // Step 9c: Create task for current player
             // The task description tells the agent what to do and which tools to use

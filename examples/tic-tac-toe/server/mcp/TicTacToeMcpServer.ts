@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 /**
- * Tic-Tac-Toe MCP Server (HTTP-based)
+ * Tic-Tac-Toe MCP stdio adapter
  *
  * Implements MCP protocol (JSON-RPC over stdio) for game tools.
- * Proxies all tool calls to the game server HTTP API
+ * Proxies tool calls from the stdio MCP process to the game server HTTP API.
  */
 
 const GAME_SERVER_URL = process.env.GAME_SERVER_URL || 'http://localhost:3004';

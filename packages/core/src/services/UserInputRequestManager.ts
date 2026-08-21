@@ -103,10 +103,14 @@ export class UserInputRequestManager {
     private static readonly CLEANUP_INTERVAL_MS = 60 * 1000;
 
     private constructor() {
-        // Start periodic cleanup of expired requests
+        // Start periodic cleanup of expired requests. The sweep must not be what
+        // keeps the process alive: the manager is created lazily by the first
+        // forwarded user-input request, and a referenced interval here kept the
+        // server running after every shutdown step had completed.
         this.cleanupInterval = setInterval(() => {
             this.cleanupExpired();
         }, UserInputRequestManager.CLEANUP_INTERVAL_MS);
+        this.cleanupInterval.unref?.();
     }
 
     /**
@@ -117,6 +121,20 @@ export class UserInputRequestManager {
             UserInputRequestManager.instance = new UserInputRequestManager();
         }
         return UserInputRequestManager.instance;
+    }
+
+    /**
+     * Shut down the live manager, if one was ever created, without constructing
+     * one solely for teardown.
+     *
+     * @returns true when a manager existed and was shut down
+     */
+    public static shutdownExisting(): boolean {
+        if (!UserInputRequestManager.instance) {
+            return false;
+        }
+        UserInputRequestManager.instance.shutdown();
+        return true;
     }
 
     /**
@@ -187,20 +205,35 @@ export class UserInputRequestManager {
      *
      * @param requestId - The request ID to respond to
      * @param value - The user's response value
-     * @throws Error if requestId not found, request not pending, or value is invalid
+     * @param responderAgentId - Authenticated agent submitting the response
+     * @param responderChannelId - Authenticated channel of the responder
+     * @throws Error if the request is missing, outside the responder's scope,
+     *         not pending, or the value is invalid
      */
-    public submitResponse(requestId: string, value: UserInputResponseValue): void {
+    public submitResponse(
+        requestId: string,
+        value: UserInputResponseValue,
+        responderAgentId: string,
+        responderChannelId: string
+    ): void {
         const validator = createStrictValidator('UserInputRequestManager.submitResponse');
         validator.assertIsNonEmptyString(requestId, 'requestId is required');
+        validator.assertIsNonEmptyString(responderAgentId, 'responderAgentId is required');
+        validator.assertIsNonEmptyString(responderChannelId, 'responderChannelId is required');
 
         const pending = this.pendingRequests.get(requestId);
         if (!pending) {
             throw new Error(`User input request ${requestId} not found`);
         }
 
+        if (pending.request.agentId !== responderAgentId ||
+            pending.request.channelId !== responderChannelId) {
+            throw new Error('User input response is outside the authenticated agent/channel scope');
+        }
+
         if (pending.status !== 'pending') {
-            // Idempotent: duplicate responses are expected when multiple agents receive
-            // the same user_input:request broadcast and each independently emits a response.
+            // Preserve idempotence for client retries or duplicate transport
+            // delivery after the exact owner has already responded.
             logger.debug(`User input request ${requestId} is already ${pending.status}, ignoring duplicate response`);
             return;
         }
@@ -276,13 +309,25 @@ export class UserInputRequestManager {
      * @param requestId - The request ID to check
      * @returns Status info, or null if not found
      */
-    public getRequest(requestId: string): {
+    public getRequest(requestId: string, requesterAgentId: string, requesterChannelId: string): {
         status: UserInputRequestStatus;
         value?: UserInputResponseValue;
         request: UserInputRequestData;
     } | null {
+        const validator = createStrictValidator('UserInputRequestManager.getRequest');
+        validator.assertIsNonEmptyString(requestId, 'requestId is required');
+        validator.assertIsNonEmptyString(requesterAgentId, 'requesterAgentId is required');
+        validator.assertIsNonEmptyString(requesterChannelId, 'requesterChannelId is required');
+
         const pending = this.pendingRequests.get(requestId);
         if (!pending) {
+            return null;
+        }
+
+        // Return the same result as an unknown id so callers cannot use a
+        // leaked or guessed request id to probe another agent's prompt or value.
+        if (pending.request.agentId !== requesterAgentId ||
+            pending.request.channelId !== requesterChannelId) {
             return null;
         }
 

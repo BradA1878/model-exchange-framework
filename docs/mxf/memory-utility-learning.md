@@ -251,10 +251,10 @@ For existing deployments, run the MULS migration:
 
 ```bash
 # Apply migration
-npx ts-node src/migrations/2026.01.MULS.ts up
+bun run migrate:muls up
 
 # Rollback if needed
-npx ts-node src/migrations/2026.01.MULS.ts down
+bun run migrate:muls down
 ```
 
 The migration:

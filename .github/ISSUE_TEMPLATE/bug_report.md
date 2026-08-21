@@ -98,6 +98,7 @@ MONGODB_URI=mongodb://localhost:27017/mxf
 ENABLE_MEILISEARCH=true
 SYSTEMLLM_ENABLED=true
 SYSTEMLLM_PROVIDER=openrouter
+SYSTEMLLM_DEFAULT_MODEL=~anthropic/claude-sonnet-latest
 MXP_ENCRYPTION_ENABLED=false
 ```
 

@@ -35,7 +35,16 @@ export interface SimpleTaskRequest {
     content: string;
     title?: string; // Task title for display and context
     description?: string; // Full task description (same as content, for compatibility)
-    metadata?: any; // Task metadata including completion agent designation
+    /** Agent designated to report the task's terminal outcome; the server enforces it. */
+    completionAgentId?: string;
+    /** Every agent assigned to the task. */
+    assignedAgentIds?: string[];
+    /**
+     * Task metadata. Role flags (isCompletionAgent, multiAgentTask, agentRole)
+     * are present only on the late-assignment flows; the creator's own
+     * metadata is passed through on direct assignment.
+     */
+    metadata?: Record<string, unknown>;
 }
 
 /**
@@ -51,3 +60,9 @@ export interface SimpleTaskResponse {
  * Callback for handling task requests
  */
 export type TaskRequestHandler = (task: SimpleTaskRequest) => Promise<SimpleTaskResponse>;
+
+/** Terminal outcomes the server broadcasts for a task. */
+export type TaskOutcome = 'completed' | 'failed' | 'cancelled';
+
+/** Called once when the task this agent was assigned reaches a terminal outcome. */
+export type TaskEndedHandler = (taskId: string, outcome: TaskOutcome) => void;

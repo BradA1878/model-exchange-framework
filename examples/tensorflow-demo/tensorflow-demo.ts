@@ -241,7 +241,7 @@ const createTfAgent = async (
 
         llmProvider: LlmProviderType.OPENROUTER,
         apiKey: process.env.OPENROUTER_API_KEY!,
-        defaultModel: process.env.MXF_DEMO_MODEL || 'anthropic/claude-sonnet-4',
+        defaultModel: process.env.MXF_DEMO_MODEL || '~anthropic/claude-sonnet-latest',
         temperature: 0.3,
         maxTokens: 4000,
         maxHistory: 50, // Demo agents are ephemeral — 50 messages is sufficient context

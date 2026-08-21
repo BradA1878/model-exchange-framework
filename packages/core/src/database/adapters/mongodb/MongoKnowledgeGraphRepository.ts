@@ -53,6 +53,18 @@ import { Logger } from '../../../utils/Logger.js';
 const logger = new Logger('info', 'MongoKnowledgeGraphRepository', 'server');
 
 /**
+ * Every mutation and id-list read is bound to one channel. A blank channel
+ * would turn the predicate into "any channel", so it is rejected before the
+ * query is built.
+ */
+const requireChannelId = (channelId: ChannelId, operation: string): ChannelId => {
+    if (typeof channelId !== 'string' || channelId.trim().length === 0) {
+        throw new Error(`${operation} requires a non-empty channelId`);
+    }
+    return channelId;
+};
+
+/**
  * MongoDB implementation of IKnowledgeGraphRepository
  */
 export class MongoKnowledgeGraphRepository implements IKnowledgeGraphRepository {
@@ -95,25 +107,30 @@ export class MongoKnowledgeGraphRepository implements IKnowledgeGraphRepository 
         return toEntityObject(saved);
     }
 
-    async getEntity(entityId: string): Promise<Entity | null> {
-        const doc = await EntityModel.findById(entityId);
+    async getEntity(entityId: string, channelId?: ChannelId): Promise<Entity | null> {
+        const doc = await EntityModel.findOne({
+            _id: entityId,
+            ...(channelId ? { channelId } : {})
+        });
         return doc ? toEntityObject(doc) : null;
     }
 
-    async updateEntity(entityId: string, updates: Partial<Entity>): Promise<Entity | null> {
-        const doc = await EntityModel.findByIdAndUpdate(
-            entityId,
+    async updateEntity(entityId: string, channelId: ChannelId, updates: Partial<Entity>): Promise<Entity | null> {
+        const doc = await EntityModel.findOneAndUpdate(
+            { _id: entityId, channelId: requireChannelId(channelId, 'updateEntity') },
             { $set: updates },
             { new: true }
         );
         return doc ? toEntityObject(doc) : null;
     }
 
-    async deleteEntity(entityId: string): Promise<boolean> {
-        const result = await EntityModel.deleteOne({ _id: entityId });
+    async deleteEntity(entityId: string, channelId: ChannelId): Promise<boolean> {
+        const exactChannelId = requireChannelId(channelId, 'deleteEntity');
+        const result = await EntityModel.deleteOne({ _id: entityId, channelId: exactChannelId });
         if (result.deletedCount > 0) {
             // Also delete relationships involving this entity
             await RelationshipModel.deleteMany({
+                channelId: exactChannelId,
                 $or: [
                     { fromEntityId: entityId },
                     { toEntityId: entityId },
@@ -224,9 +241,13 @@ export class MongoKnowledgeGraphRepository implements IKnowledgeGraphRepository 
 
     async mergeEntities(
         targetEntityId: string,
-        sourceEntityIds: string[]
+        sourceEntityIds: string[],
+        channelId?: ChannelId
     ): Promise<EntityMergeResult> {
-        const target = await EntityModel.findById(targetEntityId);
+        const target = await EntityModel.findOne({
+            _id: targetEntityId,
+            ...(channelId ? { channelId } : {})
+        });
         if (!target) {
             return {
                 success: false,
@@ -235,12 +256,23 @@ export class MongoKnowledgeGraphRepository implements IKnowledgeGraphRepository 
             };
         }
 
-        const sources = await EntityModel.find({ _id: { $in: sourceEntityIds } });
-        if (sources.length === 0) {
+        const uniqueSourceEntityIds = [...new Set(sourceEntityIds)];
+        if (uniqueSourceEntityIds.includes(targetEntityId)) {
             return {
                 success: false,
                 sourceEntityIds,
-                error: 'No source entities found',
+                error: 'The merge target cannot also be a source entity',
+            };
+        }
+        const sources = await EntityModel.find({
+            _id: { $in: uniqueSourceEntityIds },
+            ...(channelId ? { channelId } : {})
+        });
+        if (sources.length !== uniqueSourceEntityIds.length) {
+            return {
+                success: false,
+                sourceEntityIds,
+                error: 'Every source entity must exist in the authorized channel',
             };
         }
 
@@ -261,7 +293,10 @@ export class MongoKnowledgeGraphRepository implements IKnowledgeGraphRepository 
 
         // Mark sources as merged
         await EntityModel.updateMany(
-            { _id: { $in: sourceEntityIds } },
+            {
+                _id: { $in: uniqueSourceEntityIds },
+                ...(channelId ? { channelId } : {})
+            },
             {
                 $set: {
                     merged: true,
@@ -272,11 +307,17 @@ export class MongoKnowledgeGraphRepository implements IKnowledgeGraphRepository 
 
         // Update relationships to point to target
         await RelationshipModel.updateMany(
-            { fromEntityId: { $in: sourceEntityIds } },
+            {
+                fromEntityId: { $in: uniqueSourceEntityIds },
+                ...(channelId ? { channelId } : {})
+            },
             { $set: { fromEntityId: targetEntityId } }
         );
         await RelationshipModel.updateMany(
-            { toEntityId: { $in: sourceEntityIds } },
+            {
+                toEntityId: { $in: uniqueSourceEntityIds },
+                ...(channelId ? { channelId } : {})
+            },
             { $set: { toEntityId: targetEntityId } }
         );
 
@@ -423,18 +464,22 @@ export class MongoKnowledgeGraphRepository implements IKnowledgeGraphRepository 
 
     async updateRelationship(
         relationshipId: string,
+        channelId: ChannelId,
         updates: Partial<Relationship>
     ): Promise<Relationship | null> {
-        const doc = await RelationshipModel.findByIdAndUpdate(
-            relationshipId,
+        const doc = await RelationshipModel.findOneAndUpdate(
+            { _id: relationshipId, channelId: requireChannelId(channelId, 'updateRelationship') },
             { $set: updates },
             { new: true }
         );
         return doc ? toRelationshipObject(doc) : null;
     }
 
-    async deleteRelationship(relationshipId: string): Promise<boolean> {
-        const result = await RelationshipModel.deleteOne({ _id: relationshipId });
+    async deleteRelationship(relationshipId: string, channelId: ChannelId): Promise<boolean> {
+        const result = await RelationshipModel.deleteOne({
+            _id: relationshipId,
+            channelId: requireChannelId(channelId, 'deleteRelationship')
+        });
         return result.deletedCount > 0;
     }
 
@@ -497,7 +542,8 @@ export class MongoKnowledgeGraphRepository implements IKnowledgeGraphRepository 
             entityType?: EntityType | EntityType[];
             maxDepth?: number;
             limit?: number;
-        }
+        },
+        channelId?: ChannelId
     ): Promise<{ entities: Entity[]; relationships: Relationship[] }> {
         const direction = options?.direction || 'both';
         const limit = options?.limit || 100;
@@ -519,6 +565,9 @@ export class MongoKnowledgeGraphRepository implements IKnowledgeGraphRepository 
                 ? { $in: options.relationshipType }
                 : options.relationshipType;
         }
+        if (channelId) {
+            relationshipQuery.channelId = channelId;
+        }
 
         const relationships = await RelationshipModel.find(relationshipQuery)
             .limit(limit)
@@ -533,6 +582,7 @@ export class MongoKnowledgeGraphRepository implements IKnowledgeGraphRepository 
         let entityQuery: any = {
             _id: { $in: Array.from(neighborIds) },
             merged: false,
+            ...(channelId ? { channelId } : {})
         };
 
         if (options?.entityType) {
@@ -542,19 +592,37 @@ export class MongoKnowledgeGraphRepository implements IKnowledgeGraphRepository 
         }
 
         const entities = await EntityModel.find(entityQuery).lean();
+        const scopedEntities = entities.map(doc => toEntityObject(doc as unknown as IEntity));
+        const scopedEntityIds = new Set<string>([
+            entityId,
+            ...scopedEntities.map(entity => entity.id)
+        ]);
+        const scopedRelationships = relationships
+            .map(doc => toRelationshipObject(doc as unknown as IRelationship))
+            .filter(relationship => (
+                scopedEntityIds.has(relationship.fromEntityId) &&
+                scopedEntityIds.has(relationship.toEntityId)
+            ));
 
         return {
-            entities: entities.map((doc: any) => toEntityObject(doc as IEntity)),
-            relationships: relationships.map((doc: any) => toRelationshipObject(doc as IRelationship)),
+            entities: scopedEntities,
+            relationships: scopedRelationships,
         };
     }
 
     async findPath(
         fromEntityId: string,
         toEntityId: string,
-        maxHops?: number
+        maxHops?: number,
+        channelId?: ChannelId
     ): Promise<GraphPath | null> {
-        const paths = await this.findAllPaths(fromEntityId, toEntityId, maxHops, 1);
+        const paths = await this.findAllPaths(
+            fromEntityId,
+            toEntityId,
+            maxHops,
+            1,
+            channelId
+        );
         return paths.length > 0 ? paths[0] : null;
     }
 
@@ -562,7 +630,8 @@ export class MongoKnowledgeGraphRepository implements IKnowledgeGraphRepository 
         fromEntityId: string,
         toEntityId: string,
         maxHops?: number,
-        limit?: number
+        limit?: number,
+        channelId?: ChannelId
     ): Promise<GraphPath[]> {
         const maxDepth = maxHops ?? 5;
         const maxPaths = limit ?? 10;
@@ -613,6 +682,7 @@ export class MongoKnowledgeGraphRepository implements IKnowledgeGraphRepository 
             // Get outgoing relationships
             const rels = await RelationshipModel.find({
                 fromEntityId: current.currentId,
+                ...(channelId ? { channelId } : {})
             }).lean();
 
             for (const rel of rels) {
@@ -687,7 +757,8 @@ export class MongoKnowledgeGraphRepository implements IKnowledgeGraphRepository 
     async getSubgraph(
         entityId: string,
         depth?: number,
-        limit?: number
+        limit?: number,
+        channelId?: ChannelId
     ): Promise<{ entities: Entity[]; relationships: Relationship[] }> {
         const maxDepth = depth ?? 2;
         const maxEntities = limit ?? 50;
@@ -703,7 +774,7 @@ export class MongoKnowledgeGraphRepository implements IKnowledgeGraphRepository 
             for (const id of currentLevel) {
                 const neighbors = await this.getNeighbors(id, {
                     limit: Math.min(10, maxEntities - entityIds.size),
-                });
+                }, channelId);
 
                 for (const rel of neighbors.relationships) {
                     if (!relationships.find((r) => r.id === rel.id)) {
@@ -724,6 +795,7 @@ export class MongoKnowledgeGraphRepository implements IKnowledgeGraphRepository 
 
         const entities = await EntityModel.find({
             _id: { $in: Array.from(entityIds) },
+            ...(channelId ? { channelId } : {})
         }).lean();
 
         return {
@@ -736,24 +808,28 @@ export class MongoKnowledgeGraphRepository implements IKnowledgeGraphRepository 
     // Batch Operations
     // ========================================================================
 
-    async getEntitiesByIds(entityIds: string[]): Promise<Entity[]> {
+    async getEntitiesByIds(channelId: ChannelId, entityIds: string[]): Promise<Entity[]> {
+        const exactChannelId = requireChannelId(channelId, 'getEntitiesByIds');
         if (entityIds.length === 0) {
             return [];
         }
 
         const docs = await EntityModel.find({
             _id: { $in: entityIds },
+            channelId: exactChannelId,
             merged: false,
         }).lean();
         return docs.map((doc: any) => toEntityObject(doc as IEntity));
     }
 
-    async getRelationshipsByEntityIds(entityIds: string[]): Promise<Relationship[]> {
+    async getRelationshipsByEntityIds(channelId: ChannelId, entityIds: string[]): Promise<Relationship[]> {
+        const exactChannelId = requireChannelId(channelId, 'getRelationshipsByEntityIds');
         if (entityIds.length === 0) {
             return [];
         }
 
         const docs = await RelationshipModel.find({
+            channelId: exactChannelId,
             $or: [
                 { fromEntityId: { $in: entityIds } },
                 { toEntityId: { $in: entityIds } },
@@ -792,11 +868,12 @@ export class MongoKnowledgeGraphRepository implements IKnowledgeGraphRepository 
 
     async updateEntityQValue(
         entityId: string,
+        channelId: ChannelId,
         newQValue: number,
         reason: string
     ): Promise<Entity | null> {
-        const doc = await EntityModel.findByIdAndUpdate(
-            entityId,
+        const doc = await EntityModel.findOneAndUpdate(
+            { _id: entityId, channelId: requireChannelId(channelId, 'updateEntityQValue') },
             {
                 $set: {
                     'utility.qValue': newQValue,
@@ -814,11 +891,13 @@ export class MongoKnowledgeGraphRepository implements IKnowledgeGraphRepository 
     }
 
     async batchUpdateQValues(
+        channelId: ChannelId,
         updates: Array<{ entityId: string; qValue: number; reason: string }>
     ): Promise<void> {
+        const exactChannelId = requireChannelId(channelId, 'batchUpdateQValues');
         const bulkOps = updates.map((update) => ({
             updateOne: {
-                filter: { _id: update.entityId },
+                filter: { _id: update.entityId, channelId: exactChannelId },
                 update: {
                     $set: {
                         'utility.qValue': update.qValue,
@@ -861,9 +940,9 @@ export class MongoKnowledgeGraphRepository implements IKnowledgeGraphRepository 
         return docs.map((doc: any) => toEntityObject(doc as IEntity));
     }
 
-    async incrementRetrievalCount(entityIds: string[]): Promise<void> {
+    async incrementRetrievalCount(channelId: ChannelId, entityIds: string[]): Promise<void> {
         await EntityModel.updateMany(
-            { _id: { $in: entityIds } },
+            { _id: { $in: entityIds }, channelId: requireChannelId(channelId, 'incrementRetrievalCount') },
             {
                 $inc: { 'utility.retrievalCount': 1 },
                 $set: { 'utility.lastAccessedAt': Date.now() },
@@ -871,10 +950,10 @@ export class MongoKnowledgeGraphRepository implements IKnowledgeGraphRepository 
         );
     }
 
-    async recordOutcome(entityIds: string[], success: boolean): Promise<void> {
+    async recordOutcome(channelId: ChannelId, entityIds: string[], success: boolean): Promise<void> {
         const field = success ? 'utility.successCount' : 'utility.failureCount';
         await EntityModel.updateMany(
-            { _id: { $in: entityIds } },
+            { _id: { $in: entityIds }, channelId: requireChannelId(channelId, 'recordOutcome') },
             { $inc: { [field]: 1 } }
         );
     }

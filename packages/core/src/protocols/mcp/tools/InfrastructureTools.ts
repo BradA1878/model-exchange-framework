@@ -30,14 +30,18 @@ import { AgentId, ChannelId } from '../../../types/ChannelContext.js';
 import { Logger } from '../../../utils/Logger.js';
 import { createStrictValidator } from '../../../utils/validation.js';
 import { INFRASTRUCTURE_TOOLS } from '../../../constants/ToolNames.js';
-import fs from 'fs/promises';
-import path from 'path';
-import { exec, spawn } from 'child_process';
+import { execFile } from 'child_process';
 import { promisify } from 'util';
 import crypto from 'crypto';
 import { getSecurityGuard, SecurityContext } from '../security/McpSecurityGuard.js';
 import { getConfirmationManager } from '../security/McpConfirmationManager.js';
-import { buildShellChildEnv } from '../security/McpToolPolicy.js';
+import {
+    assertCommandAllowlisted,
+    buildShellChildEnv,
+    isShellSandboxEnabled,
+    requireWorkspaceRoot,
+    resolveWorkspacePath
+} from '../security/McpToolPolicy.js';
 import { execute as shellExecuteHandler } from './shell/ShellExecuteHandler.js';
 import { processOutput } from './shell/LargeOutputHandler.js';
 import { BackgroundTaskManager } from '../../../services/BackgroundTaskManager.js';
@@ -57,12 +61,7 @@ import {
 
 const logger = new Logger('info', 'InfrastructureTools', 'server');
 const validator = createStrictValidator('InfrastructureTools');
-const execAsync = promisify(exec);
-
-// Initialize the security guard singleton. Importing this module is what binds
-// the guard to the project root; ShellExecuteHandler and executeShellCommand
-// below then retrieve it with getSecurityGuard().
-getSecurityGuard(process.cwd());
+const execFileAsync = promisify(execFile);
 
 /**
  * Identity of the caller running a shell command.
@@ -147,10 +146,19 @@ export async function executeShellCommand(
     const fullCommand = args && args.length > 0 ? `${command} ${quotedArgs}` : command;
 
     // ── Security validation ────────────────────────────────────────────────
+    // The configured allowlist binds every agent-driven command, not only
+    // shell_execute: a host tool that lets the model choose the binary
+    // (run_full_test_suite, performance_benchmark) is checked here too.
+    assertCommandAllowlisted(fullCommand);
+
     // The guard parses compound expressions (`a && b`, `a; b`) and validates each
     // effective command, so `git status; rm -rf /` cannot slip through on the
     // strength of its first word.
-    const securityGuard = getSecurityGuard();
+    const workingDirectory = resolveWorkspacePath(
+        options?.workingDirectory,
+        `executeShellCommand (${command})`
+    );
+    const securityGuard = getSecurityGuard(requireWorkspaceRoot('executeShellCommand'));
     const securityContext: SecurityContext = {
         agentId: context.agentId,
         channelId: context.channelId,
@@ -197,10 +205,11 @@ export async function executeShellCommand(
     const childEnv = buildShellChildEnv(options?.environment);
 
     try {
-        const result = await execAsync(fullCommand, {
-            cwd: options?.workingDirectory || process.cwd(),
+        const result = await execFileAsync(command, args ?? [], {
+            cwd: workingDirectory,
             env: childEnv,
             timeout: options?.timeout || 30000,
+            encoding: 'utf-8',
             maxBuffer: 1024 * 1024 * 10 // 10MB buffer
         });
 
@@ -476,8 +485,7 @@ export const shellExecTool = {
     },
 
     /**
-     * Delegates to the enhanced ShellExecuteHandler for foreground execution, or
-     * to BackgroundTaskManager for background execution.
+     * Delegates sandboxed foreground execution to ShellExecuteHandler.
      *
      * Foreground mode provides:
      * - Security guard validation and confirmation
@@ -486,13 +494,9 @@ export const shellExecTool = {
      * - Command classification (read-only, silent, etc.)
      * - Large output handling (persist + preview)
      * - Event emission throughout lifecycle
-     * - spawn() instead of exec() for streaming
      *
-     * Background mode provides:
-     * - Immediate taskId return
-     * - Ring-buffer output accumulation
-     * - Throttled progress events via EventBus
-     * - Query via shell_task_status tool
+     * Background mode fails fast: BackgroundTaskManager is host-spawn based and
+     * cannot preserve shell_execute's mandatory Docker isolation boundary.
      *
      * The command allowlist is NOT an input. It comes from MXF_SHELL_ALLOWED_COMMANDS
      * (see McpToolPolicy) — an allowlist passed as a tool argument would be supplied
@@ -513,67 +517,16 @@ export const shellExecTool = {
         channelId: ChannelId;
         requestId: string;
     }) {
-        // Background execution: delegate to BackgroundTaskManager.
-        //
-        // The guard runs here, at the tool boundary, because BackgroundTaskManager
-        // spawns directly. Without this the background path would be an unguarded
-        // way to run exactly the commands the foreground path blocks.
-        if (input.runInBackground) {
-            const securityGuard = getSecurityGuard();
-            const securityContext: SecurityContext = {
-                agentId: context.agentId,
-                channelId: context.channelId,
-                requestId: context.requestId
-            };
-
-            const validation = securityGuard.validateCommand(input.command, securityContext);
-
-            if (!validation.allowed) {
-                throw new Error(
-                    `Command blocked by security policy: ${validation.reason ?? 'command is not allowed'} ` +
-                    `(command: ${input.command}, risk: ${validation.riskLevel ?? 'unknown'})`
-                );
-            }
-
-            if (validation.requiresConfirmation) {
-                const confirmed = await getConfirmationManager().requestConfirmation(
-                    'command',
-                    'Execute background shell command',
-                    {
-                        command: input.command,
-                        riskLevel: validation.riskLevel || 'medium',
-                        reason: validation.reason || 'Command requires confirmation'
-                    },
-                    securityContext,
-                    input.timeout || 30000
-                );
-
-                if (!confirmed) {
-                    throw new Error(`Background command execution denied by confirmation policy: ${input.command}`);
-                }
-            }
-
-            const btm = BackgroundTaskManager.getInstance();
-            const { taskId } = await btm.startBackground(
-                input.command,
-                {
-                    workingDirectory: input.workingDirectory,
-                    // Hand the child a minimal environment. BackgroundTaskManager
-                    // still merges this over process.env internally — see the
-                    // reported fix for BackgroundTaskManager.ts:190.
-                    environment: buildShellChildEnv(input.environment),
-                    timeout: input.backgroundTimeout,
-                    description: input.description
-                },
-                context
+        if (!isShellSandboxEnabled()) {
+            throw new Error(
+                'shell_execute requires MXF_SHELL_SANDBOX_ENABLED=true; ' +
+                'host shell execution is not workspace-contained'
             );
-            return {
-                taskId,
-                command: input.command,
-                description: input.description,
-                status: 'running',
-                message: `Background task started. Use shell_task_status with taskId "${taskId}" to check progress.`
-            };
+        }
+        if (input.runInBackground) {
+            throw new Error(
+                'Background shell execution is unavailable because it would run on the host outside the Docker sandbox'
+            );
         }
 
         // Foreground execution: delegate to ShellExecuteHandler
@@ -602,18 +555,14 @@ export const shellTaskStatusTool = {
                 default: 'status',
                 description: 'Action to perform: status (get task info), output (get full output), cancel (stop the task), list (list all tasks)'
             },
-            agentId: {
-                type: 'string',
-                description: 'Filter tasks by agent (only used with action: list)'
-            }
         },
-        required: []
+        required: [],
+        additionalProperties: false
     },
 
     async handler(input: {
         taskId?: string;
         action?: 'status' | 'output' | 'cancel' | 'list';
-        agentId?: AgentId;
     }, context: {
         agentId: AgentId;
         channelId: ChannelId;
@@ -621,9 +570,12 @@ export const shellTaskStatusTool = {
     }) {
         const btm = BackgroundTaskManager.getInstance();
         const action = input.action || 'status';
+        if (Object.prototype.hasOwnProperty.call(input, 'agentId')) {
+            throw new Error('agentId is derived from the authenticated tool context and must not be supplied');
+        }
 
         if (action === 'list') {
-            const tasks = btm.listTasks(input.agentId as AgentId);
+            const tasks = btm.listTasks(context);
             return {
                 action: 'list',
                 count: tasks.length,
@@ -636,7 +588,7 @@ export const shellTaskStatusTool = {
         }
 
         if (action === 'cancel') {
-            const cancelled = btm.cancelTask(input.taskId);
+            const cancelled = btm.cancelTask(input.taskId, context);
             return {
                 action: 'cancel',
                 taskId: input.taskId,
@@ -648,7 +600,7 @@ export const shellTaskStatusTool = {
         }
 
         if (action === 'output') {
-            const output = btm.getTaskOutput(input.taskId);
+            const output = btm.getTaskOutput(input.taskId, context);
             if (output === null) {
                 throw new Error(`Task not found: ${input.taskId}`);
             }
@@ -661,7 +613,7 @@ export const shellTaskStatusTool = {
         }
 
         // Default: status
-        const status = btm.getTaskStatus(input.taskId);
+        const status = btm.getTaskStatus(input.taskId, context);
         if (!status) {
             throw new Error(`Task not found: ${input.taskId}`);
         }

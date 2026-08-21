@@ -34,6 +34,8 @@ const TIMEOUT_ENV_KEYS = [
     'OPENROUTER_SLOW_REQUEST_WARN_MS'
 ] as const;
 
+const EXTERNAL_LLM_TEST_OPT_IN_ENV = 'MXF_TEST_ALLOW_EXTERNAL_LLM_CALLS';
+
 /** Minimal agent context accepted by structureMessagesFromContext */
 function buildContext(agentId: string = 'test-agent'): AgentContext {
     return {
@@ -116,6 +118,7 @@ function stalledStreamFetchResponse(): any {
 describe('OpenRouterMcpClient request timeouts', () => {
     let fetchMock: jest.Mock;
     const originalFetch = global.fetch;
+    const originalExternalLlmOptIn = process.env[EXTERNAL_LLM_TEST_OPT_IN_ENV];
     const savedEnv: Partial<Record<(typeof TIMEOUT_ENV_KEYS)[number], string | undefined>> = {};
 
     async function makeClient(env: Partial<Record<(typeof TIMEOUT_ENV_KEYS)[number], string>>): Promise<OpenRouterMcpClient> {
@@ -128,6 +131,8 @@ describe('OpenRouterMcpClient request timeouts', () => {
     }
 
     beforeEach(() => {
+        // Network behavior is fully controlled by fetchMock in this suite.
+        process.env[EXTERNAL_LLM_TEST_OPT_IN_ENV] = 'true';
         for (const key of TIMEOUT_ENV_KEYS) {
             savedEnv[key] = process.env[key];
             delete process.env[key];
@@ -137,6 +142,11 @@ describe('OpenRouterMcpClient request timeouts', () => {
     });
 
     afterEach(() => {
+        if (originalExternalLlmOptIn === undefined) {
+            delete process.env[EXTERNAL_LLM_TEST_OPT_IN_ENV];
+        } else {
+            process.env[EXTERNAL_LLM_TEST_OPT_IN_ENV] = originalExternalLlmOptIn;
+        }
         for (const key of TIMEOUT_ENV_KEYS) {
             if (savedEnv[key] === undefined) {
                 delete process.env[key];

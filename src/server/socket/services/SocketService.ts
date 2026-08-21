@@ -35,11 +35,7 @@
  */
 
 import { Server as SocketServer, Socket } from 'socket.io';
-import { 
-    Events,
-    CoreSocketEvents
-} from '@mxf-dev/core/events/EventNames';
-import { AgentConnectionStatus } from '@mxf-dev/core/types/AgentTypes';
+import { CoreSocketEvents } from '@mxf-dev/core/events/EventNames';
 import { EventBus } from '@mxf-dev/core/events/EventBus';
 import logger from '@mxf-dev/core/utils/Logger';
 import { createStrictValidator } from '@mxf-dev/core/utils/validation';
@@ -51,6 +47,13 @@ import { createAuthMiddleware } from '../handlers/authenticationHandlers';
 import { handleSocketDisconnect } from '../handlers/connectionHandlers';
 import { startHeartbeatMonitor } from '../handlers/heartbeatHandlers';
 import { setupMeilisearchHandlers } from '../handlers/meilisearchHandlers';
+import channelKeyService, { ChannelKeySocketLifecycle } from './ChannelKeyService';
+import {
+    userSessionLifecycle,
+    UserSocketSessionLifecycle
+} from './UserSessionLifecycle';
+import { User } from '@mxf-dev/core/models/user';
+import PersonalAccessToken from '@mxf-dev/core/models/personalAccessToken';
 
 // Agent connection information (internal implementation)
 interface AgentSocketInfo {
@@ -63,11 +66,9 @@ interface AgentSocketInfo {
 /**
  * Socket Service for managing agent connections
  */
-export class SocketService implements ISocketService {
+export class SocketService implements ISocketService, ChannelKeySocketLifecycle, UserSocketSessionLifecycle {
     private io: SocketServer | null = null;
     private logger = logger.child('SocketService'); // Use child logger
-    private readonly heartbeatInterval: number = 30000; // 30 seconds
-    private readonly heartbeatTimeout: number = 300000; // 300 seconds (5 minutes) - allows for complex LLM processing
     // Agent tracking
     private agents = new Map<string, AgentSocketInfo>(); // Maps agentId -> socket info
     private socketIds = new Map<string, string>(); // Maps socketId -> agentId
@@ -75,15 +76,15 @@ export class SocketService implements ISocketService {
     // Heartbeat tracking
     private heartbeats = new Map<string, number>(); // Maps agentId -> last heartbeat time
     private heartbeatMonitor: NodeJS.Timeout | null = null;
-    private readonly validator = createStrictValidator();
+    private credentialExpiryTimers = new Map<string, NodeJS.Timeout>();
     private agentService: AgentService | null = null;
+    private readonly pendingDisconnects = new Set<Promise<void>>();
+    private shutdownPromise: Promise<void> | undefined;
 
     /**
      * Constructor
      */
     constructor(io: SocketServer) {
-        const validator = createStrictValidator('SocketService.initialize');
-        
         if (!io) {
             throw new Error('Socket.IO server is required');
         }
@@ -91,14 +92,12 @@ export class SocketService implements ISocketService {
         
         // Store the provided Socket.IO server instance
         this.io = io;
+        channelKeyService.setSocketLifecycle(this);
+        userSessionLifecycle.setSocketLifecycle(this);
         
         // AgentService will be initialized lazily when needed
         // to avoid early singleton instantiation
             
-        // Connect Socket.IO server to EventBus for proper event routing
-        // This is critical for events emitted through EventBus to reach client sockets
-        EventBus.server.setSocketServer(io);
-        
         // Set up authentication middleware
         this.io.use(this.authMiddleware.bind(this));
         
@@ -172,8 +171,14 @@ export class SocketService implements ISocketService {
                 
                 
                 if (agentId) {
-                    this.handleSocketDisconnect(socket.id, channelId, agentId, reason);
+                    void this.handleSocketDisconnect(socket.id, channelId, agentId, reason);
+                    return;
                 }
+
+                // User and unauthenticated sockets are not represented in the
+                // agent maps. They must still leave the service registry and
+                // release any JWT/PAT expiry timer on every disconnect path.
+                this.unregisterUserSession(socket.id);
             });
         } catch (error) {
             this.logger.error(`Error handling socket connection: ${error}`);
@@ -205,7 +210,27 @@ export class SocketService implements ISocketService {
      * @param channelId - Channel ID
      * @param reason - Reason for disconnection
      */
-    private async handleSocketDisconnect(socketId: string, channelId: string, agentId: string, reason: string): Promise<void> {
+    private handleSocketDisconnect(
+        socketId: string,
+        channelId: string,
+        agentId: string,
+        reason: string
+    ): Promise<void> {
+        const operation = this.performSocketDisconnect(socketId, channelId, agentId, reason);
+        this.pendingDisconnects.add(operation);
+        void operation.then(
+            () => this.pendingDisconnects.delete(operation),
+            () => this.pendingDisconnects.delete(operation)
+        );
+        return operation;
+    }
+
+    private async performSocketDisconnect(
+        socketId: string,
+        channelId: string,
+        agentId: string,
+        reason: string
+    ): Promise<void> {
         try {
             
             // Handle the socket disconnect using the handler module
@@ -236,7 +261,11 @@ export class SocketService implements ISocketService {
             
             // Define callback functions for the heartbeat handler to use
             const getSocketInfo = this.getAgentSocketInfo.bind(this);
-            const disconnectAgent = async (socketId: string, agentId: string, reason: string) => {
+            const disconnectAgent = async (
+                socketId: string,
+                agentId: string,
+                reason: string
+            ): Promise<void> => {
                 // Get channel ID for this agent
                 const agentInfo = this.agents.get(agentId);
                 const channelId = agentInfo?.channelId || 'system';
@@ -261,26 +290,73 @@ export class SocketService implements ISocketService {
     /**
      * Shutdown the socket service
      */
-    public shutdown(): void {
+    public shutdown(): Promise<void> {
+        if (!this.shutdownPromise) {
+            this.shutdownPromise = this.performShutdown();
+        }
+        return this.shutdownPromise;
+    }
+
+    private async performShutdown(): Promise<void> {
         
         // Clear heartbeat monitor
         if (this.heartbeatMonitor) {
             clearInterval(this.heartbeatMonitor);
             this.heartbeatMonitor = null;
         }
-        
-        // Disconnect all sockets
-        if (this.io) {
-            this.io.disconnectSockets(true);
-            this.io.close();
-            this.io = null;
+
+        for (const timer of this.credentialExpiryTimers.values()) {
+            clearTimeout(timer);
         }
+        this.credentialExpiryTimers.clear();
         
-        // Clear all maps
+        // Detach the transport before awaiting its close callback so a second
+        // caller cannot begin another close against the same Socket.IO server.
+        const socketServer = this.io;
+        this.io = null;
+        let transportError: unknown;
+        try {
+            socketServer?.disconnectSockets(true);
+        } catch (error) {
+            transportError = error;
+        }
+
+        if (socketServer) {
+            try {
+                await new Promise<void>((resolve, reject) => {
+                    socketServer.close(error => {
+                        if (error) {
+                            reject(error);
+                            return;
+                        }
+                        resolve();
+                    });
+                });
+            } catch (error) {
+                transportError ??= error;
+            }
+        }
+
+        // Socket.IO does not await promises returned by disconnect listeners. Drain
+        // the work explicitly before later shutdown steps close dependent services
+        // and MongoDB. Loop in case one disconnect operation synchronously starts
+        // another while the first batch is settling.
+        while (this.pendingDisconnects.size > 0) {
+            await Promise.all([...this.pendingDisconnects]);
+        }
+
+        // Clear all maps only after disconnect handlers have finished using the
+        // authoritative socket registry and channel lifecycle services.
         this.agents.clear();
         this.socketIds.clear();
         this.sockets.clear();
         this.heartbeats.clear();
+        channelKeyService.clearSocketLifecycle(this);
+        userSessionLifecycle.clearSocketLifecycle(this);
+
+        if (transportError !== undefined) {
+            throw transportError;
+        }
         
     }
     
@@ -295,11 +371,24 @@ export class SocketService implements ISocketService {
     /**
      * Get the socket for an agent by its ID
      * @param agentId - Agent ID to find the socket for
-     * @returns The socket for the agent, or null if not found
+     * @param channelId - Authenticated channel the event is scoped to
+     * @returns The socket for the agent in that exact channel, or null if not found
      */
-    public getSocketByAgentId(agentId: string): Socket | null {
+    public getSocketByAgentId(agentId: string, channelId: string): Socket | null {
         const agentInfo = this.agents.get(agentId);
-        return agentInfo ? agentInfo.socket : null;
+        if (!agentInfo || agentInfo.channelId !== channelId) {
+            return null;
+        }
+
+        // Check both the server registry and the immutable authentication
+        // context. A later connection may reuse an agent id in another channel;
+        // it must never receive results addressed to the original channel.
+        if (agentInfo.socket.data?.agentId !== agentId ||
+            agentInfo.socket.data?.channelId !== channelId) {
+            return null;
+        }
+
+        return agentInfo.socket;
     }
     
     /**
@@ -320,8 +409,25 @@ export class SocketService implements ISocketService {
     public registerSocket(socket: Socket, agentId: string, channelId: string): void {
         const validator = createStrictValidator('SocketService.registerSocket');
         validator.assertIsNonEmptyString(agentId);
-        
-        
+
+        if (socket.data?.authType === 'key') {
+            const keyId = socket.data.keyId;
+            const expiresAt = socket.data.credentialExpiresAt;
+            if (typeof keyId !== 'string' || keyId.length === 0) {
+                socket.disconnect(true);
+                throw new Error('Authenticated key socket is missing its credential id');
+            }
+            if (expiresAt !== undefined &&
+                (typeof expiresAt !== 'number' || !Number.isFinite(expiresAt))) {
+                socket.disconnect(true);
+                throw new Error('Authenticated key socket has an invalid credential expiry');
+            }
+            if (typeof expiresAt === 'number' && expiresAt <= Date.now()) {
+                socket.disconnect(true);
+                throw new Error('Authenticated key expired before socket registration completed');
+            }
+        }
+
         // Create agent info
         const agentInfo: AgentSocketInfo = {
             socket,
@@ -333,8 +439,102 @@ export class SocketService implements ISocketService {
         // Store agent info
         this.agents.set(agentId, agentInfo);
         this.socketIds.set(socket.id, agentId);
+        this.sockets.set(socket.id, socket);
         this.heartbeats.set(agentId, Date.now());
-        
+
+        this.scheduleCredentialExpiry(socket);
+    }
+
+    /**
+     * Register an authenticated JWT, password, or PAT user session.
+     * User sockets were historically kept only in Socket.IO's adapter and were
+     * therefore invisible to revocation and leaked from this service's raw map.
+     */
+    public async registerUserSession(socket: Socket): Promise<void> {
+        const userId = socket.data?.userId;
+        const authType = socket.data?.authType;
+        if (typeof userId !== 'string' || userId.trim().length === 0 ||
+            !this.isUserAuthType(authType)) {
+            if (socket.connected !== false) {
+                socket.disconnect(true);
+            }
+            throw new Error('Authenticated user socket is missing trusted session identity');
+        }
+
+        if (authType === 'pat' &&
+            (typeof socket.data?.tokenId !== 'string' || socket.data.tokenId.trim().length === 0)) {
+            if (socket.connected !== false) {
+                socket.disconnect(true);
+            }
+            throw new Error('Authenticated PAT socket is missing its token id');
+        }
+
+        const expiresAt = socket.data?.credentialExpiresAt;
+        if (authType === 'jwt' &&
+            (typeof expiresAt !== 'number' || !Number.isFinite(expiresAt))) {
+            if (socket.connected !== false) {
+                socket.disconnect(true);
+            }
+            throw new Error('Authenticated JWT socket is missing its verified expiry');
+        }
+        if (expiresAt !== undefined &&
+            (typeof expiresAt !== 'number' || !Number.isFinite(expiresAt))) {
+            if (socket.connected !== false) {
+                socket.disconnect(true);
+            }
+            throw new Error('Authenticated user socket has an invalid credential expiry');
+        }
+        if (typeof expiresAt === 'number' && expiresAt <= Date.now()) {
+            if (socket.connected !== false) {
+                socket.disconnect(true);
+            }
+            throw new Error('User credential expired before socket registration completed');
+        }
+
+        // Authentication may have started before a concurrent role change,
+        // deactivation, deletion, or PAT revocation. The lifecycle registry
+        // serializes this final read with those mutations; validate current
+        // persisted authority again before installing/tracking the session.
+        const user = await User.findById(userId);
+        if (!user || !user.isActive || String(user.role) !== String(socket.data?.role)) {
+            if (socket.connected !== false) {
+                socket.disconnect(true);
+            }
+            throw new Error('User authorization changed before socket registration completed');
+        }
+
+        // Rebuild mutable profile and authorization fields from the record read
+        // inside the lifecycle lock. Do not retain caller or stale pre-lock
+        // values when installing role-sensitive socket listeners.
+        socket.data.userId = String(user._id);
+        socket.data.username = user.username;
+        socket.data.role = user.role;
+
+        if (authType === 'pat') {
+            const token = await PersonalAccessToken.findOne({
+                tokenId: socket.data.tokenId,
+                userId,
+                isActive: true,
+                revokedAt: null
+            });
+            const persistedExpiry = token?.expiresAt?.getTime();
+            if (!token ||
+                (persistedExpiry !== undefined && persistedExpiry <= Date.now()) ||
+                persistedExpiry !== expiresAt) {
+                if (socket.connected !== false) {
+                    socket.disconnect(true);
+                }
+                throw new Error('PAT authorization changed before socket registration completed');
+            }
+            socket.data.scopes = [...token.scopes];
+        }
+
+        if (socket.connected === false) {
+            throw new Error('User socket disconnected before registration completed');
+        }
+
+        this.sockets.set(socket.id, socket);
+        this.scheduleCredentialExpiry(socket);
     }
     
     /**
@@ -355,6 +555,7 @@ export class SocketService implements ISocketService {
 
         // Remove heartbeat entry to prevent stale entries
         this.heartbeats.delete(agentId);
+        this.clearCredentialExpiryTimer(socketId);
 
     }
     
@@ -405,5 +606,152 @@ export class SocketService implements ISocketService {
         // Get the default namespace and count connected sockets
         const sockets = this.io.sockets?.sockets;
         return sockets ? sockets.size : 0;
+    }
+
+    /** Disconnect every live socket authenticated with one exact key. */
+    public disconnectKeySockets(keyId: string): number {
+        return this.disconnectMatchingSockets(socket => socket.data?.keyId === keyId);
+    }
+
+    /** Disconnect every live key-authenticated socket in one exact channel. */
+    public disconnectChannelSockets(channelId: string): number {
+        return this.disconnectMatchingSockets(socket => (
+            socket.data?.authType === 'key' && socket.data?.channelId === channelId
+        ));
+    }
+
+    /** Disconnect every live PAT socket carrying one exact immutable token id. */
+    public disconnectTokenSessions(tokenId: string): number {
+        return this.disconnectMatchingSockets(socket => (
+            socket.data?.authType === 'pat' && socket.data?.tokenId === tokenId
+        ));
+    }
+
+    /** Disconnect all user-authenticated sessions for one exact account. */
+    public disconnectUserSessions(userId: string): number {
+        return this.disconnectMatchingSockets(socket => (
+            this.isUserAuthType(socket.data?.authType) && socket.data?.userId === userId
+        ));
+    }
+
+    private disconnectMatchingSockets(predicate: (socket: Socket) => boolean): number {
+        let disconnected = 0;
+        const failures: string[] = [];
+        for (const socket of this.getTrackedSockets().values()) {
+            if (!predicate(socket)) {
+                continue;
+            }
+
+            if (socket.connected === false) {
+                if (this.isUserAuthType(socket.data?.authType)) {
+                    this.unregisterUserSession(socket.id);
+                } else {
+                    this.clearCredentialExpiryTimer(socket.id);
+                }
+                continue;
+            }
+
+            try {
+                socket.disconnect(true);
+                if (socket.connected === true) {
+                    failures.push(`Socket ${socket.id} remained connected after credential revocation`);
+                    continue;
+                }
+                this.clearCredentialExpiryTimer(socket.id);
+                if (this.isUserAuthType(socket.data?.authType)) {
+                    this.unregisterUserSession(socket.id);
+                }
+                disconnected += 1;
+            } catch (error) {
+                failures.push(
+                    `Socket ${socket.id} disconnect failed: ` +
+                    (error instanceof Error ? error.message : String(error))
+                );
+            }
+        }
+        if (failures.length > 0) {
+            throw new Error(failures.join('; '));
+        }
+        return disconnected;
+    }
+
+    /** Union the service registry with Socket.IO's registry during auth races. */
+    private getTrackedSockets(): Map<string, Socket> {
+        const tracked = new Map<string, Socket>(this.sockets);
+        const ioSockets = this.io?.sockets?.sockets;
+        if (ioSockets) {
+            for (const [socketId, socket] of ioSockets) {
+                tracked.set(socketId, socket);
+            }
+        }
+        return tracked;
+    }
+
+    private clearCredentialExpiryTimer(socketId: string): void {
+        const timer = this.credentialExpiryTimers.get(socketId);
+        if (timer) {
+            clearTimeout(timer);
+            this.credentialExpiryTimers.delete(socketId);
+        }
+    }
+
+    private isUserAuthType(authType: unknown): authType is 'jwt' | 'password' | 'pat' {
+        return authType === 'jwt' || authType === 'password' || authType === 'pat';
+    }
+
+    private unregisterUserSession(socketId: string): void {
+        this.sockets.delete(socketId);
+        this.clearCredentialExpiryTimer(socketId);
+    }
+
+    /**
+     * Schedule a key, PAT, or JWT socket's hard expiry without retaining its
+     * secret/token. Long expiries are chunked because JavaScript timers have a
+     * signed 32-bit delay.
+     */
+    private scheduleCredentialExpiry(socket: Socket): void {
+        this.clearCredentialExpiryTimer(socket.id);
+
+        const authType = socket.data?.authType;
+        if ((authType !== 'key' && authType !== 'pat' && authType !== 'jwt') ||
+            typeof socket.data?.credentialExpiresAt !== 'number') {
+            return;
+        }
+
+        const expiresAt = socket.data.credentialExpiresAt;
+        const credentialIdentity = authType === 'key'
+            ? socket.data.keyId
+            : authType === 'pat'
+                ? socket.data.tokenId
+                : socket.data.userId;
+        const maxTimerDelay = 2_147_483_647;
+
+        const scheduleNext = (): void => {
+            const remaining = expiresAt - Date.now();
+            if (remaining > 0) {
+                const timer = setTimeout(scheduleNext, Math.min(remaining, maxTimerDelay));
+                timer.unref?.();
+                this.credentialExpiryTimers.set(socket.id, timer);
+                return;
+            }
+
+            this.credentialExpiryTimers.delete(socket.id);
+            const trackedSocket = this.getTrackedSockets().get(socket.id);
+            if (trackedSocket === socket &&
+                socket.connected !== false &&
+                socket.data?.authType === authType &&
+                (authType === 'key'
+                    ? socket.data?.keyId === credentialIdentity
+                    : authType === 'pat'
+                        ? socket.data?.tokenId === credentialIdentity
+                        : socket.data?.userId === credentialIdentity)) {
+                socket.disconnect(true);
+                if (authType !== 'key') {
+                    this.unregisterUserSession(socket.id);
+                }
+            }
+        };
+
+        scheduleNext();
     }
 }

@@ -1,6 +1,6 @@
 /**
  * Unit tests for awaitEventResponse — the shared request/response helper that replaced
- * 13 hand-rolled copies across MxfSDK / MxfClient / AdminHelper / McpToolHandlers /
+ * 13 hand-rolled copies across MxfSDK / MxfClient / McpToolHandlers /
  * MemoryHandlers.
  *
  * The contract under test:
@@ -35,6 +35,12 @@ jest.mock('@mxf-dev/core/events/EventBus', () => {
                             }
                         }),
                     } as unknown as Subscription;
+                }),
+                off: jest.fn((event: string, handler: (payload: unknown) => void) => {
+                    const list = handlers.get(event);
+                    if (!list) return;
+                    const index = list.indexOf(handler);
+                    if (index > -1) list.splice(index, 1);
                 }),
                 emit: jest.fn((event: string, payload: any) => {
                     emitted.push({ route: 'primary', event, payload });

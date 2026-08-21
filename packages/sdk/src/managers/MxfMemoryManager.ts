@@ -35,12 +35,15 @@ import { v4 as uuidv4 } from 'uuid';
 import { firstValueFrom } from 'rxjs';
 import { MxfMeilisearchService } from '@mxf-dev/core/services/MxfMeilisearchService';
 import {
+    BaseEventPayload,
+    createAgentEventPayload,
     createMeilisearchIndexEventPayload,
     createMeilisearchBackfillEventPayload,
     MeilisearchIndexEventData,
     MeilisearchBackfillEventData
 } from '@mxf-dev/core/schemas/EventPayloadSchema';
 import { EventBus } from '@mxf-dev/core/events/EventBus';
+import { AnyEventName } from '@mxf-dev/core/events/EventBusBase';
 import { Events } from '@mxf-dev/core/events/EventNames';
 
 export interface MemoryManagerConfig {
@@ -53,48 +56,137 @@ export interface MemoryManagerConfig {
     maxMessageSize?: number; // Max size in bytes for a single message (default: 100KB)
 }
 
+export interface ConversationMessageInput {
+    role: ConversationMessage['role'];
+    content: string;
+    metadata?: ConversationMessage['metadata'];
+    tool_calls?: ConversationMessage['tool_calls'];
+}
+
+interface ImportedMemoryData {
+    conversationHistory?: ConversationMessage[];
+    observations?: Observation[];
+    currentReasoning?: Reasoning | null;
+    currentPlan?: Plan | null;
+}
+
+/**
+ * The server answered a search-index request with a failure event.
+ *
+ * `retryAfterMs` is set when the server throttled the request; the indexing
+ * queue waits that long and sends the same document again. Any other
+ * rejection is final for that document.
+ */
+export class MeilisearchIndexRejectedError extends Error {
+    public readonly retryAfterMs: number | null;
+
+    constructor(message: string, retryAfterMs: number | null) {
+        super(message);
+        this.name = 'MeilisearchIndexRejectedError';
+        this.retryAfterMs = retryAfterMs;
+    }
+}
+
+/**
+ * A search-index request could not be sent, or was cut off, because the
+ * agent socket is not connected. Nothing was indexed.
+ */
+export class MeilisearchTransportUnavailableError extends Error {
+    constructor(message: string) {
+        super(message);
+        this.name = 'MeilisearchTransportUnavailableError';
+    }
+}
+
 export class MxfMemoryManager {
-    private config: MemoryManagerConfig;
-    private memoryService: any; // Memory service interface
-    private logger: Logger;
-    private agentId: string;
+    private readonly config: MemoryManagerConfig;
+    private readonly logger: Logger;
+    private readonly agentId: string;
     private conversationHistory: ConversationMessage[] = [];
+    /**
+     * Complete desired persisted history. The working history intentionally rolls at
+     * maxHistory, while this snapshot retains older messages until an explicit
+     * clear/compact operation replaces it.
+     */
+    private authoritativeConversationHistory: ConversationMessage[] = [];
     private observations: Observation[] = [];
     private currentReasoning: Reasoning | null = null;
     private currentPlan: Plan | null = null;
-    private memoryLoaded: boolean = false;
-    private maxHistorySize: number = 50; // Default max messages to keep
-    private maxObservations: number = 100; // Default max observations
-    private memoryOperations?: any; // Memory operations interface
-    private enableDeduplication: boolean = false; // DISABLED by default - was causing more issues than solving
+    private memoryLoaded = false;
+    private readonly enableDeduplication: boolean;
     private meilisearchService: MxfMeilisearchService | null = null; // Meilisearch integration for semantic search
-    private eventBus: typeof EventBus = EventBus; // Event bus for emitting indexing events
-    private lastSavedMessageCount: number = 0; // Track how many messages were already saved to MongoDB
-    private maxMessageSize: number = 100 * 1024; // Default 100KB max per message to prevent MongoDB overflow
+    private readonly eventBus: typeof EventBus = EventBus;
+    private readonly maxMessageSize: number;
+    private memoryIdentity: Pick<IAgentMemory, 'id' | 'createdAt' | 'persistenceLevel'>;
+
+    /**
+     * Every local mutation receives a monotonically increasing revision. Revisions
+     * stay queued until the server acknowledges an authoritative snapshot that
+     * contains them. A failed write therefore cannot advance the cursor or lose work.
+     */
+    private nextPersistenceRevision = 0;
+    private persistedRevision = 0;
+    private pendingPersistenceRevisions: number[] = [];
+    private saveInFlight: Promise<void> | null = null;
+
+    /**
+     * Search indexing runs behind the conversation, one request at a time, in
+     * arrival order. The head of the queue is the request in flight; it leaves
+     * the queue only when the server acknowledges it or rejects it for good.
+     */
+    private readonly indexQueue: ConversationMessage[] = [];
+    private indexDrain: Promise<void> | null = null;
+    /** Reason indexing was stopped for good (agent disconnect), or null while it runs. */
+    private indexingStopped: string | null = null;
+    /** The wait for a server retry hint, so stopIndexing() can cut it short. */
+    private retryWait: { timer: NodeJS.Timeout; cancel: () => void } | null = null;
+    /** Settle functions of index requests in flight, keyed by operation id. */
+    private readonly pendingIndexOperations = new Map<string, (error: Error) => void>();
 
     constructor(config: MemoryManagerConfig) {
+        if (typeof config.agentId !== 'string' || config.agentId.trim() === '') {
+            throw new Error('MxfMemoryManager requires a non-empty agentId');
+        }
+        if (typeof config.channelId !== 'string' || config.channelId.trim() === '') {
+            throw new Error('MxfMemoryManager requires a non-empty channelId');
+        }
+        if (!Number.isInteger(config.maxHistory) || config.maxHistory <= 0) {
+            throw new Error('MxfMemoryManager maxHistory must be a positive integer');
+        }
+        if (!Number.isInteger(config.maxObservations) || config.maxObservations <= 0) {
+            throw new Error('MxfMemoryManager maxObservations must be a positive integer');
+        }
+        if (config.maxMessageSize !== undefined &&
+            (!Number.isInteger(config.maxMessageSize) || config.maxMessageSize <= 0)) {
+            throw new Error('MxfMemoryManager maxMessageSize must be a positive integer');
+        }
+
         this.config = config;
         this.logger = new Logger('debug', `MemoryManager:${config.agentId}`, 'client');
         this.agentId = config.agentId;
-        this.maxHistorySize = config.maxHistory || this.maxHistorySize;
-        this.maxObservations = config.maxObservations || this.maxObservations;
-        this.enableDeduplication = config.enableDeduplication || this.enableDeduplication;
-        this.maxMessageSize = config.maxMessageSize || this.maxMessageSize;
+        this.enableDeduplication = config.enableDeduplication ?? false;
+        this.maxMessageSize = config.maxMessageSize ?? 100 * 1024;
+        this.memoryIdentity = {
+            id: `agent-memory-${config.agentId}`,
+            createdAt: new Date(),
+            persistenceLevel: MemoryPersistenceLevel.PERSISTENT
+        };
 
         // Initialize Meilisearch service if enabled
-        if (process.env.ENABLE_MEILISEARCH !== 'false') {
-            try {
-                // Pass client context for proper logging
-                this.meilisearchService = MxfMeilisearchService.getInstance({
-                    host: process.env.MEILISEARCH_HOST || 'http://localhost:7700',
-                    apiKey: process.env.MEILISEARCH_MASTER_KEY || '',
-                    loggerContext: 'client'
-                });
-            } catch (error) {
-                this.logger.warn(`Failed to initialize Meilisearch service: ${error instanceof Error ? error.message : String(error)}`);
-                this.meilisearchService = null;
+        if (process.env.ENABLE_MEILISEARCH === 'true') {
+            const host = process.env.MEILISEARCH_HOST;
+            const apiKey = process.env.MEILISEARCH_MASTER_KEY;
+            if (!host || host.trim() === '') {
+                throw new Error('MEILISEARCH_HOST is required when ENABLE_MEILISEARCH=true');
             }
-        } else {
+            if (!apiKey || apiKey.trim() === '') {
+                throw new Error('MEILISEARCH_MASTER_KEY is required when ENABLE_MEILISEARCH=true');
+            }
+            this.meilisearchService = MxfMeilisearchService.getInstance({
+                host,
+                apiKey,
+                loggerContext: 'client'
+            });
         }
     }
 
@@ -102,11 +194,13 @@ export class MxfMemoryManager {
      * Initialize the memory manager and load existing memory
      */
     public async initialize(): Promise<void> {
-        
+        // One manager serves every connect() of its agent. A stop from the
+        // previous session (agent disconnect) ends with the next initialize.
+        this.indexingStopped = null;
+
         if (this.config.enablePersistence) {
             await this.loadAgentMemory();
         }
-        
     }
 
     /**
@@ -114,25 +208,24 @@ export class MxfMemoryManager {
      */
     public async loadAgentMemory(): Promise<void> {
         try {
-            if (!this.config.agentId) {
-                this.logger.warn('Cannot load memory: agent ID not set');
-                return;
-            }
-            
-            
             // Get memory from the memory service
             const memory = await firstValueFrom(
                 MxfMemoryService.getInstance().getAgentMemory(
-                    this.config.agentId, 
-                    this.config.channelId, 
-                    this.config.agentId
+                    this.config.agentId,
+                    this.config.channelId
                 )
             );
+            this.memoryIdentity = {
+                id: memory.id,
+                createdAt: memory.createdAt,
+                persistenceLevel: memory.persistenceLevel
+            };
             
             // If memory has conversation history, index it to Meilisearch but DON'T inject into prompts
             if (memory.conversationHistory && Array.isArray(memory.conversationHistory)) {
-                // Track the count of historical messages for append-only saves
-                this.lastSavedMessageCount = memory.conversationHistory.length;
+                this.authoritativeConversationHistory = [
+                    ...memory.conversationHistory as ConversationMessage[]
+                ];
 
                 if (this.conversationHistory.length === 0 && memory.conversationHistory.length > 0) {
                     // ✅ NEW ARCHITECTURE: Don't restore to working memory
@@ -142,12 +235,8 @@ export class MxfMemoryManager {
 
                     // Backfill historical messages to Meilisearch (async, non-blocking)
                     if (this.meilisearchService) {
-                        this.backfillConversationsToMeilisearch(memory.conversationHistory).catch(error => {
-                            // Error already logged in backfillConversationsToMeilisearch, just prevent unhandled rejection
-                        });
+                        await this.backfillConversationsToMeilisearch(memory.conversationHistory);
                     } else {
-                        // No Meilisearch - historical data not accessible (but also won't pollute prompts)
-                        this.logger.warn(`⚠️  ${memory.conversationHistory.length} historical messages exist but Meilisearch disabled - history not searchable`);
                         this.emitMeilisearchReady();
                     }
                 } else if (this.conversationHistory.length === 0 && memory.conversationHistory.length === 0) {
@@ -155,9 +244,14 @@ export class MxfMemoryManager {
                     this.emitMeilisearchReady();
                 }
             } else {
+                this.authoritativeConversationHistory = [];
                 // No conversation history at all - new agent
                 this.emitMeilisearchReady();
             }
+
+            this.nextPersistenceRevision = 0;
+            this.persistedRevision = 0;
+            this.pendingPersistenceRevisions = [];
 
             // Restore other memory components if available
             if (memory.notes) {
@@ -176,157 +270,225 @@ export class MxfMemoryManager {
             this.memoryLoaded = true;
         } catch (error) {
             this.logger.error(`Error loading agent memory: ${error instanceof Error ? error.message : String(error)}`);
-        }
-    }
-
-    /**
-     * Save agent memory to the memory system
-     * CRITICAL: Appends new messages instead of replacing entire history
-     */
-    public async saveAgentMemory(): Promise<void> {
-        try {
-            if (!this.config.enablePersistence) {
-                return; // Skip if persistence is disabled
-            }
-
-            if (!this.config.agentId) {
-                this.logger.warn('Cannot save memory: agent ID not set');
-                return;
-            }
-
-            // Determine which messages are NEW (not yet saved to MongoDB)
-            const newMessages = this.conversationHistory.slice(this.lastSavedMessageCount);
-
-            if (newMessages.length === 0) {
-                return; // Nothing new to append
-            }
-
-            // Calculate total document size to prevent MongoDB 16MB limit
-            const estimatedDocSize = Buffer.byteLength(JSON.stringify({
-                conversationHistory: this.conversationHistory,
-                notes: {
-                    recentObservations: this.observations,
-                    currentReasoning: this.currentReasoning,
-                    currentPlan: this.currentPlan
-                }
-            }), 'utf8');
-
-            // MongoDB has a 16MB limit, use 12MB as safety threshold (75% of limit)
-            const MONGODB_SAFE_LIMIT = 12 * 1024 * 1024; // 12MB
-
-            if (estimatedDocSize > MONGODB_SAFE_LIMIT) {
-                this.logger.warn(
-                    `⚠️  Agent memory approaching MongoDB limit! ` +
-                    `Current: ${(estimatedDocSize / 1024 / 1024).toFixed(2)}MB, ` +
-                    `Limit: ${(MONGODB_SAFE_LIMIT / 1024 / 1024).toFixed(0)}MB. ` +
-                    `Forcing aggressive cleanup...`
-                );
-
-                // Aggressive cleanup: keep only last 20 messages
-                const messagesToKeep = 20;
-                this.conversationHistory = this.conversationHistory.slice(-messagesToKeep);
-                this.observations = this.observations.slice(-10);
-                this.lastSavedMessageCount = 0; // Reset since we truncated
-
-                this.logger.info(`Trimmed conversation to ${this.conversationHistory.length} messages`);
-            }
-
-            // Determine which messages are NEW after potential cleanup
-            const newMessagesAfterCleanup = this.conversationHistory.slice(this.lastSavedMessageCount);
-
-            if (newMessagesAfterCleanup.length === 0) {
-                return; // Nothing new to append after cleanup
-            }
-
-            // Truncate individual large messages (legacy safety check)
-            const MAX_CONTENT_LENGTH = 5 * 1024 * 1024; // 5MB per message
-            const truncatedMessages = newMessagesAfterCleanup.map(msg => {
-                if (msg.content && msg.content.length > MAX_CONTENT_LENGTH) {
-                    this.logger.warn(`Truncating large message content: ${msg.content.length} bytes → ${MAX_CONTENT_LENGTH} bytes (role: ${msg.role})`);
-                    return {
-                        ...msg,
-                        content: msg.content.substring(0, MAX_CONTENT_LENGTH) + '\n\n[Content truncated for MongoDB storage - full content indexed in Meilisearch]',
-                        metadata: {
-                            ...msg.metadata,
-                            truncated: true,
-                            originalSize: msg.content.length
-                        }
-                    };
-                }
-                return msg;
-            });
-
-
-            // Prepare memory data with ONLY new messages (truncated if necessary)
-            // The server will APPEND these to existing conversationHistory
-            const memoryData: IAgentMemory = {
-                id: `agent-memory-${this.config.agentId}`,
-                agentId: this.config.agentId,
-                createdAt: new Date(),
-                updatedAt: new Date(),
-                persistenceLevel: MemoryPersistenceLevel.PERSISTENT,
-                conversationHistory: truncatedMessages,  // Truncated messages to prevent MongoDB 16MB limit
-                notes: {
-                    recentObservations: this.observations,
-                    currentReasoning: this.currentReasoning,
-                    currentPlan: this.currentPlan
-                }
-            };
-
-            // Save memory using the memory service
-            await firstValueFrom(
-                MxfMemoryService.getInstance().updateAgentMemory(
-                    this.config.agentId,
-                    this.config.channelId,
-                    this.config.agentId,
-                    memoryData
-                )
-            );
-
-            // Update the saved count
-            this.lastSavedMessageCount = this.conversationHistory.length;
-
-        } catch (error) {
-            // Log AND rethrow: every caller either awaits or attaches .catch —
-            // swallowing here turned all of those handlers into dead code.
-            this.logger.error(`Error saving agent memory: ${error instanceof Error ? error.message : String(error)}`);
             throw error;
         }
     }
 
     /**
-     * Add a message to the conversation history with optional deduplication
+     * Save the complete desired agent-memory state.
+     *
+     * Writes are serialized and revision-driven. Mutations that arrive while a
+     * request is in flight are written by the next loop iteration. The cursor only
+     * advances after acknowledgement, so retrying a failed request neither skips nor
+     * duplicates a message, even when the working history has rolled.
      */
-    public addConversationMessage(message: { role: string; content: string; metadata?: Record<string, any>; tool_calls?: any[] }): void {
-        // Calculate message size to prevent MongoDB 16MB document limit
-        const messageSize = Buffer.byteLength(JSON.stringify(message), 'utf8');
-
-        if (messageSize > this.maxMessageSize) {
-            this.logger.warn(
-                `⚠️  Skipping large message (${(messageSize / 1024).toFixed(1)}KB > ${(this.maxMessageSize / 1024).toFixed(0)}KB limit). ` +
-                `Role: ${message.role}, Tool: ${message.metadata?.toolName || 'N/A'}`
-            );
-
-            // Store a summary instead of the full message to preserve conversation flow
-            const summaryMessage: ConversationMessage = {
-                id: uuidv4(),
-                role: message.role as 'user' | 'assistant' | 'system',
-                content: `[Large response omitted - ${(messageSize / 1024).toFixed(1)}KB]`,
-                timestamp: Date.now(),
-                metadata: {
-                    ...message.metadata,
-                    omittedSize: messageSize,
-                    omittedReason: 'exceeded_max_message_size'
-                },
-                tool_calls: message.tool_calls
-            };
-
-            this.conversationHistory.push(summaryMessage);
-            this.trimConversationHistory();
-            return;
+    public saveAgentMemory(): Promise<void> {
+        if (!this.config.enablePersistence || this.pendingPersistenceRevisions.length === 0) {
+            return Promise.resolve();
         }
 
-        // Only check for duplicates if deduplication is enabled
+        if (this.saveInFlight) {
+            return this.saveInFlight;
+        }
+
+        const operation = this.flushPendingMemory();
+        this.saveInFlight = operation;
+        operation.then(
+            () => {
+                if (this.saveInFlight === operation) {
+                    this.saveInFlight = null;
+                }
+            },
+            () => {
+                if (this.saveInFlight === operation) {
+                    this.saveInFlight = null;
+                }
+            }
+        );
+        return operation;
+    }
+
+    private async flushPendingMemory(): Promise<void> {
+        while (this.pendingPersistenceRevisions.length > 0) {
+            const snapshotRevision = this.pendingPersistenceRevisions.at(-1)!;
+            const memoryData = this.createAuthoritativeMemorySnapshot();
+
+            try {
+                await firstValueFrom(
+                    MxfMemoryService.getInstance().updateAgentMemory(
+                        this.config.agentId,
+                        this.config.channelId,
+                        memoryData
+                    )
+                );
+            } catch (error) {
+                this.logger.error(
+                    `Error saving agent memory revision ${snapshotRevision}: ` +
+                    `${error instanceof Error ? error.message : String(error)}`
+                );
+                throw error;
+            }
+
+            this.persistedRevision = snapshotRevision;
+            this.pendingPersistenceRevisions = this.pendingPersistenceRevisions
+                .filter(revision => revision > this.persistedRevision);
+        }
+    }
+
+    private createAuthoritativeMemorySnapshot(): IAgentMemory {
+        const memoryData: IAgentMemory = {
+            id: this.memoryIdentity.id,
+            agentId: this.config.agentId,
+            createdAt: this.memoryIdentity.createdAt,
+            updatedAt: new Date(),
+            persistenceLevel: this.memoryIdentity.persistenceLevel,
+            conversationHistory: [...this.authoritativeConversationHistory],
+            notes: {
+                recentObservations: [...this.observations],
+                currentReasoning: this.currentReasoning,
+                currentPlan: this.currentPlan
+            }
+        };
+        const safeDocumentLimit = 12 * 1024 * 1024;
+        const estimatedSize = Buffer.byteLength(JSON.stringify(memoryData), 'utf8');
+        if (estimatedSize > safeDocumentLimit) {
+            throw new Error(
+                `Agent memory snapshot is ${(estimatedSize / 1024 / 1024).toFixed(2)}MB, ` +
+                `above the 12MB safe persistence limit; compact or clear it explicitly`
+            );
+        }
+        return memoryData;
+    }
+
+    private markMemoryDirty(): number {
+        this.nextPersistenceRevision += 1;
+        this.pendingPersistenceRevisions.push(this.nextPersistenceRevision);
+        return this.nextPersistenceRevision;
+    }
+
+    private awaitMeilisearchOperation<
+        TData extends { operationId: string; success: boolean; error?: string; retryAfterMs?: number }
+    >(
+        requestEvent: typeof MeilisearchEvents.INDEX_REQUEST |
+            typeof MeilisearchEvents.BACKFILL_REQUEST,
+        payload: BaseEventPayload<TData>,
+        successEvents: readonly AnyEventName[],
+        failureEvents: readonly AnyEventName[]
+    ): Promise<TData> {
+        return new Promise<TData>((resolve, reject) => {
+            let settled = false;
+            const listeners = new Map<AnyEventName, (rawEvent: unknown) => void>();
+            const failureEventSet = new Set(failureEvents);
+
+            const cleanup = (): void => {
+                listeners.forEach((handler, eventName) => {
+                    this.eventBus.client.off(eventName, handler);
+                });
+                this.eventBus.client.off(Events.Agent.DISCONNECT, disconnectHandler);
+                this.pendingIndexOperations.delete(payload.data.operationId);
+            };
+            const settleError = (error: unknown): void => {
+                if (settled) {
+                    return;
+                }
+                settled = true;
+                cleanup();
+                reject(error instanceof Error ? error : new Error(String(error)));
+            };
+            const responseHandler = (eventName: AnyEventName) => (rawEvent: unknown): void => {
+                if (!rawEvent || typeof rawEvent !== 'object') {
+                    return;
+                }
+                const event = rawEvent as {
+                    agentId?: string;
+                    channelId?: string;
+                    data?: Partial<TData>;
+                };
+                const data = event.data;
+                if (event.agentId !== this.agentId ||
+                    event.channelId !== this.config.channelId ||
+                    data?.operationId !== payload.data.operationId || settled) {
+                    return;
+                }
+
+                if (failureEventSet.has(eventName) || data.success !== true) {
+                    const retryAfterMs = typeof data.retryAfterMs === 'number' &&
+                        Number.isFinite(data.retryAfterMs) && data.retryAfterMs > 0
+                        ? data.retryAfterMs
+                        : null;
+                    settleError(new MeilisearchIndexRejectedError(
+                        data.error ?? `${String(requestEvent)} failed`,
+                        retryAfterMs
+                    ));
+                    return;
+                }
+
+                settled = true;
+                cleanup();
+                resolve(data as TData);
+            };
+            const disconnectHandler = (rawEvent: unknown): void => {
+                if (!rawEvent || typeof rawEvent !== 'object') {
+                    return;
+                }
+                const event = rawEvent as {
+                    agentId?: string;
+                    data?: { agentId?: string; reason?: string };
+                };
+                const disconnectedAgentId = event.agentId ?? event.data?.agentId;
+                if (disconnectedAgentId !== this.agentId) {
+                    return;
+                }
+                const reason = event.data?.reason ? `: ${event.data.reason}` : '';
+                settleError(new MeilisearchTransportUnavailableError(
+                    `${String(requestEvent)} cancelled because agent ${this.agentId} ` +
+                    `disconnected${reason}`
+                ));
+            };
+
+            // MxfService emits Agent.DISCONNECT locally when this agent's socket
+            // drops. (Agent.DISCONNECTED is the server's announcement to other
+            // sockets and never reaches the agent that disconnected, so waiting
+            // for it left this request pending forever.)
+            [...successEvents, ...failureEvents].forEach(eventName => {
+                const handler = responseHandler(eventName);
+                listeners.set(eventName, handler);
+                this.eventBus.client.on(eventName, handler);
+            });
+            this.eventBus.client.on(Events.Agent.DISCONNECT, disconnectHandler);
+            this.pendingIndexOperations.set(payload.data.operationId, settleError);
+
+            // emitOn() falls back to the primary socket and only logs when no
+            // transport is available, which would leave this request pending
+            // forever. Refuse up front instead.
+            if (!this.eventBus.client.isRegisteredSocketConnected(this.agentId)) {
+                settleError(new MeilisearchTransportUnavailableError(
+                    `${String(requestEvent)} not sent: agent ${this.agentId} has no connected socket`
+                ));
+                return;
+            }
+
+            try {
+                this.eventBus.client.emitOn(this.agentId, requestEvent, payload);
+            } catch (error) {
+                settleError(error);
+            }
+        });
+    }
+
+    /**
+     * Add a message to the conversation history with optional deduplication
+     */
+    public async addConversationMessage(message: ConversationMessageInput): Promise<void> {
+        // Calculate message size to prevent MongoDB 16MB document limit
+        const messageSize = Buffer.byteLength(JSON.stringify(message), 'utf8');
+        if (messageSize > this.maxMessageSize) {
+            throw new Error(
+                `Conversation message is ${messageSize} bytes, above the configured ` +
+                `${this.maxMessageSize}-byte persistence limit`
+            );
+        }
+
         if (this.enableDeduplication) {
             const isDuplicate = this.isDuplicateMessage(message);
 
@@ -334,43 +496,179 @@ export class MxfMemoryManager {
                 return;
             }
         }
-
-        const conversationMessage: ConversationMessage = {
-            id: uuidv4(),
-            role: message.role as 'user' | 'assistant' | 'system',
-            content: message.content,
-            timestamp: Date.now(),
-            metadata: message.metadata,
-            tool_calls: message.tool_calls // CRITICAL: Preserve tool_calls for assistant messages
-        };
+        const conversationMessage = this.createConversationMessage(message);
 
         // Add to history
         this.conversationHistory.push(conversationMessage);
+        this.authoritativeConversationHistory.push(conversationMessage);
+        this.markMemoryDirty();
 
         // Maintain max history length
         this.trimConversationHistory();
 
-        // Index to Meilisearch asynchronously (non-blocking)
+        await this.saveAgentMemory();
+
+        // Search indexing happens behind the conversation: the message is queued
+        // and the caller returns once it is in history and persisted. A rejected or
+        // throttled index request is handled by the queue (see drainIndexQueue) and
+        // never aborts the agent's turn. Before this, the request was awaited here
+        // and one throttled index call failed the agent's whole generation loop.
         // Skip system role messages - they contain dynamically generated prompts that are:
         // 1. Redundant (already sent with every LLM request)
         // 2. Large (full tool schemas, guidelines, etc.)
         // 3. Not useful for semantic search (framework boilerplate, not conversation content)
-        if (this.meilisearchService && message.role !== 'system') {
-            this.indexConversationToMeilisearch(conversationMessage).catch(error => {
-                // Error already logged in indexConversationToMeilisearch, just prevent unhandled rejection
-            });
+        // Also skip messages with no text: an assistant turn that only calls a tool
+        // has empty content, there is nothing to search, and the server refuses an
+        // empty document.
+        if (this.meilisearchService &&
+            message.role !== 'system' &&
+            conversationMessage.content.trim().length > 0) {
+            this.enqueueConversationIndex(conversationMessage);
         }
+    }
 
-        // Save memory asynchronously
-        this.saveAgentMemory().catch(error => {
-            this.logger.error(`Error saving conversation to memory: ${error instanceof Error ? error.message : String(error)}`);
+    /**
+     * Number of conversation messages waiting to be indexed, including the
+     * one in flight.
+     */
+    public pendingIndexCount(): number {
+        return this.indexQueue.length;
+    }
+
+    /**
+     * Resolve once the index queue has drained, or indexing has been stopped.
+     * Resolves immediately when nothing is queued. Never rejects: index
+     * failures are logged and published as Meilisearch events, not thrown.
+     */
+    public flushIndexQueue(): Promise<void> {
+        return this.indexDrain ?? Promise.resolve();
+    }
+
+    /**
+     * Stop search indexing for good: cut short a retry wait, settle the request
+     * in flight, and drop whatever is queued. Called when the agent disconnects.
+     * Messages dropped here are still in persisted history and are indexed
+     * from it when the agent's memory is next loaded.
+     */
+    public stopIndexing(reason: string): void {
+        if (this.indexingStopped !== null) {
+            return;
+        }
+        this.indexingStopped = reason;
+        const dropped = this.indexQueue.length;
+        this.indexQueue.length = 0;
+        this.retryWait?.cancel();
+        for (const settle of [...this.pendingIndexOperations.values()]) {
+            settle(new MeilisearchTransportUnavailableError(`Search indexing stopped: ${reason}`));
+        }
+        if (dropped > 0) {
+            this.logger.info(
+                `Search indexing stopped (${reason}); ${dropped} queued message(s) not indexed now — ` +
+                'they are indexed from persisted history at the next memory load'
+            );
+        }
+    }
+
+    private enqueueConversationIndex(message: ConversationMessage): void {
+        if (this.indexingStopped !== null) {
+            this.logger.debug(`Search indexing is stopped (${this.indexingStopped}); not indexing message ${message.id}`);
+            return;
+        }
+        this.indexQueue.push(message);
+        if (!this.indexDrain) {
+            const drain = this.drainIndexQueue().finally(() => {
+                if (this.indexDrain === drain) {
+                    this.indexDrain = null;
+                }
+            });
+            this.indexDrain = drain;
+        }
+    }
+
+    /**
+     * Send queued index requests one at a time, in order.
+     *
+     * - throttled (the server sent a retry hint): wait that long, resend the
+     *   same document
+     * - rejected for any other reason: drop the document; the failure was
+     *   already logged and published as MeilisearchEvents.INDEX_ERROR
+     * - no connected agent socket: drop the whole queue once, keep accepting
+     *   new messages — persisted history is indexed at the next memory load
+     */
+    private async drainIndexQueue(): Promise<void> {
+        while (this.indexQueue.length > 0 && this.indexingStopped === null) {
+            const message = this.indexQueue[0];
+            try {
+                await this.indexConversationToMeilisearch(message);
+                this.indexQueue.shift();
+            } catch (error) {
+                if (this.indexingStopped !== null) {
+                    return;
+                }
+                if (error instanceof MeilisearchIndexRejectedError && error.retryAfterMs !== null) {
+                    this.logger.warn(
+                        `Search indexing throttled; retrying message ${message.id} in ${error.retryAfterMs}ms ` +
+                        `(${this.indexQueue.length} queued)`
+                    );
+                    await this.waitForRetry(error.retryAfterMs);
+                    continue;
+                }
+                if (error instanceof MeilisearchTransportUnavailableError) {
+                    const dropped = this.indexQueue.length;
+                    this.indexQueue.length = 0;
+                    this.logger.warn(
+                        `${error.message}; ${dropped} queued message(s) not indexed now — ` +
+                        'they are indexed from persisted history at the next memory load'
+                    );
+                    return;
+                }
+                this.indexQueue.shift();
+                this.logger.error(
+                    `Search indexing of message ${message.id} failed and is not retried: ` +
+                    `${error instanceof Error ? error.message : String(error)}`
+                );
+            }
+        }
+    }
+
+    /** Wait for the server's retry hint. stopIndexing() resolves it early. */
+    private waitForRetry(retryAfterMs: number): Promise<void> {
+        return new Promise<void>(resolve => {
+            const finish = (): void => {
+                if (this.retryWait?.timer === timer) {
+                    this.retryWait = null;
+                }
+                resolve();
+            };
+            const timer = setTimeout(finish, retryAfterMs);
+            // A pending retry must not be what keeps the process alive.
+            timer.unref?.();
+            this.retryWait = {
+                timer,
+                cancel: (): void => {
+                    clearTimeout(timer);
+                    finish();
+                }
+            };
         });
     }
+
+    private createConversationMessage(message: ConversationMessageInput): ConversationMessage {
+        return {
+            id: uuidv4(),
+            role: message.role,
+            content: message.content,
+            timestamp: Date.now(),
+            metadata: message.metadata,
+            tool_calls: message.tool_calls
+        };
+    }
+
 
     /**
      * Enhanced duplicate message detection
      */
-    private isDuplicateMessage(newMessage: { role: string; content: string; metadata?: Record<string, any>; tool_calls?: any[] }): boolean {
+    private isDuplicateMessage(newMessage: ConversationMessageInput): boolean {
         // CRITICAL: Never deduplicate tool results - they may have same content but different tool_call_ids
         if (newMessage.role === 'tool' || (newMessage.metadata && newMessage.metadata.isToolResult)) {
             return false; // Tool results must never be deduplicated
@@ -410,7 +708,7 @@ export class MxfMemoryManager {
      */
     private areSemanticallySimilar(
         existing: ConversationMessage, 
-        newMessage: { role: string; content: string; metadata?: Record<string, any>; tool_calls?: any[] }
+        newMessage: ConversationMessageInput
     ): boolean {
         // Must be same role
         if (existing.role !== newMessage.role) {
@@ -421,7 +719,7 @@ export class MxfMemoryManager {
         const normalizeContent = (content: string): string => {
             return content
                 .replace(/^\[[^\]]+\]:\s*/, '') // Remove [agent]: prefix
-                .replace(/^[🎯📨📋⚡🛠️💬]\s*/, '') // Remove emoji prefixes
+                .replace(/^(?:🎯|📨|📋|⚡|🛠️|💬)\s*/u, '') // Remove emoji prefixes
                 .replace(/\s+/g, ' ') // Normalize whitespace
                 .trim()
                 .toLowerCase();
@@ -474,17 +772,24 @@ export class MxfMemoryManager {
     /**
      * Update a conversation message at a specific index
      */
-    public updateConversationMessage(index: number, message: ConversationMessage): void {
-        if (index >= 0 && index < this.conversationHistory.length) {
-            this.conversationHistory[index] = message;
-            
-            // Save memory asynchronously
-            this.saveAgentMemory().catch(error => {
-                this.logger.error(`Error saving updated conversation to memory: ${error instanceof Error ? error.message : String(error)}`);
-            });
-        } else {
-            this.logger.warn(`Invalid conversation message index: ${index}`);
+    public async updateConversationMessage(index: number, message: ConversationMessage): Promise<void> {
+        if (!Number.isInteger(index) || index < 0 || index >= this.conversationHistory.length) {
+            throw new Error(`Invalid conversation message index: ${index}`);
         }
+
+        const previousMessage = this.conversationHistory[index];
+        const authoritativeIndex = this.authoritativeConversationHistory
+            .findIndex(candidate => candidate.id === previousMessage.id);
+        if (authoritativeIndex < 0) {
+            throw new Error(
+                `Conversation message '${previousMessage.id}' is missing from authoritative memory`
+            );
+        }
+
+        this.conversationHistory[index] = message;
+        this.authoritativeConversationHistory[authoritativeIndex] = message;
+        this.markMemoryDirty();
+        await this.saveAgentMemory();
     }
 
     /**
@@ -502,16 +807,9 @@ export class MxfMemoryManager {
     public async clearConversationHistory(): Promise<void> {
         // Keep only system messages
         this.conversationHistory = this.conversationHistory.filter((msg: ConversationMessage) => msg.role === 'system');
-
-        // Reset saved count since we truncated the history
-        this.lastSavedMessageCount = 0;
-
-        // Await the save to ensure cleared state is persisted before the next turn
-        try {
-            await this.saveAgentMemory();
-        } catch (error) {
-            this.logger.error(`Error saving cleared conversation history: ${error instanceof Error ? error.message : String(error)}`);
-        }
+        this.authoritativeConversationHistory = [...this.conversationHistory];
+        this.markMemoryDirty();
+        await this.saveAgentMemory();
     }
 
     /**
@@ -524,6 +822,9 @@ export class MxfMemoryManager {
      * @returns Object with originalMessages and compactedMessages counts
      */
     public async compactConversation(keepRecent?: number): Promise<{ originalMessages: number; compactedMessages: number }> {
+        if (keepRecent !== undefined && (!Number.isInteger(keepRecent) || keepRecent < 0)) {
+            throw new Error('keepRecent must be a non-negative integer');
+        }
         const originalCount = this.conversationHistory.length;
 
         // Target: keep half of maxHistory by default (aggressive compaction to buy headroom)
@@ -560,8 +861,8 @@ export class MxfMemoryManager {
             ...keepBlocks.flat(),
         ].sort((a, b) => a.timestamp - b.timestamp);
 
-        // Reset saved count since we removed messages MongoDB has
-        this.lastSavedMessageCount = 0;
+        this.authoritativeConversationHistory = [...this.conversationHistory];
+        this.markMemoryDirty();
 
         const compactedCount = this.conversationHistory.length;
         this.logger.info(
@@ -569,24 +870,24 @@ export class MxfMemoryManager {
             `(removed ${originalCount - compactedCount} oldest messages)`
         );
 
-        // Persist the compacted state
-        try {
-            await this.saveAgentMemory();
-        } catch (error) {
-            this.logger.error(`Error saving compacted history: ${error instanceof Error ? error.message : String(error)}`);
-        }
+        await this.saveAgentMemory();
 
         // Emit compaction event for TUI notification
-        this.eventBus.client.emit(Events.Agent.CONTEXT_COMPACTED, {
-            agentId: this.agentId,
-            channelId: this.config.channelId,
-            data: {
-                agentId: this.agentId,
-                originalMessages: originalCount,
-                compactedMessages: compactedCount,
-                timestamp: Date.now(),
-            },
-        });
+        this.eventBus.client.emit(
+            Events.Agent.CONTEXT_COMPACTED,
+            createAgentEventPayload(
+                Events.Agent.CONTEXT_COMPACTED,
+                this.agentId,
+                this.config.channelId,
+                {
+                    agentId: this.agentId,
+                    originalMessages: originalCount,
+                    compactedMessages: compactedCount,
+                    timestamp: Date.now()
+                },
+                { source: 'MxfMemoryManager' }
+            )
+        );
 
         return { originalMessages: originalCount, compactedMessages: compactedCount };
     }
@@ -648,7 +949,19 @@ export class MxfMemoryManager {
         if (semanticSearchEnabled) {
             // Option 1: Server handles indexing with embeddings
             // Emit event to server to index this message
-
+            const metadata: NonNullable<MeilisearchIndexEventData['metadata']> & {
+                message: Pick<ConversationMessage, 'id' | 'role' | 'content' | 'timestamp'>;
+            } = {
+                agentId: this.config.agentId,
+                channelId: this.config.channelId,
+                timestamp: message.timestamp,
+                message: {
+                    id: message.id,
+                    role: message.role,
+                    content: message.content,
+                    timestamp: message.timestamp
+                }
+            };
             const eventData: MeilisearchIndexEventData = {
                 operationId,
                 indexName: 'mxf-conversations',
@@ -656,17 +969,7 @@ export class MxfMemoryManager {
                 documentType: 'conversation',
                 success: true,
                 duration: 0,
-                metadata: {
-                    agentId: this.config.agentId,
-                    channelId: this.config.channelId,
-                    timestamp: message.timestamp,
-                    message: {
-                        id: message.id,
-                        role: message.role,
-                        content: message.content,
-                        timestamp: message.timestamp
-                    }
-                } as any // Extended metadata for indexing request
+                metadata
             };
 
             const payload = createMeilisearchIndexEventPayload(
@@ -677,7 +980,12 @@ export class MxfMemoryManager {
                 { source: 'MxfMemoryManager' }
             );
 
-            this.eventBus.client.emit(MeilisearchEvents.INDEX_REQUEST, payload);
+            await this.awaitMeilisearchOperation(
+                MeilisearchEvents.INDEX_REQUEST,
+                payload,
+                [MeilisearchEvents.INDEX],
+                [MeilisearchEvents.INDEX_ERROR]
+            );
             return;
         }
 
@@ -714,14 +1022,14 @@ export class MxfMemoryManager {
             };
 
             const payload = createMeilisearchIndexEventPayload(
-                'meilisearch:index',
+                MeilisearchEvents.INDEX,
                 this.config.agentId,
                 this.config.channelId,
                 eventData,
                 { source: 'MxfMemoryManager' }
             );
 
-            this.eventBus.client.emit('meilisearch:index', payload);
+            this.eventBus.client.emit(MeilisearchEvents.INDEX, payload);
 
         } catch (error) {
             const duration = Date.now() - startTime;
@@ -743,16 +1051,56 @@ export class MxfMemoryManager {
             };
 
             const payload = createMeilisearchIndexEventPayload(
-                'meilisearch:index:error',
+                MeilisearchEvents.INDEX_ERROR,
                 this.config.agentId,
                 this.config.channelId,
                 eventData,
                 { source: 'MxfMemoryManager' }
             );
 
-            this.eventBus.client.emit('meilisearch:index:error', payload);
+            this.eventBus.client.emit(MeilisearchEvents.INDEX_ERROR, payload);
 
-            this.logger.warn(`Failed to index conversation to Meilisearch: ${error instanceof Error ? error.message : String(error)}`);
+            // The index queue logs the failure once, with the queue's decision.
+            throw error;
+        }
+    }
+
+    /**
+     * Send one backfill batch and await its acknowledgement. A throttled batch
+     * is sent again after the server's retry hint; any other failure propagates
+     * to initialize(), because a missing backfill is a startup problem.
+     */
+    private async sendBackfillBatch(payload: BaseEventPayload<MeilisearchBackfillEventData>): Promise<void> {
+        for (;;) {
+            try {
+                await this.awaitMeilisearchOperation(
+                    MeilisearchEvents.BACKFILL_REQUEST,
+                    payload,
+                    [MeilisearchEvents.BACKFILL_COMPLETE],
+                    [
+                        MeilisearchEvents.BACKFILL_PARTIAL,
+                        MeilisearchEvents.BACKFILL_ERROR
+                    ]
+                );
+                return;
+            } catch (error) {
+                if (error instanceof MeilisearchIndexRejectedError && error.retryAfterMs !== null) {
+                    this.logger.warn(
+                        `Search backfill throttled; retrying batch of ${payload.data.totalDocuments} ` +
+                        `in ${error.retryAfterMs}ms`
+                    );
+                    await this.waitForRetry(error.retryAfterMs);
+                    // stopIndexing() cuts the wait short; the batch must not be resent
+                    // against a connection that is closing.
+                    if (this.indexingStopped !== null) {
+                        throw new MeilisearchTransportUnavailableError(
+                            `Search indexing stopped: ${this.indexingStopped}`
+                        );
+                    }
+                    continue;
+                }
+                throw error;
+            }
         }
     }
 
@@ -761,9 +1109,19 @@ export class MxfMemoryManager {
      * Called when agent memory is loaded from MongoDB
      * @private
      */
-    private async backfillConversationsToMeilisearch(messages: ConversationMessage[]): Promise<void> {
-        if (!this.meilisearchService || messages.length === 0) {
-            return; // Meilisearch not enabled or no messages to backfill
+    private async backfillConversationsToMeilisearch(history: ConversationMessage[]): Promise<void> {
+        if (!this.meilisearchService) {
+            return; // Meilisearch not enabled
+        }
+
+        // Same rule as live indexing: system prompts are framework boilerplate and
+        // a message with no text (a tool-call-only turn) has nothing to search.
+        // The server refuses both, and one refusal fails the whole batch.
+        const messages = history.filter(message =>
+            message.role !== 'system' && message.content.trim().length > 0
+        );
+        if (messages.length === 0) {
+            return; // Nothing to backfill
         }
 
         const operationId = uuidv4();
@@ -773,49 +1131,61 @@ export class MxfMemoryManager {
         const semanticSearchEnabled = process.env.ENABLE_SEMANTIC_SEARCH === 'true';
 
         if (semanticSearchEnabled) {
-            // Option 1: Server handles backfill with embeddings
-            // Emit event to server to backfill these messages
-
-            const eventData: MeilisearchBackfillEventData = {
-                operationId,
-                indexName: 'mxf-conversations',
-                totalDocuments: messages.length,
-                indexedDocuments: 0,
-                failedDocuments: 0,
-                duration: 0,
-                success: true,
-                source: 'mongodb',
-                metadata: {
+            // The authenticated server boundary accepts at most 50 documents per
+            // request. Each batch is correlated and acknowledged before the next is
+            // sent, so a partial/error response is visible to initialize().
+            const semanticBatchSize = 50;
+            for (let index = 0; index < messages.length; index += semanticBatchSize) {
+                const batch = messages.slice(index, index + semanticBatchSize);
+                const batchOperationId = uuidv4();
+                const metadata: NonNullable<MeilisearchBackfillEventData['metadata']> & {
+                    messages: Array<Pick<
+                        ConversationMessage,
+                        'id' | 'role' | 'content' | 'timestamp'
+                    >>;
+                } = {
                     agentId: this.config.agentId,
                     channelId: this.config.channelId,
-                    startTimestamp: messages.length > 0 ? messages[0].timestamp : Date.now(),
-                    endTimestamp: messages.length > 0 ? messages[messages.length - 1].timestamp : Date.now(),
-                    batchSize: 100,
-                    messages: messages.map(m => ({
-                        id: m.id,
-                        role: m.role,
-                        content: m.content,
-                        timestamp: m.timestamp
+                    startTimestamp: batch[0].timestamp,
+                    endTimestamp: batch[batch.length - 1].timestamp,
+                    batchSize: semanticBatchSize,
+                    messages: batch.map(message => ({
+                        id: message.id,
+                        role: message.role,
+                        content: message.content,
+                        timestamp: message.timestamp
                     }))
-                } as any // Extended metadata for backfill request
-            };
+                };
+                const eventData: MeilisearchBackfillEventData & {
+                    documentType: 'conversation';
+                } = {
+                    operationId: batchOperationId,
+                    indexName: 'mxf-conversations',
+                    documentType: 'conversation',
+                    totalDocuments: batch.length,
+                    indexedDocuments: 0,
+                    failedDocuments: 0,
+                    duration: 0,
+                    success: true,
+                    source: 'mongodb',
+                    metadata
+                };
 
-            const payload = createMeilisearchBackfillEventPayload(
-                MeilisearchEvents.BACKFILL_REQUEST,
-                this.config.agentId,
-                this.config.channelId,
-                eventData,
-                { source: 'MxfMemoryManager' }
-            );
+                const payload = createMeilisearchBackfillEventPayload(
+                    MeilisearchEvents.BACKFILL_REQUEST,
+                    this.config.agentId,
+                    this.config.channelId,
+                    eventData,
+                    { source: 'MxfMemoryManager' }
+                );
 
-            this.eventBus.client.emit(MeilisearchEvents.BACKFILL_REQUEST, payload);
+                await this.sendBackfillBatch(payload);
+            }
             return;
         }
 
         // Option 2: SDK handles backfill (keyword search only, no embeddings)
         let indexedCount = 0;
-        let failedCount = 0;
-
 
         try {
             // Index messages in batches to avoid overwhelming Meilisearch
@@ -824,32 +1194,22 @@ export class MxfMemoryManager {
                 const batch = messages.slice(i, i + batchSize);
 
                 for (const message of batch) {
-                    try {
-                        await this.meilisearchService.indexConversation({
-                            id: message.id,
-                            role: message.role,
-                            content: message.content,
-                            timestamp: message.timestamp,
-                            metadata: {
-                                agentId: this.config.agentId,
-                                channelId: this.config.channelId,
-                                ...message.metadata
-                            }
-                        });
-                        indexedCount++;
-                    } catch (error) {
-                        failedCount++;
-                    }
-                }
-
-                // Small delay between batches to be gentle on Meilisearch
-                if (i + batchSize < messages.length) {
-                    await new Promise(resolve => setTimeout(resolve, 100));
+                    await this.meilisearchService.indexConversation({
+                        id: message.id,
+                        role: message.role,
+                        content: message.content,
+                        timestamp: message.timestamp,
+                        metadata: {
+                            agentId: this.config.agentId,
+                            channelId: this.config.channelId,
+                            ...message.metadata
+                        }
+                    });
+                    indexedCount++;
                 }
             }
 
             const duration = Date.now() - startTime;
-            const success = failedCount === 0;
 
             // Emit backfill event
             const eventData: MeilisearchBackfillEventData = {
@@ -857,9 +1217,9 @@ export class MxfMemoryManager {
                 indexName: 'mxf-conversations',
                 totalDocuments: messages.length,
                 indexedDocuments: indexedCount,
-                failedDocuments: failedCount,
+                failedDocuments: 0,
                 duration,
-                success,
+                success: true,
                 source: 'mongodb',
                 metadata: {
                     agentId: this.config.agentId,
@@ -871,14 +1231,14 @@ export class MxfMemoryManager {
             };
 
             const payload = createMeilisearchBackfillEventPayload(
-                success ? 'meilisearch:backfill:complete' : 'meilisearch:backfill:partial',
+                MeilisearchEvents.BACKFILL_COMPLETE,
                 this.config.agentId,
                 this.config.channelId,
                 eventData,
                 { source: 'MxfMemoryManager' }
             );
 
-            this.eventBus.client.emit(success ? 'meilisearch:backfill:complete' : 'meilisearch:backfill:partial', payload);
+            this.eventBus.client.emit(MeilisearchEvents.BACKFILL_COMPLETE, payload);
 
         } catch (error) {
             const duration = Date.now() - startTime;
@@ -902,16 +1262,17 @@ export class MxfMemoryManager {
             };
 
             const payload = createMeilisearchBackfillEventPayload(
-                'meilisearch:backfill:error',
+                MeilisearchEvents.BACKFILL_ERROR,
                 this.config.agentId,
                 this.config.channelId,
                 eventData,
                 { source: 'MxfMemoryManager' }
             );
 
-            this.eventBus.client.emit('meilisearch:backfill:error', payload);
+            this.eventBus.client.emit(MeilisearchEvents.BACKFILL_ERROR, payload);
 
             this.logger.error(`Meilisearch backfill failed: ${error instanceof Error ? error.message : String(error)}`);
+            throw error;
         }
     }
 
@@ -928,7 +1289,7 @@ export class MxfMemoryManager {
             // Start new block after assistant responses that don't have pending tool results
             if (message.role === 'assistant') {
                 // Check if this assistant message has tool_calls
-                const hasToolCalls = (message as any).tool_calls && (message as any).tool_calls.length > 0;
+                const hasToolCalls = (message.tool_calls?.length ?? 0) > 0;
                 
                 if (!hasToolCalls) {
                     // No tool calls, complete this block
@@ -959,42 +1320,34 @@ export class MxfMemoryManager {
     /**
      * Add an observation to the memory
      */
-    public addObservation(observation: Observation): void {
+    public async addObservation(observation: Observation): Promise<void> {
         this.observations.push(observation);
         
         // Trim observations list if it exceeds the maximum limit
         if (this.observations.length > this.config.maxObservations) {
             this.observations = this.observations.slice(-this.config.maxObservations);
         }
-        
-        // Save memory asynchronously
-        this.saveAgentMemory().catch(error => {
-            this.logger.error(`Error saving observations to memory: ${error}`);
-        });
+
+        this.markMemoryDirty();
+        await this.saveAgentMemory();
     }
 
     /**
      * Set current reasoning
      */
-    public setCurrentReasoning(reasoning: Reasoning): void {
+    public async setCurrentReasoning(reasoning: Reasoning): Promise<void> {
         this.currentReasoning = reasoning;
-        
-        // Save memory asynchronously
-        this.saveAgentMemory().catch(error => {
-            this.logger.error(`Error saving reasoning to memory: ${error}`);
-        });
+        this.markMemoryDirty();
+        await this.saveAgentMemory();
     }
 
     /**
      * Set current plan
      */
-    public setCurrentPlan(plan: Plan): void {
+    public async setCurrentPlan(plan: Plan): Promise<void> {
         this.currentPlan = plan;
-        
-        // Save memory asynchronously
-        this.saveAgentMemory().catch(error => {
-            this.logger.error(`Error saving plan to memory: ${error}`);
-        });
+        this.markMemoryDirty();
+        await this.saveAgentMemory();
     }
 
     /**
@@ -1068,20 +1421,20 @@ export class MxfMemoryManager {
         };
 
         const payload = createMeilisearchBackfillEventPayload(
-            'meilisearch:backfill:complete',
+            MeilisearchEvents.BACKFILL_COMPLETE,
             this.config.agentId,
             this.config.channelId,
             eventData,
             { source: 'MxfMemoryManager' }
         );
 
-        this.eventBus.client.emit('meilisearch:backfill:complete', payload);
+        this.eventBus.client.emit(MeilisearchEvents.BACKFILL_COMPLETE, payload);
     }
 
     /**
      * Optimize memory by removing old or less important data
      */
-    public optimizeMemory(): void {
+    public async optimizeMemory(): Promise<void> {
         
         // Trim conversation history more aggressively if needed
         const targetHistorySize = Math.floor(this.config.maxHistory * 0.8);
@@ -1101,10 +1454,9 @@ export class MxfMemoryManager {
         }
         
         
-        // Save optimized memory
-        this.saveAgentMemory().catch(error => {
-            this.logger.error(`Error saving optimized memory: ${error}`);
-        });
+        this.authoritativeConversationHistory = [...this.conversationHistory];
+        this.markMemoryDirty();
+        await this.saveAgentMemory();
     }
 
     /**
@@ -1139,31 +1491,36 @@ export class MxfMemoryManager {
     /**
      * Import memory from backup
      */
-    public async importMemory(memoryData: any): Promise<void> {
-        try {
-            
-            if (memoryData.conversationHistory && Array.isArray(memoryData.conversationHistory)) {
-                this.conversationHistory = memoryData.conversationHistory;
-            }
-            
-            if (memoryData.observations && Array.isArray(memoryData.observations)) {
-                this.observations = memoryData.observations;
-            }
-            
-            if (memoryData.currentReasoning) {
-                this.currentReasoning = memoryData.currentReasoning;
-            }
-            
-            if (memoryData.currentPlan) {
-                this.currentPlan = memoryData.currentPlan;
-            }
-            
-            // Save imported memory
-            await this.saveAgentMemory();
-
-        } catch (error) {
-            this.logger.error(`Error importing memory: ${error}`);
-            throw error;
+    public async importMemory(memoryData: ImportedMemoryData): Promise<void> {
+        if (!memoryData || typeof memoryData !== 'object') {
+            throw new Error('Imported memory must be an object');
         }
+
+        if (memoryData.conversationHistory !== undefined) {
+            if (!Array.isArray(memoryData.conversationHistory)) {
+                throw new Error('Imported conversationHistory must be an array');
+            }
+            this.conversationHistory = [...memoryData.conversationHistory];
+            this.trimConversationHistory();
+            this.authoritativeConversationHistory = [...memoryData.conversationHistory];
+        }
+
+        if (memoryData.observations !== undefined) {
+            if (!Array.isArray(memoryData.observations)) {
+                throw new Error('Imported observations must be an array');
+            }
+            this.observations = memoryData.observations.slice(-this.config.maxObservations);
+        }
+
+        if (memoryData.currentReasoning !== undefined) {
+            this.currentReasoning = memoryData.currentReasoning;
+        }
+
+        if (memoryData.currentPlan !== undefined) {
+            this.currentPlan = memoryData.currentPlan;
+        }
+
+        this.markMemoryDirty();
+        await this.saveAgentMemory();
     }
 }

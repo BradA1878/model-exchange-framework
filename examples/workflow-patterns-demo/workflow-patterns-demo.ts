@@ -12,17 +12,13 @@
  * - Explains its rationale
  *
  * @prerequisites
- * - MXF server running (`npm run dev`)
+ * - MXF server running (`bun run dev`)
  * - Environment variables configured
  *
  * @example
  * ```bash
- * cd examples/workflow-patterns-demo
- * cp .env.example .env
- * npx ts-node workflow-patterns-demo.ts
+ * bun run demo:workflow-patterns
  * ```
- *
- * Run with: npm run demo:workflow-patterns
  */
 
 import { MxfSDK, Events, LlmProviderType } from '@mxf-dev/sdk';
@@ -242,7 +238,7 @@ const createWorkflowAnalysisAgent = async (
         // LLM configuration
         llmProvider: LlmProviderType.OPENROUTER,
         apiKey: process.env.OPENROUTER_API_KEY!,
-        defaultModel: 'anthropic/claude-3.5-sonnet',
+        defaultModel: '~anthropic/claude-sonnet-latest',
         temperature: 0.3,
         maxTokens: 8000,
 

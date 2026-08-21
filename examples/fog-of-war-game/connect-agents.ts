@@ -444,7 +444,7 @@ async function connectAgents() {
         secretKey: adminKey.secretKey,
         llmProvider: LlmProviderType.OPENROUTER,
         apiKey: process.env.OPENROUTER_API_KEY!,
-        defaultModel: 'anthropic/claude-3.5-haiku',
+        defaultModel: '~anthropic/claude-haiku-latest',
         description: 'Admin agent for MCP server registration',
         allowedTools: [
             'game_viewTerritory',
@@ -463,7 +463,7 @@ async function connectAgents() {
     
     console.log('   Registering channel-scoped MCP server (all agents will share this)...\n');
     
-    const mcpResult = await adminAgent.registerChannelMcpServer({
+    const mcpResult = await sdk.registerChannelMcpServer(channelId, {
         id: 'fog-of-war-game-server',
         name: 'Fog of War Game Tools',
         command: 'ts-node',
@@ -731,7 +731,7 @@ async function connectAgents() {
             //    This prevents "Server not found" errors from delayed callbacks
             console.log('🔧 Unregistering channel MCP server...');
             try {
-                await adminAgent.unregisterChannelMcpServer('fog-of-war-game-server');
+                await sdk.unregisterChannelMcpServer(channelId, 'fog-of-war-game-server');
                 console.log('   ✅ Channel MCP server unregistered');
             } catch (error) {
                 console.error(`   ❌ Failed to unregister MCP server:`, error instanceof Error ? error.message : String(error));
@@ -948,14 +948,7 @@ This is Turn 0. Use game_scanPerimeter() IMMEDIATELY to begin revealing the batt
         // STEP 2: Clear conversation history for fresh context
         console.log('   🧹 Clearing agent conversation history for fresh context...');
         for (const agent of agents) {
-            try {
-                const memoryManager = agent.getMemoryManager?.();
-                if (memoryManager && typeof memoryManager.clearConversationHistory === 'function') {
-                    memoryManager.clearConversationHistory();
-                }
-            } catch (error) {
-                // Silently continue if memory manager not available
-            }
+            await agent.getMemoryManager().clearConversationHistory();
         }
         
         // Brief delay to let any remaining operations settle before creating new task
@@ -1040,7 +1033,7 @@ ${turnSummary.actions.length > 10 ? `... and ${turnSummary.actions.length - 10} 
 
     console.log('\n🌐 Access Points:');
     console.log(`   Game Server: http://localhost:${gameServerPort}`);
-    console.log(`   Dashboard: http://localhost:3003 (run: cd client && npm run dev)`);
+    console.log(`   Dashboard: http://localhost:3003 (run: bun run --cwd examples/fog-of-war-game/client dev)`);
     console.log(`   WebSocket: ws://localhost:${gameServerPort}`);
 
     console.log('\n💡 What Happens Next:');

@@ -12,7 +12,7 @@ SystemLLM is a server-side service that handles all AI-powered decision-making a
 - **Channel Independence**: Each channel operates with its own configuration, context, and state
 - **Schema-Enforced**: All outputs validated against JSON schemas
 - **Multi-Provider**: Supports OpenRouter, Gemini, OpenAI, Anthropic, XAI, Ollama
-- **Dynamic Selection**: Automatic model selection based on complexity and budget
+- **Dynamic Selection**: The configured model for an operation can upgrade to a more capable sibling as task complexity increases
 
 ## Architecture
 
@@ -227,35 +227,41 @@ REFLECTION_SCHEMA = {
 
 ### 3. Dynamic Model Selection
 
-SystemLLM automatically selects optimal models based on multiple factors:
+SystemLLM has no built-in model ids. It selects a model for each ORPAR operation
+from what the operator configured, then optionally upgrades that choice based on
+task complexity.
 
 #### Operation-Specific Models
 
-Each ORPAR operation has default models:
+`SYSTEMLLM_DEFAULT_MODEL` is the model for every ORPAR operation — observation,
+reasoning, action, planning, and reflection — unless that operation has its own
+override:
 
-```typescript
-const ORPAR_MODEL_CONFIGS: Record<LlmProviderType, OrparModelConfig> = {
-    [LlmProviderType.OPENROUTER]: {
-        observation: 'google/gemini-2.0-flash-lite-001',     // Fast, cheap
-        reasoning: 'anthropic/claude-3.5-sonnet',            // Advanced reasoning
-        action: 'openai/gpt-4o-mini',                        // Reliable execution
-        planning: 'google/gemini-2.5-pro-preview-05-06',    // Strategic planning
-        reflection: 'anthropic/claude-3.5-sonnet'           // Meta-cognitive
-    },
-    [LlmProviderType.ANTHROPIC]: {
-        observation: 'claude-3-5-haiku-20241022',
-        reasoning: 'claude-3-5-sonnet-20241022',
-        action: 'claude-3-5-haiku-20241022',
-        planning: 'claude-3-5-sonnet-20241022',
-        reflection: 'claude-3-5-sonnet-20241022'
-    }
-    // ... other providers
-};
-```
+| Operation   | Override variable             |
+|-------------|--------------------------------|
+| observation | `SYSTEMLLM_MODEL_OBSERVATION`  |
+| reasoning   | `SYSTEMLLM_MODEL_REASONING`    |
+| action      | `SYSTEMLLM_MODEL_ACTION`       |
+| planning    | `SYSTEMLLM_MODEL_PLANNING`     |
+| reflection  | `SYSTEMLLM_MODEL_REFLECTION`   |
+
+Coordination suggestions are not an ORPAR operation, but they use the observation
+model — they are short, so they use the operation configured for fast, light work.
+
+> **Note:** Model ids change often. The ids in these docs are a snapshot of what was
+> available when they were written; providers add, rename, and retire models all the
+> time. Check your provider's current list before relying on an id — for OpenRouter,
+> <https://openrouter.ai/models>. For Claude on OpenRouter, `~anthropic/claude-opus-latest`,
+> `~anthropic/claude-sonnet-latest`, and `~anthropic/claude-haiku-latest` resolve to the
+> newest release in each family, so they are the ids to use unless you need a specific
+> version. `~anthropic/claude-fable-latest` is the same kind of alias for the top-tier
+> family; it is priced well above the others and nothing in MXF selects it by default.
 
 #### Complexity-Based Upgrades
 
-Models automatically upgrade based on context complexity:
+Models automatically upgrade based on context complexity. The upgrade always
+starts from the model configured for the operation (`SYSTEMLLM_DEFAULT_MODEL`,
+or its per-operation override) — there is no built-in base model to fall back to:
 
 ```typescript
 getModelForOperationWithComplexity(
@@ -279,79 +285,26 @@ getModelForOperationWithComplexity(
 - **Moderate**: 1.2 - 3.0 → Upgraded models
 - **Complex**: > 3.0 → Premium models
 
-**Example Upgrade Paths**:
-```typescript
-// Observation models
-'google/gemini-2.0-flash-lite-001' → {
-    moderate: 'openai/gpt-4o-mini',
-    complex: 'anthropic/claude-3.5-sonnet'
-}
+Upgrades are off unless `SYSTEMLLM_DYNAMIC_MODEL_SELECTION=true`: an upgrade
+changes which model spends the money, so it is the operator's call.
 
-// Reasoning models
-'anthropic/claude-3.5-sonnet' → {
-    moderate: 'anthropic/claude-3.5-sonnet:beta',
-    complex: 'anthropic/claude-3-opus'
-}
+**Upgrade table** (`MODEL_UPGRADES` in `SystemLlmService.ts`, keyed by the
+configured model id; an id with no entry is used as configured). On OpenRouter
+every target is one of the `~anthropic/claude-*-latest` aliases, so a new
+release is picked up at every tier without editing the table:
 
-// Planning models
-'google/gemini-2.5-pro-preview-05-06' → {
-    moderate: 'openai/o1-mini',
-    complex: 'openai/o1-preview'
-}
-```
+| Configured model | moderate | complex |
+|---|---|---|
+| cheap non-Claude (`google/gemini-2.5-flash`, `openai/gpt-5-mini`, `openai/gpt-5-nano`, small Llama/Qwen/Phi) | `~anthropic/claude-haiku-latest` | `~anthropic/claude-sonnet-latest` |
+| mid-tier non-Claude (`openai/gpt-5.2`, `google/gemini-2.5-pro`, 70B Llama, Qwen 32B, Grok, Mistral Large, DeepSeek) | `~anthropic/claude-sonnet-latest` | `~anthropic/claude-opus-latest` |
+| `~anthropic/claude-haiku-latest` and pinned Haiku releases | `~anthropic/claude-sonnet-latest` | `~anthropic/claude-opus-latest` |
+| `~anthropic/claude-sonnet-latest` | `~anthropic/claude-opus-latest` | `~anthropic/claude-opus-latest` |
+| pinned Sonnet releases | `~anthropic/claude-sonnet-latest` | `~anthropic/claude-opus-latest` |
+| `~anthropic/claude-opus-latest` and pinned Opus releases | `~anthropic/claude-opus-latest` | `~anthropic/claude-opus-latest` |
 
-#### Cost-Aware Selection
-
-Select models within budget constraints:
-
-```typescript
-getCostAwareModel(
-    operation: OrparOperationType,
-    context?: OrparContext,
-    budgetTier: 'ULTRA_CHEAP' | 'BUDGET' | 'STANDARD' | 'PREMIUM' | 'ULTRA_PREMIUM'
-): string
-```
-
-**Budget Tiers** (OpenRouter):
-- **ULTRA_CHEAP**: < $0.10/1M tokens (gemini-flash-lite, llama-3.2-3b)
-- **BUDGET**: < $1.00/1M tokens (gpt-4o-mini, claude-haiku)
-- **STANDARD**: < $5.00/1M tokens (claude-sonnet, gpt-4o)
-- **PREMIUM**: < $15.00/1M tokens (gemini-pro, claude-opus)
-- **ULTRA_PREMIUM**: Reasoning models (o1-preview, deepseek-r1)
-
-#### Load-Balanced Selection
-
-Distribute load across providers:
-
-```typescript
-getLoadBalancedModel(
-    operation: OrparOperationType,
-    context?: OrparContext,
-    preferredProviders: string[]
-): string
-```
-
-Rotates through providers based on current hour to distribute load.
-
-#### Specialized Selection
-
-Use specialized models for specific tasks:
-
-```typescript
-getSpecializedModel(
-    operation: OrparOperationType,
-    specialization: 'reasoning' | 'coding' | 'analysis' | 'creative' | 'multilingual' | 'speed',
-    context?: OrparContext
-): string
-```
-
-**Specialization Models**:
-- **Reasoning**: o1-preview, deepseek-r1
-- **Coding**: claude-sonnet, deepseek-r1
-- **Analysis**: claude-opus, claude-sonnet
-- **Creative**: gemini-pro, claude-opus
-- **Multilingual**: qwen-2.5-72b, gemini-pro
-- **Speed**: gemini-flash-lite, gpt-4o-mini
+`~anthropic/claude-fable-latest` is never an upgrade target. Direct-API
+providers (OpenAI, Azure OpenAI, Anthropic) have no latest-resolution aliases
+and keep release ids in their tables; the other providers have no upgrade paths.
 
 ## Configuration
 
@@ -360,24 +313,57 @@ getSpecializedModel(
 SystemLLM can be configured globally via environment variables:
 
 ```env
-# Master switch to enable/disable SystemLLM features
+# Master switch. SystemLLM is on unless this is exactly 'false' — an unset
+# variable means on.
 SYSTEMLLM_ENABLED=true
 
-# Provider for SystemLLM operations
+# Provider for SystemLLM operations. Default: openrouter
 # Options: openrouter, azure-openai, openai, anthropic, gemini, xai, ollama
 SYSTEMLLM_PROVIDER=openrouter
 
-# Default model for SystemLLM (optional - defaults to provider-specific model)
-SYSTEMLLM_DEFAULT_MODEL=google/gemini-2.5-flash
+# Required whenever SystemLLM is on — there is no built-in model. The server
+# refuses to boot without it (and without the provider's credential; see
+# below). Check your provider's current model list before choosing an id.
+SYSTEMLLM_DEFAULT_MODEL=~anthropic/claude-sonnet-latest
 
-# Enable dynamic model selection based on complexity
-# Recommended: true for OpenRouter (access to 200+ models), false for single-model providers
-SYSTEMLLM_DYNAMIC_MODEL_SELECTION=true
+# Optional per-operation overrides. Each, when set, replaces the default
+# model for that one ORPAR operation; coordination suggestions use the
+# observation model. A variable that is set but blank is a boot error.
+# SYSTEMLLM_MODEL_OBSERVATION=
+# SYSTEMLLM_MODEL_REASONING=
+# SYSTEMLLM_MODEL_ACTION=
+# SYSTEMLLM_MODEL_PLANNING=
+# SYSTEMLLM_MODEL_REFLECTION=
+
+# Complexity-based upgrades into the latest Claude aliases (see the upgrade
+# table above). Off by default for every provider; set to true to enable.
+# SYSTEMLLM_DYNAMIC_MODEL_SELECTION=true
+
+# Hard daily spend ceiling in USD. Calls are refused once spend reaches this.
+# Default: 10
+SYSTEMLLM_DAILY_BUDGET_USD=10
+
+# Fraction of the ceiling at which a warning is logged. Default: 0.8
+SYSTEMLLM_BUDGET_WARN_AT=0.8
 ```
 
+Boot fails fast when SystemLLM is on and misconfigured. Missing
+`SYSTEMLLM_DEFAULT_MODEL` fails with:
+
+```
+Missing required environment variable SYSTEMLLM_DEFAULT_MODEL. SystemLLM is on
+and has no built-in model. Set the model it should use (for example
+~anthropic/claude-sonnet-latest on OpenRouter), or set SYSTEMLLM_ENABLED=false.
+```
+
+A missing provider credential (`OPENROUTER_API_KEY`, `OPENAI_API_KEY`,
+`ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `XAI_API_KEY`, or the three
+`AZURE_OPENAI_*` variables for azure-openai; ollama needs none) fails the same
+way. There is no way to opt out of these checks short of `SYSTEMLLM_ENABLED=false`.
+
 **Dynamic Model Selection**:
-- When `true`: SystemLLM automatically selects models based on task complexity (simple/moderate/complex)
-- When `false`: Uses the default model for all operations (saves overhead for single-model providers)
+- When `true`: the model configured for an operation can upgrade to a more capable sibling based on task complexity (simple/moderate/complex)
+- When `false`: uses each operation's configured model as-is, with no upgrade attempt
 - Default: `true` for OpenRouter, `false` for other providers
 
 **Provider-Specific Examples**:
@@ -390,10 +376,12 @@ SYSTEMLLM_DEFAULT_MODEL=gpt-4o-mini
 SYSTEMLLM_DYNAMIC_MODEL_SELECTION=false
 AZURE_OPENAI_API_KEY=your-key
 AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com/
+AZURE_OPENAI_DEPLOYMENT_NAME=your-deployment-name
 
-# OpenRouter Example (multi-model, with dynamic selection)
+# OpenRouter Example (one configured model; upgrades opted in)
 SYSTEMLLM_ENABLED=true
 SYSTEMLLM_PROVIDER=openrouter
+SYSTEMLLM_DEFAULT_MODEL=~anthropic/claude-sonnet-latest
 SYSTEMLLM_DYNAMIC_MODEL_SELECTION=true
 OPENROUTER_API_KEY=your-key
 ```
@@ -403,7 +391,7 @@ OPENROUTER_API_KEY=your-key
 ```typescript
 interface SystemLlmServiceConfig {
     providerType?: LlmProviderType;
-    defaultModel?: string;
+    defaultModel: string;  // Required — there is no built-in model
     defaultTemperature?: number;
     defaultMaxTokens?: number;
     orparModels?: Partial<OrparModelConfig>;
@@ -411,14 +399,15 @@ interface SystemLlmServiceConfig {
     enableDynamicModelSelection?: boolean;  // Control complexity-based model switching
 }
 
-// Example - Code-based configuration (overrides environment variables)
-const service = new SystemLlmService({
+// Example - Code-based configuration (overrides environment variables).
+// A service is owned by one channel; the manager normally constructs it.
+const service = new SystemLlmService('channel-id', {
     providerType: LlmProviderType.OPENROUTER,
-    defaultModel: 'anthropic/claude-3.5-sonnet',
+    defaultModel: '~anthropic/claude-sonnet-latest',
     defaultTemperature: 0.3,
     defaultMaxTokens: 2000,
     orparModels: {
-        reasoning: 'anthropic/claude-3-opus',  // Override for complex reasoning
+        reasoning: '~anthropic/claude-opus-latest',  // Override for complex reasoning
         planning: 'openai/o1-preview'          // Override for strategic planning
     },
     enableRealTimeCoordination: true,
@@ -663,9 +652,9 @@ async sendLlmRequestWithRecovery(
 ```typescript
 import { SystemLlmService } from './src/server/socket/services/SystemLlmService';
 
-const systemLlm = new SystemLlmService({
+const systemLlm = new SystemLlmService('channel-id', {
     providerType: LlmProviderType.OPENROUTER,
-    defaultModel: 'anthropic/claude-3.5-sonnet'
+    defaultModel: '~anthropic/claude-sonnet-latest'
 });
 
 // Process observations
@@ -682,10 +671,14 @@ systemLlm.processObservationData(observations).subscribe({
 ### ORPAR Cycle Integration
 
 ```typescript
-// In ControlLoop.ts
+// In ControlLoop.ts — the manager owns one service per channel and returns
+// null when SystemLLM is off for that channel.
 async processObservations(observations: Observation[]): Promise<Reasoning | null> {
-    const systemLlmService = new SystemLlmService();
-    
+    const systemLlmService = SystemLlmServiceManager.getInstance().getServiceForChannel(this.channelId);
+    if (!systemLlmService) {
+        return null;
+    }
+
     try {
         const analysis = await lastValueFrom(
             systemLlmService.processObservationData(observations, this.context)
@@ -748,10 +741,10 @@ const prodChannel = manager.getServiceForChannel('prod-channel', {
 
 ### 1. Model Selection
 
-- **Use defaults** for most cases - they're optimized for cost/performance
-- **Override strategically** only when you have specific requirements
-- **Monitor complexity** scores to understand upgrade patterns
-- **Budget wisely** using cost-aware selection for production
+- **Set `SYSTEMLLM_DEFAULT_MODEL`** — there is no built-in model, and the server will not start without it
+- **Override per operation** only when one ORPAR phase genuinely needs a different model
+- **Monitor complexity** scores to understand when the upgrade table swaps in a more capable model
+- **Watch the daily budget** (`SYSTEMLLM_DAILY_BUDGET_USD`) — calls are refused once it's spent
 
 ### 2. Prompt Engineering
 
@@ -821,7 +814,7 @@ SystemLLM Service is the AI intelligence backbone of MXF, providing:
 
 1. **Centralized AI Operations**: Single service for all server-side AI needs
 2. **ORPAR Integration**: Powers all five cognitive cycle phases
-3. **Dynamic Model Selection**: Automatic optimization based on complexity and budget
+3. **Dynamic Model Selection**: The configured model for an operation can upgrade to a more capable sibling as task complexity increases
 4. **JSON Schema Enforcement**: Structured, validated outputs
 5. **Multi-Provider Support**: Works with all major LLM providers
 6. **Performance Optimization**: Batch processing, parallel execution, caching

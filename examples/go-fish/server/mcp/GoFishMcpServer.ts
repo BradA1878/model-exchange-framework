@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
- * Go Fish MCP Server (HTTP-based)
+ * Go Fish MCP stdio adapter
  *
- * Implements MCP protocol (JSON-RPC over stdio) for game tools.
+ * Implements MCP over stdio and proxies game actions to the game HTTP API.
  */
 
 const GAME_SERVER_URL = process.env.GAME_SERVER_URL || 'http://localhost:3006';

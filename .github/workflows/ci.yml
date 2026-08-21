@@ -1,6 +1,7 @@
 name: CI
 
-# Build, typecheck and unit-test every push and pull request.
+# Build, lint changed code, validate migrations, and unit-test every push and
+# pull request.
 #
 # Needs no server, no Docker and no secrets: the unit suite is hermetic and the
 # integration suite (which does need a running server) is deliberately excluded.
@@ -17,15 +18,26 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
+env:
+  NODE_ENV: test
+  SYSTEMLLM_ENABLED: 'false'
+  MXF_TEST_ALLOW_EXTERNAL_LLM_CALLS: 'false'
+
 jobs:
   verify:
-    name: Build, typecheck, unit tests
+    name: Build, quality gates, unit tests
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
 
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
@@ -35,19 +47,27 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      # Compiles the server and both workspace packages, and emits the .d.ts
-      # files that the CLI typecheck below resolves @mxf-dev/* against.
-      - name: Build (tsc -b)
-        run: bunx tsc -b
+      # Builds the server and workspace packages, then typechecks the CLI/TUI
+      # source that Bun executes directly.
+      - name: Build and typecheck all runtime surfaces
+        run: bun run build
 
-      # The Ink TUI is excluded from the root tsconfig (it is never compiled —
-      # Bun runs it from source), so without this step its type errors only ever
-      # surface at runtime.
-      - name: Typecheck CLI + TUI
-        run: bun run typecheck:cli
+      - name: Verify packed SDK public contract
+        run: bun run verify:sdk-package
+
+      - name: Lint changed TypeScript lines
+        env:
+          MXF_LINT_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: bun run lint:changed
+
+      - name: Validate migration manifest
+        run: bun run check:migrations
+
+      - name: Validate demo launch contracts
+        run: bun run check:demos
 
       - name: Unit + property tests
-        run: bun run test:unit
+        run: bun run test:unit:ci
 
   # Mutation testing is slow (~3 min) and gated on thresholds.break in
   # stryker.config.json, so it runs on demand rather than on every push.
@@ -60,6 +80,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
@@ -80,16 +102,10 @@ jobs:
           path: reports/mutation/
           retention-days: 14
 
-# Why there is no lint step:
+# Why lint is scoped to changed lines:
 #
 # `bun run lint` (eslint .) currently reports ~4,600 pre-existing errors, almost
 # all @typescript-eslint/no-explicit-any (~3,300) and no-unused-vars (~1,000),
-# spread across packages/, src/, examples/ and tests/. A blocking lint step would
-# make CI permanently red; a continue-on-error one would be a gate that can never
-# fail. Neither is worth having.
-#
-# Fix that debt — or recalibrate the severities in .eslintrc.js to match how the
-# codebase is actually written — and then add:
-#
-#   - name: Lint
-#     run: bun run lint
+# spread across packages/, src/, examples/ and tests/. The changed-line gate is
+# blocking for both errors and warnings, so new work cannot add to that debt.
+# Replace it with `bun run lint` once the legacy findings reach zero.

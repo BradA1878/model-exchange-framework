@@ -84,19 +84,16 @@ describe('Tool Execution', () => {
             expect(result).toBeDefined();
         });
 
-        it('should allow all tools when allowedTools is empty array', async () => {
+        it('should deny tool execution when allowedTools is an empty array', async () => {
             const agent = await testSdk.createAndConnectAgent(channelId, {
-                name: 'Unrestricted Agent',
-                allowedTools: [], // Empty array = allow all tools
-                agentConfigPrompt: 'Test agent with all tools allowed'
+                name: 'Deny All Agent',
+                allowedTools: [],
+                agentConfigPrompt: 'Test agent with no tools allowed'
             });
 
-            // Empty allowedTools means all tools are available
-            const result = await agent.executeTool('tool_help', {
+            await expect(agent.executeTool('tool_help', {
                 toolName: 'messaging_send'
-            });
-
-            expect(result).toBeDefined();
+            })).rejects.toThrow();
         });
     });
 

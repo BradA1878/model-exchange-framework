@@ -26,13 +26,13 @@ const agent = await sdk.createAgent({
     keyId: process.env.AGENT_KEY_ID!,
     secretKey: process.env.AGENT_SECRET_KEY!,
     llmProvider: 'openrouter',
-    defaultModel: 'anthropic/claude-3.5-sonnet',
+    defaultModel: '~anthropic/claude-sonnet-latest',
     apiKey: process.env.OPENROUTER_API_KEY!
 });
 await agent.connect();
 
 // Execute simple code
-const result = await agent.callTool('code_execute', {
+const result = await agent.executeTool('code_execute', {
     code: 'return 1 + 1;'
 });
 
@@ -44,7 +44,7 @@ console.log(result.output);  // 2
 Pass data to your code via the `context` parameter:
 
 ```typescript
-const result = await agent.callTool('code_execute', {
+const result = await agent.executeTool('code_execute', {
     code: `
         const total = context.numbers.reduce((a, b) => a + b, 0);
         return total / context.numbers.length;
@@ -60,7 +60,7 @@ console.log(result.output);  // 30 (average)
 ### TypeScript Execution
 
 ```typescript
-const result = await agent.callTool('code_execute', {
+const result = await agent.executeTool('code_execute', {
     language: 'typescript',
     code: `
         interface Result {
@@ -119,7 +119,7 @@ interface CodeExecuteOutput {
 
 ```typescript
 // Instead of multiple tool calls with model round-trips
-const result = await agent.callTool('code_execute', {
+const result = await agent.executeTool('code_execute', {
     code: `
         const filtered = context.data
             .filter(item => item.score > 0.8)
@@ -146,7 +146,7 @@ const result = await agent.callTool('code_execute', {
 ### Multi-Step Calculations
 
 ```typescript
-const result = await agent.callTool('code_execute', {
+const result = await agent.executeTool('code_execute', {
     code: `
         // Step 1: Calculate metrics
         const total = context.values.reduce((a, b) => a + b, 0);
@@ -178,7 +178,7 @@ const result = await agent.callTool('code_execute', {
 ### Conditional Logic
 
 ```typescript
-const result = await agent.callTool('code_execute', {
+const result = await agent.executeTool('code_execute', {
     code: `
         let action = 'none';
         let priority = 0;
@@ -208,7 +208,7 @@ const result = await agent.callTool('code_execute', {
 ### Iterative Operations
 
 ```typescript
-const result = await agent.callTool('code_execute', {
+const result = await agent.executeTool('code_execute', {
     code: `
         const processed = [];
         let skipped = 0;
@@ -250,7 +250,7 @@ const result = await agent.callTool('code_execute', {
 
 ```typescript
 try {
-    const result = await agent.callTool('code_execute', {
+    const result = await agent.executeTool('code_execute', {
         code: yourCode
     });
 
@@ -275,7 +275,7 @@ try {
 ```typescript
 // This will throw before execution
 try {
-    await agent.callTool('code_execute', {
+    await agent.executeTool('code_execute', {
         code: 'eval("dangerous")'  // ❌ Blocked by pattern detection
     });
 } catch (error) {
@@ -287,7 +287,7 @@ try {
 ### Timeout Handling
 
 ```typescript
-const result = await agent.callTool('code_execute', {
+const result = await agent.executeTool('code_execute', {
     code: 'while(true) {}',
     timeout: 2000
 });
@@ -302,7 +302,7 @@ console.log(result.error);                 // "Script execution timed out"
 Capture console.log for debugging:
 
 ```typescript
-const result = await agent.callTool('code_execute', {
+const result = await agent.executeTool('code_execute', {
     code: `
         console.log('Starting process...');
         const result = Math.sqrt(144);
@@ -322,7 +322,7 @@ console.log(result.output);
 Disable console capture for better performance:
 
 ```typescript
-const result = await agent.callTool('code_execute', {
+const result = await agent.executeTool('code_execute', {
     code: 'return expensive_calculation();',
     captureConsole: false  // logs will be undefined
 });
@@ -351,17 +351,17 @@ const result = await agent.callTool('code_execute', {
 
 ```typescript
 // ✅ GOOD: Process data locally
-const result = await agent.callTool('code_execute', {
+const result = await agent.executeTool('code_execute', {
     code: 'return context.data.filter(d => d.score > 0.8);',
     context: { data: largeArray }
 });
 
 // ❌ BAD: Multiple tool calls through model
-const search = await agent.callTool('memory_search', { query: '...' });
+const search = await agent.executeTool('memory_search', { query: '...' });
 // ... wait for model response ...
-const filtered = await agent.callTool('filter_data', { data: search.results });
+const filtered = await agent.executeTool('filter_data', { data: search.results });
 // ... wait for model response ...
-const sorted = await agent.callTool('sort_data', { data: filtered });
+const sorted = await agent.executeTool('sort_data', { data: filtered });
 ```
 
 ### Latency Comparison
@@ -473,7 +473,7 @@ docker build -t mxf/code-executor:latest ./docker/code-executor
 **Solution:**
 ```typescript
 // Increase timeout
-await agent.callTool('code_execute', {
+await agent.executeTool('code_execute', {
     code: complexOperation,
     timeout: 15000  // 15 seconds
 });
@@ -536,12 +536,12 @@ Pass sensitive data via context (never hardcode):
 
 ```typescript
 // ❌ BAD: Hardcoded secret
-await agent.callTool('code_execute', {
+await agent.executeTool('code_execute', {
     code: 'const apiKey = "sk-123456"; return callApi(apiKey);'
 });
 
 // ✅ GOOD: Pass via context
-await agent.callTool('code_execute', {
+await agent.executeTool('code_execute', {
     code: 'return callApi(context.apiKey);',
     context: {
         apiKey: process.env.API_KEY
@@ -582,7 +582,7 @@ Comprehensive code execution with error handling:
 ```typescript
 async function processData(agent: MxfClient, rawData: any[]) {
     try {
-        const result = await agent.callTool('code_execute', {
+        const result = await agent.executeTool('code_execute', {
             language: 'javascript',
             code: `
                 console.log('Processing', context.data.length, 'items');

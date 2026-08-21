@@ -1,13 +1,24 @@
 # External MCP Server Registration Example
 
-This example demonstrates how to dynamically register external MCP servers via the SDK, making custom tools available to all agents in your MXF deployment.
+This example shows how an administrator can register a child-process MCP server and
+make its tools available to authorized agents.
+
+## Security requirements
+
+Runtime registration requires an administrator-authenticated `MxfSDK` connection
+and `MXF_UNSAFE_STDIO_MCP_ENABLED=true` on the MXF server. The flag is disabled by
+default because the supplied command runs on the MXF host. Agent keys cannot start
+or stop MCP processes.
+
+MXF currently implements runtime MCP registration over child-process `stdio` only.
+HTTP MCP endpoints and URL-based registration are not supported.
 
 ## Overview
 
 External MCP server registration allows you to:
 
 - Add custom tools at runtime without server restart
-- Integrate third-party MCP servers (npm packages)
+- Integrate third-party MCP packages
 - Create domain-specific tooling for your agents
 - Manage server lifecycle programmatically
 
@@ -18,7 +29,7 @@ External MCP server registration allows you to:
 | Scope | Method | Availability |
 |-------|--------|--------------|
 | Global | `sdk.registerExternalMcpServer()` | All agents, all channels |
-| Channel | `agent.registerChannelMcpServer()` | Agents in specific channel only |
+| Channel | `sdk.registerChannelMcpServer(channelId, config)` | Authorized agents in one channel |
 
 This example focuses on **global registration**. See [Channel MCP Registration](channel-mcp.md) for channel-scoped servers.
 
@@ -88,13 +99,12 @@ await server.connect(transport);
 ### 2. Register via SDK
 
 ```typescript
-import { MxfSDK } from '@mxf-dev/sdk';
+import { LlmProviderType, MxfSDK } from '@mxf-dev/sdk';
 
 const sdk = new MxfSDK({
     serverUrl: 'http://localhost:3001',
     domainKey: process.env.MXF_DOMAIN_KEY!,
-    username: 'admin',
-    password: 'admin-password'
+    accessToken: process.env.MXF_ADMIN_ACCESS_TOKEN!
 });
 
 await sdk.connect();
@@ -103,15 +113,16 @@ await sdk.connect();
 const result = await sdk.registerExternalMcpServer({
     id: 'simple-custom-server',
     name: 'Simple Custom Server',
-    command: 'npx',
-    args: ['tsx', './simple-custom-mcp-server.ts'],
+    transport: 'stdio',
+    command: 'bun',
+    args: ['run', './simple-custom-mcp-server.ts'],
     autoStart: true,
     restartOnCrash: true,
     maxRestartAttempts: 3
 });
 
 console.log('Registration result:', result);
-// { success: true, toolsDiscovered: ['reverse_string', 'uppercase'] }
+// { toolsDiscovered: ['reverse_string', 'uppercase'] }
 ```
 
 ### 3. Use the Tools
@@ -121,12 +132,17 @@ console.log('Registration result:', result);
 const agent = await sdk.createAgent({
     agentId: 'tool-user',
     name: 'Tool User Agent',
-    provider: 'openrouter',
-    model: 'anthropic/claude-haiku-4.5'
+    channelId: 'tool-testing',
+    keyId: process.env.TOOL_USER_KEY_ID!,
+    secretKey: process.env.TOOL_USER_SECRET_KEY!,
+    llmProvider: LlmProviderType.OPENROUTER,
+    defaultModel: '~anthropic/claude-haiku-latest'
 });
 
+await agent.connect();
+
 // Tools are automatically available
-const tools = await agent.getAvailableTools();
+const tools = await agent.listTools();
 console.log('Available tools:', tools.map(t => t.name));
 // Includes 'reverse_string', 'uppercase', plus all built-in tools
 
@@ -156,12 +172,10 @@ interface ExternalServerConfig {
     name: string;         // Display name
 
     // Transport: stdio (default)
-    command?: string;     // Executable (e.g., 'npx', 'node')
+    command?: string;     // Executable (for example, 'bun' or 'bunx')
     args?: string[];      // Command arguments
 
-    // Transport: http
-    transport?: 'stdio' | 'http';
-    url?: string;         // HTTP endpoint for http transport
+    transport?: 'stdio'; // The only supported runtime transport
 
     // Lifecycle
     autoStart?: boolean;          // Start immediately (default: true)
@@ -173,19 +187,19 @@ interface ExternalServerConfig {
 }
 ```
 
-Registration resolves after the MCP handshake and tool discovery, so a resolved call means the discovered tools are in the registry. An unexpected exit — including a clean `exit 0` — is logged at error level and removes the server's tools from the registry; with `restartOnCrash` the server restarts and re-discovers its tools, and a completed startup resets the restart count. Exhausting `maxRestartAttempts` unregisters the server, so re-register it to get its tools back. See [External MCP Server Registration](../sdk/external-mcp-servers.md#server-lifecycle-errors) for the full lifecycle rules.
+Registration resolves after the MCP handshake and tool discovery, so a resolved call means the discovered tools are in the registry. An unexpected exit — including a clean `exit 0` — is logged at error level and removes the server's tools from the registry; with `restartOnCrash` the server restarts and re-discovers its tools, and a completed startup resets the restart count. Exhausting `maxRestartAttempts` unregisters the server, so re-register it to get its tools back. See [External MCP Server Registration](../sdk/external-mcp-servers.md#lifecycle-behavior) for the full lifecycle rules.
 
-## Using npm Packages
+## Using registry packages
 
-You can register any npm MCP package:
+You can register an MCP package through `bunx`:
 
 ```typescript
 // Example: Register the official filesystem MCP server
 await sdk.registerExternalMcpServer({
     id: 'filesystem',
     name: 'Filesystem Server',
-    command: 'npx',
-    args: ['-y', '@modelcontextprotocol/server-filesystem', '/allowed/path'],
+    command: 'bunx',
+    args: ['@modelcontextprotocol/server-filesystem', '/allowed/path'],
     autoStart: true
 });
 ```
@@ -195,25 +209,21 @@ await sdk.registerExternalMcpServer({
 ```typescript
 try {
     const result = await sdk.registerExternalMcpServer(config);
-
-    if (!result.success) {
-        console.error('Registration failed');
-    }
+    console.log('Registered tools:', result.toolsDiscovered);
 } catch (error) {
-    if (error.message.includes('timeout')) {
-        console.error('Server did not start within 30 seconds');
-    } else {
-        console.error('Registration error:', error.message);
-    }
+    console.error('Registration failed:', error);
 }
 ```
+
+There is no `success` property. Failure rejects the promise; do not continue as if
+the tools exist after a rejection.
 
 ## Best Practices
 
 1. **Use unique IDs** - Server IDs must be unique across the system
 2. **Handle cleanup** - Always unregister servers when shutting down
 3. **Set resource limits** - Use `maxRestartAttempts` to prevent infinite restart loops
-4. **Test locally first** - Verify your MCP server works before registering
+4. **Enable registration deliberately** - Keep the server-side opt-in disabled on hosts that do not need it
 5. **Use environment variables** - Pass secrets via `environmentVariables`, not args
 
 ## Source Code

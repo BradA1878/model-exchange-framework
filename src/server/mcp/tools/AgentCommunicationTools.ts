@@ -29,7 +29,6 @@
  */
 
 import { createAgentMessage, createChannelMessage } from '@mxf-dev/core/schemas/MessageSchemas';
-import { AgentId, ChannelId } from '@mxf-dev/core/types/ChannelContext';
 import { Logger } from '@mxf-dev/core/utils/Logger';
 import { COMMUNICATION_TOOLS } from '@mxf-dev/core/constants/ToolNames';
 import { AgentService } from '../../socket/services/AgentService';
@@ -39,8 +38,18 @@ import { createAgentMessageEventPayload, createChannelMessageEventPayload, creat
 import { MxpMiddleware } from '@mxf-dev/core/middleware/MxpMiddleware';
 import { isMxpMessage } from '@mxf-dev/core/schemas/MxpProtocolSchemas';
 import { McpToolHandlerContext, McpToolHandlerResult, McpToolResultContent } from '@mxf-dev/core/protocols/mcp/McpServerTypes';
+import {
+    requireChannelParticipants,
+    requireCurrentChannelParticipant,
+    requireExactToolTenantContext
+} from './helpers/toolTenantContext';
 
 const logger = new Logger('info', 'AgentCommunicationTools', 'server');
+
+type MxpMessageCandidate = Parameters<typeof MxpMiddleware.processOutgoing>[0];
+
+const hasMxpMessageFormat = (value: unknown): boolean =>
+    isMxpMessage(value as MxpMessageCandidate);
 
 /**
  * MCP Tool: messaging_send
@@ -103,10 +112,10 @@ export const agentMessageTool = {
     
     handler: async (input: {
         targetAgentId: string;
-        message: any;
+        message: unknown;
         messageType?: string;
         priority?: number;
-        metadata?: Record<string, any>;
+        metadata?: Record<string, unknown>;
         mxpOptions?: {
             enableMxp?: boolean;
             preferredFormat?: 'mxp' | 'natural-language' | 'auto';
@@ -114,34 +123,28 @@ export const agentMessageTool = {
         };
     }, context: McpToolHandlerContext): Promise<McpToolHandlerResult> => {
         try {
-            // CRITICAL VALIDATION: Check if target agent exists before processing
-            const agentService = AgentService.getInstance();
-            if (!agentService.agentExists(input.targetAgentId)) {
-                // Get list of available agents dynamically
-                const availableAgents = Array.from(agentService.getAllAgents().keys());
-                const agentList = availableAgents.length > 0 
-                    ? availableAgents.join(', ') 
-                    : 'No agents currently connected';
-                throw new Error(`Agent '${input.targetAgentId}' does not exist. Available agents: ${agentList}`);
-            }
+            const { agentId, channelId } = requireExactToolTenantContext(context);
+            requireCurrentChannelParticipant(channelId, agentId);
+            requireChannelParticipants(channelId, [input.targetAgentId]);
 
             // MESSAGE CONTENT: Allow any format (natural language, JSON, structured data, etc.)
             // LLM agents can handle and understand various message formats effectively
             // Process message through MXP middleware if enabled
             let processedMessage = input.message;
             let mxpProcessed = false;
-            
+            const forceEncryption = input.mxpOptions?.forceEncryption ?? false;
             const mxpOptions = {
-                enableMxp: input.mxpOptions?.enableMxp ?? false,
+                enableMxp: forceEncryption || (input.mxpOptions?.enableMxp ?? false),
                 preferredFormat: input.mxpOptions?.preferredFormat ?? 'auto',
-                forceEncryption: input.mxpOptions?.forceEncryption ?? false
+                forceEncryption
             };
             
             // Check if MXP processing should be applied
             if (mxpOptions.enableMxp) {
                 try {
                     // If message is already MXP or should be converted
-                    if (isMxpMessage(input.message) || 
+                    if (mxpOptions.forceEncryption ||
+                        hasMxpMessageFormat(input.message) ||
                         mxpOptions.preferredFormat === 'mxp' ||
                         (mxpOptions.preferredFormat === 'auto' && 
                          typeof input.message === 'string' && 
@@ -155,25 +158,23 @@ export const agentMessageTool = {
                         };
                         
                         processedMessage = await MxpMiddleware.processOutgoing(
-                            input.message,
-                            context.agentId!,
+                            input.message as MxpMessageCandidate,
+                            agentId,
                             middlewareOptions
                         );
                         
-                        mxpProcessed = isMxpMessage(processedMessage);
-                        
-                        if (mxpProcessed) {
-                        }
+                        mxpProcessed = hasMxpMessageFormat(processedMessage);
                     }
                 } catch (mxpError) {
-                    logger.warn(`MXP processing failed, using original message: ${mxpError}`);
-                    // Continue with original message
+                    throw new Error(
+                        `MXP processing failed: ${mxpError instanceof Error ? mxpError.message : String(mxpError)}`
+                    );
                 }
             }
             
             // Create standardized agent message using existing schema
             const agentMessage = createAgentMessage(
-                context.agentId!,
+                agentId,
                 input.targetAgentId,
                 processedMessage,
                 {
@@ -183,9 +184,9 @@ export const agentMessageTool = {
                         correlationId: context.requestId
                     },
                     context: {
+                        ...input.metadata,
                         messageType: input.messageType || 'direct',
-                        requestId: context.requestId,
-                        ...input.metadata
+                        requestId: context.requestId
                     }
                 }
             );
@@ -193,8 +194,8 @@ export const agentMessageTool = {
             // Emit agent message event using existing infrastructure
             const payload = createAgentMessageEventPayload(
                 Events.Message.AGENT_MESSAGE,
-                context.agentId!,
-                context.channelId!,
+                agentId,
+                channelId,
                 agentMessage
             );
 
@@ -205,10 +206,9 @@ export const agentMessageTool = {
                 type: 'application/json',
                 data: {
                     messageId: agentMessage.metadata.messageId,
-                    sent: true,
+                    eventEmitted: true,
                     timestamp: agentMessage.metadata.timestamp,
                     targetAgent: input.targetAgentId,
-                    guidance: `Message successfully sent to ${input.targetAgentId}. They will receive it and respond if needed. If you expect a reply, wait for their response.`,
                     mxpProcessed
                 }
             };
@@ -291,10 +291,10 @@ export const agentBroadcastTool = {
     handler: async (input: {
         targetChannelId?: string;
         targetAgentIds?: string[];
-        message: any;
+        message: unknown;
         messageType?: string;
         excludeSelf?: boolean;
-        metadata?: Record<string, any>;
+        metadata?: Record<string, unknown>;
         mxpOptions?: {
             enableMxp?: boolean;
             preferredFormat?: 'mxp' | 'natural-language' | 'auto';
@@ -302,30 +302,48 @@ export const agentBroadcastTool = {
         };
     }, context: McpToolHandlerContext): Promise<McpToolHandlerResult> => {
         try {
-            const deliveredTo: string[] = [];
+            const { agentId, channelId } = requireExactToolTenantContext(
+                context,
+                input.targetChannelId
+            );
+            requireCurrentChannelParticipant(channelId, agentId);
+            const emittedFor: string[] = [];
             let messageId: string;
             const timestamp = Date.now();
             let mxpProcessed = false;
-            
-            // If no targetChannelId or targetAgentIds specified, default to broadcasting to current channel
-            if (!input.targetChannelId && (!input.targetAgentIds || input.targetAgentIds.length === 0)) {
-                input.targetChannelId = context.channelId;
+
+            if (input.targetChannelId !== undefined && input.targetAgentIds?.length) {
+                throw new Error('Specify either targetChannelId or targetAgentIds, not both');
             }
+
+            const isChannelBroadcast = input.targetChannelId !== undefined
+                || !input.targetAgentIds
+                || input.targetAgentIds.length === 0;
+            const excludeSelf = input.excludeSelf ?? true;
+            const filteredTargets = !isChannelBroadcast
+                ? (excludeSelf
+                    ? input.targetAgentIds!.filter(id => id !== agentId)
+                    : input.targetAgentIds!)
+                : [];
+            const targetAgentIds = isChannelBroadcast
+                ? []
+                : requireChannelParticipants(channelId, filteredTargets);
             
             // Process message through MXP middleware if enabled
             let processedMessage = input.message;
-            
+            const forceEncryption = input.mxpOptions?.forceEncryption ?? false;
             const mxpOptions = {
-                enableMxp: input.mxpOptions?.enableMxp ?? false,
+                enableMxp: forceEncryption || (input.mxpOptions?.enableMxp ?? false),
                 preferredFormat: input.mxpOptions?.preferredFormat ?? 'auto',
-                forceEncryption: input.mxpOptions?.forceEncryption ?? false
+                forceEncryption
             };
             
             // Check if MXP processing should be applied
             if (mxpOptions.enableMxp) {
                 try {
                     // If message is already MXP or should be converted
-                    if (isMxpMessage(input.message) || 
+                    if (mxpOptions.forceEncryption ||
+                        hasMxpMessageFormat(input.message) ||
                         mxpOptions.preferredFormat === 'mxp' ||
                         (mxpOptions.preferredFormat === 'auto' && 
                          typeof input.message === 'string' && 
@@ -339,38 +357,36 @@ export const agentBroadcastTool = {
                         };
                         
                         processedMessage = await MxpMiddleware.processOutgoing(
-                            input.message,
-                            context.agentId!,
+                            input.message as MxpMessageCandidate,
+                            agentId,
                             middlewareOptions
                         );
                         
-                        mxpProcessed = isMxpMessage(processedMessage);
-                        
-                        if (mxpProcessed) {
-                        }
+                        mxpProcessed = hasMxpMessageFormat(processedMessage);
                     }
                 } catch (mxpError) {
-                    logger.warn(`MXP processing failed for broadcast, using original message: ${mxpError}`);
-                    // Continue with original message
+                    throw new Error(
+                        `MXP processing failed: ${mxpError instanceof Error ? mxpError.message : String(mxpError)}`
+                    );
                 }
             }
 
-            if (input.targetChannelId) {
+            if (isChannelBroadcast) {
                 // Channel broadcast using existing channel message infrastructure
                 const channelMessage = createChannelMessage(
-                    input.targetChannelId,
-                    context.agentId!,
+                    channelId,
+                    agentId,
                     processedMessage,
                     {
                         metadata: {
-                            correlationId: context.requestId,
-                            ...input.metadata
+                            ...input.metadata,
+                            correlationId: context.requestId
                         },
                         context: {
+                            ...input.metadata,
                             messageType: input.messageType || 'broadcast',
                             requestId: context.requestId,
-                            excludeSelf: input.excludeSelf,
-                            ...input.metadata
+                            excludeSelf
                         }
                     }
                 );
@@ -380,39 +396,35 @@ export const agentBroadcastTool = {
 
                 const payload = createChannelMessageEventPayload(
                     Events.Message.CHANNEL_MESSAGE,
-                    context.agentId!,
+                    agentId,
                     channelMessage
                 );
 
                 EventBus.server.emit(Events.Message.CHANNEL_MESSAGE, payload);
 
                 messageId = channelMessage.metadata.messageId;
-                deliveredTo.push(input.targetChannelId); // Channel ID as recipient
+                emittedFor.push(channelId);
 
-            } else if (input.targetAgentIds && input.targetAgentIds.length > 0) {
+            } else {
                 // Multi-agent broadcast using multiple agent messages
-                const filteredTargets = input.excludeSelf 
-                    ? input.targetAgentIds.filter(id => id !== context.agentId)
-                    : input.targetAgentIds;
-
                 // Use the first message ID for all (they'll have same timestamp)
                 messageId = `broadcast_${context.requestId}_${timestamp}`;
 
-                for (const targetAgentId of filteredTargets) {
+                for (const targetAgentId of targetAgentIds) {
                     const agentMessage = createAgentMessage(
-                        context.agentId!,
+                        agentId,
                         targetAgentId,
                         processedMessage,
                         {
                             metadata: {
-                                correlationId: context.requestId,
-                                ...input.metadata
+                                ...input.metadata,
+                                correlationId: context.requestId
                             },
                             context: {
+                                ...input.metadata,
                                 messageType: input.messageType || 'broadcast',
                                 requestId: context.requestId,
-                                broadcastId: messageId,
-                                ...input.metadata
+                                broadcastId: messageId
                             }
                         }
                     );
@@ -422,24 +434,21 @@ export const agentBroadcastTool = {
 
                     const payload = createAgentMessageEventPayload(
                         Events.Message.AGENT_MESSAGE,
-                        context.agentId!,
-                        context.channelId!,
+                        agentId,
+                        channelId,
                         agentMessage
                     );
 
                     EventBus.server.emit(Events.Message.AGENT_MESSAGE, payload);
-                    deliveredTo.push(targetAgentId);
+                    emittedFor.push(targetAgentId);
                 }
-
-            } else {
-                throw new Error('Must specify either targetChannelId or targetAgentIds');
             }
 
             const content: McpToolResultContent = {
                 type: 'application/json',
                 data: {
                     messageId,
-                    deliveredTo,
+                    emittedFor,
                     timestamp,
                     mxpProcessed
                 }
@@ -487,10 +496,11 @@ export const agentDiscoverTool = {
     handler: async (input: {
         channelId?: string;
         capabilities?: string[];
-        filters?: Record<string, any>;
+        filters?: Record<string, unknown>;
     }, context: McpToolHandlerContext): Promise<McpToolHandlerResult> => {
         try {
-            const targetChannelId = input.channelId || context.channelId;
+            const { agentId, channelId } = requireExactToolTenantContext(context, input.channelId);
+            requireCurrentChannelParticipant(channelId, agentId);
 
             // Import EventBus and EventNames dynamically to avoid circular dependencies and ensure server-side access
             // Use imported modules
@@ -498,10 +508,10 @@ export const agentDiscoverTool = {
             // Create event payload for agent discovery
             const discoveryPayload = createBaseEventPayload(
                 Events.Agent.DISCOVERY_REQUEST, 
-                context.agentId!,
-                context.channelId!,
+                agentId,
+                channelId,
                 {
-                    channelId: targetChannelId,
+                    channelId,
                     capabilities: input.capabilities,
                     filters: input.filters,
                     requestId: context.requestId
@@ -511,19 +521,19 @@ export const agentDiscoverTool = {
             EventBus.server.emit(Events.Agent.DISCOVERY_REQUEST, discoveryPayload);
 
             // Get all agents in the channel
-            const channelAgents = await AgentService.getInstance().getActiveAgentsInChannel(targetChannelId!);
+            const channelAgents = await AgentService.getInstance().getActiveAgentsInChannel(channelId);
             
             // Filter out the requesting agent and apply capability filters
             const discoveredAgents = channelAgents
-                .filter((agent: any) => agent.id !== context.agentId) // Exclude self
-                .filter((agent: any) => {
+                .filter((agent) => agent.id !== agentId) // Exclude self
+                .filter((agent) => {
                     // Apply capability filters if specified
                     if (input.capabilities && input.capabilities.length > 0) {
                         return input.capabilities.some(cap => agent.capabilities?.includes(cap));
                     }
                     return true;
                 })
-                .map((agent: any) => ({
+                .map((agent) => ({
                     agentId: agent.id,
                     name: agent.id.replace(/-/g, ' ').replace(/\b\w/g, (l: string) => l.toUpperCase()),
                     type: 'mxf-agent',
@@ -532,7 +542,7 @@ export const agentDiscoverTool = {
                     metadata: { 
                         lastSeen: Date.now(),
                         socketConnections: agent.socketIds?.length || 0,
-                        channelId: targetChannelId
+                        channelId
                     }
                 }));
 
@@ -601,18 +611,18 @@ export const agentCoordinateTool = {
         targetAgentIds: string[];
         coordinationType: 'collaborate' | 'delegate' | 'merge' | 'sync';
         taskDescription: string;
-        requirements?: Record<string, any>;
+        requirements?: Record<string, unknown>;
         deadline?: number;
-        metadata?: Record<string, any>;
+        metadata?: Record<string, unknown>;
     }, context: McpToolHandlerContext): Promise<McpToolHandlerResult> => {
         try {
+            const { agentId, channelId } = requireExactToolTenantContext(context);
+            requireCurrentChannelParticipant(channelId, agentId);
+            const targetAgentIds = requireChannelParticipants(channelId, input.targetAgentIds);
             const coordinationId = `coord_${context.requestId}_${Date.now()}`;
-            
-            // Send coordination requests to target agents using existing message infrastructure
-            const acceptedAgents: string[] = [];
-            const rejectedAgents: Array<{ agentId: string; reason: string }> = [];
 
-            for (const targetAgentId of input.targetAgentIds) {
+            // Send coordination requests to target agents using existing message infrastructure
+            for (const targetAgentId of targetAgentIds) {
                 const coordinationMessage = {
                     type: 'coordination_request',
                     coordinationId,
@@ -620,23 +630,23 @@ export const agentCoordinateTool = {
                     taskDescription: input.taskDescription,
                     requirements: input.requirements,
                     deadline: input.deadline,
-                    requestingAgent: context.agentId
+                    requestingAgent: agentId
                 };
 
                 const agentMessage = createAgentMessage(
-                    context.agentId!,
+                    agentId,
                     targetAgentId,
                     coordinationMessage,
                     {
                         metadata: {
-                            correlationId: context.requestId,
-                            ...input.metadata
+                            ...input.metadata,
+                            correlationId: context.requestId
                         },
                         context: {
+                            ...input.metadata,
                             messageType: 'coordination_request',
                             requestId: context.requestId,
-                            coordinationId,
-                            ...input.metadata
+                            coordinationId
                         }
                     }
                 );
@@ -646,15 +656,12 @@ export const agentCoordinateTool = {
 
                 const payload = createAgentMessageEventPayload(
                     Events.Message.AGENT_MESSAGE,
-                    context.agentId!,
-                    context.channelId!,
+                    agentId,
+                    channelId,
                     agentMessage
                 );
 
                 EventBus.server.emit(Events.Message.AGENT_MESSAGE, payload);
-                
-                // For now, assume acceptance (real implementation would wait for responses)
-                acceptedAgents.push(targetAgentId);
             }
 
 
@@ -662,8 +669,9 @@ export const agentCoordinateTool = {
                 type: 'application/json',
                 data: {
                     coordinationId,
-                    acceptedAgents,
-                    rejectedAgents,
+                    status: 'requested',
+                    requestedAgents: targetAgentIds,
+                    notificationsEmitted: targetAgentIds.length,
                     estimatedCompletion: input.deadline
                 }
             };

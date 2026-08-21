@@ -26,8 +26,8 @@ export interface ChannelMcpServerConfig {
     name: string;
     command?: string;
     args?: string[];
-    transport?: 'stdio' | 'http';
-    url?: string;
+    /** Caller-supplied runtime registration currently supports stdio only. */
+    transport?: 'stdio';
     autoStart?: boolean;
     environmentVariables?: Record<string, string>;
     restartOnCrash?: boolean;

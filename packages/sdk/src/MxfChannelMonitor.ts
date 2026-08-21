@@ -48,7 +48,7 @@ const logger = new Logger('warn', 'MxfChannelMonitor', 'client');
  *
  * // Listen to messages in the channel
  * channelMonitor.on(Events.Message.AGENT_MESSAGE, (payload) => {
- *     console.log('Message:', payload.data.content);
+ *     console.log('Message:', payload.data.content.data);
  * });
  *
  * // Clean up when done
@@ -90,7 +90,7 @@ export class MxfChannelMonitor {
      * Subscribe to an event in this channel.
      *
      * Only events in the PUBLIC_EVENTS whitelist can be listened to — the same rule
-     * agent.on() and channelService.on() enforce. The monitor previously accepted any
+     * agent.on() and mxfService.on() enforce. The monitor previously accepted any
      * event name at all, which quietly contradicted the whitelist the other two claim
      * to be there for security.
      *

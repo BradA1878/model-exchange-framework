@@ -45,7 +45,7 @@ Get a specific entity by its ID.
 **Example:**
 
 ```typescript
-const result = await agent.callTool('kg_get_entity', {
+const result = await agent.executeTool('kg_get_entity', {
     entityId: 'ent_abc123'
 });
 // { success: true, entity: { name: 'John Smith', type: 'person', qValue: 0.75, ... } }
@@ -82,14 +82,14 @@ Find entities by name or alias.
 
 ```typescript
 // Partial match search
-const result = await agent.callTool('kg_find_entity', {
+const result = await agent.executeTool('kg_find_entity', {
     name: 'John',
     limit: 5
 });
 // Returns entities with names containing "John"
 
 // Exact match search
-const exact = await agent.callTool('kg_find_entity', {
+const exact = await agent.executeTool('kg_find_entity', {
     name: 'John Smith',
     exact: true
 });
@@ -127,12 +127,12 @@ Get entities connected to a specific entity.
 
 ```typescript
 // Get all connections
-const result = await agent.callTool('kg_get_neighbors', {
+const result = await agent.executeTool('kg_get_neighbors', {
     entityId: 'person-123'
 });
 
 // Get only projects a person works on
-const projects = await agent.callTool('kg_get_neighbors', {
+const projects = await agent.executeTool('kg_get_neighbors', {
     entityId: 'person-123',
     direction: 'outgoing',
     relationshipType: 'WORKS_ON'
@@ -171,7 +171,7 @@ Find the shortest path between two entities.
 **Example:**
 
 ```typescript
-const result = await agent.callTool('kg_find_path', {
+const result = await agent.executeTool('kg_find_path', {
     fromEntityId: 'person-alice',
     toEntityId: 'project-xyz',
     maxHops: 3
@@ -210,7 +210,7 @@ Get entities with the highest Q-values (utility scores).
 **Example:**
 
 ```typescript
-const result = await agent.callTool('kg_get_high_utility_entities', {
+const result = await agent.executeTool('kg_get_high_utility_entities', {
     limit: 5
 });
 // Returns top 5 entities by learned utility
@@ -252,7 +252,7 @@ Get relevant graph context for a task or query.
 **Example:**
 
 ```typescript
-const result = await agent.callTool('kg_get_context', {
+const result = await agent.executeTool('kg_get_context', {
     keywords: ['authentication', 'security', 'JWT']
 });
 ```
@@ -306,13 +306,13 @@ Get Knowledge Graph context optimized for a specific ORPAR phase.
 
 ```typescript
 // During observation phase
-const obsContext = await agent.callTool('kg_get_phase_context', {
+const obsContext = await agent.executeTool('kg_get_phase_context', {
     phase: 'observation',
     taskContent: 'Implement user authentication with OAuth'
 });
 
 // During planning phase
-const planContext = await agent.callTool('kg_get_phase_context', {
+const planContext = await agent.executeTool('kg_get_phase_context', {
     phase: 'planning',
     entityIds: ['project-auth', 'tech-oauth']
 });
@@ -350,7 +350,7 @@ Create a new entity in the Knowledge Graph.
 **Example:**
 
 ```typescript
-const result = await agent.callTool('kg_create_entity', {
+const result = await agent.executeTool('kg_create_entity', {
     name: 'React',
     type: 'technology',
     aliases: ['ReactJS', 'React.js'],
@@ -390,7 +390,7 @@ Create a relationship between two entities.
 **Example:**
 
 ```typescript
-const result = await agent.callTool('kg_create_relationship', {
+const result = await agent.executeTool('kg_create_relationship', {
     fromEntityId: 'person-john',
     toEntityId: 'project-xyz',
     type: 'WORKS_ON',
@@ -434,7 +434,7 @@ Extract entities and relationships from arbitrary text.
 **Example:**
 
 ```typescript
-const result = await agent.callTool('kg_extract_from_text', {
+const result = await agent.executeTool('kg_extract_from_text', {
     text: 'Sarah Chen from Google is leading the TensorFlow migration project. The team uses Python and Docker.'
 });
 
@@ -490,7 +490,7 @@ Extract entities and relationships from a stored memory.
 **Example:**
 
 ```typescript
-const result = await agent.callTool('kg_extract_from_memory', {
+const result = await agent.executeTool('kg_extract_from_memory', {
     memoryId: 'mem_123',
     memoryContent: 'Discussed API design with Bob. He suggested using GraphQL.'
 });
@@ -527,7 +527,7 @@ Find entities that may be duplicates based on name similarity.
 **Example:**
 
 ```typescript
-const result = await agent.callTool('kg_find_duplicates', {
+const result = await agent.executeTool('kg_find_duplicates', {
     threshold: 0.85
 });
 
@@ -569,7 +569,7 @@ Merge multiple entities into a single target entity.
 
 ```typescript
 // Merge "ReactJS" and "React.js" into "React"
-const result = await agent.callTool('kg_merge_entities', {
+const result = await agent.executeTool('kg_merge_entities', {
     targetEntityId: 'ent_react',
     sourceEntityIds: ['ent_reactjs', 'ent_react_js']
 });
@@ -605,20 +605,20 @@ All tools return a consistent error structure:
 1. **Use extraction for bulk entity creation**
    ```typescript
    // Instead of creating entities one by one
-   const result = await agent.callTool('kg_extract_from_text', {
+   const result = await agent.executeTool('kg_extract_from_text', {
        text: documentContent
    });
    ```
 
 2. **Leverage Q-values for context prioritization**
    ```typescript
-   const highValue = await agent.callTool('kg_get_high_utility_entities', {});
+   const highValue = await agent.executeTool('kg_get_high_utility_entities', {});
    // Focus on entities that have been most useful
    ```
 
 3. **Use phase context for ORPAR alignment**
    ```typescript
-   const context = await agent.callTool('kg_get_phase_context', {
+   const context = await agent.executeTool('kg_get_phase_context', {
        phase: currentPhase
    });
    // Context is optimized for the current ORPAR phase
@@ -626,9 +626,9 @@ All tools return a consistent error structure:
 
 4. **Regularly check for and merge duplicates**
    ```typescript
-   const dups = await agent.callTool('kg_find_duplicates', {});
+   const dups = await agent.executeTool('kg_find_duplicates', {});
    for (const dup of dups.duplicates) {
-       await agent.callTool('kg_merge_entities', {
+       await agent.executeTool('kg_merge_entities', {
            targetEntityId: dup.entity1.id,
            sourceEntityIds: [dup.entity2.id]
        });
@@ -637,7 +637,7 @@ All tools return a consistent error structure:
 
 5. **Use path finding for relationship discovery**
    ```typescript
-   const path = await agent.callTool('kg_find_path', {
+   const path = await agent.executeTool('kg_find_path', {
        fromEntityId: 'entity-a',
        toEntityId: 'entity-b'
    });

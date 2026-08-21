@@ -30,6 +30,7 @@
  */
 
 import { EventEmitter } from 'events';
+import type { Subscription } from 'rxjs';
 import { Logger } from '../utils/Logger.js';
 import { EventBus } from '../events/EventBus.js';
 import { Events } from '../events/EventNames.js';
@@ -203,8 +204,10 @@ export class ValidationAnalyticsService extends EventEmitter {
         retentionPeriod: 90 * 24 * 60 * 60 * 1000, // 90 days
         enableRealTimeStreaming: true
     };
-    
-    private static instance: ValidationAnalyticsService;
+    private readonly eventSubscriptions: Subscription[] = [];
+    private aggregationInterval?: ReturnType<typeof setInterval>;
+
+    private static instance: ValidationAnalyticsService | undefined;
     
     private constructor() {
         super();
@@ -1037,7 +1040,7 @@ export class ValidationAnalyticsService extends EventEmitter {
      */
     private setupEventListeners(): void {
         // Listen to validation events
-        EventBus.server.on(Events.Mcp.TOOL_VALIDATION_ERROR, (event) => {
+        this.eventSubscriptions.push(EventBus.server.on(Events.Mcp.TOOL_VALIDATION_ERROR, (event) => {
             this.recordMetric({
                 name: 'validation_error',
                 value: 1,
@@ -1048,9 +1051,9 @@ export class ValidationAnalyticsService extends EventEmitter {
                     errorType: event.errorType
                 }
             });
-        });
+        }));
         
-        EventBus.server.on(Events.Mcp.TOOL_RESULT, (event) => {
+        this.eventSubscriptions.push(EventBus.server.on(Events.Mcp.TOOL_RESULT, (event) => {
             if (event.success) {
                 this.recordMetric({
                     name: 'tool_success',
@@ -1062,10 +1065,10 @@ export class ValidationAnalyticsService extends EventEmitter {
                     }
                 });
             }
-        });
+        }));
         
         // Listen to correction events
-        EventBus.server.on(Events.Mcp.TOOL_RESULT, (event) => {
+        this.eventSubscriptions.push(EventBus.server.on(Events.Mcp.TOOL_RESULT, (event) => {
             this.recordMetric({
                 name: 'auto_correction',
                 value: 1,
@@ -1075,16 +1078,17 @@ export class ValidationAnalyticsService extends EventEmitter {
                     tool: event.toolName
                 }
             });
-        });
+        }));
     }
     
     /**
      * Start aggregation worker
      */
     private startAggregationWorker(): void {
-        setInterval(() => {
-            this.performAggregation();
+        this.aggregationInterval = setInterval(() => {
+            void this.performAggregation();
         }, this.config.aggregationInterval);
+        this.aggregationInterval.unref?.();
     }
     
     /**
@@ -1169,5 +1173,26 @@ export class ValidationAnalyticsService extends EventEmitter {
     public clearMetrics(): void {
         this.metricsBuffer.length = 0;
         this.aggregatedMetrics.clear();
+    }
+
+    /** Release every timer and subscription owned by this singleton. */
+    public shutdown(): void {
+        if (this.aggregationInterval) {
+            clearInterval(this.aggregationInterval);
+            this.aggregationInterval = undefined;
+        }
+        for (const subscription of this.eventSubscriptions) {
+            subscription.unsubscribe();
+        }
+        this.eventSubscriptions.length = 0;
+        this.clearMetrics();
+        this.activeABTests.clear();
+        this.abTestResults.clear();
+        this.customReports.clear();
+        this.removeAllListeners();
+
+        if (ValidationAnalyticsService.instance === this) {
+            ValidationAnalyticsService.instance = undefined;
+        }
     }
 }

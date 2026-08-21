@@ -20,6 +20,8 @@ import { OpenRouterMcpClient } from '@mxf-dev/core/protocols/mcp/providers/OpenR
 import { AgentContext } from '@mxf-dev/core/interfaces/AgentContext';
 import { McpApiResponse } from '@mxf-dev/core/protocols/mcp/IMcpClient';
 
+const EXTERNAL_LLM_TEST_OPT_IN_ENV = 'MXF_TEST_ALLOW_EXTERNAL_LLM_CALLS';
+
 /** Minimal agent context accepted by structureMessagesFromContext */
 function buildContext(): AgentContext {
     return {
@@ -98,15 +100,24 @@ describe('OpenRouterMcpClient reasoning parameter', () => {
     let client: OpenRouterMcpClient;
     let fetchMock: jest.Mock;
     const originalFetch = global.fetch;
+    const originalExternalLlmOptIn = process.env[EXTERNAL_LLM_TEST_OPT_IN_ENV];
 
     beforeEach(async () => {
+        // Install the network boundary before enabling the guard exception or
+        // initializing the client, so future initialization work cannot escape.
+        fetchMock = jest.fn();
+        global.fetch = fetchMock as unknown as typeof fetch;
+        process.env[EXTERNAL_LLM_TEST_OPT_IN_ENV] = 'true';
         client = new OpenRouterMcpClient();
         await lastValueFrom(client.initialize({ apiKey: 'test-key', defaultModel: 'z-ai/glm-5.2' }));
-        fetchMock = jest.fn();
-        global.fetch = fetchMock as any;
     });
 
     afterEach(() => {
+        if (originalExternalLlmOptIn === undefined) {
+            delete process.env[EXTERNAL_LLM_TEST_OPT_IN_ENV];
+        } else {
+            process.env[EXTERNAL_LLM_TEST_OPT_IN_ENV] = originalExternalLlmOptIn;
+        }
         global.fetch = originalFetch;
         jest.restoreAllMocks();
     });

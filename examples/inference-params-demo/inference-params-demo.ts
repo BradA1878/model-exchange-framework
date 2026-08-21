@@ -9,17 +9,13 @@
  * Instead, the agent receives a task and autonomously decides which tools to use.
  *
  * @prerequisites
- * - MXF server running (`npm run dev`)
+ * - MXF server running (`bun run dev`)
  * - Environment variables configured
  *
  * @example
  * ```bash
- * cd examples/inference-params-demo
- * cp .env.example .env
- * npx ts-node inference-params-demo.ts
+ * bun run demo:inference-params
  * ```
- *
- * Run with: npm run demo:inference-params
  */
 
 import { MxfSDK, Events, LlmProviderType } from '@mxf-dev/sdk';
@@ -193,7 +189,7 @@ const createMetacognitiveAgent = async (
         // LLM configuration - starts with a budget model
         llmProvider: LlmProviderType.OPENROUTER,
         apiKey: process.env.OPENROUTER_API_KEY!,
-        defaultModel: 'anthropic/claude-3.5-haiku',
+        defaultModel: '~anthropic/claude-haiku-latest',
         temperature: 0.5,
         maxTokens: 8000,
 
@@ -243,7 +239,7 @@ For each problem you encounter:
    - Call get_current_params with phase="reasoning" to see your current model
    - Call request_inference_params with:
      - reason: Explain why this task needs better capabilities
-     - suggested: { model: "anthropic/claude-3.5-sonnet", reasoningTokens: 4000, maxOutputTokens: 4000 }
+     - suggested: { model: "~anthropic/claude-sonnet-latest", reasoningTokens: 4000, maxOutputTokens: 4000 }
      - scope: "task"
 
 3. **SOLVE THE PROBLEM** - Apply your reasoning

@@ -282,7 +282,7 @@ async function connectAgents() {
     // This creates more interesting gameplay with diverse AI behaviors
     const availableModels = [
         'google/gemini-2.5-flash',
-        'anthropic/claude-haiku-4.5'
+        '~anthropic/claude-haiku-latest'
     ].sort(() => Math.random() - 0.5);
 
     const agents: any[] = [];
@@ -520,12 +520,7 @@ async function connectAgents() {
             await new Promise(resolve => setTimeout(resolve, 200));
 
             // Clear conversation history
-            try {
-                const memoryManager = currentAgent.getMemoryManager?.();
-                if (memoryManager?.clearConversationHistory) {
-                    memoryManager.clearConversationHistory();
-                }
-            } catch (e) {}
+            await currentAgent.getMemoryManager().clearConversationHistory();
 
             // Create task - use the current player's agent to create their own task
             // This prevents admin from receiving tasks (server sets toAgentId to creator)

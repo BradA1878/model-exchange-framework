@@ -5,7 +5,7 @@
  * Use this in integration tests to create channels and agents.
  */
 
-import { MxfSDK, MxfAgent, MxfChannelMonitor, LlmProviderType, ConfigManager } from '@mxf-dev/sdk';
+import { MxfSDK, MxfAgent, MxfChannelMonitor, LlmProviderType } from '@mxf-dev/sdk';
 import type { AgentCreationConfig } from '@mxf-dev/sdk';
 
 export interface TestSDKOptions {
@@ -38,6 +38,11 @@ export interface TestChannelConfig {
     requireApproval?: boolean;
     maxAgents?: number;
     metadata?: Record<string, any>;
+    /**
+     * SystemLLM is disabled by default for test channels so an omitted option
+     * cannot silently enable paid LLM calls. Set this explicitly to false only
+     * in tests whose purpose requires SystemLLM.
+     */
     disableSystemLlm?: boolean;
 }
 
@@ -87,6 +92,9 @@ export class TestSDK {
         await this.connect();
 
         const channelId = `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        // Fail closed: test channels do not use SystemLLM unless a test explicitly
+        // opts in with disableSystemLlm: false.
+        const systemLlmEnabled = config.disableSystemLlm === false;
 
         const monitor = await this.sdk.createChannel(channelId, {
             name: config.name || `Test Channel ${channelId}`,
@@ -94,22 +102,16 @@ export class TestSDK {
             isPrivate: config.isPrivate ?? false,
             requireApproval: config.requireApproval ?? false,
             maxAgents: config.maxAgents ?? 10,
+            // This must be part of the creation request so the server persists the
+            // value. Mutating the test process's ConfigManager cannot configure a
+            // separately running integration-test server.
+            systemLlmEnabled,
             metadata: {
                 ...config.metadata,
                 testChannel: true,
                 createdAt: Date.now()
             }
         });
-
-        // Optionally disable SystemLLM for test channel
-        if (config.disableSystemLlm) {
-            const configManager = ConfigManager.getInstance();
-            configManager.setChannelSystemLlmEnabled(
-                false,
-                channelId,
-                'Integration test - SystemLLM disabled'
-            );
-        }
 
         this.channels.push(channelId);
         return { channelId, monitor };
@@ -127,7 +129,13 @@ export class TestSDK {
         const agentId = config.agentId || `test-agent-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
         // Generate authentication keys
-        const keys = await this.sdk.generateKey(channelId, agentId, `Key for ${agentId}`);
+        const keys = await this.sdk.generateKey(
+            channelId,
+            agentId,
+            `Key for ${agentId}`,
+            undefined,
+            config.allowedTools
+        );
 
         // Build full agent configuration
         const agentConfig: AgentCreationConfig = {
@@ -138,11 +146,13 @@ export class TestSDK {
             secretKey: keys.secretKey,
             description: config.description || 'Integration test agent',
             capabilities: config.capabilities || ['testing'],
-            allowedTools: config.allowedTools || [],
+            // Preserve omission so the server applies its curated core default.
+            // An explicit [] is a deliberate deny-all policy.
+            allowedTools: config.allowedTools,
             agentConfigPrompt: config.agentConfigPrompt || 'You are a test agent for integration testing. Be concise and direct.',
             llmProvider: config.llmProvider || LlmProviderType.OPENROUTER,
             apiKey: config.apiKey || process.env.OPENROUTER_API_KEY || '',
-            defaultModel: config.defaultModel || 'anthropic/claude-3.5-haiku',
+            defaultModel: config.defaultModel || '~anthropic/claude-haiku-latest',
             temperature: config.temperature ?? 0.3,
             maxTokens: config.maxTokens ?? 2000,
             metadata: {

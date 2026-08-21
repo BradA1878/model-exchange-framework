@@ -37,6 +37,7 @@
  */
 
 import { createBaseEventPayload } from '../../schemas/EventPayloadSchema.js';
+import type { Subscription } from 'rxjs';
 import { Logger } from '../../utils/Logger.js';
 import { EventBus } from '../../events/EventBus.js';
 import { Events, ControlLoopEvents } from '../../events/EventNames.js';
@@ -88,6 +89,7 @@ export class CycleConsolidationTrigger {
     private qValueManager: QValueManager;
     private enabled: boolean = false;
     private rules: ConsolidationRule[];
+    private cycleCompletedSubscription?: Subscription;
 
     // Track success/failure counts per memory
     private memorySuccessCounts: Map<string, number> = new Map();
@@ -132,8 +134,13 @@ export class CycleConsolidationTrigger {
      * Setup event listeners for ORPAR cycle completion
      */
     private setupEventListeners(): void {
+        if (this.cycleCompletedSubscription && !this.cycleCompletedSubscription.closed) {
+            return;
+        }
+        this.cycleCompletedSubscription = undefined;
+
         // Listen to cycle completed events
-        EventBus.server.on(OrparMemoryEvents.CYCLE_COMPLETED, async (payload: any) => {
+        this.cycleCompletedSubscription = EventBus.server.on(OrparMemoryEvents.CYCLE_COMPLETED, async payload => {
             if (this.enabled) {
                 await this.onCycleCompleted(payload);
             }
@@ -686,6 +693,8 @@ export class CycleConsolidationTrigger {
      */
     public reset(): void {
         this.enabled = false;
+        this.cycleCompletedSubscription?.unsubscribe();
+        this.cycleCompletedSubscription = undefined;
         this.rules = DEFAULT_CONSOLIDATION_RULES;
         this.memorySuccessCounts.clear();
         this.memoryFailureCounts.clear();

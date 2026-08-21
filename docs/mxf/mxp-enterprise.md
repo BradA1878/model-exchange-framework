@@ -80,7 +80,7 @@ export enum SecurityLevel {
 Intelligent token reduction system with 6 optimization strategies:
 
 ```typescript
-import { MxpTokenOptimizer } from '@mxf-dev/sdk';
+import { MxpTokenOptimizer } from '@mxf-dev/core/mxp/MxpTokenOptimizer';
 
 const optimizer = new MxpTokenOptimizer(mxpConfig);
 
@@ -128,7 +128,7 @@ console.log(result.tokenOptimization);
 Enhanced message aggregation with bandwidth optimization:
 
 ```typescript
-import { MxfMessageAggregator } from '@mxf-dev/sdk';
+import { MxfMessageAggregator } from '@mxf-dev/core/services/MxfMessageAggregator';
 
 // Create aggregator with MXP enhancements
 const aggregator = new MxfMessageAggregator(
@@ -170,7 +170,7 @@ aggregator.enableMxpEnhancement(mxpConfig);
 Production-grade AES-256-GCM encryption:
 
 ```typescript
-import { MxpEncryption } from '@mxf-dev/sdk';
+import { MxpEncryption } from '@mxf-dev/core/utils/MxpEncryption';
 
 const encryption = MxpEncryption.getInstance();
 
@@ -212,7 +212,8 @@ MXP_ENCRYPTION_ENABLED=true
 Comprehensive event tracking for monitoring and analytics:
 
 ```typescript
-import { Events, EventBus } from '@mxf-dev/sdk';
+import { Events } from '@mxf-dev/sdk';
+import { EventBus } from '@mxf-dev/core/events/EventBus';
 
 // Listen to optimization events
 EventBus.server.on(Events.Mxp.TOKEN_OPTIMIZATION_COMPLETE, (data) => {
@@ -442,7 +443,8 @@ MXP 2.0 integrates seamlessly with existing MXF services:
 // EXAMPLE IMPLEMENTATION - Not included in framework
 // File: src/custom/executive-reporting.ts (you create this)
 
-import { MxpConfigManager, Events, EventBus } from '@mxf-dev/sdk';
+import { MxpConfigManager, Events } from '@mxf-dev/sdk';
+import { EventBus } from '@mxf-dev/core/events/EventBus';
 
 export class MxpExecutiveReporting {
     private stats = {
@@ -493,7 +495,7 @@ export class MxpExecutiveReporting {
 // EXAMPLE IMPLEMENTATION - Not included in framework
 // File: src/custom/vault-integration.ts (you create this)
 
-import { MxpEncryption } from '@mxf-dev/sdk';
+import { MxpEncryption } from '@mxf-dev/core/utils/MxpEncryption';
 import * as vault from 'node-vault';
 
 export class MxpVaultIntegration {
@@ -663,7 +665,8 @@ mxpManager.createChannelConfig('production-channel', {
 ### Monitoring Optimization
 
 ```typescript
-import { Events, EventBus } from '@mxf-dev/sdk';
+import { Events } from '@mxf-dev/sdk';
+import { EventBus } from '@mxf-dev/core/events/EventBus';
 
 // Monitor real-time optimizations
 EventBus.server.on(Events.Mxp.TOKEN_OPTIMIZATION_COMPLETE, (data) => {

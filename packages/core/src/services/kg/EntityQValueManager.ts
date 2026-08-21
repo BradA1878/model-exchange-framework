@@ -50,6 +50,8 @@ import { createBaseEventPayload } from '../../schemas/EventPayloadSchema.js';
  */
 export interface EntityRewardSignal {
     entityId: string;
+    /** Channel the entity belongs to; the update is bound to it. */
+    channelId: ChannelId;
     reward: number; // -1 to 1
     reason: string;
     taskId?: string;
@@ -122,7 +124,7 @@ export class EntityQValueManager {
             return null;
         }
 
-        const entity = await this.repository.getEntity(signal.entityId);
+        const entity = await this.repository.getEntity(signal.entityId, signal.channelId);
         if (!entity) {
             this.logger.warn(`Entity not found for Q-value update: ${signal.entityId}`);
             return null;
@@ -141,7 +143,12 @@ export class EntityQValueManager {
         const clampedQValue = Math.max(0, Math.min(1, newQValue));
 
         // Update in database
-        await this.repository.updateEntityQValue(signal.entityId, clampedQValue, signal.reason);
+        await this.repository.updateEntityQValue(
+            signal.entityId,
+            signal.channelId,
+            clampedQValue,
+            signal.reason
+        );
 
         const result: QValueUpdateResult = {
             entityId: signal.entityId,
@@ -184,7 +191,7 @@ export class EntityQValueManager {
         const updates: Array<{ entityId: string; qValue: number; reason: string }> = [];
 
         for (const entityId of entityIds) {
-            const entity = await this.repository.getEntity(entityId);
+            const entity = await this.repository.getEntity(entityId, channelId);
             if (!entity) continue;
 
             const alpha = getQValueLearningRate();
@@ -208,10 +215,10 @@ export class EntityQValueManager {
 
         // Batch update
         if (updates.length > 0) {
-            await this.repository.batchUpdateQValues(updates);
+            await this.repository.batchUpdateQValues(channelId, updates);
 
             // Record outcomes for statistics
-            await this.repository.recordOutcome(entityIds, taskOutcome.success);
+            await this.repository.recordOutcome(channelId, entityIds, taskOutcome.success);
 
             // Emit batch event
             this.emitBatchQValueUpdatedEvent(channelId, results, taskOutcome.taskId);
@@ -251,7 +258,7 @@ export class EntityQValueManager {
         }
 
         if (updates.length > 0) {
-            await this.repository.batchUpdateQValues(updates);
+            await this.repository.batchUpdateQValues(channelId, updates);
             this.logger.info(`Decayed Q-values for ${updates.length} unused entities in channel ${channelId}`);
         }
 
@@ -262,19 +269,23 @@ export class EntityQValueManager {
      * Boost Q-value for retrieved entities
      * Called when entities are used in context retrieval
      */
-    public async boostRetrievedEntities(entityIds: string[], boostAmount: number = 0.05): Promise<void> {
+    public async boostRetrievedEntities(
+        channelId: ChannelId,
+        entityIds: string[],
+        boostAmount: number = 0.05
+    ): Promise<void> {
         if (!this.enabled || entityIds.length === 0) {
             return;
         }
 
         // Increment retrieval counts
-        await this.repository.incrementRetrievalCount(entityIds);
+        await this.repository.incrementRetrievalCount(channelId, entityIds);
 
         // Small Q-value boost for being retrieved
         const updates: Array<{ entityId: string; qValue: number; reason: string }> = [];
 
         for (const entityId of entityIds) {
-            const entity = await this.repository.getEntity(entityId);
+            const entity = await this.repository.getEntity(entityId, channelId);
             if (entity) {
                 const newQValue = Math.min(1, entity.utility.qValue + boostAmount);
                 if (newQValue !== entity.utility.qValue) {
@@ -288,7 +299,7 @@ export class EntityQValueManager {
         }
 
         if (updates.length > 0) {
-            await this.repository.batchUpdateQValues(updates);
+            await this.repository.batchUpdateQValues(channelId, updates);
         }
     }
 

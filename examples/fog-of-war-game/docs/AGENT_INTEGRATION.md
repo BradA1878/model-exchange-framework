@@ -62,38 +62,38 @@ console.log(result);
 For autonomous AI commanders, integrate using the MXF SDK:
 
 ```typescript
-import { MxfSDK, LlmProviderType } from 'mxf-sdk';
+import { MxfSDK, LlmProviderType } from '@mxf-dev/sdk';
 
 // 1. Initialize SDK
 const sdk = new MxfSDK({
   serverUrl: 'http://localhost:3001',
   domainKey: process.env.MXF_DOMAIN_KEY!,
-  username: 'game-user',
-  password: 'demo-password'
+  accessToken: process.env.MXF_ADMIN_ACCESS_TOKEN!
 });
 
 await sdk.connect();
 
 // 2. Create game channel
-const channel = await sdk.createChannel('fog-of-war-game-1', {
+const channelId = 'fog-of-war-game-1';
+const channelMonitor = await sdk.createChannel(channelId, {
   name: 'Fog of War Battle',
   description: 'Autonomous AI strategy game',
   maxAgents: 10
 });
 
 // 3. Generate authentication key
-const key = await sdk.generateKey(channel.id, 'red-scout', 'Red Scout Key');
+const key = await sdk.generateKey(channelId, 'red-scout', 'Red Scout Key');
 
 // 4. Create AI agent for commander
 const agent = await sdk.createAgent({
   agentId: 'red-scout',
   name: 'Red Scout Alpha',
-  channelId: channel.id,
+  channelId,
   keyId: key.keyId,
   secretKey: key.secretKey,
   llmProvider: LlmProviderType.OPENROUTER,
   apiKey: process.env.OPENROUTER_API_KEY!,
-  defaultModel: 'anthropic/claude-haiku-4',
+  defaultModel: '~anthropic/claude-haiku-latest',
   temperature: 0.7,
   maxTokens: 100000,
   reasoning: { enabled: false }, // Disable for faster gameplay
@@ -229,7 +229,7 @@ Here's a full example connecting all 8 commanders:
 ```typescript
 // examples/fog-of-war-game/src/connect-agents.ts
 
-import { MxfSDK, LlmProviderType } from 'mxf-sdk';
+import { MxfSDK, LlmProviderType } from '@mxf-dev/sdk';
 import { Team, CommanderRole } from './types/game';
 
 const COMMANDERS = [
@@ -241,26 +241,30 @@ const COMMANDERS = [
 async function connectAllAgents() {
   const sdk = new MxfSDK({
     serverUrl: process.env.MXF_SERVER_URL!,
-    domainKey: process.env.MXF_DOMAIN_KEY!
+    domainKey: process.env.MXF_DOMAIN_KEY!,
+    accessToken: process.env.MXF_ADMIN_ACCESS_TOKEN!
   });
 
   await sdk.connect();
 
-  const channel = await sdk.createChannel('fog-of-war-game');
+  const channelId = 'fog-of-war-game';
+  const channelMonitor = await sdk.createChannel(channelId, {
+    name: 'Fog of War Battle'
+  });
   const agents = [];
 
   for (const commander of COMMANDERS) {
-    const key = await sdk.generateKey(channel.id, commander.id);
+    const key = await sdk.generateKey(channelId, commander.id);
 
     const agent = await sdk.createAgent({
       agentId: commander.id,
       name: commander.name,
-      channelId: channel.id,
+      channelId,
       keyId: key.keyId,
       secretKey: key.secretKey,
       llmProvider: LlmProviderType.OPENROUTER,
       apiKey: process.env.OPENROUTER_API_KEY!,
-      defaultModel: 'anthropic/claude-haiku-4',
+      defaultModel: '~anthropic/claude-haiku-latest',
       agentConfigPrompt: generatePersonality(commander)
     });
 
@@ -270,7 +274,7 @@ async function connectAllAgents() {
     console.log(`✅ ${commander.name} connected`);
   }
 
-  return { sdk, channel, agents };
+  return { sdk, channelMonitor, agents };
 }
 
 function generatePersonality(commander: any): string {
@@ -292,25 +296,25 @@ Agents operate in a turn-based loop:
 
 while (!gameOver) {
   // OBSERVATION PHASE
-  const perimeter = await agent.callTool('scanPerimeter');
-  const teamStatus = await agent.callTool('getTeamStatus');
+  const perimeter = await agent.executeTool('scanPerimeter', {});
+  const teamStatus = await agent.executeTool('getTeamStatus', {});
 
   // REASONING PHASE
   // Agent's LLM processes information and decides actions
 
   // ACTION PHASE
   // Agent executes planned actions
-  await agent.callTool('moveUnits', { from: 'A1', to: 'B2', ... });
-  await agent.callTool('collectResources', { territory: 'A1' });
+  await agent.executeTool('moveUnits', { from: 'A1', to: 'B2', ... });
+  await agent.executeTool('collectResources', { territory: 'A1' });
 
   // COMMUNICATION PHASE
-  await agent.callTool('messaging_send', {
-    targetAgentId: 'red-warrior',
-    message: 'Enemy spotted at C5 - 50 infantry detected'
+  await agent.executeTool('messaging_send', {
+    targetId: 'red-warrior',
+    content: 'Enemy spotted at C5 - 50 infantry detected'
   });
 
   // COMMIT PHASE
-  await agent.callTool('commitTurn');
+  await agent.executeTool('commitTurn', {});
 
   // Wait for turn execution
   await waitForTurnComplete();
@@ -322,14 +326,14 @@ while (!gameOver) {
 Monitor agent decisions in real-time:
 
 ```typescript
-import { Events } from 'mxf-sdk';
+import { Events } from '@mxf-dev/sdk';
 
 // Create channel monitor
-const monitor = sdk.createChannelMonitor(channel.id);
+const monitor = channelMonitor;
 
 // Listen for agent messages
 monitor.on(Events.Message.AGENT_MESSAGE, (payload) => {
-  console.log(`[${payload.data.senderId}]: ${payload.data.content}`);
+  console.log(`[${payload.data.senderId}]: ${payload.data.content.data}`);
 });
 
 // Listen for tool executions
@@ -339,15 +343,15 @@ monitor.on(Events.Agent.LLM_RESPONSE, (payload) => {
 
 // Listen for task completions (turn ends)
 monitor.on(Events.Task.COMPLETED, (payload) => {
-  console.log(`Turn ${payload.data.turn} complete!`);
+  console.log(`Task ${payload.data.taskId} complete`);
 });
 ```
 
 ## Debugging Tips
 
-1. **Enable verbose logging:**
+1. **Check the agent connection:**
    ```typescript
-   agent.mxfService.setLogLevel('debug');
+   console.log('Connected:', agent.isConnected());
    ```
 
 2. **Test tools individually:**
@@ -366,9 +370,9 @@ monitor.on(Events.Task.COMPLETED, (payload) => {
 
 4. **Check agent memory:**
    ```typescript
-   const memory = await agent.mxfService.readMemory({
+   const memory = await agent.executeTool('agent_memory_read', {
      key: 'enemy-positions',
-     scope: 'agent'
+     memorySection: 'customData'
    });
    ```
 
@@ -383,7 +387,7 @@ For faster gameplay:
 
 2. **Use faster models:**
    ```typescript
-   defaultModel: 'anthropic/claude-3-haiku' // Faster than Opus/Sonnet
+   defaultModel: '~anthropic/claude-haiku-latest' // Faster than Opus/Sonnet
    ```
 
 3. **Limit token usage:**
@@ -395,9 +399,9 @@ For faster gameplay:
    ```typescript
    // Instead of sequential calls:
    await Promise.all([
-     agent.callTool('scanPerimeter'),
-     agent.callTool('getTeamStatus'),
-     agent.callTool('viewTerritory', { ids: ['A1', 'B2'] })
+     agent.executeTool('scanPerimeter', {}),
+     agent.executeTool('getTeamStatus', {}),
+     agent.executeTool('viewTerritory', { ids: ['A1', 'B2'] })
    ]);
    ```
 

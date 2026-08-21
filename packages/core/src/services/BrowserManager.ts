@@ -74,6 +74,21 @@ export interface BrowserConfig {
     userAgent?: string;
 }
 
+/** Chromium launch flags that preserve its OS sandbox boundary. */
+export const getSecureBrowserLaunchArgs = (): string[] => [
+    '--disable-dev-shm-usage',
+    '--disable-gpu',
+    '--disable-background-timer-throttling',
+    '--disable-backgrounding-occluded-windows',
+    '--disable-renderer-backgrounding',
+    '--disable-features=TranslateUI',
+    '--disable-ipc-flooding-protection',
+    '--no-first-run',
+    '--no-default-browser-check',
+    '--disable-default-apps',
+    '--disable-extensions'
+];
+
 export class BrowserManager {
     private pools: Map<string, BrowserInstance[]> = new Map();
     private maxPoolSize: number;
@@ -176,21 +191,10 @@ export class BrowserManager {
         const puppeteer = await loadPuppeteer();
         const browser = await puppeteer.launch({
             headless: this.config.headless ?? true,
-            args: [
-                '--no-sandbox',
-                '--disable-setuid-sandbox',
-                '--disable-dev-shm-usage',
-                '--disable-gpu',
-                '--disable-background-timer-throttling',
-                '--disable-backgrounding-occluded-windows',
-                '--disable-renderer-backgrounding',
-                '--disable-features=TranslateUI',
-                '--disable-ipc-flooding-protection',
-                '--no-first-run',
-                '--no-default-browser-check',
-                '--disable-default-apps',
-                '--disable-extensions'
-            ]
+            // Never pass --no-sandbox or --disable-setuid-sandbox. A deployment
+            // that cannot start Chromium with its OS sandbox intact must fail
+            // instead of silently executing hostile pages without isolation.
+            args: getSecureBrowserLaunchArgs()
         });
 
         const instance: BrowserInstance = {

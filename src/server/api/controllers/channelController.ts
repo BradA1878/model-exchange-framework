@@ -28,17 +28,48 @@
 import { McpEvents } from '@mxf-dev/core/events/event-definitions/McpEvents';
 import { Request, Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
-import { Channel } from '@mxf-dev/core/models/channel';
+import { Channel, IChannel } from '@mxf-dev/core/models/channel';
 import { createStrictValidator } from '@mxf-dev/core/utils/validation';
 import { Logger } from '@mxf-dev/core/utils/Logger';
 import { EventBus } from '@mxf-dev/core/events/EventBus';
-import { Events, ChannelActionTypes, ChannelActionType } from '@mxf-dev/core/events/EventNames';
+import { Events, ChannelActionType } from '@mxf-dev/core/events/EventNames';
 import { ChannelService } from '../../socket/services/ChannelService';
 import channelKeyService, { CreatedChannelKey } from '../../socket/services/ChannelKeyService';
+import { AgentIdentityOwnershipError } from '../../security/AgentIdentityOwnershipService';
 import { createChannelEventPayload } from '@mxf-dev/core/schemas/EventPayloadSchema';
 import { MemoryPersistenceService } from '../services/MemoryPersistenceService';
 import { MemoryScope } from '@mxf-dev/core/types/MemoryTypes';
 import { firstValueFrom } from 'rxjs';
+import { UserRole } from '@mxf-dev/core/models/user';
+import {
+    AuthorizationPrincipal,
+    authorizationService
+} from '../services/AuthorizationService';
+import type { ChannelAuthorizedRequest } from '../middleware/channelAuth';
+import { isReservedChannelId } from '@mxf-dev/core/constants/ReservedIdentities';
+
+interface AuthenticatedChannelRequest extends Request {
+    authType?: string;
+    user?: {
+        id?: string | { toString(): string };
+        role?: string;
+    };
+    agent?: {
+        agentId?: string;
+    };
+}
+
+interface ChannelVerificationRequest {
+    channelId: string;
+    verificationMethod: 'dns' | 'email' | 'file' | 'token';
+    verificationToken: string;
+}
+
+interface ChannelVerificationResult {
+    verified: boolean;
+    channelId?: string;
+    error?: string;
+}
 
 // Create validator for this controller
 const validate = createStrictValidator('ChannelController');
@@ -48,6 +79,95 @@ const logger = new Logger('info', 'ChannelController', 'server');
 
 /** Longest accepted channel search term. Bounds the work a single query can cause. */
 const MAX_SEARCH_TERM_LENGTH = 100;
+
+/** Fields which are safe to expose through unaffiliated channel discovery. */
+const CHANNEL_DISCOVERY_FIELDS = [
+    'channelId',
+    'customChannelId',
+    'name',
+    'description',
+    'isPrivate',
+    'requireApproval',
+    'maxAgents',
+    'allowAnonymous',
+    'showActiveAgents',
+    'active',
+    'verified',
+    'createdAt',
+    'updatedAt',
+    'lastActive'
+] as const;
+
+/** Mongo projection used at the database boundary for discovery reads. */
+export const CHANNEL_DISCOVERY_PROJECTION: Record<string, 0 | 1> = {
+    _id: 0,
+    ...Object.fromEntries(CHANNEL_DISCOVERY_FIELDS.map((field) => [field, 1]))
+};
+
+/**
+ * Defense-in-depth output allowlist. This remains explicit even though the
+ * Mongo query also projects fields, so a future query refactor cannot expose
+ * shared memory, verification credentials, metadata, participants, or MCP
+ * server configuration/environment values.
+ */
+export const toSafeChannelDiscoveryView = (channel: Record<string, unknown>): Record<string, unknown> => {
+    const safeView: Record<string, unknown> = {};
+
+    for (const field of CHANNEL_DISCOVERY_FIELDS) {
+        if (Object.prototype.hasOwnProperty.call(channel, field)) {
+            safeView[field] = channel[field];
+        }
+    }
+
+    return safeView;
+};
+
+const getDiscoveryVisibilityFilter = (principal: AuthorizationPrincipal): Record<string, unknown> => {
+    if (principal.kind === 'user' && principal.role === UserRole.ADMIN) {
+        return {};
+    }
+
+    const visibleChannels: Record<string, unknown>[] = [
+        { isPrivate: { $ne: true } }
+    ];
+
+    if (principal.kind === 'user') {
+        visibleChannels.push({ createdBy: principal.userId });
+    } else if (principal.kind === 'agent') {
+        // Agent credentials are scoped to their authenticated channel. A
+        // matching participant name elsewhere does not broaden that scope.
+        visibleChannels.push({ channelId: principal.channelId });
+    }
+
+    return { $or: visibleChannels };
+};
+
+const withDiscoveryVisibility = (
+    query: Record<string, unknown>,
+    principal: AuthorizationPrincipal,
+    includeAffiliatedUnverified: boolean = false
+): Record<string, unknown> => {
+    const visibility = getDiscoveryVisibilityFilter(principal);
+    const accessFilters = [query];
+
+    if (Object.keys(visibility).length > 0) {
+        accessFilters.push(visibility);
+    }
+
+    if (includeAffiliatedUnverified && !(principal.kind === 'user' && principal.role === UserRole.ADMIN)) {
+        const verifiedOrAffiliated: Record<string, unknown>[] = [{ verified: true }];
+
+        if (principal.kind === 'user') {
+            verifiedOrAffiliated.push({ createdBy: principal.userId });
+        } else if (principal.kind === 'agent') {
+            verifiedOrAffiliated.push({ channelId: principal.channelId });
+        }
+
+        accessFilters.push({ $or: verifiedOrAffiliated });
+    }
+
+    return accessFilters.length === 1 ? query : { $and: accessFilters };
+};
 
 /**
  * Neutralize regex metacharacters in a user-supplied search term.
@@ -91,18 +211,20 @@ const toSafeSearchPattern = (value: unknown): string => {
 
 // Channel discovery service - real database implementations
 const channelDiscoveryService = {
-    registerChannel: async (channel: any) => {
+    registerChannel: async (channel: Record<string, unknown>): Promise<IChannel> => {
         // Create new channel in database
         const newChannel = new Channel(channel);
         return await newChannel.save();
     },
     
-    verifyChannel: async (verificationData: any) => {
-        const channelId = typeof verificationData === 'string' ? verificationData : verificationData.channelId;
-        const token = verificationData.token;
+    verifyChannel: async (
+        verificationData: ChannelVerificationRequest
+    ): Promise<ChannelVerificationResult> => {
+        const channelId = verificationData.channelId;
+        const token = verificationData.verificationToken;
         
         // Find channel and verify token
-        const channel = await Channel.findOne({ channelId });
+        const channel = await Channel.findOne({ channelId, active: true });
         if (!channel) {
             return { verified: false, error: 'Channel not found' };
         }
@@ -115,72 +237,60 @@ const channelDiscoveryService = {
             return { verified: false, error: 'Verification token expired' };
         }
         
-        // Update channel as verified
-        channel.verified = true;
-        channel.verificationToken = undefined;
-        channel.verificationExpiry = undefined;
-        await channel.save();
+        // Update only while the same channel remains active. A concurrent
+        // deletion must win without this verification mutating its tombstone.
+        const verificationResult = await Channel.updateOne(
+            {
+                _id: channel._id,
+                active: true,
+                verificationToken: token
+            },
+            {
+                $set: { verified: true },
+                $unset: {
+                    verificationToken: '',
+                    verificationExpiry: ''
+                }
+            }
+        );
+        if (verificationResult.matchedCount !== 1) {
+            return { verified: false, error: 'Channel is no longer active' };
+        }
         
         return { verified: true, channelId };
     },
     
-    findChannelById: async (channelId: string) => {
+    findChannelForDiscovery: async (
+        channelId: string,
+        principal: AuthorizationPrincipal,
+        includeUnverified: boolean = false
+    ): Promise<Record<string, unknown> | null> => {
         try {
-            const channel = await Channel.findOne({ channelId }).lean();
-            return channel;
-        } catch (error) {
-            logger.error(`Error finding channel ${channelId}:`, error);
-            return null;
-        }
-    },
-    
-    findChannelsByAgent: async (agentId: string) => {
-        try {
-            const channels = await Channel.find({
-                participants: agentId,
-                active: true
-            }).lean();
-            return channels;
-        } catch (error) {
-            logger.error(`Error finding channels for agent ${agentId}:`, error);
-            return [];
-        }
-    },
-    
-    findPublicChannels: async () => {
-        try {
-            const channels = await Channel.find({
-                isPrivate: { $ne: true },
-                active: true
-            }).limit(50).lean();
-            return channels;
-        } catch (error) {
-            logger.error('Error finding public channels:', error);
-            return [];
-        }
-    },
-    
-    findChannelForDiscovery: async (channelId: string, includeUnverified: boolean = false) => {
-        try {
-            const query: any = { channelId, active: true };
+            const query: Record<string, unknown> = { channelId, active: true };
             if (!includeUnverified) {
                 query.verified = true;
             }
-            const channel = await Channel.findOne(query).lean();
-            return channel;
+            const channel = await Channel.findOne(withDiscoveryVisibility(query, principal, includeUnverified))
+                .select(CHANNEL_DISCOVERY_PROJECTION)
+                .lean();
+            return channel ? toSafeChannelDiscoveryView(channel as Record<string, unknown>) : null;
         } catch (error) {
             logger.error(`Error finding channel for discovery ${channelId}:`, error);
             return null;
         }
     },
     
-    listChannelsByDomain: async (domain: string, verifiedOnly: boolean = true) => {
+    listChannelsByDomain: async (
+        domain: string,
+        principal: AuthorizationPrincipal,
+        verifiedOnly: boolean = true
+    ): Promise<Array<Record<string, unknown>>> => {
         try {
             // Escape before building the $regex — see toSafeSearchPattern
             const pattern = toSafeSearchPattern(domain);
 
             // Search in channelId, customChannelId, or name for domain pattern
-            const query: any = {
+            const query: Record<string, unknown> = {
                 $or: [
                     { channelId: { $regex: pattern, $options: 'i' } },
                     { customChannelId: { $regex: pattern, $options: 'i' } },
@@ -193,20 +303,27 @@ const channelDiscoveryService = {
                 query.verified = true;
             }
 
-            const channels = await Channel.find(query).limit(20).lean();
-            return channels;
+            const channels = await Channel.find(withDiscoveryVisibility(query, principal, !verifiedOnly))
+                .select(CHANNEL_DISCOVERY_PROJECTION)
+                .limit(20)
+                .lean();
+            return channels.map((channel) => toSafeChannelDiscoveryView(channel as Record<string, unknown>));
         } catch (error) {
             logger.error(`Error listing channels by domain ${domain}:`, error);
             return [];
         }
     },
 
-    searchChannels: async (query: string, verifiedOnly: boolean = true) => {
+    searchChannels: async (
+        query: string,
+        principal: AuthorizationPrincipal,
+        verifiedOnly: boolean = true
+    ): Promise<Array<Record<string, unknown>>> => {
         try {
             // Escape before building the $regex — see toSafeSearchPattern
             const pattern = toSafeSearchPattern(query);
 
-            const searchQuery: any = {
+            const searchQuery: Record<string, unknown> = {
                 $or: [
                     { name: { $regex: pattern, $options: 'i' } },
                     { description: { $regex: pattern, $options: 'i' } },
@@ -219,8 +336,11 @@ const channelDiscoveryService = {
                 searchQuery.verified = true;
             }
 
-            const channels = await Channel.find(searchQuery).limit(20).lean();
-            return channels;
+            const channels = await Channel.find(withDiscoveryVisibility(searchQuery, principal, !verifiedOnly))
+                .select(CHANNEL_DISCOVERY_PROJECTION)
+                .limit(20)
+                .lean();
+            return channels.map((channel) => toSafeChannelDiscoveryView(channel as Record<string, unknown>));
         } catch (error) {
             logger.error(`Error searching channels with query "${query}":`, error);
             return [];
@@ -232,14 +352,17 @@ const channelDiscoveryService = {
             const token = uuidv4();
             const expiry = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
             
-            await Channel.updateOne(
-                { channelId },
+            const result = await Channel.updateOne(
+                { channelId, active: true },
                 {
                     verificationToken: token,
                     verificationMethod: method,
                     verificationExpiry: expiry
                 }
             );
+            if (result.matchedCount !== 1) {
+                throw new Error(`Active channel ${channelId} not found`);
+            }
             
             return token;
         } catch (error) {
@@ -286,7 +409,7 @@ export const registerChannel = async (req: Request, res: Response): Promise<void
         } = req.body;
         
         // Get user ID from the authenticated request
-        const userId = (req as any).user?.id;
+        const userId = (req as AuthenticatedChannelRequest).user?.id;
         if (!userId) {
             res.status(401).json({
                 success: false,
@@ -308,6 +431,14 @@ export const registerChannel = async (req: Request, res: Response): Promise<void
         
         // Validate the final channelId
         validate.assertIsNonEmptyString(channelId, 'Channel ID could not be generated');
+
+        if (isReservedChannelId(channelId)) {
+            res.status(400).json({
+                success: false,
+                message: 'This channelId is reserved for internal MXF routing'
+            });
+            return;
+        }
         
         // Check if channel with ID already exists
         const existingChannel = await Channel.findOne({ channelId });
@@ -420,13 +551,15 @@ export const findByChannelId = async (req: Request, res: Response): Promise<void
     try {
         const { channelId } = req.params;
         const includeUnverified = req.query.includeUnverified === 'true';
+        const principal = authorizationService.readPrincipal(req);
         
         // Updated to use the renamed method
         const result = await channelDiscoveryService.findChannelForDiscovery(
             channelId,
+            principal,
             includeUnverified
         );
-        
+
         if (!result) {
             res.status(404).json({
                 success: false,
@@ -460,6 +593,7 @@ export const listChannelsByDomain = async (req: Request, res: Response): Promise
     try {
         const { domain } = req.params;
         const verifiedOnly = req.query.verifiedOnly !== 'false';
+        const principal = authorizationService.readPrincipal(req);
 
         // Reject over-long terms with a 400 rather than letting them reach the
         // regex builder. The builder escapes them anyway, but the caller should
@@ -474,6 +608,7 @@ export const listChannelsByDomain = async (req: Request, res: Response): Promise
 
         const channels = await channelDiscoveryService.listChannelsByDomain(
             domain,
+            principal,
             verifiedOnly
         );
 
@@ -503,6 +638,7 @@ export const searchChannels = async (req: Request, res: Response): Promise<void>
     try {
         const { query } = req.query;
         const verifiedOnly = req.query.verifiedOnly !== 'false';
+        const principal = authorizationService.readPrincipal(req);
 
         // typeof guard also keeps query operators out: ?query[$ne]= arrives as an object.
         if (!query || typeof query !== 'string' || query.trim().length === 0) {
@@ -523,9 +659,10 @@ export const searchChannels = async (req: Request, res: Response): Promise<void>
 
         const channels = await channelDiscoveryService.searchChannels(
             query,
+            principal,
             verifiedOnly
         );
-        
+
         res.status(200).json({
             success: true,
             count: channels.length,
@@ -565,7 +702,7 @@ export const initializeVerification = async (req: Request, res: Response): Promi
             channelId,
             method as 'dns' | 'email' | 'file' | 'token'
         );
-        
+
         if (!verificationToken) {
             res.status(400).json({
                 success: false,
@@ -614,16 +751,16 @@ export const verifyChannel = async (req: Request, res: Response): Promise<void> 
             return;
         }
         
-        const success = await channelDiscoveryService.verifyChannel({
+        const verification = await channelDiscoveryService.verifyChannel({
             channelId,
             verificationMethod: method as 'dns' | 'email' | 'file' | 'token',
             verificationToken
         });
         
-        if (!success) {
+        if (!verification.verified) {
             res.status(400).json({
                 success: false,
-                message: 'Verification failed'
+                message: verification.error ?? 'Verification failed'
             });
             return;
         }
@@ -645,160 +782,6 @@ export const verifyChannel = async (req: Request, res: Response): Promise<void> 
 };
 
 /**
- * Get or create channel shared memory
- * 
- * @param req - Express request object
- * @param res - Express response object
- */
-export const getOrCreateChannelMemory = async (req: Request, res: Response): Promise<void> => {
-    try {
-        const { channelId } = req.params;
-        validate.assertIsNonEmptyString(channelId);
-        
-        // Find channel by channelId
-        let channel = await Channel.findOne({ channelId });
-        
-        if (!channel) {
-            res.status(404).json({
-                success: false,
-                message: `Channel with ID ${channelId} not found`
-            });
-            return;
-        }
-        
-        // Initialize shared memory if it doesn't exist
-        if (!channel.sharedMemory) {
-            channel.sharedMemory = {
-                notes: {},
-                sharedState: {},
-                conversationHistory: [],
-                customData: {},
-                updatedAt: new Date()
-            };
-            
-            await channel.save();
-        }
-        
-        // Return the shared memory data
-        res.status(200).json({
-            success: true,
-            data: {
-                channelId: channel.channelId,
-                notes: channel.sharedMemory.notes || {},
-                sharedState: channel.sharedMemory.sharedState || {},
-                conversationHistory: channel.sharedMemory.conversationHistory || [],
-                customData: channel.sharedMemory.customData || {},
-                updatedAt: channel.sharedMemory.updatedAt
-            }
-        });
-    } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        res.status(400).json({
-            success: false,
-            message: errorMessage
-        });
-    }
-};
-
-/**
- * Update channel shared memory
- * 
- * @param req - Express request object
- * @param res - Express response object
- */
-export const updateChannelMemory = async (req: Request, res: Response): Promise<void> => {
-    try {
-        const { channelId } = req.params;
-        validate.assertIsNonEmptyString(channelId);
-        validate.assertIsObject(req.body);
-        
-        // Find channel by channelId
-        const channel = await Channel.findOne({ channelId });
-        
-        if (!channel) {
-            res.status(404).json({
-                success: false,
-                message: `Channel with ID ${channelId} not found`
-            });
-            return;
-        }
-        
-        // Initialize shared memory if it doesn't exist
-        if (!channel.sharedMemory) {
-            channel.sharedMemory = {
-                notes: {},
-                sharedState: {},
-                conversationHistory: [],
-                customData: {},
-                updatedAt: new Date()
-            };
-        }
-        
-        // Update shared memory fields if provided in request
-        if (req.body.notes) {
-            channel.sharedMemory.notes = {
-                ...channel.sharedMemory.notes || {},
-                ...req.body.notes
-            };
-        }
-        
-        if (req.body.sharedState) {
-            channel.sharedMemory.sharedState = {
-                ...channel.sharedMemory.sharedState || {},
-                ...req.body.sharedState
-            };
-        }
-        
-        if (req.body.customData) {
-            const mergedData: Record<string, any> = {
-                ...channel.sharedMemory.customData || {},
-                ...req.body.customData
-            };
-            // Remove keys explicitly set to null (used for deletion)
-            for (const key of Object.keys(mergedData)) {
-                if (mergedData[key] === null) {
-                    delete mergedData[key];
-                }
-            }
-            channel.sharedMemory.customData = mergedData;
-        }
-        
-        // Handle conversation history (append if provided)
-        if (req.body.conversationHistory && Array.isArray(req.body.conversationHistory)) {
-            if (!channel.sharedMemory.conversationHistory) {
-                channel.sharedMemory.conversationHistory = [];
-            }
-            channel.sharedMemory.conversationHistory.push(...req.body.conversationHistory);
-        }
-        
-        // Update timestamp
-        channel.sharedMemory.updatedAt = new Date();
-        
-        // Save the updated channel
-        await channel.save();
-        
-        // Return updated memory
-        res.status(200).json({
-            success: true,
-            data: {
-                channelId: channel.channelId,
-                notes: channel.sharedMemory.notes,
-                sharedState: channel.sharedMemory.sharedState,
-                conversationHistory: channel.sharedMemory.conversationHistory,
-                customData: channel.sharedMemory.customData,
-                updatedAt: channel.sharedMemory.updatedAt
-            }
-        });
-    } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        res.status(400).json({
-            success: false,
-            message: errorMessage
-        });
-    }
-};
-
-/**
  * Get a specific channel by ID for the authenticated user
  * @param req - Express request object
  * @param res - Express response object
@@ -806,21 +789,12 @@ export const updateChannelMemory = async (req: Request, res: Response): Promise<
 export const getChannelById = async (req: Request, res: Response): Promise<void> => {
     try {
         const { channelId } = req.params;
-        const user = (req as any).user;
-        
-        // Validate authentication and channel ID
-        validate.assertIsObject(user, 'User authentication required');
-        validate.assertIsObject(user.id, 'User ID is required');
         validate.assertIsNonEmptyString(channelId, 'Channel ID is required');
-        
-        // Convert ObjectId to string for database query
-        const userId = user.id.toString();
-        
-        // Find the channel for the authenticated user
-        const channel = await Channel.findOne({ 
-            channelId, 
-            createdBy: userId 
-        });
+
+        // requireChannelOwner resolves the channel and proves ownership before
+        // this controller runs. Reusing that record avoids a second query and
+        // keeps administrator access consistent with the central policy.
+        const channel = (req as ChannelAuthorizedRequest).channel;
         
         if (!channel) {
             res.status(404).json({
@@ -867,17 +841,19 @@ export const getChannelById = async (req: Request, res: Response): Promise<void>
 export const getAllChannels = async (req: Request, res: Response): Promise<void> => {
     try {
         // Get user from authentication middleware
-        const user = (req as any).user;
+        const user = (req as AuthenticatedChannelRequest).user;
         
         // Validate user authentication
         validate.assertIsObject(user, 'User authentication required');
-        validate.assertIsObject(user.id, 'User ID is required');
+        if (!user?.id) {
+            throw new Error('User ID is required');
+        }
         
         // Convert ObjectId to string for database query
         const userId = user.id.toString();
         
         // Get channels created by the authenticated user
-        const channels = await Channel.find({ createdBy: userId });
+        const channels = await Channel.find({ createdBy: userId, active: true });
         
         // Format the channel data for the response
         const formattedChannels = channels.map(channel => ({
@@ -924,57 +900,44 @@ export const createChannelWorkspace = async (req: Request, res: Response): Promi
             generateKey = false,
             keyAgentId,
             keyName,
-            keyExpiresAt
+            keyExpiresAt,
+            keyAllowedTools
         } = req.body;
-        // Get user ID from JWT auth or agent ID from key auth
-        const userId = (req as any).user?.id;
-        const agentId = (req as any).agent?.agentId;
-        
-        // Convert ObjectId to string if needed and ensure non-empty value
-        let createdBy: string;
-        if (userId) {
-            createdBy = userId.toString();
-        } else if (agentId) {
-            createdBy = agentId.toString();
-        } else {
-            logger.error('createChannelWorkspace: No valid authentication found');
-            res.status(401).json({
+        // Workspace creation is a credential-management operation. A channel
+        // key proves an agent identity inside one channel; it is not authority
+        // to create new channels or mint more credentials.
+        const authenticatedRequest = req as AuthenticatedChannelRequest;
+        const userId = authenticatedRequest.user?.id;
+        if (authenticatedRequest.authType !== 'jwt' || !userId) {
+            res.status(403).json({
                 success: false,
-                message: 'Authentication required'
+                message: 'A user account is required to create a channel workspace'
             });
             return;
         }
-        
+
+        const createdBy = userId.toString();
+
         // Validate required fields
-        if (!channelId) {
+        if (typeof channelId !== 'string' || channelId.trim().length === 0) {
             res.status(400).json({
                 success: false,
                 message: 'channelId is required'
             });
             return;
         }
-        
-        // Create channel using ChannelService singleton
-        const channelService = ChannelService.getInstance();
-        const channel = await channelService.createChannel(
-            channelId,
-            name,
-            createdBy,
-            { description, isPrivate }
-        );
-        
-        if (!channel) {
-            res.status(409).json({
+
+        if (isReservedChannelId(channelId)) {
+            res.status(400).json({
                 success: false,
-                message: 'Channel already exists'
+                message: 'This channelId is reserved for internal MXF routing'
             });
             return;
         }
-        
-        let generatedKey: CreatedChannelKey | null = null;
 
-        // Generate key if requested. A key names the agent it authenticates, so
-        // keyAgentId is required whenever generateKey is set — see ChannelKeyService.
+        // Validate every key option before creating the channel. Invalid key
+        // input must not leave a partially-created workspace behind.
+        let expirationDate: Date | undefined;
         if (generateKey) {
             if (typeof keyAgentId !== 'string' || keyAgentId.trim().length === 0) {
                 res.status(400).json({
@@ -984,8 +947,6 @@ export const createChannelWorkspace = async (req: Request, res: Response): Promi
                 return;
             }
 
-            // Parse expiration date if provided
-            let expirationDate: Date | undefined;
             if (keyExpiresAt) {
                 expirationDate = new Date(keyExpiresAt);
                 if (isNaN(expirationDate.getTime())) {
@@ -996,7 +957,54 @@ export const createChannelWorkspace = async (req: Request, res: Response): Promi
                     return;
                 }
             }
+        }
 
+        // Never make workspace creation an idempotent "get existing" path.
+        // Returning another user's channel here used to flow directly into key
+        // generation and allowed channel takeover.
+        const existingChannel = await Channel.findOne({ channelId }).select('_id');
+        if (existingChannel) {
+            res.status(409).json({
+                success: false,
+                message: 'Channel already exists'
+            });
+            return;
+        }
+
+        // Create channel using ChannelService singleton
+        const channelService = ChannelService.getInstance();
+        const channel = await channelService.createChannel(
+            channelId,
+            name,
+            createdBy,
+            { description, isPrivate }
+        );
+        if (!channel) {
+            res.status(409).json({
+                success: false,
+                message: 'Channel already exists'
+            });
+            return;
+        }
+
+        // A concurrent creator can win the unique-index race between the
+        // existence check and ChannelService.save(). ChannelService may load
+        // that winner for runtime consistency; never mint a key unless the
+        // persisted record belongs to this caller.
+        const persistedChannel = await Channel.findOne({ channelId, active: true }).select('createdBy');
+        if (!persistedChannel || String(persistedChannel.createdBy) !== createdBy) {
+            res.status(409).json({
+                success: false,
+                message: 'Channel already exists'
+            });
+            return;
+        }
+
+        let generatedKey: CreatedChannelKey | null = null;
+
+        // Generate key if requested. A key names the agent it authenticates, so
+        // keyAgentId is required whenever generateKey is set — see ChannelKeyService.
+        if (generateKey) {
             // A key generation failure is not swallowed: the caller asked for a key,
             // and returning a channel without one would leave them with no way in.
             generatedKey = await channelKeyService.createChannelKey(
@@ -1004,12 +1012,13 @@ export const createChannelWorkspace = async (req: Request, res: Response): Promi
                 createdBy,
                 keyAgentId.trim(),
                 keyName || `Initial key for ${name || channelId}`,
-                expirationDate
+                expirationDate,
+                keyAllowedTools
             );
         }
 
 
-        const responseData: any = {
+        const responseData: Record<string, unknown> = {
             channelId: channel.id,
             name: channel.name,
             active: channel.active,
@@ -1022,6 +1031,7 @@ export const createChannelWorkspace = async (req: Request, res: Response): Promi
                 keyId: generatedKey.keyId,
                 secretKey: generatedKey.secretKey, // Only returned on creation
                 agentId: generatedKey.agentId,
+                allowedTools: generatedKey.allowedTools,
                 name: generatedKey.name,
                 isActive: generatedKey.isActive,
                 expiresAt: generatedKey.expiresAt,
@@ -1038,8 +1048,11 @@ export const createChannelWorkspace = async (req: Request, res: Response): Promi
         });
     } catch (error) {
         logger.error('Error creating channel:', error);
-        
-        res.status(500).json({
+
+        const statusCode = error instanceof AgentIdentityOwnershipError
+            ? error.statusCode
+            : 500;
+        res.status(statusCode).json({
             success: false,
             message: error instanceof Error ? error.message : 'Server error',
             error: error instanceof Error ? error.message : String(error)
@@ -1090,7 +1103,7 @@ export const updateChannel = async (req: Request, res: Response): Promise<void> 
         validate.assertIsObject(req.body, 'Request body must be an object');
         
         // Find and update channel
-        const channel = await Channel.findOne({ channelId });
+        const channel = await Channel.findOne({ channelId, active: true });
         if (!channel) {
             res.status(404).json({
                 success: false,
@@ -1100,8 +1113,11 @@ export const updateChannel = async (req: Request, res: Response): Promise<void> 
         }
         
         // Update allowed fields
-        const allowedUpdates = ['name', 'description', 'isPrivate', 'requireApproval', 'maxAgents', 'allowAnonymous', 'active'];
-        const updates: any = {};
+        // Lifecycle state is not a generic mutable field. Deactivation must go
+        // through the deletion/archive lifecycle so keys, sockets, and runtime
+        // services cannot be left live.
+        const allowedUpdates = ['name', 'description', 'isPrivate', 'requireApproval', 'maxAgents', 'allowAnonymous'];
+        const updates: Record<string, unknown> = {};
         
         for (const field of allowedUpdates) {
             if (req.body[field] !== undefined) {
@@ -1116,13 +1132,20 @@ export const updateChannel = async (req: Request, res: Response): Promise<void> 
         
         // Update channel
         const updatedChannel = await Channel.findOneAndUpdate(
-            { channelId },
+            { channelId, active: true },
             { $set: updates },
             { new: true, runValidators: true }
         );
+        if (!updatedChannel) {
+            res.status(404).json({
+                success: false,
+                message: 'Channel is no longer active'
+            });
+            return;
+        }
         
         // Emit channel updated event with proper payload structure
-        const agentId = (req as any).agent?.agentId || 'system';
+        const agentId = (req as AuthenticatedChannelRequest).agent?.agentId || 'system';
         const updatedPayload = createChannelEventPayload(
             Events.Channel.UPDATED,
             agentId,
@@ -1140,13 +1163,13 @@ export const updateChannel = async (req: Request, res: Response): Promise<void> 
             success: true,
             message: 'Channel updated successfully',
             channel: {
-                channelId: updatedChannel!.channelId,
-                name: updatedChannel!.name,
-                description: updatedChannel!.description,
-                isPrivate: updatedChannel!.isPrivate,
-                active: updatedChannel!.active,
-                verified: updatedChannel!.verified,
-                updatedAt: updatedChannel!.updatedAt
+                channelId: updatedChannel.channelId,
+                name: updatedChannel.name,
+                description: updatedChannel.description,
+                isPrivate: updatedChannel.isPrivate,
+                active: updatedChannel.active,
+                verified: updatedChannel.verified,
+                updatedAt: updatedChannel.updatedAt
             }
         });
     } catch (error) {
@@ -1172,18 +1195,34 @@ export const deleteChannel = async (req: Request, res: Response): Promise<void> 
         const { channelId } = req.params;
         validate.assertIsNonEmptyString(channelId, 'channelId is required');
 
-        // Find channel first to check if it exists
-        const channel = await Channel.findOne({ channelId });
-        if (!channel) {
+        // Route authorization has established the owning user/admin. The
+        // service owns the complete lifecycle and emits the sole deletion
+        // event; the controller must not hard-delete the channel tombstone or
+        // emit a duplicate result.
+        const authenticatedRequest = req as AuthenticatedChannelRequest;
+        const actorId = authenticatedRequest.user?.id?.toString();
+        validate.assertIsNonEmptyString(actorId, 'Authenticated user ID is required');
+        if (!actorId) {
+            throw new Error('Authenticated user ID is required');
+        }
+        const channelService = ChannelService.getInstance();
+        const deletionReason = typeof req.body?.reason === 'string'
+            ? req.body.reason
+            : undefined;
+        const deleted = authenticatedRequest.user?.role === UserRole.ADMIN
+            ? await channelService.deleteChannelAsAdministrator(
+                channelId,
+                actorId,
+                deletionReason
+            )
+            : await channelService.deleteChannel(channelId, actorId, deletionReason);
+        if (!deleted) {
             res.status(404).json({
                 success: false,
-                message: 'Channel not found'
+                message: 'Channel not found or already inactive'
             });
             return;
         }
-
-        // Delete the channel document
-        await Channel.deleteOne({ channelId });
 
         // Delete channel memory from MongoDB
         const memoryPersistenceService = MemoryPersistenceService.getInstance();
@@ -1195,27 +1234,14 @@ export const deleteChannel = async (req: Request, res: Response): Promise<void> 
                 logger.info(`Channel memory deleted for ${channelId}`);
             }
         } catch (memoryError) {
-            // Log but don't fail - channel is already deleted
+            // The channel is already safely inactive and its keys/sockets are
+            // revoked. Memory cleanup is best-effort after that security boundary.
             logger.warn(`Could not delete channel memory for ${channelId}:`, memoryError);
         }
 
-        // Emit channel deleted event
-        const agentId = (req as any).agent?.agentId || 'system';
-        const deletedPayload = createChannelEventPayload(
-            Events.Channel.DELETED,
-            agentId,
-            channelId,
-            {
-                action: 'deleted' as ChannelActionType,
-                channelId
-            }
-        );
-        EventBus.server.emit(Events.Channel.DELETED, deletedPayload);
-
-
         res.status(200).json({
             success: true,
-            message: 'Channel and associated memory deleted successfully',
+            message: 'Channel deleted successfully',
             channelId
         });
     } catch (error) {
@@ -1235,19 +1261,26 @@ export const registerChannelMcpServer = async (req: Request, res: Response): Pro
     try {
         const { channelId } = req.params;
         const serverConfig = req.body;
-        const agentId = (req as any).agent?.agentId || (req as any).user?.userId || 'system';
+        // These routes are administrator-only. dualAuth stores the authenticated
+        // user identifier at `user.id`; using the legacy `userId` property made
+        // every REST registration look as though it had been performed by system.
+        const actorId = (req as AuthenticatedChannelRequest).user?.id?.toString();
+        validate.assertIsNonEmptyString(actorId, 'Authenticated administrator ID is required');
+        if (!actorId) {
+            throw new Error('Authenticated administrator ID is required');
+        }
 
         const channelService = ChannelService.getInstance();
 
         // Persist to database first
-        const result = await channelService.registerChannelMcpServer(channelId, serverConfig, agentId);
+        const result = await channelService.registerChannelMcpServer(channelId, serverConfig, actorId);
 
         // Then emit event for ExternalMcpServerManager to start the server
         EventBus.server.emit(McpEvents.CHANNEL_SERVER_REGISTER, {
-            eventId: require('uuid').v4(),
+            eventId: uuidv4(),
             eventType: McpEvents.CHANNEL_SERVER_REGISTER,
             timestamp: Date.now(),
-            agentId,
+            agentId: actorId,
             channelId,
             data: { ...serverConfig, channelId }
         });
@@ -1274,6 +1307,8 @@ export const listChannelMcpServers = async (req: Request, res: Response): Promis
         const { channelId } = req.params;
 
         const channelService = ChannelService.getInstance();
+        // The complete config is intentionally returned only because the route
+        // is administrator-only; configs may include environment credentials.
         const servers = await channelService.getChannelMcpServers(channelId);
 
         res.status(200).json({
@@ -1296,19 +1331,23 @@ export const listChannelMcpServers = async (req: Request, res: Response): Promis
 export const unregisterChannelMcpServer = async (req: Request, res: Response): Promise<void> => {
     try {
         const { channelId, serverId } = req.params;
-        const agentId = (req as any).agent?.agentId || (req as any).user?.userId || 'system';
+        const actorId = (req as AuthenticatedChannelRequest).user?.id?.toString();
+        validate.assertIsNonEmptyString(actorId, 'Authenticated administrator ID is required');
+        if (!actorId) {
+            throw new Error('Authenticated administrator ID is required');
+        }
 
         const channelService = ChannelService.getInstance();
 
         // Remove from database first
-        const result = await channelService.unregisterChannelMcpServer(channelId, serverId, agentId);
+        await channelService.unregisterChannelMcpServer(channelId, serverId, actorId);
 
         // Then emit event for ExternalMcpServerManager to stop the server
         EventBus.server.emit(McpEvents.CHANNEL_SERVER_UNREGISTER, {
-            eventId: require('uuid').v4(),
+            eventId: uuidv4(),
             eventType: McpEvents.CHANNEL_SERVER_UNREGISTER,
             timestamp: Date.now(),
-            agentId,
+            agentId: actorId,
             channelId,
             data: { serverId, channelId }
         });

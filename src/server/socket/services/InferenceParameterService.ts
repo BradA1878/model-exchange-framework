@@ -87,7 +87,7 @@ interface RequestTracker {
  * Provides parameter resolution, override management, and governance enforcement.
  */
 export class InferenceParameterService {
-    private static instance: InferenceParameterService;
+    private static instance: InferenceParameterService | undefined;
     private logger = logger;
     private eventBus = EventBus.server;
 
@@ -118,6 +118,7 @@ export class InferenceParameterService {
 
     // Event subscriptions for cleanup
     private eventSubscriptions: Array<{ unsubscribe: () => void }> = [];
+    private shutdownComplete = false;
 
     private constructor(providerType: LlmProviderType = LlmProviderType.OPENROUTER) {
         this.providerType = providerType;
@@ -136,6 +137,16 @@ export class InferenceParameterService {
         return InferenceParameterService.instance;
     }
 
+    /** Stop the live singleton without constructing one solely for teardown. */
+    public static shutdownExisting(): boolean {
+        const instance = InferenceParameterService.instance;
+        if (!instance) {
+            return false;
+        }
+        instance.shutdown();
+        return true;
+    }
+
     /**
      * Initialize cleanup timer for stale overrides
      */
@@ -144,6 +155,7 @@ export class InferenceParameterService {
             this.cleanupStaleOverrides();
             this.cleanupStaleTrackers();
         }, this.CLEANUP_INTERVAL);
+        this.cleanupInterval.unref?.();
     }
 
     /**
@@ -997,6 +1009,11 @@ export class InferenceParameterService {
      * Shutdown the service
      */
     public shutdown(): void {
+        if (this.shutdownComplete) {
+            return;
+        }
+        this.shutdownComplete = true;
+
         // Clear cleanup interval
         if (this.cleanupInterval) {
             clearInterval(this.cleanupInterval);
@@ -1005,18 +1022,20 @@ export class InferenceParameterService {
 
         // Unsubscribe from all event listeners
         for (const subscription of this.eventSubscriptions) {
-            try {
-                subscription.unsubscribe();
-            } catch {
-                // Ignore errors during unsubscribe
-            }
+            subscription.unsubscribe();
         }
         this.eventSubscriptions = [];
 
         // Clear state
         this.activeOverrides.clear();
         this.requestTrackers.clear();
+        this.agentConfigs.clear();
+        this.channelDefaults.clear();
+        this.governanceConfigs.clear();
         this.usageMetrics = [];
+        if (InferenceParameterService.instance === this) {
+            InferenceParameterService.instance = undefined;
+        }
         this.logger.info('InferenceParameterService shutdown complete');
     }
 }

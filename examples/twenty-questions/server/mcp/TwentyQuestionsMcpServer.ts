@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 /**
- * Twenty Questions MCP Server (HTTP-based)
+ * Twenty Questions MCP stdio adapter
  *
  * Implements MCP protocol (JSON-RPC over stdio) for game tools.
- * Proxies all tool calls to the game server HTTP API.
+ * Proxies tool calls from the stdio MCP process to the game server HTTP API.
  *
  * Tools:
  * - game_getState: Get current game state
