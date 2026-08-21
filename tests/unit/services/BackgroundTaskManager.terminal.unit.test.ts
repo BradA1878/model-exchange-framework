@@ -26,7 +26,18 @@ class FakeChildProcess extends EventEmitter {
     public readonly stdout = new PassThrough();
     public readonly stderr = new PassThrough();
     public readonly kill = jest.fn((): boolean => true);
+    /** Tasks are signalled as a process group (-pid); see processKill below. */
+    public readonly pid = 4242;
 }
+
+/**
+ * The manager signals the task's whole process group so a `sh -c` wrapper's
+ * children stop too. On Linux, dash forks the command instead of exec'ing it,
+ * and signalling only the shell left the work running and holding the stdio
+ * pipes, so shutdown() waited on a close event that came 30s later. Mocked so
+ * no real group is signalled.
+ */
+const processKill = jest.spyOn(process, 'kill').mockImplementation((): true => true);
 
 describe('BackgroundTaskManager terminal process events', () => {
     const previousWorkspaceRoot = process.env.MXF_WORKSPACE_ROOT;
@@ -35,6 +46,7 @@ describe('BackgroundTaskManager terminal process events', () => {
         process.env.MXF_WORKSPACE_ROOT = process.cwd();
         mockSpawn.mockReset();
         mockEmit.mockReset();
+        processKill.mockClear();
     });
 
     afterEach(async (): Promise<void> => {
@@ -118,7 +130,8 @@ describe('BackgroundTaskManager terminal process events', () => {
         });
 
         expect(manager.cancelTask(taskId, principal)).toBe(true);
-        expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+        expect(processKill).toHaveBeenCalledWith(-child.pid, 'SIGTERM');
+        expect(child.kill).not.toHaveBeenCalled();
 
         const shutdown = manager.shutdown();
         let settled = false;
@@ -128,7 +141,7 @@ describe('BackgroundTaskManager terminal process events', () => {
         await Promise.resolve();
 
         expect(settled).toBe(false);
-        expect(child.kill).toHaveBeenCalledWith('SIGKILL');
+        expect(processKill).toHaveBeenCalledWith(-child.pid, 'SIGKILL');
 
         child.emit('close', null);
         await expect(shutdown).resolves.toBeUndefined();

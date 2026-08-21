@@ -228,6 +228,12 @@ export class BackgroundTaskManager {
         // get the same stripped environment the guarded shell path builds.
         const spawnOptions: SpawnOptions = {
             shell: true,
+            // The command runs under `sh -c`. On Linux, dash forks the command
+            // rather than exec'ing it, so a signal to the shell's pid left the
+            // real work running and holding the stdio pipes — `close` never
+            // fired and shutdown() waited on it. Each task gets its own process
+            // group and is signalled as a group (see signalTask).
+            detached: process.platform !== 'win32',
             cwd: resolveWorkspacePath(
                 options.workingDirectory,
                 'BackgroundTaskManager.startBackground'
@@ -405,7 +411,7 @@ export class BackgroundTaskManager {
                     this.logger.warn(
                         `Background task timed out after ${options.timeout}s: ${taskId}`
                     );
-                    task.process.kill('SIGTERM');
+                    this.signalTask(task, 'SIGTERM');
                     this.scheduleForceKill(task, taskId);
                 }
             }, options.timeout * 1000);
@@ -480,7 +486,7 @@ export class BackgroundTaskManager {
         }
 
         // Send SIGTERM for graceful shutdown
-        task.process.kill('SIGTERM');
+        this.signalTask(task, 'SIGTERM');
 
         // Escalate to SIGKILL after 5 seconds if still alive
         this.scheduleForceKill(task, taskId);
@@ -552,7 +558,7 @@ export class BackgroundTaskManager {
                 }
                 task.endTime ??= Date.now();
                 completions.push(task.completion);
-                task.process.kill('SIGKILL');
+                this.signalTask(task, 'SIGKILL');
             }
         }
 
@@ -569,10 +575,35 @@ export class BackgroundTaskManager {
             task.forceKillTimer = undefined;
             if (task.process) {
                 this.logger.warn(`Force-killing background task: ${taskId} (SIGKILL)`);
-                task.process.kill('SIGKILL');
+                this.signalTask(task, 'SIGKILL');
             }
         }, 5000);
         task.forceKillTimer.unref?.();
+    }
+
+    /**
+     * Deliver a signal to a task's whole process group — the shell and every
+     * process it started — so the work actually stops and its stdio pipes
+     * close. A group that has already exited (ESRCH) is not an error.
+     */
+    private signalTask(task: InternalTask, signal: NodeJS.Signals): void {
+        const child = task.process;
+        if (!child) {
+            return;
+        }
+        // No pid means the process never started, so there is no group to
+        // signal; Windows has no process groups to signal either.
+        if (child.pid === undefined || process.platform === 'win32') {
+            child.kill(signal);
+            return;
+        }
+        try {
+            process.kill(-child.pid, signal);
+        } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== 'ESRCH') {
+                throw error;
+            }
+        }
     }
 
     // ---- Private helpers ----
