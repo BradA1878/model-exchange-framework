@@ -90,6 +90,58 @@ const initializeEventBusHandlers = (): void => {
     }
 };
 
+/** The failure event that answers each MCP server management request. */
+const MCP_REQUEST_FAILURE_EVENTS: ReadonlyMap<string, string> = new Map([
+    [Events.Mcp.CHANNEL_SERVER_REGISTER, Events.Mcp.CHANNEL_SERVER_REGISTRATION_FAILED],
+    [Events.Mcp.CHANNEL_SERVER_UNREGISTER, Events.Mcp.CHANNEL_SERVER_UNREGISTERED],
+    [Events.Mcp.EXTERNAL_SERVER_REGISTER, Events.Mcp.EXTERNAL_SERVER_REGISTRATION_FAILED],
+    [Events.Mcp.EXTERNAL_SERVER_UNREGISTER, Events.Mcp.EXTERNAL_SERVER_UNREGISTERED]
+]);
+
+/**
+ * Answer an MCP server management request on the socket that sent it with the
+ * failure event the SDK is waiting for.
+ *
+ * The SDK correlates these responses on data.serverId and, for channel
+ * servers, data.scopeId. Every refusal — including a denial for a user
+ * without administrator rights — must carry both, or the client never sees
+ * the answer and waits out its request timeout instead.
+ */
+const emitMcpRequestFailure = (
+    socket: Socket,
+    userId: string,
+    requestEvent: string,
+    payload: unknown,
+    error: string
+): void => {
+    const failureEvent = MCP_REQUEST_FAILURE_EVENTS.get(requestEvent);
+    if (!failureEvent) {
+        throw new Error(`No failure event is defined for MCP request ${requestEvent}`);
+    }
+    const envelope = payload !== null && typeof payload === 'object'
+        ? payload as Record<string, unknown>
+        : {};
+    const data = envelope.data !== null && typeof envelope.data === 'object'
+        ? envelope.data as Record<string, unknown>
+        : {};
+    const channelId = typeof envelope.channelId === 'string' &&
+        envelope.channelId.trim().length > 0
+        ? envelope.channelId
+        : 'system';
+    const isChannelScoped = requestEvent.startsWith('mcp:channel:');
+
+    socket.emit(
+        failureEvent,
+        createBaseEventPayload(failureEvent, userId, channelId, {
+            ...(isChannelScoped ? { channelId } : {}),
+            serverId: data.id || data.serverId,
+            scopeId: isChannelScoped ? channelId : undefined,
+            success: false,
+            error
+        })
+    );
+};
+
 /**
  * Setup admin event forwarding for password/JWT/PAT authenticated users
  *
@@ -359,34 +411,18 @@ const setupAdminSocketForwarding = (socket: Socket, userId: string): void => {
             });
         });
 
-        const deniedOperations = new Map<string, string>([
-            [Events.Mcp.CHANNEL_SERVER_REGISTER, Events.Mcp.CHANNEL_SERVER_REGISTRATION_FAILED],
-            [Events.Mcp.CHANNEL_SERVER_UNREGISTER, Events.Mcp.CHANNEL_SERVER_UNREGISTERED],
-            [Events.Mcp.EXTERNAL_SERVER_REGISTER, Events.Mcp.EXTERNAL_SERVER_REGISTRATION_FAILED],
-            [Events.Mcp.EXTERNAL_SERVER_UNREGISTER, Events.Mcp.EXTERNAL_SERVER_UNREGISTERED]
-        ]);
-
-        deniedOperations.forEach((failureEvent, requestEvent) => {
+        // MCP server management needs an administrator. A denial still answers
+        // the request: before this, the reply lacked the scopeId the SDK
+        // correlates on, so a non-admin registration waited out the SDK's
+        // timeout (twice, for a caller that unregisters and retries).
+        MCP_REQUEST_FAILURE_EVENTS.forEach((_failureEvent, requestEvent) => {
             socket.on(requestEvent, (payload: unknown) => {
-                const envelope = payload !== null && typeof payload === 'object'
-                    ? payload as Record<string, unknown>
-                    : {};
-                const data = envelope.data !== null && typeof envelope.data === 'object'
-                    ? envelope.data as Record<string, unknown>
-                    : {};
-                const channelId = typeof envelope.channelId === 'string' &&
-                    envelope.channelId.trim().length > 0
-                    ? envelope.channelId
-                    : 'system';
-
-                socket.emit(
-                    failureEvent,
-                    createBaseEventPayload(failureEvent, userId, channelId, {
-                        channelId,
-                        serverId: data.id || data.serverId,
-                        success: false,
-                        error: 'Administrator privileges are required for this operation'
-                    })
+                emitMcpRequestFailure(
+                    socket,
+                    userId,
+                    requestEvent,
+                    payload,
+                    'Administrator privileges are required for this operation'
                 );
             });
         });
@@ -441,38 +477,8 @@ const setupAdminSocketForwarding = (socket: Socket, userId: string): void => {
         );
     };
 
-    const emitAdminMcpFailure = (
-        requestEvent: string,
-        payload: unknown,
-        error: string
-    ): void => {
-        const envelope = payload !== null && typeof payload === 'object'
-            ? payload as Record<string, unknown>
-            : {};
-        const data = envelope.data !== null && typeof envelope.data === 'object'
-            ? envelope.data as Record<string, unknown>
-            : {};
-        const channelId = typeof envelope.channelId === 'string' &&
-            envelope.channelId.trim().length > 0
-            ? envelope.channelId
-            : 'system';
-        const failureEvent = requestEvent === Events.Mcp.EXTERNAL_SERVER_REGISTER
-            ? Events.Mcp.EXTERNAL_SERVER_REGISTRATION_FAILED
-            : requestEvent === Events.Mcp.EXTERNAL_SERVER_UNREGISTER
-                ? Events.Mcp.EXTERNAL_SERVER_UNREGISTERED
-                : requestEvent === Events.Mcp.CHANNEL_SERVER_REGISTER
-                    ? Events.Mcp.CHANNEL_SERVER_REGISTRATION_FAILED
-                    : Events.Mcp.CHANNEL_SERVER_UNREGISTERED;
-
-        socket.emit(
-            failureEvent,
-            createBaseEventPayload(failureEvent, userId, channelId, {
-                serverId: data.id || data.serverId,
-                scopeId: requestEvent.startsWith('mcp:channel:') ? channelId : undefined,
-                success: false,
-                error
-            })
-        );
+    const emitAdminMcpFailure = (requestEvent: string, payload: unknown, error: string): void => {
+        emitMcpRequestFailure(socket, userId, requestEvent, payload, error);
     };
 
     // ── Outbound: admin socket → EventBus.server (requests) ──

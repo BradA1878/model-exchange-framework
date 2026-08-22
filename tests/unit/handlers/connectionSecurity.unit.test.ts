@@ -512,6 +512,64 @@ describe('connection security', () => {
         ]));
     });
 
+    it('answers a non-admin channel MCP request with a denial the SDK can correlate', async () => {
+        // The SDK matches CHANNEL_SERVER_REGISTERED / _REGISTRATION_FAILED and
+        // CHANNEL_SERVER_UNREGISTERED on data.serverId AND data.scopeId. A denial
+        // that omits scopeId is never matched: the request waits out the SDK's
+        // 30s timeout and a caller that unregisters-and-retries pays it twice.
+        const socket = new FakeSocket();
+        const socketService = buildSocketService();
+        mockHandleSocketAuthentication.mockImplementation(async (targetSocket: FakeSocket) => {
+            targetSocket.data = {
+                userId: 'user-1',
+                username: 'reader',
+                role: UserRole.CONSUMER,
+                authType: 'pat',
+                authenticated: true
+            };
+            return 'user-1';
+        });
+
+        handleConnection(socket as never, socketService as never);
+        await flushPromises();
+        (EventBus.server.emit as jest.Mock).mockClear();
+
+        socket.emit(Events.Mcp.CHANNEL_SERVER_REGISTER, {
+            eventId: 'register-request',
+            eventType: Events.Mcp.CHANNEL_SERVER_REGISTER,
+            agentId: 'user-1',
+            channelId: 'sentinel-alpha',
+            data: { id: 'sentinel-tools', channelId: 'sentinel-alpha', command: 'node', args: ['tools.js'] }
+        });
+        socket.emit(Events.Mcp.CHANNEL_SERVER_UNREGISTER, {
+            eventId: 'unregister-request',
+            eventType: Events.Mcp.CHANNEL_SERVER_UNREGISTER,
+            agentId: 'user-1',
+            channelId: 'sentinel-alpha',
+            data: { serverId: 'sentinel-tools', channelId: 'sentinel-alpha' }
+        });
+        await flushPromises();
+
+        // Nothing reaches the server-side handlers.
+        expect(EventBus.server.emit).not.toHaveBeenCalled();
+
+        const sdkMatches = (payload: unknown): boolean => {
+            const data = (payload as { data?: { serverId?: unknown; scopeId?: unknown } }).data;
+            return data?.serverId === 'sentinel-tools' && data?.scopeId === 'sentinel-alpha';
+        };
+        const registrationDenial = socket.emitted.find(e => e.event === Events.Mcp.CHANNEL_SERVER_REGISTRATION_FAILED);
+        const unregistrationDenial = socket.emitted.find(e => e.event === Events.Mcp.CHANNEL_SERVER_UNREGISTERED);
+        expect(registrationDenial && sdkMatches(registrationDenial.payload)).toBe(true);
+        expect(unregistrationDenial && sdkMatches(unregistrationDenial.payload)).toBe(true);
+        expect(registrationDenial?.payload).toMatchObject({
+            channelId: 'sentinel-alpha',
+            data: { success: false, error: expect.stringContaining('Administrator') }
+        });
+        expect(unregistrationDenial?.payload).toMatchObject({
+            data: { success: false, error: expect.stringContaining('Administrator') }
+        });
+    });
+
     it('denies opening an existing foreign channel through Channel.CREATE', async () => {
         const socket = new FakeSocket();
         const socketService = buildSocketService();
