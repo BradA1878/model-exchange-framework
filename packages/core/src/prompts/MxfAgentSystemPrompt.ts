@@ -43,6 +43,8 @@ import { PROMPT_TEMPLATES } from '../utils/PromptTemplateReplacer.js';
 import { ToolBehavioralGuidance } from './ToolBehavioralGuidance.js';
 import { DeferredToolSchemaRegistry } from './DeferredToolSchemaRegistry.js';
 import { loadPromptCompactionConfig } from '../config/PromptCompactionConfig.js';
+import { SYSTEM_CHALLENGE_PREFIX } from './SystemLlmStanceGuidance.js';
+import { TASK_COMPLETION_CHALLENGED_STATUS } from '../types/SystemLlmStanceTypes.js';
 
 const logger = new Logger('info', 'MxfAgentSystemPrompt', 'client');
 const validator = createStrictValidator('MxfAgentSystemPrompt');
@@ -903,7 +905,12 @@ You may occasionally receive messages with special prefixes or metadata:
 - Use them as context for your work
 - Continue your task execution
 
-**Important:** SystemLLM messages and SYSTEM: prefixed messages are ephemeral coordination metadata that should not interrupt your autonomous task execution. Treat them as background context only.`;
+**Important:** SystemLLM messages and SYSTEM: prefixed messages are ephemeral coordination metadata that should not interrupt your autonomous task execution. Treat them as background context only.
+
+**The one exception** is a message starting with "${SYSTEM_CHALLENGE_PREFIX}", or a \`task_complete\` result with \`status: "${TASK_COMPLETION_CHALLENGED_STATUS}"\`. Those are SystemLLM disputing something you claimed, and they do need an answer. Whether you will see them depends on the stance below.
+
+### Stance
+${PROMPT_TEMPLATES.SYSTEM_LLM_STANCE_GUIDANCE}`;
     }
 
     /**
@@ -927,6 +934,7 @@ You may occasionally receive messages with special prefixes or metadata:
 **OS Platform**: ${PROMPT_TEMPLATES.OS_PLATFORM}
 **Your LLM Configuration**: ${PROMPT_TEMPLATES.LLM_PROVIDER} (${PROMPT_TEMPLATES.LLM_MODEL})
 **SystemLLM Status**: ${PROMPT_TEMPLATES.SYSTEM_LLM_STATUS}
+**SystemLLM Stance**: ${PROMPT_TEMPLATES.SYSTEM_LLM_STANCE}
 **Active Agents in Channel**: ${PROMPT_TEMPLATES.ACTIVE_AGENTS_COUNT} - ${PROMPT_TEMPLATES.ACTIVE_AGENTS_LIST}
 
 **Current Task**: ${PROMPT_TEMPLATES.CURRENT_TASK_TITLE}

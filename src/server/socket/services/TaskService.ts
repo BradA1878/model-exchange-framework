@@ -58,6 +58,13 @@ import {
     TaskCompletionMonitoringService
 } from './TaskCompletionMonitoringService';
 import { TaskCompletionConfig } from '@mxf-dev/core/types/TaskCompletionTypes';
+import {
+    TASK_COMPLETION_CHALLENGED_STATUS,
+    TASK_METADATA_CHALLENGES_KEY,
+    type SystemLlmChallenge,
+    type SystemLlmChallengeRecord
+} from '@mxf-dev/core/types/SystemLlmStanceTypes';
+import { SystemLlmChallengeService } from './SystemLlmChallengeService';
 import { TaskDagService } from '@mxf-dev/core/services/dag/TaskDagService';
 import { isDagEnabled, isDagEnforcementEnabled } from '@mxf-dev/core/config/dag.config';
 import { DagEvents } from '@mxf-dev/core/events/event-definitions/DagEvents';
@@ -2253,6 +2260,72 @@ Respond with JSON:
     }
 
     /**
+     * The active task whose terminal outcome this agent may report: a task it
+     * is assigned to, or one that names it as the completion agent (which
+     * overrides the assignee-based policy). Null when there is none.
+     */
+    public async findActiveTaskForAgent(channelId: ChannelId, agentId: AgentId): Promise<ChannelTask | null> {
+        this.validator.assertIsNonEmptyString(channelId, 'channelId is required');
+        this.validator.assertIsNonEmptyString(agentId, 'agentId is required');
+
+        const activeTasks = await this.getTasks({ channelId });
+        const agentTask = activeTasks.find(task => {
+            const canReportTerminalOutcome = task.completionAgentId
+                ? task.completionAgentId === agentId
+                : task.assignedAgentIds?.includes(agentId) || task.assignedAgentId === agentId;
+            return canReportTerminalOutcome &&
+                task.status !== 'completed' &&
+                task.status !== 'failed' &&
+                task.status !== 'cancelled';
+        });
+        return agentTask ?? null;
+    }
+
+    /**
+     * Append a SystemLLM challenge record to the task's metadata. The record
+     * is what makes each trigger challenge-once per task, and it is the audit
+     * trail of what SystemLLM disputed.
+     *
+     * The write is conditional on no record for the same trigger existing, so
+     * two overlapping claims cannot both record a challenge: the check before
+     * the model call is a snapshot, this is the guard that holds.
+     *
+     * @returns true when recorded; false when the task already carries a
+     *          record for this trigger (the caller must not issue the challenge)
+     * @throws Error when the task does not exist in the channel
+     */
+    public async recordSystemLlmChallenge(
+        taskId: string,
+        channelId: ChannelId,
+        record: SystemLlmChallengeRecord
+    ): Promise<boolean> {
+        this.validator.assertIsNonEmptyString(taskId, 'taskId is required');
+        this.validator.assertIsNonEmptyString(channelId, 'channelId is required');
+        this.validator.assertIsNonEmptyString(record.id, 'record.id is required');
+
+        const challengesPath = `metadata.${TASK_METADATA_CHALLENGES_KEY}`;
+        const result = await Task.updateOne(
+            {
+                _id: taskId,
+                channelId,
+                [`${challengesPath}.trigger`]: { $ne: record.trigger }
+            },
+            {
+                $push: { [challengesPath]: record },
+                $set: { updatedAt: new Date() }
+            }
+        );
+        if (result.matchedCount > 0) {
+            return true;
+        }
+        const exists = await Task.exists({ _id: taskId, channelId });
+        if (!exists) {
+            throw new Error(`Cannot record SystemLLM challenge: task ${taskId} not found in channel ${channelId}`);
+        }
+        return false;
+    }
+
+    /**
      * Handle task completion from agent's task_complete tool call
      * This centralizes all task completion logic and ensures single event emission
      */
@@ -2266,7 +2339,14 @@ Respond with JSON:
             nextSteps?: string;
             requestId: string;
         }
-    ): Promise<{ status: string; message: string; taskId?: string; nextSteps?: string }> {
+    ): Promise<{
+        status: string;
+        message: string;
+        taskId?: string;
+        nextSteps?: string;
+        /** Present when the claim was challenged instead of accepted (critical or hostile stance). */
+        challenge?: Pick<SystemLlmChallenge, 'id' | 'stance' | 'trigger' | 'summary' | 'points'>;
+    }> {
         try {
             
             const validator = createStrictValidator('TaskService.handleTaskCompletion');
@@ -2275,24 +2355,44 @@ Respond with JSON:
             validator.assertIsNonEmptyString(completionData.summary, 'completion summary is required');
             validator.assertIsNonEmptyString(completionData.requestId, 'requestId is required');
             
-            // Find the active task whose terminal authority belongs to this
-            // agent. A designated completion agent overrides the otherwise
-            // assignee-based completion policy.
-            const activeTasks = await this.getTasks({ channelId });
-            const agentTask = activeTasks.find(task => {
-                const canReportTerminalOutcome = task.completionAgentId
-                    ? task.completionAgentId === agentId
-                    : task.assignedAgentIds?.includes(agentId) || task.assignedAgentId === agentId;
-                return canReportTerminalOutcome &&
-                    task.status !== 'completed' &&
-                    task.status !== 'failed' &&
-                    task.status !== 'cancelled';
-            });
-            
+            const agentTask = await this.findActiveTaskForAgent(channelId, agentId);
             if (!agentTask) {
                 throw new Error(
                     `No active task is assigned to agent ${agentId} in channel ${channelId}`
                 );
+            }
+
+            const reportedSuccess = completionData.success !== false;
+
+            // In critical or hostile stance, SystemLLM gets to dispute a success
+            // claim before the task is marked complete. A failure report is not
+            // a claim of success and is never challenged. Each task is
+            // challenged on completion at most once; the next claim goes through.
+            // If a challenge is required and cannot be produced, this throws and
+            // the task stays where it is — no silent, unchallenged completions.
+            if (reportedSuccess) {
+                const challenge = await SystemLlmChallengeService.getInstance().challengeCompletionClaim({
+                    task: agentTask,
+                    agentId,
+                    channelId,
+                    summary: completionData.summary,
+                    details: completionData.details
+                });
+                if (challenge) {
+                    return {
+                        status: TASK_COMPLETION_CHALLENGED_STATUS,
+                        message: `Completion of task ${agentTask.id} was challenged by SystemLLM (${challenge.stance} stance). ` +
+                            'Address each point with evidence, or explain why it is wrong, then call task_complete again.',
+                        taskId: agentTask.id,
+                        challenge: {
+                            id: challenge.id,
+                            stance: challenge.stance,
+                            trigger: challenge.trigger,
+                            summary: challenge.summary,
+                            points: challenge.points
+                        }
+                    };
+                }
             }
 
             const completionOutput = {
@@ -2304,10 +2404,9 @@ Respond with JSON:
                 ...(completionData.nextSteps !== undefined
                     ? { nextSteps: completionData.nextSteps }
                     : {}),
-                reportedSuccess: completionData.success !== false,
+                reportedSuccess,
                 requestId: completionData.requestId
             };
-            const reportedSuccess = completionData.success !== false;
             const updatedTask = await this.transitionTaskInChannel(
                 agentTask.id,
                 channelId,

@@ -1,11 +1,42 @@
 import { ConfigManager } from '@mxf-dev/core/config/ConfigManager';
 import { Channel, IChannel } from '@mxf-dev/core/models/channel';
 import { McpService } from '../../socket/services/McpService';
+import { isSystemLlmStance, SYSTEMLLM_STANCES } from '@mxf-dev/core/types/SystemLlmStanceTypes';
+import { Logger } from '@mxf-dev/core/utils/Logger';
+
+const logger = new Logger('info', 'ChannelRuntimePolicy', 'server');
 
 type PersistedChannelRuntimePolicy = Pick<
     IChannel,
-    'channelId' | 'allowedTools' | 'systemLlmEnabled'
+    'channelId' | 'allowedTools' | 'systemLlmEnabled' | 'systemLlmStance'
 >;
+
+/**
+ * Install a persisted channel's SystemLLM stance into ConfigManager. A
+ * document without a stance inherits the server-wide one, so any stale
+ * channel-level stance is cleared. A value that is not a stance is a data
+ * error and is refused rather than guessed at.
+ */
+export const hydrateChannelSystemLlmStance = (channelId: string, stance: unknown): void => {
+    const configManager = ConfigManager.getInstance();
+    if (stance === undefined || stance === null) {
+        configManager.clearChannelSystemLlmStance(channelId);
+        return;
+    }
+    if (!isSystemLlmStance(stance)) {
+        throw new Error(
+            `Channel ${channelId} has an invalid systemLlmStance '${String(stance)}'. ` +
+            `Expected one of: ${SYSTEMLLM_STANCES.join(', ')}`
+        );
+    }
+    configManager.setChannelSystemLlmStance(stance, channelId);
+    const effective = configManager.getChannelSystemLlmStance(channelId);
+    if (effective !== stance) {
+        logger.info(
+            `Channel ${channelId} asks for SystemLLM stance '${stance}'; SYSTEMLLM_STANCE_MAX caps it at '${effective}'`
+        );
+    }
+};
 
 /**
  * Install a persisted channel's runtime policy into the synchronous services
@@ -33,6 +64,7 @@ export const hydrateChannelRuntimePolicy = (
             ? undefined
             : 'Channel runtime policy loaded from persistence'
     );
+    hydrateChannelSystemLlmStance(channelId, channel.systemLlmStance);
 };
 
 /**

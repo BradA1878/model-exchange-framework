@@ -36,6 +36,8 @@ import type { ChannelTask, TaskStatus } from '@mxf-dev/core/types/TaskTypes';
 import type { TaskDocument } from '@mxf-dev/core/models/task';
 import PlanModel from '@mxf-dev/core/models/plan';
 import { SystemLlmServiceManager } from './SystemLlmServiceManager';
+import { buildCompletionJudgePrompt } from './SystemLlmStancePrompts';
+import { ConfigManager } from '@mxf-dev/core/config/ConfigManager';
 
 type MonitoredTask = TaskDocument | ChannelTask;
 
@@ -512,14 +514,21 @@ export class TaskCompletionMonitoringService {
             throw new Error(`SystemLLM is unavailable for channel ${task.channelId}`);
         }
 
-        const prompt = `Evaluate whether every objective for this task is complete.\n\n` +
-            `Task: ${task.title}\nDescription: ${task.description}\n` +
-            `Objectives:\n${criteria.objectives.map(objective => `- ${objective}`).join('\n')}\n\n` +
-            `Evidence: ${state.evidence.messages.length} messages, ` +
-            `${state.evidence.toolCalls.length} tool calls.\n` +
-            'Respond exactly as: <complete>YES/NO</complete> ' +
-            '<confidence>0.X</confidence> <reason>Brief explanation</reason>';
+        // The evidence the listeners collected goes to the judge in full (bounded
+        // by EVIDENCE_CAPS). This used to send only the counts — "12 messages,
+        // 5 tool calls" — which left the judge deciding without seeing the work.
+        // The stance picks the prompt: critical demands evidence per objective.
+        const stance = ConfigManager.getInstance().getChannelSystemLlmStance(task.channelId);
+        const prompt = buildCompletionJudgePrompt(
+            stance,
+            { title: task.title, description: task.description },
+            criteria.objectives,
+            state.evidence
+        );
 
+        // degrade: false — a verdict must come from the model. A fabricated
+        // "service unavailable" reply would fail the format check with a
+        // misleading reason; the real provider error is the honest one.
         const response = await systemLlm.sendLlmRequest(
             prompt,
             undefined,
@@ -527,7 +536,8 @@ export class TaskCompletionMonitoringService {
                 model: systemLlm.getModelForOperation('reasoning'),
                 operationType: 'reasoning',
                 temperature: 0.3,
-                maxTokens: 200
+                maxTokens: 200,
+                degrade: false
             }
         );
         const parsed = response.trim().match(

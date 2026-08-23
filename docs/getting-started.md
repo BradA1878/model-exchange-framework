@@ -204,6 +204,10 @@ SYSTEMLLM_DEFAULT_MODEL=~anthropic/claude-sonnet-latest
 # SYSTEMLLM_MODEL_REFLECTION=
 # Complexity-based upgrades into the latest Claude aliases; off by default, opt in with true
 # SYSTEMLLM_DYNAMIC_MODEL_SELECTION=true
+# How SystemLLM treats agents: supportive (default), critical, or hostile (test mode)
+# SYSTEMLLM_STANCE=supportive
+# Server-wide ceiling on every channel's stance; unset means no ceiling
+# SYSTEMLLM_STANCE_MAX=hostile
 # Hard daily spend ceiling in USD; calls are refused once spend reaches it (default: 10)
 SYSTEMLLM_DAILY_BUDGET_USD=10
 # Fraction of the ceiling at which a warning is logged (default: 0.8)
@@ -1126,6 +1130,8 @@ SYSTEMLLM_MODEL_ACTION         # Per-operation override for the action phase (op
 SYSTEMLLM_MODEL_PLANNING       # Per-operation override for the planning phase (optional)
 SYSTEMLLM_MODEL_REFLECTION     # Per-operation override for the reflection phase (optional)
 SYSTEMLLM_DYNAMIC_MODEL_SELECTION  # Complexity-based upgrades into the latest Claude aliases (default: false)
+SYSTEMLLM_STANCE               # How SystemLLM treats agents: supportive (default), critical, or hostile (test mode)
+SYSTEMLLM_STANCE_MAX           # Ceiling on every channel's stance: supportive, critical, or hostile (default: hostile, no ceiling)
 SYSTEMLLM_DAILY_BUDGET_USD     # Daily spend ceiling in USD; calls refused past it (default: 10)
 SYSTEMLLM_BUDGET_WARN_AT       # Fraction of the ceiling that triggers a warning (default: 0.8)
 

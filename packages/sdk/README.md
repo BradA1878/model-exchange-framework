@@ -46,6 +46,25 @@ bun add @mxf-dev/sdk
 MXF server development uses Bun. The published SDK is ESM-only and supports Bun
 >= 1.2 or Node.js >= 20.19 for client applications.
 
+### New in 3.1
+
+3.1 adds the SystemLLM stance. Nothing changes for existing code; the defaults
+keep 3.0 behavior.
+
+- **`createChannel(id, { systemLlmStance })`** accepts `'supportive' | 'critical'
+  | 'hostile'`; omit it to inherit the server's `SYSTEMLLM_STANCE`. The effective
+  stance arrives in the channel config at join and is rendered into the agent's
+  system prompt.
+- **`task_complete` can return `status: "completion_challenged"`** in a critical
+  or hostile channel, with a `challenge` listing disputed points. The task is
+  still the agent's; it answers the points and calls `task_complete` again.
+- **Challenge messages are answered.** A channel message from `system` with
+  `context.messageType: "systemllm_challenge"` addressed to the agent is stored
+  with `requiresResponse` and the agent takes a turn on it. Coordination hints
+  are still stored as context only.
+
+See the server's `docs/mxf/system-llm.md`, "Stance".
+
 ### Upgrading to 3.0
 
 3.0 tightens the public contract. What changed for code written against 2.x:

@@ -43,6 +43,7 @@ import { loadPromptCompactionConfig } from '@mxf-dev/core/config/PromptCompactio
 import { EventBus } from '@mxf-dev/core/events/EventBus';
 import { Events } from '@mxf-dev/core/events/EventNames';
 import { createMicrocompactionAppliedPayload } from '@mxf-dev/core/schemas/EventPayloadSchema';
+import { isSystemLlmStance } from '@mxf-dev/core/types/SystemLlmStanceTypes';
 
 /**
  * Build AgentContext from current agent state
@@ -107,6 +108,8 @@ export class MxfContextBuilder {
 
             // System status (from channel config)
             systemLlmEnabled: channelConfig?.systemLlmEnabled || false,
+            // Effective stance the server sent at join; anything else renders as supportive
+            systemLlmStance: isSystemLlmStance(channelConfig?.systemLlmStance) ? channelConfig.systemLlmStance : undefined,
 
             // Control loop state - ORPAR phase tracking via event-based updates
             currentOrparPhase: currentOrparPhase || null,

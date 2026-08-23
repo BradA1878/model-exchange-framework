@@ -44,6 +44,7 @@ import { ConfigManager } from '@mxf-dev/core/config/ConfigManager';
 import { PersonalAccessTokenService } from '../../api/services/PersonalAccessTokenService';
 import { verifySessionToken } from '../../api/security/jwtTokenPolicy';
 import { consumeSocketPasswordAttempt } from '../security/SocketPasswordRateLimiter';
+import type { SystemLlmStance } from '@mxf-dev/core/types/SystemLlmStanceTypes';
 
 // Create module logger
 const moduleLogger = logger.child('AuthenticationHandlers');
@@ -54,6 +55,8 @@ interface SocketChannelConfig {
     description?: string;
     showActiveAgents: boolean;
     systemLlmEnabled: boolean;
+    /** Effective stance: the channel's own, or the server's SYSTEMLLM_STANCE. */
+    systemLlmStance: SystemLlmStance;
 }
 
 /**
@@ -507,9 +510,11 @@ export const sendAuthResponse = async (
                     const channel = await Channel.findOne({ channelId }).exec();
 
                     if (channel) {
-                        // Get systemLlmEnabled status from ConfigManager
+                        // Get the SystemLLM settings from ConfigManager: the enabled flag and
+                        // the effective stance (channel override, else the server default).
                         const configManager = ConfigManager.getInstance();
                         const systemLlmEnabled = configManager.isChannelSystemLlmEnabled(channelId);
+                        const systemLlmStance = configManager.getChannelSystemLlmStance(channelId);
 
                         // Extract relevant config for SDK
                         channelConfig = {
@@ -517,7 +522,8 @@ export const sendAuthResponse = async (
                             name: channel.name,
                             description: channel.description,
                             showActiveAgents: channel.showActiveAgents !== false, // Default to true
-                            systemLlmEnabled
+                            systemLlmEnabled,
+                            systemLlmStance
                         };
 
                         // Get active agents if showActiveAgents is enabled

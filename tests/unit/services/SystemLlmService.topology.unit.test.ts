@@ -2,6 +2,9 @@ type EventHandler = (payload: unknown) => unknown;
 
 const mockListeners = new Map<string, Set<EventHandler>>();
 const mockIsChannelSystemLlmEnabled = jest.fn();
+const mockSetChannelSystemLlmStance = jest.fn();
+const mockSetChannelSystemLlmStanceCeiling = jest.fn();
+const mockGetChannelSystemLlmStance = jest.fn(() => 'supportive');
 
 const mockServerEventBus = {
     on: jest.fn((event: string, handler: EventHandler) => {
@@ -48,8 +51,16 @@ jest.mock('@mxf-dev/core/config/ConfigManager', () => ({
         CHANNEL_SYSTEM_LLM_CHANGED: 'config:channel_system_llm_changed'
     },
     ConfigManager: {
-        getInstance: (): { isChannelSystemLlmEnabled: typeof mockIsChannelSystemLlmEnabled } => ({
-            isChannelSystemLlmEnabled: mockIsChannelSystemLlmEnabled
+        getInstance: (): {
+            isChannelSystemLlmEnabled: typeof mockIsChannelSystemLlmEnabled;
+            setChannelSystemLlmStance: typeof mockSetChannelSystemLlmStance;
+            setChannelSystemLlmStanceCeiling: typeof mockSetChannelSystemLlmStanceCeiling;
+            getChannelSystemLlmStance: typeof mockGetChannelSystemLlmStance;
+        } => ({
+            isChannelSystemLlmEnabled: mockIsChannelSystemLlmEnabled,
+            setChannelSystemLlmStance: mockSetChannelSystemLlmStance,
+            setChannelSystemLlmStanceCeiling: mockSetChannelSystemLlmStanceCeiling,
+            getChannelSystemLlmStance: mockGetChannelSystemLlmStance
         })
     }
 }));
@@ -119,6 +130,12 @@ interface SystemLlmServiceInternals {
         message: unknown,
         lifecycleGeneration: number
     ) => Promise<string | null>;
+    injectSystemCoordinationMessage: (
+        channelId: string,
+        content: string,
+        coordinationType: string,
+        stance?: string
+    ) => Promise<void>;
     initClient: () => Promise<{ sendMessage: jest.Mock }>;
     sendLlmRequestInternal: (...args: unknown[]) => Promise<string>;
     sendLlmRequestWithRecovery: (...args: unknown[]) => Promise<string>;
@@ -685,6 +702,68 @@ describe('SystemLlmService per-channel topology and lifecycle', () => {
         await Promise.resolve();
         expect(mockServerEventBus.emit).not.toHaveBeenCalled();
     });
+    describe('stance hints', () => {
+        const activity = {
+            channelId: CHANNEL_A,
+            activeAgents: new Set(['agent-a', 'agent-b']),
+            recentMessages: [],
+            messageCount: 3
+        };
+
+        it('sends nothing when the critical stance answers NONE', async () => {
+            mockGetChannelSystemLlmStance.mockReturnValue('critical');
+            const service = manager.getServiceForChannel(CHANNEL_A)!;
+            const internals = serviceInternals(service);
+            jest.spyOn(internals, 'sendLlmRequestWithRecovery').mockResolvedValue('NONE');
+
+            await expect(internals.generateCoordinationSuggestionContent(
+                'high_activity', { opportunities: [] }, activity, null, internals.lifecycleGeneration
+            )).resolves.toBeNull();
+        });
+
+        it('uses the canned hint only in supportive stance when the model call fails', async () => {
+            const service = manager.getServiceForChannel(CHANNEL_A)!;
+            const internals = serviceInternals(service);
+            jest.spyOn(internals, 'sendLlmRequestWithRecovery').mockRejectedValue(new Error('provider down'));
+
+            mockGetChannelSystemLlmStance.mockReturnValue('supportive');
+            await expect(internals.generateCoordinationSuggestionContent(
+                'high_activity', { opportunities: [] }, activity, null, internals.lifecycleGeneration
+            )).resolves.toMatch(/^💡 System coordination insight:/);
+
+            // A canned hint is not a critical or hostile hint.
+            mockGetChannelSystemLlmStance.mockReturnValue('critical');
+            await expect(internals.generateCoordinationSuggestionContent(
+                'high_activity', { opportunities: [] }, activity, null, internals.lifecycleGeneration
+            )).resolves.toBeNull();
+            mockGetChannelSystemLlmStance.mockReturnValue('hostile');
+            await expect(internals.generateCoordinationSuggestionContent(
+                'high_activity', { opportunities: [] }, activity, null, internals.lifecycleGeneration
+            )).resolves.toBeNull();
+        });
+
+        it('tags a hostile or critical hint with its stance, and leaves a supportive hint untouched', async () => {
+            const service = manager.getServiceForChannel(CHANNEL_A)!;
+            const internals = serviceInternals(service);
+            const contextOfLastEmit = (): Record<string, unknown> => {
+                const calls = mockServerEventBus.emit.mock.calls as Array<[string, { data: { context: Record<string, unknown> } }]>;
+                const last = calls[calls.length - 1];
+                expect(last[0]).toBe(Events.Message.CHANNEL_MESSAGE);
+                return last[1].data.context;
+            };
+
+            await internals.injectSystemCoordinationMessage(CHANNEL_A, 'a wrong hint', 'high_activity', 'hostile');
+            expect(contextOfLastEmit()).toEqual(expect.objectContaining({
+                messageType: 'coordination_suggestion',
+                source: 'SystemLlmService',
+                stance: 'hostile'
+            }));
+
+            await internals.injectSystemCoordinationMessage(CHANNEL_A, 'a real hint', 'complementary_skills');
+            expect(contextOfLastEmit()).not.toHaveProperty('stance');
+        });
+    });
+
 });
 
 describe('SystemLlmService complexity upgrades', () => {

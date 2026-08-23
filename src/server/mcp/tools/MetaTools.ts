@@ -30,6 +30,7 @@ import { firstValueFrom, Observable } from 'rxjs';
 import { createStrictValidator } from '@mxf-dev/core/utils/validation';
 import { Logger } from '@mxf-dev/core/utils/Logger';
 import { SystemLlmServiceManager } from '../../socket/services/SystemLlmServiceManager';
+import { TASK_COMPLETION_CHALLENGED_STATUS } from '@mxf-dev/core/types/SystemLlmStanceTypes';
 import { TOOL_RECOMMENDATION_SCHEMA } from '@mxf-dev/core/schemas/JsonResponseSchemas';
 import { getHybridMcpToolRegistry } from '../services/HybridMcpRegistryAccess';
 import type { HybridMcpTool } from '../services/HybridMcpToolRegistry';
@@ -665,7 +666,8 @@ export const tools_recommend = {
  */
 export const task_complete = {
     name: META_TOOLS.TASK_COMPLETE,
-    description: 'REQUIRED: Call this tool when you have finished an assigned task. This is MANDATORY - tasks are NOT complete until you call this tool. It signals the task management system that your work is finished.',
+    description: 'REQUIRED: Call this tool when you have finished an assigned task. This is MANDATORY - tasks are NOT complete until you call this tool. It signals the task management system that your work is finished. ' +
+        `When the channel's SystemLLM stance is critical or hostile, a success claim may come back with status "${TASK_COMPLETION_CHALLENGED_STATUS}" and a challenge listing disputed points; the task is then still yours. Answer each point with evidence (or say why it is wrong) and call this tool again.`,
     inputSchema: {
         type: 'object',
         properties: {
@@ -750,6 +752,8 @@ export const task_complete = {
             message: result.message,
             taskId: result.taskId,
             nextSteps: result.nextSteps,
+            // Present only when SystemLLM challenged the claim instead of accepting it.
+            ...(result.challenge ? { challenge: result.challenge } : {}),
             processingTime: Date.now() - startTime
         };
     }

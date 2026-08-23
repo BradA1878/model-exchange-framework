@@ -38,6 +38,20 @@ import type { ConversationMessageInput } from '../managers/MxfMemoryManager.js';
 import { v4 as uuidv4 } from 'uuid';
 import { MxpMiddleware } from '@mxf-dev/core/middleware/MxpMiddleware';
 import { isMxpMessage } from '@mxf-dev/core/schemas/MxpProtocolSchemas';
+import { SYSTEMLLM_CHALLENGE_MESSAGE_TYPE } from '@mxf-dev/core/types/SystemLlmStanceTypes';
+
+/** The parts of a CHANNEL_MESSAGE carrying a SystemLLM challenge that the handler reads. */
+interface SystemLlmChallengeEventData {
+    receiverId?: string;
+    content?: string | { data?: unknown };
+    context?: {
+        stance?: string;
+        challengeId?: string;
+        trigger?: string;
+        taskId?: string;
+        targetAgentId?: string;
+    };
+}
 // ActionHistoryService removed - action history is now handled at the MxfAgent level
 // to maintain proper client/server architectural boundaries
 
@@ -417,6 +431,15 @@ export class MxfEventHandlerService {
             return; // Don't respond to our own messages
         }
         
+        // A SystemLLM challenge (critical or hostile stance) is the one system
+        // message that asks for an answer. Addressed to one agent: that agent
+        // takes a turn with the challenge as its current message; everyone else
+        // in the channel keeps it as context only.
+        if (eventData.senderId === 'system' && eventData.context?.messageType === SYSTEMLLM_CHALLENGE_MESSAGE_TYPE) {
+            await this.handleSystemLlmChallenge(eventData, payload);
+            return;
+        }
+
         // Special handling for SystemLLM messages - add to history but don't trigger immediate response
         if (eventData.senderId === 'system' && eventData.context?.source === 'SystemLlmService') {
             
@@ -539,6 +562,84 @@ export class MxfEventHandlerService {
             this.logger.error(`❌ CHANNEL FEEDBACK ERROR: Failed to process channel message from ${senderAgentId}: ${error}`);
             throw error;
         }
+    }
+
+    /**
+     * Handle a SystemLLM challenge message.
+     *
+     * The challenge text already starts with SYSTEM_CHALLENGE_PREFIX and says
+     * what a good answer looks like; the system prompt's stance guidance told
+     * the agent what to expect. So the message goes into history as-is, marked
+     * as requiring a response, and the agent takes a turn on it — unlike a
+     * coordination hint, which is stored and never answered.
+     */
+    private async handleSystemLlmChallenge(
+        eventData: SystemLlmChallengeEventData,
+        payload: BaseEventPayload<unknown>
+    ): Promise<void> {
+        const context = eventData.context ?? {};
+        const content = eventData.content;
+        const text = typeof content === 'string'
+            ? content
+            : typeof content?.data === 'string'
+                ? content.data
+                : JSON.stringify(content?.data ?? content);
+        // A challenge is always addressed to one agent. One that is not is kept
+        // as context only: treating it as "for me" would make every agent in the
+        // channel answer at once.
+        const targetAgentId: string | undefined = eventData.receiverId ?? context.targetAgentId;
+        const forThisAgent = targetAgentId === this.agentId;
+
+        const metadata: NonNullable<ConversationMessage['metadata']> = {
+            messageType: 'systemllm-challenge',
+            source: 'SystemLlmService',
+            stance: context.stance,
+            challengeId: context.challengeId,
+            challengeTrigger: context.trigger,
+            taskId: context.taskId,
+            toAgentId: targetAgentId,
+            requiresResponse: forThisAgent,
+            ephemeral: !forThisAgent,
+            timestamp: payload.timestamp || Date.now()
+        };
+
+        if (!forThisAgent) {
+            const addressee = targetAgentId ?? 'no agent';
+            await this.callbacks.addConversationMessage({
+                role: 'user',
+                content: `${text}\n\n[Note: this challenge is addressed to ${addressee}, not to you. Context only.]`,
+                metadata
+            });
+            return;
+        }
+
+        if (!this.callbacks.hasActiveTask()) {
+            // provideImmediateToolFeedback takes no turn without an active task,
+            // so the challenge would sit in history unanswered and unlogged. Say
+            // so, and keep it as context for whatever comes next.
+            this.logger.warn(
+                `SystemLLM ${context.stance ?? ''} challenge ${context.challengeId ?? ''} arrived` +
+                `${context.taskId ? ` for task ${context.taskId}` : ''} but this agent has no active task; kept as context only`
+            );
+            await this.callbacks.addConversationMessage({
+                role: 'user',
+                content: `${text}\n\n[Note: this challenge arrived after the task ended. Context only.]`,
+                metadata: { ...metadata, requiresResponse: false, ephemeral: true }
+            });
+            return;
+        }
+
+        await this.callbacks.addConversationMessage({ role: 'user', content: text, metadata });
+        this.logger.info(
+            `SystemLLM ${context.stance ?? ''} challenge ${context.challengeId ?? ''} received` +
+            `${context.taskId ? ` for task ${context.taskId}` : ''}; responding`
+        );
+        await this.callbacks.provideImmediateToolFeedback(
+            'system',
+            SYSTEMLLM_CHALLENGE_MESSAGE_TYPE,
+            text,
+            'system challenge'
+        );
     }
 
     /**

@@ -682,6 +682,7 @@ export class MxfSDK {
             metadata = {},
             allowedTools = [],
             systemLlmEnabled = true,
+            systemLlmStance,
             mcpServers = []
         } = config;
 
@@ -700,7 +701,10 @@ export class MxfSDK {
                     allowAnonymous,
                     metadata,
                     allowedTools,
-                    systemLlmEnabled
+                    systemLlmEnabled,
+                    // Only sent when the caller chose one; absent means the channel
+                    // follows the server's SYSTEMLLM_STANCE.
+                    ...(systemLlmStance !== undefined ? { systemLlmStance } : {})
                 }
             ),
             route: { via: 'primary' },

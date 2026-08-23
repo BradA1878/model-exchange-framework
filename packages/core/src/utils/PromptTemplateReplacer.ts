@@ -31,7 +31,11 @@
  * - {{ISO_TIMESTAMP}}: Current ISO 8601 timestamp
  * - {{AGENT_ID}}: Agent ID (context-based)
  * - {{CHANNEL_ID}}: Channel ID (context-based)
+ * - {{SYSTEM_LLM_STANCE}} / {{SYSTEM_LLM_STANCE_GUIDANCE}}: the channel's SystemLLM stance and what it means for the agent
  */
+
+import { DEFAULT_SYSTEMLLM_STANCE, type SystemLlmStance } from '../types/SystemLlmStanceTypes.js';
+import { buildSystemLlmStanceGuidance } from '../prompts/SystemLlmStanceGuidance.js';
 
 /**
  * Available prompt templates as constants
@@ -60,6 +64,8 @@ export const PROMPT_TEMPLATES = {
     LLM_PROVIDER: '{{LLM_PROVIDER}}',
     LLM_MODEL: '{{LLM_MODEL}}',
     SYSTEM_LLM_STATUS: '{{SYSTEM_LLM_STATUS}}',
+    SYSTEM_LLM_STANCE: '{{SYSTEM_LLM_STANCE}}',
+    SYSTEM_LLM_STANCE_GUIDANCE: '{{SYSTEM_LLM_STANCE_GUIDANCE}}',
     OS_PLATFORM: '{{OS_PLATFORM}}',
     
     // Control loop state
@@ -92,6 +98,8 @@ export interface TemplateContext {
     
     // System status
     systemLlmEnabled?: boolean;
+    // SystemLLM stance of the channel; unset is treated as supportive
+    systemLlmStance?: SystemLlmStance;
     
     // Control loop state
     currentOrparPhase?: 'Observe' | 'Reason' | 'Plan' | 'Act' | 'Reflect' | null;
@@ -224,6 +232,15 @@ export class PromptTemplateReplacer {
             const statusStr = context.systemLlmEnabled ? 'Enabled' : 'Disabled';
             result = result.replace(/\{\{SYSTEM_LLM_STATUS\}\}/g, statusStr);
         }
+
+        // Replace the SystemLLM stance and its guidance. Always replaced: an
+        // agent that does not know the stance is told the supportive one, which
+        // is the stance a server that never sends one is running.
+        const stance = context.systemLlmStance ?? DEFAULT_SYSTEMLLM_STANCE;
+        const stanceGuidance = buildSystemLlmStanceGuidance(stance);
+        result = result.replace(/\{\{SYSTEM_LLM_STANCE\}\}/g, stance);
+        // Function replacer: the guidance is prose and must not be parsed for `$` patterns.
+        result = result.replace(/\{\{SYSTEM_LLM_STANCE_GUIDANCE\}\}/g, () => stanceGuidance);
         
         // Replace ORPAR phase - always replace to avoid leftover template markers
         // When phase is null, show "(Not in active cycle)" to indicate ORPAR is available but not running

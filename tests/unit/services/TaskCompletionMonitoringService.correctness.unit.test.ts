@@ -5,6 +5,20 @@ const mockHandlers = new Map<string, Set<EventHandler>>();
 const mockEmit = jest.fn();
 const mockPlanFindOne = jest.fn();
 const mockGetServiceForChannel = jest.fn();
+const mockGetChannelSystemLlmStance = jest.fn();
+
+// TaskCompletionMonitoringService.ts only ever calls getChannelSystemLlmStance
+// on ConfigManager — nothing else needs to be here. Real ConfigManager is not
+// used because its setters emit through EventBus.client, which this file's
+// EventBus mock (below) does not provide — only EventBus.server is stubbed,
+// which is all TaskCompletionMonitoringService itself touches.
+jest.mock('@mxf-dev/core/config/ConfigManager', () => ({
+    ConfigManager: {
+        getInstance: (): { getChannelSystemLlmStance: typeof mockGetChannelSystemLlmStance } => ({
+            getChannelSystemLlmStance: mockGetChannelSystemLlmStance
+        })
+    }
+}));
 
 jest.mock('@mxf-dev/core/events/EventBus', () => ({
     EventBus: {
@@ -93,6 +107,8 @@ describe('TaskCompletionMonitoringService correctness', () => {
         mockPlanFindOne.mockReset();
         mockGetServiceForChannel.mockReset();
         mockGetServiceForChannel.mockReturnValue(null);
+        mockGetChannelSystemLlmStance.mockReset();
+        mockGetChannelSystemLlmStance.mockReturnValue('supportive');
         service = TaskCompletionMonitoringService.getInstance();
     });
 
@@ -276,6 +292,50 @@ describe('TaskCompletionMonitoringService correctness', () => {
         expect(service.getMonitoringStatus('channel-a', 'same-task').active).toBe(false);
     });
 
+    it('sends the collected evidence to the SystemLLM judge, not just its counts', async () => {
+        // The service collected full message content and tool results into
+        // state.evidence, then told the judge only "N messages, M tool calls".
+        // A judge that cannot see the work is a rubber stamp.
+        const sendLlmRequest = jest.fn().mockResolvedValue(
+            '<complete>NO</complete><confidence>0.9</confidence><reason>Work remains</reason>'
+        );
+        mockGetServiceForChannel.mockReturnValue({
+            getModelForOperation: jest.fn().mockReturnValue('test-model'),
+            sendLlmRequest
+        });
+
+        service.startMonitoring(task('channel-a'), {
+            primary: {
+                type: 'systemllm-eval',
+                objectives: ['Write the report to report.md'],
+                evaluationInterval: 5_000,
+                confidenceThreshold: 0.8,
+                maxEvaluations: 3
+            }
+        }, jest.fn());
+        await Promise.resolve();
+
+        deliver(Events.Message.AGENT_MESSAGE_DELIVERED, {
+            channelId: 'channel-a',
+            data: { fromAgentId: 'worker', toAgentId: 'lead', content: 'Draft finished, writing it out now' }
+        });
+        deliver(Events.Mcp.TOOL_RESULT, {
+            agentId: 'worker',
+            channelId: 'channel-a',
+            data: { toolName: 'file_write', callId: 'call-9', result: { path: 'report.md', bytes: 2048 } }
+        });
+        await jest.advanceTimersByTimeAsync(5_000);
+
+        // One evaluation at start, one at the interval; the evidence arrived in between.
+        expect(sendLlmRequest).toHaveBeenCalledTimes(2);
+        const prompt = sendLlmRequest.mock.calls[1][0] as string;
+        expect(prompt).toContain('Write the report to report.md');
+        expect(prompt).toContain('[worker] Draft finished, writing it out now');
+        expect(prompt).toContain('file_write');
+        expect(prompt).toContain('"path":"report.md"');
+        expect(prompt).not.toMatch(/Evidence: \d+ messages, \d+ tool calls/);
+    });
+
     it('enforces the configured SystemLLM evaluation budget', async () => {
         const sendLlmRequest = jest.fn().mockResolvedValue(
             '<complete>NO</complete><confidence>0.9</confidence><reason>Work remains</reason>'
@@ -313,5 +373,51 @@ describe('TaskCompletionMonitoringService correctness', () => {
 
         await jest.advanceTimersByTimeAsync(60_000);
         expect(sendLlmRequest).toHaveBeenCalledTimes(2);
+    });
+
+    it('changes the judge prompt with the channel\'s SystemLLM stance, and always forbids the judge from degrading', async () => {
+        const sendLlmRequest = jest.fn().mockResolvedValue(
+            '<complete>NO</complete><confidence>0.9</confidence><reason>Work remains</reason>'
+        );
+        mockGetServiceForChannel.mockReturnValue({
+            getModelForOperation: jest.fn().mockReturnValue('test-model'),
+            sendLlmRequest
+        });
+        const config: TaskCompletionConfig = {
+            primary: {
+                type: 'systemllm-eval',
+                objectives: ['Produce the required result'],
+                evaluationInterval: 5_000,
+                confidenceThreshold: 0.8,
+                maxEvaluations: 3
+            }
+        };
+
+        mockGetChannelSystemLlmStance.mockReturnValue('critical');
+        service.startMonitoring(task('channel-a'), config, jest.fn());
+        await jest.advanceTimersByTimeAsync(0);
+
+        expect(sendLlmRequest).toHaveBeenCalledTimes(1);
+        const [criticalPrompt, , criticalOptions] = sendLlmRequest.mock.calls[0] as [string, undefined, Record<string, unknown>];
+        expect(criticalPrompt).toContain('demand evidence');
+        expect(criticalPrompt).toContain('answer NO');
+        expect(criticalOptions).toEqual({
+            model: 'test-model',
+            operationType: 'reasoning',
+            temperature: 0.3,
+            maxTokens: 200,
+            degrade: false
+        });
+        service.stopMonitoring('channel-a', 'same-task');
+
+        sendLlmRequest.mockClear();
+        mockGetChannelSystemLlmStance.mockReturnValue('supportive');
+        service.startMonitoring(task('channel-b'), config, jest.fn());
+        await jest.advanceTimersByTimeAsync(0);
+
+        expect(sendLlmRequest).toHaveBeenCalledTimes(1);
+        const [supportivePrompt] = sendLlmRequest.mock.calls[0] as [string, undefined, Record<string, unknown>];
+        expect(supportivePrompt.startsWith('Evaluate whether every objective for this task is complete.')).toBe(true);
+        expect(supportivePrompt).not.toContain('demand evidence');
     });
 });

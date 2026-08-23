@@ -21,6 +21,8 @@
 /**
  * MCP server configuration for channel registration
  */
+import type { SystemLlmStance } from '../types/SystemLlmStanceTypes.js';
+
 export interface ChannelMcpServerConfig {
     id: string;
     name: string;
@@ -53,6 +55,10 @@ export interface ChannelConfig {
     
     // Disable SystemLLM for this channel (for games, custom orchestration, etc.)
     systemLlmEnabled?: boolean;
+
+    // SystemLLM stance for this channel (supportive | critical | hostile).
+    // Unset means the channel uses the server's SYSTEMLLM_STANCE.
+    systemLlmStance?: SystemLlmStance;
     
     // MCP servers to register for this channel at creation time
     mcpServers?: ChannelMcpServerConfig[];

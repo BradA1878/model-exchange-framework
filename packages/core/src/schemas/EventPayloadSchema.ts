@@ -2553,8 +2553,47 @@ import type {
     SystemEphemeralEventData,
     CoordinationAnalysis,
     TemporalContext,
-    SystemEventType
+    SystemEventType,
+    SystemLlmChallengeIssuedEventData
 } from '../events/event-definitions/SystemEvents.js';
+import { SystemEvents } from '../events/event-definitions/SystemEvents.js';
+import { CHALLENGE_TRIGGERS } from '../types/SystemLlmStanceTypes.js';
+
+export type SystemLlmChallengeIssuedEventPayload = BaseEventPayload<SystemLlmChallengeIssuedEventData>;
+
+/**
+ * Creates the payload for Events.System.SYSTEMLLM_CHALLENGE_ISSUED.
+ * @param agentId - The agent whose claim was challenged
+ * @param channelId - The channel the task belongs to
+ * @param data - The challenge
+ */
+export function createSystemLlmChallengeIssuedEventPayload(
+    agentId: AgentId,
+    channelId: ChannelId,
+    data: SystemLlmChallengeIssuedEventData,
+    options: { source?: string; eventId?: string; timestamp?: number } = {}
+): SystemLlmChallengeIssuedEventPayload {
+    const validator = createStrictValidator('createSystemLlmChallengeIssuedEventPayload');
+    validator.assertIsNonEmptyString(data.challengeId, 'challengeId');
+    validator.assertIsNonEmptyString(data.taskId, 'taskId');
+    validator.assertIsNonEmptyString(data.summary, 'summary');
+    if (!(CHALLENGE_TRIGGERS as ReadonlyArray<string>).includes(data.trigger)) {
+        throw new Error(`createSystemLlmChallengeIssuedEventPayload: unknown trigger '${data.trigger}'`);
+    }
+    if (data.stance !== 'critical' && data.stance !== 'hostile') {
+        throw new Error(`createSystemLlmChallengeIssuedEventPayload: stance '${data.stance}' issues no challenges`);
+    }
+    if (!Array.isArray(data.points) || data.points.length === 0) {
+        throw new Error('createSystemLlmChallengeIssuedEventPayload: a challenge needs at least one point');
+    }
+    return createBaseEventPayload<SystemLlmChallengeIssuedEventData>(
+        SystemEvents.SYSTEMLLM_CHALLENGE_ISSUED,
+        agentId,
+        channelId,
+        data,
+        { source: options.source ?? 'SystemLlmChallengeService', eventId: options.eventId, timestamp: options.timestamp }
+    );
+}
 
 /**
  * System ephemeral event payload for EventBus integration

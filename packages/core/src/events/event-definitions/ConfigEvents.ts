@@ -24,6 +24,8 @@
  * Event definitions for configuration management, templates, and deployment settings
  */
 
+import type { SystemLlmStance } from '../../types/SystemLlmStanceTypes.js';
+
 export const ConfigEvents = {
     // Template management events
     TEMPLATE_CREATED: 'config:template:created',
@@ -230,6 +232,12 @@ export interface ChannelSystemLlmChangeEvent {
      * If not provided, applies globally
      */
     channelId?: string;
+
+    /**
+     * SystemLLM stance after the change, when the change set one.
+     * Absent when only the enabled flag or operation overrides changed.
+     */
+    stance?: SystemLlmStance;
 
     /**
      * Timestamp of the change

@@ -42,6 +42,8 @@ import { ServerHybridMcpService } from '../../api/services/ServerHybridMcpServic
 // Import shared config events (NOT from SDK - that's client-side only)
 import { ConfigEvents, ChannelSystemLlmChangeEvent } from '@mxf-dev/core/events/event-definitions/ConfigEvents';
 import { ConfigManager } from '@mxf-dev/core/config/ConfigManager';
+import { hydrateChannelSystemLlmStance } from '../../api/security/ChannelRuntimePolicy';
+import { isSystemLlmStance, SYSTEMLLM_STANCES } from '@mxf-dev/core/types/SystemLlmStanceTypes';
 import { isReservedChannelId } from '@mxf-dev/core/constants/ReservedIdentities';
 
 /** A terminal channel tombstone exists, but one or more required cleanups need retry. */
@@ -424,14 +426,23 @@ export class ChannelService extends EventEmitter {
                     return;
                 }
 
-                // Update database
+                // Update database. The stance rides along only when the change
+                // set one, so an enabled/override change never clears it.
                 const result = await Channel.updateOne(
                     { channelId, active: true },
-                    { $set: { systemLlmEnabled: data.enabled } }
+                    {
+                        $set: {
+                            systemLlmEnabled: data.enabled,
+                            ...(data.stance !== undefined ? { systemLlmStance: data.stance } : {})
+                        }
+                    }
                 );
 
                 if (result.modifiedCount > 0) {
-                    this.logger.info(`Channel ${channelId} systemLlmEnabled updated to ${data.enabled} in database`);
+                    this.logger.info(
+                        `Channel ${channelId} systemLlmEnabled updated to ${data.enabled}` +
+                        `${data.stance !== undefined ? `, systemLlmStance to ${data.stance}` : ''} in database`
+                    );
                 }
             } catch (error) {
                 this.logger.error(`Error persisting systemLlmEnabled change: ${error instanceof Error ? error.message : String(error)}`);
@@ -516,6 +527,7 @@ export class ChannelService extends EventEmitter {
                     channelId,
                     systemLlmEnabled ? undefined : 'Channel loaded from DB with systemLlmEnabled=false'
                 );
+                hydrateChannelSystemLlmStance(channelId, channelDoc.systemLlmStance);
 
                 // Install persisted policy synchronously before returning this
                 // cold-loaded channel to an authenticating socket.
@@ -541,6 +553,15 @@ export class ChannelService extends EventEmitter {
             metadata: { ...(metadata || {}), createdBy: createdBy } 
         };
 
+        // A requested stance must be a stance; refuse anything else before it is stored.
+        const requestedStance: unknown = metadata?.systemLlmStance;
+        if (requestedStance !== undefined && requestedStance !== null && !isSystemLlmStance(requestedStance)) {
+            throw new Error(
+                `Cannot create channel ${channelId}: invalid systemLlmStance '${String(requestedStance)}'. ` +
+                `Expected one of: ${SYSTEMLLM_STANCES.join(', ')}`
+            );
+        }
+
         // Persist to database first
         try {
             const channelDoc = new Channel({
@@ -554,7 +575,9 @@ export class ChannelService extends EventEmitter {
                 metadata: newChannel.metadata,
                 // New fields for channel-level access control
                 allowedTools: metadata?.allowedTools || [],
-                systemLlmEnabled: metadata?.systemLlmEnabled !== false // Default to true
+                systemLlmEnabled: metadata?.systemLlmEnabled !== false, // Default to true
+                // Absent means the channel follows the server's SYSTEMLLM_STANCE.
+                ...(requestedStance ? { systemLlmStance: requestedStance } : {})
             });
             await channelDoc.save();
         } catch (error) {
@@ -602,6 +625,7 @@ export class ChannelService extends EventEmitter {
                             channelId,
                             existingSystemLlmEnabled ? undefined : 'Channel loaded from DB (dup key recovery) with systemLlmEnabled=false'
                         );
+                        hydrateChannelSystemLlmStance(channelId, existingChannel.systemLlmStance);
 
                         McpService.getInstance().hydrateChannelAllowedTools(
                             channelId,
@@ -647,6 +671,10 @@ export class ChannelService extends EventEmitter {
             channelId,
             systemLlmEnabled ? undefined : 'Channel created with systemLlmEnabled=false'
         );
+        hydrateChannelSystemLlmStance(channelId, requestedStance ?? undefined);
+        if (requestedStance) {
+            this.logger.info(`[CREATE_CHANNEL] Channel ${channelId} systemLlmStance=${String(requestedStance)}`);
+        }
 
         this.notifyChannelEvent(Events.Channel.CREATED as EventName, {
             action: 'created', 
@@ -1107,6 +1135,7 @@ export class ChannelService extends EventEmitter {
                         channelId,
                         participantSystemLlmEnabled ? undefined : 'Channel loaded in addParticipant with systemLlmEnabled=false'
                     );
+                    hydrateChannelSystemLlmStance(channelId, channelDoc.systemLlmStance);
 
                     McpService.getInstance().hydrateChannelAllowedTools(
                         channelId,

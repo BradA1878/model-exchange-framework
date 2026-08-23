@@ -29,6 +29,7 @@
 import mongoose, { Document, Schema } from 'mongoose';
 import { v4 as uuidv4 } from 'uuid';
 import { createStrictValidator } from '../utils/validation.js';
+import { SYSTEMLLM_STANCES, type SystemLlmStance } from '../types/SystemLlmStanceTypes.js';
 
 /**
  * Interface for Channel document
@@ -50,6 +51,7 @@ export interface IChannel extends Document {
     showActiveAgents: boolean; // Whether agents can see other agents in the channel
     allowedTools: string[]; // Empty means no additional channel-level restriction
     systemLlmEnabled: boolean;
+    systemLlmStance?: SystemLlmStance; // Unset inherits the server's SYSTEMLLM_STANCE
     
     // Channel state
     active: boolean;
@@ -279,6 +281,14 @@ const ChannelSchema: Schema = new Schema(
         systemLlmEnabled: {
             type: Boolean,
             default: true
+        },
+
+        // SystemLLM stance for this channel. No default on purpose: an absent
+        // value means the channel follows the server's SYSTEMLLM_STANCE.
+        systemLlmStance: {
+            type: String,
+            enum: SYSTEMLLM_STANCES,
+            required: false
         }
     },
     {

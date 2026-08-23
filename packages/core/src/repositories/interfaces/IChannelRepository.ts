@@ -19,6 +19,7 @@
  */
 
 import { IBaseRepository } from './IBaseRepository.js';
+import type { SystemLlmStance } from '../../types/SystemLlmStanceTypes.js';
 
 /**
  * Domain entity type for Channel (database-agnostic)
@@ -79,6 +80,7 @@ export interface IChannelEntity {
     metadata: Record<string, any>;
     allowedTools?: string[];
     systemLlmEnabled?: boolean;
+    systemLlmStance?: SystemLlmStance;
 }
 
 /**

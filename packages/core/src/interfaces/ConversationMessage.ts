@@ -43,6 +43,7 @@ export type MessageType =
     | 'system-notice'           // System intervention or notice
     | 'system-event'            // Framework event injected into conversation context
     | 'systemllm-coordination'  // Ephemeral SystemLLM coordination context
+    | 'systemllm-challenge'     // SystemLLM disputed a claim; the agent must answer with evidence
     | 'channel-message-immediate' // Channel notification awaiting agent review
     | 'error_feedback'          // Validation or execution feedback
     | 'error_correction_trigger' // Prompt to correct an earlier invalid action

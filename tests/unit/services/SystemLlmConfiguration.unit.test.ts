@@ -9,6 +9,9 @@
  */
 
 const mockIsChannelSystemLlmEnabled = jest.fn(() => true);
+const mockSetChannelSystemLlmStance = jest.fn();
+const mockSetChannelSystemLlmStanceCeiling = jest.fn();
+const mockGetChannelSystemLlmStance = jest.fn(() => 'supportive');
 
 jest.mock('@mxf-dev/core/events/EventBus', () => ({
     EventBus: {
@@ -24,8 +27,16 @@ jest.mock('@mxf-dev/core/events/EventBus', () => ({
 jest.mock('@mxf-dev/core/config/ConfigManager', () => ({
     ConfigEvents: { CHANNEL_SYSTEM_LLM_CHANGED: 'config:channel_system_llm_changed' },
     ConfigManager: {
-        getInstance: (): { isChannelSystemLlmEnabled: typeof mockIsChannelSystemLlmEnabled } => ({
-            isChannelSystemLlmEnabled: mockIsChannelSystemLlmEnabled
+        getInstance: (): {
+            isChannelSystemLlmEnabled: typeof mockIsChannelSystemLlmEnabled;
+            setChannelSystemLlmStance: typeof mockSetChannelSystemLlmStance;
+            setChannelSystemLlmStanceCeiling: typeof mockSetChannelSystemLlmStanceCeiling;
+            getChannelSystemLlmStance: typeof mockGetChannelSystemLlmStance;
+        } => ({
+            isChannelSystemLlmEnabled: mockIsChannelSystemLlmEnabled,
+            setChannelSystemLlmStance: mockSetChannelSystemLlmStance,
+            setChannelSystemLlmStanceCeiling: mockSetChannelSystemLlmStanceCeiling,
+            getChannelSystemLlmStance: mockGetChannelSystemLlmStance
         })
     }
 }));
@@ -73,6 +84,8 @@ const SYSTEMLLM_VARS = [
     'SYSTEMLLM_MODEL_PLANNING',
     'SYSTEMLLM_MODEL_REFLECTION',
     'SYSTEMLLM_DYNAMIC_MODEL_SELECTION',
+    'SYSTEMLLM_STANCE',
+    'SYSTEMLLM_STANCE_MAX',
     'OPENROUTER_API_KEY'
 ] as const;
 
@@ -211,5 +224,130 @@ describe('SystemLLM configuration', () => {
         expect(service!.defaultModel).toBe('google/gemini-2.5-flash');
         expect(service!.defaultTemperature).toBe(0.1);
         manager.shutdown();
+    });
+
+    describe('SystemLLM stance', () => {
+        it('defaults the stance to supportive when SYSTEMLLM_STANCE is unset', () => {
+            process.env.SYSTEMLLM_ENABLED = 'true';
+            process.env.SYSTEMLLM_DEFAULT_MODEL = '~anthropic/claude-sonnet-latest';
+
+            const config = loadSystemLlmEnvironmentConfig();
+            expect(config!.stance).toBe('supportive');
+        });
+
+        it('parses a plain lowercase value like "critical"', () => {
+            process.env.SYSTEMLLM_ENABLED = 'true';
+            process.env.SYSTEMLLM_DEFAULT_MODEL = '~anthropic/claude-sonnet-latest';
+            process.env.SYSTEMLLM_STANCE = 'critical';
+
+            const config = loadSystemLlmEnvironmentConfig();
+            expect(config!.stance).toBe('critical');
+        });
+
+        it('is case- and whitespace-tolerant, parsing "HOSTILE " as hostile', () => {
+            process.env.SYSTEMLLM_ENABLED = 'true';
+            process.env.SYSTEMLLM_DEFAULT_MODEL = '~anthropic/claude-sonnet-latest';
+            process.env.SYSTEMLLM_STANCE = 'HOSTILE ';
+
+            const config = loadSystemLlmEnvironmentConfig();
+            expect(config!.stance).toBe('hostile');
+        });
+
+        it('rejects a blank SYSTEMLLM_STANCE instead of silently defaulting', () => {
+            process.env.SYSTEMLLM_ENABLED = 'true';
+            process.env.SYSTEMLLM_DEFAULT_MODEL = '~anthropic/claude-sonnet-latest';
+            process.env.SYSTEMLLM_STANCE = '   ';
+
+            expect(() => loadSystemLlmEnvironmentConfig()).toThrow('SYSTEMLLM_STANCE');
+            expect(() => loadSystemLlmEnvironmentConfig()).toThrow('blank');
+        });
+
+        it('rejects an unsupported SYSTEMLLM_STANCE value', () => {
+            process.env.SYSTEMLLM_ENABLED = 'true';
+            process.env.SYSTEMLLM_DEFAULT_MODEL = '~anthropic/claude-sonnet-latest';
+            process.env.SYSTEMLLM_STANCE = 'aggressive';
+
+            expect(() => loadSystemLlmEnvironmentConfig()).toThrow(
+                "Unsupported SYSTEMLLM_STANCE 'aggressive'. Expected one of: supportive, critical, hostile"
+            );
+        });
+
+        it('assertSystemLlmConfigured rejects a bad stance at boot with the same error', () => {
+            process.env.SYSTEMLLM_ENABLED = 'true';
+            process.env.SYSTEMLLM_DEFAULT_MODEL = '~anthropic/claude-sonnet-latest';
+            process.env.SYSTEMLLM_STANCE = 'aggressive';
+
+            expect(() => assertSystemLlmConfigured()).toThrow(
+                "Unsupported SYSTEMLLM_STANCE 'aggressive'. Expected one of: supportive, critical, hostile"
+            );
+        });
+
+        it('leaves the ceiling at hostile (no ceiling) when SYSTEMLLM_STANCE_MAX is unset', () => {
+            process.env.SYSTEMLLM_ENABLED = 'true';
+            process.env.SYSTEMLLM_DEFAULT_MODEL = '~anthropic/claude-sonnet-latest';
+
+            expect(loadSystemLlmEnvironmentConfig()).toMatchObject({ stance: 'supportive', stanceCeiling: 'hostile' });
+        });
+
+        it('parses SYSTEMLLM_STANCE_MAX and installs it in ConfigManager before the default stance', () => {
+            process.env.SYSTEMLLM_ENABLED = 'true';
+            process.env.SYSTEMLLM_DEFAULT_MODEL = '~anthropic/claude-sonnet-latest';
+            process.env.SYSTEMLLM_STANCE_MAX = 'critical';
+            mockSetChannelSystemLlmStance.mockClear();
+            mockSetChannelSystemLlmStanceCeiling.mockClear();
+
+            expect(loadSystemLlmEnvironmentConfig()).toMatchObject({ stanceCeiling: 'critical' });
+            const manager = SystemLlmServiceManager.getInstance();
+
+            expect(mockSetChannelSystemLlmStanceCeiling).toHaveBeenCalledWith('critical');
+            expect(mockSetChannelSystemLlmStanceCeiling.mock.invocationCallOrder[0]).toBeLessThan(
+                mockSetChannelSystemLlmStance.mock.invocationCallOrder[0]
+            );
+            manager.shutdown();
+        });
+
+        it('refuses to boot with a default stance above the ceiling instead of quietly clamping it', () => {
+            process.env.SYSTEMLLM_ENABLED = 'true';
+            process.env.SYSTEMLLM_DEFAULT_MODEL = '~anthropic/claude-sonnet-latest';
+            process.env.SYSTEMLLM_STANCE = 'hostile';
+            process.env.SYSTEMLLM_STANCE_MAX = 'critical';
+
+            expect(() => assertSystemLlmConfigured()).toThrow(
+                "SYSTEMLLM_STANCE 'hostile' is above SYSTEMLLM_STANCE_MAX 'critical'"
+            );
+        });
+
+        it('rejects an unknown SYSTEMLLM_STANCE_MAX value', () => {
+            process.env.SYSTEMLLM_ENABLED = 'true';
+            process.env.SYSTEMLLM_DEFAULT_MODEL = '~anthropic/claude-sonnet-latest';
+            process.env.SYSTEMLLM_STANCE_MAX = 'none';
+
+            expect(() => loadSystemLlmEnvironmentConfig()).toThrow(
+                "Unsupported SYSTEMLLM_STANCE_MAX 'none'. Expected one of: supportive, critical, hostile"
+            );
+        });
+
+        it('constructing the manager with SYSTEMLLM_STANCE=hostile sets the ConfigManager channel stance to hostile', () => {
+            process.env.SYSTEMLLM_ENABLED = 'true';
+            process.env.SYSTEMLLM_DEFAULT_MODEL = '~anthropic/claude-sonnet-latest';
+            process.env.SYSTEMLLM_STANCE = 'hostile';
+            mockSetChannelSystemLlmStance.mockClear();
+
+            const manager = SystemLlmServiceManager.getInstance();
+
+            expect(mockSetChannelSystemLlmStance).toHaveBeenCalledWith('hostile');
+            manager.shutdown();
+        });
+
+        it('constructing the manager with SYSTEMLLM_STANCE unset sets the ConfigManager channel stance to supportive', () => {
+            process.env.SYSTEMLLM_ENABLED = 'true';
+            process.env.SYSTEMLLM_DEFAULT_MODEL = '~anthropic/claude-sonnet-latest';
+            mockSetChannelSystemLlmStance.mockClear();
+
+            const manager = SystemLlmServiceManager.getInstance();
+
+            expect(mockSetChannelSystemLlmStance).toHaveBeenCalledWith('supportive');
+            manager.shutdown();
+        });
     });
 });

@@ -27,6 +27,12 @@
  */
 
 import { AgentId, ChannelId } from '../../types/ChannelContext.js';
+import type {
+    ChallengeDelivery,
+    ChallengeTrigger,
+    SystemLlmChallengePoint,
+    SystemLlmStance
+} from '../../types/SystemLlmStanceTypes.js';
 
 /**
  * System ephemeral event constants
@@ -50,9 +56,27 @@ export const SystemEvents = {
     COORDINATION_OPPORTUNITY: 'system:coordination:opportunity',
     PATTERN_RECOGNITION: 'system:pattern:recognition',
     
+    // SystemLLM stance: a challenge was issued to an agent (critical or hostile stance)
+    SYSTEMLLM_CHALLENGE_ISSUED: 'system:systemllm:challenge_issued',
+
     // System maintenance events
     MAINTENANCE_MODE: 'system:maintenance:mode'
 } as const;
+
+/**
+ * Data for SYSTEMLLM_CHALLENGE_ISSUED: SystemLLM disputed an agent's claim.
+ * Server-side only; the agent receives the challenge as a tool result or a
+ * channel message, not through this event.
+ */
+export interface SystemLlmChallengeIssuedEventData {
+    challengeId: string;
+    taskId: string;
+    trigger: ChallengeTrigger;
+    stance: Exclude<SystemLlmStance, 'supportive'>;
+    delivery: ChallengeDelivery;
+    summary: string;
+    points: SystemLlmChallengePoint[];
+}
 
 /**
  * Temporal context information leveraging existing Time MCP server

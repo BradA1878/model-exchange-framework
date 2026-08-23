@@ -33,6 +33,12 @@ import { EventBus } from '../events/EventBus.js';
 import { createBaseEventPayload } from '../schemas/EventPayloadSchema.js';
 import { EventName } from '../events/EventNames.js';
 import { ChannelSystemLlmChangeEvent as SharedChannelSystemLlmChangeEvent } from '../events/event-definitions/ConfigEvents.js';
+import {
+    capStance,
+    DEFAULT_SYSTEMLLM_STANCE,
+    DEFAULT_SYSTEMLLM_STANCE_CEILING,
+    type SystemLlmStance
+} from '../types/SystemLlmStanceTypes.js';
 
 /**
  * LLM model configuration
@@ -206,6 +212,18 @@ export interface SdkConfig {
             reflection?: boolean;
             coordination?: boolean;
         };
+
+        /**
+         * Server-wide stance: how SystemLLM talks to agents (see SystemLlmStanceTypes).
+         * Set from SYSTEMLLM_STANCE at boot. Unset means supportive.
+         */
+        stance?: SystemLlmStance;
+
+        /**
+         * Server-wide ceiling on the effective stance of every channel. Set from
+         * SYSTEMLLM_STANCE_MAX at boot. Unset means no ceiling.
+         */
+        stanceCeiling?: SystemLlmStance;
     };
 
     /**
@@ -223,6 +241,8 @@ export interface SdkConfig {
             reflection?: boolean;
             coordination?: boolean;
         };
+        /** Channel stance; unset means inherit the server-wide stance. */
+        stance?: SystemLlmStance;
     }>;
     
     /**
@@ -677,6 +697,33 @@ export interface IConfigManager {
      * @param channelId - Optional channel ID (if not provided, sets global)
      */
     setChannelSystemLlmOperationOverride(operation: string, enabled: boolean, channelId?: string): Observable<boolean>;
+
+    /**
+     * Effective SystemLLM stance for a channel: the channel's own stance when it
+     * has one, otherwise the server-wide stance, otherwise supportive.
+     * @param channelId - Optional channel ID (if not provided, returns the server-wide stance)
+     */
+    getChannelSystemLlmStance(channelId?: string): SystemLlmStance;
+
+    /**
+     * Set the SystemLLM stance
+     * @param stance - The stance
+     * @param channelId - Optional channel ID (if not provided, sets the server-wide stance)
+     */
+    setChannelSystemLlmStance(stance: SystemLlmStance, channelId?: string): Observable<boolean>;
+
+    /**
+     * Remove a channel's own stance so it inherits the server-wide one again.
+     * @param channelId - Channel ID
+     */
+    clearChannelSystemLlmStance(channelId: string): void;
+
+    /**
+     * Set the server-wide ceiling on the effective stance. Channel stances above
+     * it resolve to it.
+     * @param ceiling - The most adversarial stance any channel may reach
+     */
+    setChannelSystemLlmStanceCeiling(ceiling: SystemLlmStance): void;
 }
 
 /**
@@ -1263,6 +1310,76 @@ export class ConfigManager implements IConfigManager {
     }
     
     /**
+     * Effective SystemLLM stance for a channel.
+     *
+     * A channel entry without a stance inherits the server-wide one: unlike the
+     * enabled flag, a channel-specific entry does not shadow the global value
+     * unless it names a stance of its own.
+     */
+    public getChannelSystemLlmStance(channelId?: string): SystemLlmStance {
+        const ceiling = this.config.channelSystemLlm.stanceCeiling ?? DEFAULT_SYSTEMLLM_STANCE_CEILING;
+        if (channelId && this.config.channelSystemLlmById) {
+            const channelStance = this.config.channelSystemLlmById.get(channelId)?.stance;
+            if (channelStance) {
+                return capStance(channelStance, ceiling);
+            }
+        }
+        return capStance(this.config.channelSystemLlm.stance ?? DEFAULT_SYSTEMLLM_STANCE, ceiling);
+    }
+
+    /**
+     * Set the server-wide ceiling. Installed once at boot from
+     * SYSTEMLLM_STANCE_MAX; it is read on every stance resolution, so it
+     * applies to channels loaded before and after it is set.
+     */
+    public setChannelSystemLlmStanceCeiling(ceiling: SystemLlmStance): void {
+        this.config.channelSystemLlm.stanceCeiling = ceiling;
+    }
+
+    /**
+     * Set the SystemLLM stance, server-wide or for one channel.
+     */
+    public setChannelSystemLlmStance(stance: SystemLlmStance, channelId?: string): Observable<boolean> {
+        let enabled: boolean;
+        let operationOverrides: Record<string, boolean> | undefined;
+
+        if (channelId) {
+            if (!this.config.channelSystemLlmById) {
+                this.config.channelSystemLlmById = new Map();
+            }
+            const existingConfig = this.config.channelSystemLlmById.get(channelId) || { enabled: true };
+            existingConfig.stance = stance;
+            this.config.channelSystemLlmById.set(channelId, existingConfig);
+            enabled = existingConfig.enabled;
+            operationOverrides = existingConfig.operationOverrides;
+        } else {
+            this.config.channelSystemLlm.stance = stance;
+            enabled = this.config.channelSystemLlm.enabled;
+            operationOverrides = this.config.channelSystemLlm.operationOverrides;
+        }
+
+        this.emitChannelSystemLlmChanged(enabled, undefined, operationOverrides, channelId, stance);
+        this.emitConfigUpdated(['channelSystemLlm']);
+
+        return from(Promise.resolve(true));
+    }
+
+    /**
+     * Remove a channel's own stance so it inherits the server-wide one again.
+     *
+     * Called when a channel document is loaded without a stance, which happens
+     * on every channel load. Deliberately emits nothing: it restores the
+     * default rather than announcing a change, and the load path already emits
+     * one CHANNEL_SYSTEM_LLM_CHANGED through setChannelSystemLlmEnabled.
+     */
+    public clearChannelSystemLlmStance(channelId: string): void {
+        const existingConfig = this.config.channelSystemLlmById?.get(channelId);
+        if (existingConfig && existingConfig.stance !== undefined) {
+            delete existingConfig.stance;
+        }
+    }
+
+    /**
      * Merge configurations
      * @param baseConfig - Base configuration
      * @param overrides - Configuration overrides
@@ -1412,14 +1529,22 @@ export class ConfigManager implements IConfigManager {
      * @param reason - Optional reason for the change
      * @param operationOverrides - Optional operation-specific overrides
      * @param channelId - Optional channel ID for channel-specific changes
+     * @param stance - Stance after the change, when the change set one
      * @private
      */
-    private emitChannelSystemLlmChanged(enabled: boolean, reason?: string, operationOverrides?: Record<string, boolean>, channelId?: string): void {
+    private emitChannelSystemLlmChanged(
+        enabled: boolean,
+        reason?: string,
+        operationOverrides?: Record<string, boolean>,
+        channelId?: string,
+        stance?: SystemLlmStance
+    ): void {
         const data: ChannelSystemLlmChangeEvent = {
             enabled,
             reason,
             operationOverrides,
             channelId,
+            stance,
             timestamp: Date.now()
         };
         const payload = createBaseEventPayload<ChannelSystemLlmChangeEvent>(

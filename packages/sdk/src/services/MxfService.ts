@@ -184,7 +184,9 @@ export interface IInternalChannelService {
  */
 export class MxfService implements IInternalChannelService {
     private channelId: string;
-    private config: Required<ChannelConfig>;
+    // Every field has a default except the stance: an unset stance means the
+    // channel follows the server's SYSTEMLLM_STANCE, which the SDK cannot know.
+    private config: Required<Omit<ChannelConfig, 'systemLlmStance'>> & Pick<ChannelConfig, 'systemLlmStance'>;
     private connectionConfig: ChannelConnectionConfig;
     private info: ChannelInfo | null = null;
     private isActive: boolean = false;
@@ -272,6 +274,7 @@ export class MxfService implements IInternalChannelService {
             // policy is carried separately in connectionConfig.allowedTools.
             allowedTools: config.allowedTools ?? [],
             systemLlmEnabled: config.systemLlmEnabled ?? true,
+            systemLlmStance: config.systemLlmStance,
             mcpServers: config.mcpServers || []
         };
 

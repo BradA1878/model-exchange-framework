@@ -110,6 +110,24 @@ import { createChannelMessageEventPayload } from '@mxf-dev/core/schemas/EventPay
 import { ChannelService } from './ChannelService';
 import { AgentService } from './AgentService';
 import { ConfigManager, ConfigEvents, ChannelSystemLlmChangeEvent } from '@mxf-dev/core/config/ConfigManager';
+import {
+    DEFAULT_SYSTEMLLM_STANCE,
+    DEFAULT_SYSTEMLLM_STANCE_CEILING,
+    SYSTEMLLM_CHALLENGE_MESSAGE_TYPE,
+    type ChallengeTrigger,
+    type SystemLlmChallenge,
+    type SystemLlmStance
+} from '@mxf-dev/core/types/SystemLlmStanceTypes';
+import {
+    buildChallengePrompt,
+    buildCoordinationHintPrompt,
+    CHALLENGE_RESPONSE_SCHEMA,
+    ChallengeEvidence,
+    ChallengingStance,
+    COORDINATION_HINT_NONE,
+    parseChallengeResponse,
+    ParsedChallengeResponse
+} from './SystemLlmStancePrompts';
 
 const logger = new Logger('debug', 'SystemLlmService', 'server');
 const validator = createStrictValidator('SystemLlmService');
@@ -388,10 +406,47 @@ export interface SystemLlmServiceConfig {
     orparModels?: Partial<OrparModelConfig>; // Per-operation models; unset operations use defaultModel
     enableRealTimeCoordination?: boolean; // Allow disabling real-time coordination
     enableDynamicModelSelection?: boolean; // Enable complexity-based model switching (recommended for OpenRouter only)
+    /**
+     * Server-wide stance from SYSTEMLLM_STANCE. Informational on the service
+     * config: the manager installs it in ConfigManager, and the service reads
+     * the effective stance for its channel from there (see getStance()).
+     */
+    stance?: SystemLlmStance;
+    /** Server-wide ceiling from SYSTEMLLM_STANCE_MAX. Informational here, applied by ConfigManager. */
+    stanceCeiling?: SystemLlmStance;
 }
 
 interface SystemLlmConfigChangePayload {
     data?: ChannelSystemLlmChangeEvent;
+}
+
+/**
+ * Options for a SystemLLM request. `operation` names the ORPAR operation for
+ * metrics and degradation; `operationType` is the per-channel enable check
+ * key; `degrade: false` refuses a fabricated reply on provider failure.
+ */
+export interface SystemLlmRequestOptions {
+    model?: string;
+    temperature?: number;
+    maxTokens?: number;
+    operation?: OrparOperationType;
+    operationType?: string;
+    degrade?: boolean;
+}
+
+/** A JSON schema the provider is asked to enforce on the reply. */
+export type SystemLlmResponseSchema = Record<string, unknown>;
+
+/** What the coordination path tracks per channel between hints. */
+interface ChannelCoordinationActivity {
+    messageCount: number;
+    lastMessage: number;
+    activeAgents: Set<AgentId>;
+    recentMessages: ChannelMessage[];
+    lastCoordinationSuggestion: number;
+    suggestionCount: number;
+    /** Not set on tracked activity; the hint prompt falls back to 'unknown'. */
+    channelId?: ChannelId;
 }
 
 /**
@@ -423,14 +478,7 @@ export class SystemLlmService {
     private configEventSubscription?: Subscription;
     private coordinationEventSubscriptions: Subscription[] = [];
     private providerRequestCancellations = new Map<Subscription, (error: Error) => void>();
-    private channelActivities = new Map<ChannelId, {
-        messageCount: number;
-        lastMessage: number;
-        activeAgents: Set<AgentId>;
-        recentMessages: ChannelMessage[];
-        lastCoordinationSuggestion: number;
-        suggestionCount: number;
-    }>();
+    private channelActivities = new Map<ChannelId, ChannelCoordinationActivity>();
     
     // Coordination configuration
     private coordinationConfig = {
@@ -539,7 +587,10 @@ export class SystemLlmService {
             defaultMaxTokens: config.defaultMaxTokens || 2000,
             orparModels,
             enableRealTimeCoordination: config.enableRealTimeCoordination !== false, // Default to true unless explicitly disabled
-            enableDynamicModelSelection
+            enableDynamicModelSelection,
+            // Informational: the effective stance is read from ConfigManager (getStance()).
+            stance: config.stance ?? DEFAULT_SYSTEMLLM_STANCE,
+            stanceCeiling: config.stanceCeiling ?? DEFAULT_SYSTEMLLM_STANCE_CEILING
         };
 
         this.providerType = this.config.providerType;
@@ -1944,11 +1995,15 @@ export class SystemLlmService {
      */
     private async sendLlmRequestWithRecovery(
         prompt: string,
-        schema?: any,
-        options: any = {}
+        schema?: SystemLlmResponseSchema | null,
+        options: SystemLlmRequestOptions = {}
     ): Promise<string> {
-        const operation = options.operation as OrparOperationType || 'observation';
-        const enableGracefulDegradation = process.env.ENABLE_GRACEFUL_DEGRADATION !== 'false';
+        const operation = options.operation || 'observation';
+        // options.degrade === false opts a call out of graceful degradation: the
+        // caller would rather have the error than a fabricated reply. Challenges
+        // and completion verdicts must never be made up.
+        const enableGracefulDegradation = options.degrade !== false
+            && process.env.ENABLE_GRACEFUL_DEGRADATION !== 'false';
         const model = options.model || this.defaultModel;
         
         // Debug: Log call stack for observation operations to trace the source
@@ -1992,14 +2047,14 @@ export class SystemLlmService {
      */
     private async sendLlmRequestInternal(
         prompt: string,
-        schema?: any,
-        options: any = {}
+        schema?: SystemLlmResponseSchema | null,
+        options: SystemLlmRequestOptions = {}
     ): Promise<string> {
         const lifecycleGeneration = this.lifecycleGeneration;
         this.assertLifecycleActive(lifecycleGeneration);
 
         const startTime = Date.now();
-        const operation = options.operation as OrparOperationType || 'observation';
+        const operation = options.operation || 'observation';
 
         try {
             const client = await this.initClient();
@@ -2154,8 +2209,8 @@ export class SystemLlmService {
      */
     public async sendLlmRequest(
         prompt: string,
-        schema?: any,
-        options: any = {}
+        schema?: SystemLlmResponseSchema | null,
+        options: SystemLlmRequestOptions = {}
     ): Promise<string> {
         const operationType = typeof options?.operationType === 'string'
             ? options.operationType
@@ -4255,9 +4310,9 @@ Create a helpful, contextual hint that provides value without being intrusive. K
             }
 
             if (suggestionContent) {
-                await this.injectSystemCoordinationMessage(channelId, suggestionContent, triggerType);
+                await this.injectSystemCoordinationMessage(channelId, suggestionContent, triggerType, this.getStance());
             } else {
-                this.logger.warn(`⚠️ No coordination suggestion content generated for ${triggerType}`);
+                this.logger.debug(`No coordination suggestion sent for ${triggerType}`);
             }
 
         } catch (error) {
@@ -4272,12 +4327,96 @@ Create a helpful, contextual hint that provides value without being intrusive. K
     }
 
     /**
+     * Effective stance for this service's channel. Read live from ConfigManager
+     * so a channel override, or a change after boot, applies to the next call.
+     */
+    public getStance(): SystemLlmStance {
+        return this.configManager.getChannelSystemLlmStance(this.ownerChannelId);
+    }
+
+    /**
+     * Ask the model to challenge (critical) or mislead (hostile) an agent about
+     * a claim, from the evidence given.
+     *
+     * The response is requested against CHALLENGE_RESPONSE_SCHEMA and parsed
+     * strictly; graceful degradation is off for this call. Anything that is not
+     * a valid model reply throws, so no fabricated challenge reaches an agent.
+     *
+     * @returns The parsed response; `challenge: false` means the critic found nothing
+     * @throws Error when SystemLLM is disabled for the channel, the budget is spent,
+     *         the provider fails, or the reply does not validate
+     */
+    public async generateChallenge(
+        stance: ChallengingStance,
+        trigger: ChallengeTrigger,
+        evidence: ChallengeEvidence
+    ): Promise<ParsedChallengeResponse> {
+        const prompt = buildChallengePrompt(stance, trigger, evidence);
+        const model = this.getModelForOperation('reasoning');
+        this.logger.debug(
+            `[SystemLLM:Challenge] ${stance} ${trigger} for ${evidence.agentId} on task ${evidence.task.id} ` +
+            `- model: ${model}, prompt: ${prompt.length} chars`
+        );
+        const response = await this.sendLlmRequest(prompt, CHALLENGE_RESPONSE_SCHEMA, {
+            model,
+            operation: 'reasoning',
+            operationType: 'reasoning',
+            temperature: stance === 'hostile' ? 0.7 : 0.2,
+            maxTokens: 1200,
+            degrade: false
+        });
+        return parseChallengeResponse(response);
+    }
+
+    /**
+     * Deliver a challenge to its agent as a channel message.
+     *
+     * Same transport as coordination hints (a CHANNEL_MESSAGE from 'system'),
+     * but addressed to one agent and tagged so the SDK treats it as something
+     * to answer rather than ignore.
+     */
+    public injectSystemChallengeMessage(challenge: SystemLlmChallenge, text: string): void {
+        this.assertOwnerChannel(challenge.channelId);
+        this.assertServiceActive();
+
+        const message = createChannelMessage(
+            challenge.channelId,
+            'system',
+            text,
+            {
+                receiverId: challenge.agentId,
+                metadata: {
+                    correlationId: `challenge-${challenge.id}`,
+                    timestamp: challenge.createdAt,
+                    priority: 7
+                },
+                context: {
+                    systemGenerated: true,
+                    source: 'SystemLlmService',
+                    messageType: SYSTEMLLM_CHALLENGE_MESSAGE_TYPE,
+                    stance: challenge.stance,
+                    challengeId: challenge.id,
+                    trigger: challenge.trigger,
+                    taskId: challenge.taskId,
+                    targetAgentId: challenge.agentId
+                }
+            }
+        );
+        const payload = createChannelMessageEventPayload(Events.Message.CHANNEL_MESSAGE, 'system', message);
+        this.eventBus.emit(Events.Message.CHANNEL_MESSAGE, payload);
+        this.logger.info(
+            `[SystemLLM:Challenge] ${challenge.stance} ${challenge.trigger} challenge ${challenge.id} ` +
+            `sent to ${challenge.agentId} in ${challenge.channelId} (${challenge.points.length} points)`
+        );
+    }
+
+    /**
      * Generate contextual coordination suggestion content using System LLM
      */
     private async generateCoordinationSuggestionContent(
         triggerType: string,
-        coordinationAnalysis: any,
-        activity: any,
+        coordinationAnalysis: Pick<CoordinationAnalysis, 'opportunities'>,
+        activity: ChannelCoordinationActivity,
         _triggerMessage: ChannelMessage | null,
         lifecycleGeneration: number
     ): Promise<string | null> {
@@ -4286,32 +4425,24 @@ Create a helpful, contextual hint that provides value without being intrusive. K
             return null;
         }
         
+        // The stance picks the prompt. Supportive is the original text;
+        // critical looks for the weakest unverified claim and may answer NONE;
+        // hostile writes a bounded, deliberately wrong hint.
+        const stance = this.getStance();
         try {
             // Create context-aware prompt for coordination suggestion
-            const recentContext = activity.recentMessages.slice(-5).map((msg: any) => 
+            const recentContext = activity.recentMessages.slice(-5).map(msg =>
                 `[${msg.senderId}]: ${typeof msg.content === 'string' ? msg.content.substring(0, 100) : JSON.stringify(msg.content).substring(0, 100)}`
             ).join('\n');
 
-            const prompt = `Generate a brief, helpful coordination suggestion for the following situation:
-
-TRIGGER: ${triggerType}
-CHANNEL: ${activity.channelId || 'unknown'}
-ACTIVE AGENTS: ${Array.from(activity.activeAgents).join(', ')} (${activity.activeAgents.size} agents)
-RECENT ACTIVITY: ${activity.messageCount} messages
-
-RECENT CONVERSATION CONTEXT:
-${recentContext}
-
-COORDINATION OPPORTUNITIES:
-${coordinationAnalysis.opportunities.map((op: any) => `- ${op.description} (confidence: ${op.confidence})`).join('\n')}
-
-Generate a concise, actionable coordination suggestion (max 80 words) that:
-1. Addresses the specific trigger (${triggerType})
-2. Provides value without being intrusive  
-3. Suggests specific actions agents can take
-4. Uses a helpful, system-intelligence tone
-
-Start with "💡 System coordination insight:" followed by your suggestion.`;
+            const prompt = buildCoordinationHintPrompt(stance, {
+                triggerType,
+                channelId: activity.channelId ?? '',
+                activeAgents: Array.from(activity.activeAgents),
+                messageCount: activity.messageCount,
+                recentContext,
+                opportunities: coordinationAnalysis.opportunities
+            });
 
         // Coordination suggestions are short; they use the observation model,
         // the operation configured for fast, light work. This used to be a
@@ -4341,13 +4472,24 @@ Start with "💡 System coordination insight:" followed by your suggestion.`;
             }
 
             const trimmedResponse = response?.trim() || null;
+            if (trimmedResponse === COORDINATION_HINT_NONE) {
+                // Critical stance found nothing unsupported. Silence is the point.
+                this.logger.debug(`[SystemLLM:Coordination] ${stance} stance: nothing to say for ${triggerType}`);
+                return null;
+            }
             if (trimmedResponse) {
-                this.logger.debug(`[SystemLLM:Coordination] Generated suggestion for ${triggerType}:\n${trimmedResponse}`);
+                this.logger.debug(`[SystemLLM:Coordination] Generated ${stance} suggestion for ${triggerType}:\n${trimmedResponse}`);
             }
             return trimmedResponse;
 
         } catch (error) {
             if (!this.isLifecycleActive(lifecycleGeneration)) {
+                return null;
+            }
+
+            if (stance !== 'supportive') {
+                // A canned hint is not a critical or hostile hint. Say nothing.
+                this.logger.warn(`LLM coordination suggestion failed in ${stance} stance; no hint sent: ${error}`);
                 return null;
             }
 
@@ -4401,7 +4543,8 @@ Start with "💡 System coordination insight:" followed by your suggestion.`;
     private async injectSystemCoordinationMessage(
         channelId: ChannelId,
         content: string,
-        coordinationType: string
+        coordinationType: string,
+        stance: SystemLlmStance = 'supportive'
     ): Promise<void> {
         // Abort if service is shutting down
         if (this.isShuttingDown) {
@@ -4454,7 +4597,11 @@ Start with "💡 System coordination insight:" followed by your suggestion.`;
                         systemGenerated: true,
                         coordinationType,
                         messageType: 'coordination_suggestion',
-                        source: 'SystemLlmService'
+                        source: 'SystemLlmService',
+                        // Tagged so a critical or hostile hint can be told apart from
+                        // a genuine one in logs and metadata. Supportive hints keep
+                        // their original context untouched.
+                        ...(stance !== 'supportive' ? { stance } : {})
                     }
                 }
             );
@@ -4468,6 +4615,11 @@ Start with "💡 System coordination insight:" followed by your suggestion.`;
 
             this.eventBus.emit(Events.Message.CHANNEL_MESSAGE, payload);
 
+            if (stance !== 'supportive') {
+                // Audit line at info: the hint's text is the only record of what a
+                // hostile (or critical) hint said once it has been delivered.
+                this.logger.info(`[SystemLLM:ToAgents] ${stance} hint sent to channel ${channelId} (${coordinationType}): ${content}`);
+            }
             this.logger.debug(`[SystemLLM:ToAgents] Sent to channel ${channelId} (${coordinationType}):\n────────────────────────────────────────\n${content}\n────────────────────────────────────────`);
 
         } catch (error) {

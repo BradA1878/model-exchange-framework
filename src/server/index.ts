@@ -53,6 +53,7 @@ import { McpService } from './socket/services/McpService';
 import { ModeDetectionService } from './socket/services/ModeDetectionService';
 import { InferenceParameterService } from './socket/services/InferenceParameterService';
 import { SystemLlmServiceManager, assertSystemLlmConfigured } from './socket/services/SystemLlmServiceManager';
+import { SystemLlmChallengeService } from './socket/services/SystemLlmChallengeService';
 import { allMxfMcpTools } from './mcp/tools/index'; // Import MXF tools
 import { McpToolRegistry } from './api/services/McpToolRegistry'; // Import McpToolRegistry
 import { firstValueFrom } from 'rxjs';
@@ -181,6 +182,7 @@ let socketService: SocketService | undefined;
 let memoryService: MemoryService;
 let mcpToolRegistry: McpToolRegistry;
 let ephemeralEventPatternService: EphemeralEventPatternService | undefined;
+let systemLlmChallengeService: SystemLlmChallengeService | undefined;
 let modeDetectionService: ModeDetectionService | undefined;
 let taskService: TaskService | undefined;
 let codeExecutionSandboxService: CodeExecutionSandboxService | undefined;
@@ -259,6 +261,7 @@ const shutdownCoordinator = new ServerShutdownCoordinator([
         name: 'inference-parameters',
         run: (): void => { InferenceParameterService.shutdownExisting(); }
     },
+    { name: 'system-llm-challenges', run: (): void => { systemLlmChallengeService?.shutdown(); } },
     { name: 'system-llm', run: (): void => { systemLlmServiceManager?.shutdown(); } },
     {
         name: 'hybrid-mcp',
@@ -574,6 +577,11 @@ const initializeServer = async () => {
         
         // Initialize SystemLlmServiceManager to load env vars and show configuration at startup
         systemLlmServiceManager = SystemLlmServiceManager.getInstance();
+
+        // Stance challenges (critical / hostile) listen for agent claims and tool
+        // results; in supportive stance the service only keeps evidence buffers.
+        systemLlmChallengeService = SystemLlmChallengeService.getInstance();
+        systemLlmChallengeService.start();
 
         // Initialize EphemeralEventPatternService
         await ephemeralEventPatternService.initialize();

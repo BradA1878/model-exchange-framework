@@ -7,6 +7,9 @@ const mockSavedChannelFields: Array<Record<string, unknown>> = [];
 const mockFindOne = jest.fn();
 const mockSaveChannel = jest.fn();
 const mockSetChannelSystemLlmEnabled = jest.fn();
+const mockSetChannelSystemLlmStance = jest.fn();
+const mockClearChannelSystemLlmStance = jest.fn();
+const mockGetChannelSystemLlmStance = jest.fn();
 const mockSetChannelAllowedTools = jest.fn().mockResolvedValue(undefined);
 const mockHydrateChannelAllowedTools = jest.fn();
 
@@ -31,7 +34,10 @@ jest.mock('@mxf-dev/core/models/channel', () => {
 jest.mock('@mxf-dev/core/config/ConfigManager', () => ({
     ConfigManager: {
         getInstance: jest.fn().mockReturnValue({
-            setChannelSystemLlmEnabled: mockSetChannelSystemLlmEnabled
+            setChannelSystemLlmEnabled: mockSetChannelSystemLlmEnabled,
+            setChannelSystemLlmStance: mockSetChannelSystemLlmStance,
+            clearChannelSystemLlmStance: mockClearChannelSystemLlmStance,
+            getChannelSystemLlmStance: mockGetChannelSystemLlmStance
         })
     }
 }));
@@ -40,11 +46,27 @@ jest.mock('@mxf-dev/core/services/ChannelContextMessageOperations', () => ({
     ChannelContextMessageOperations: jest.fn()
 }));
 
+// Captures handlers ChannelService registers via EventBus.server.on so tests
+// can deliver an event straight to the listener under test (the constructor
+// used to be the only thing that ever called `on`; nothing read its return
+// value, so giving it a real {unsubscribe} and a handler registry changes
+// nothing for the tests above — it only adds the ability to trigger a
+// listener directly, which the CHANNEL_SYSTEM_LLM_CHANGED tests below need).
+type ServerEventHandler = (payload: unknown) => void | Promise<void>;
+const mockServerHandlers = new Map<string, ServerEventHandler[]>();
+const mockServerOn = jest.fn((eventName: string, handler: ServerEventHandler): { unsubscribe: () => void } => {
+    const handlers = mockServerHandlers.get(eventName) ?? [];
+    handlers.push(handler);
+    mockServerHandlers.set(eventName, handlers);
+    return { unsubscribe: jest.fn() };
+});
+const mockServerEmit = jest.fn();
+
 jest.mock('@mxf-dev/core/events/EventBus', () => ({
     EventBus: {
         server: {
-            on: jest.fn(),
-            emit: jest.fn()
+            on: mockServerOn,
+            emit: mockServerEmit
         }
     }
 }));
@@ -79,10 +101,20 @@ jest.mock('../../../src/server/socket/services/McpService', () => ({
 }));
 
 import { ChannelService } from '../../../src/server/socket/services/ChannelService';
+import { ConfigEvents } from '@mxf-dev/core/events/event-definitions/ConfigEvents';
+
+/** Deliver a payload to every handler ChannelService registered for eventName. */
+const deliverServerEvent = async (eventName: string, payload: unknown): Promise<void> => {
+    const handlers = mockServerHandlers.get(eventName) ?? [];
+    for (const handler of handlers) {
+        await handler(payload);
+    }
+};
 
 describe('ChannelService SystemLLM persistence', () => {
     beforeEach(() => {
         jest.clearAllMocks();
+        mockServerHandlers.clear();
         mockSavedChannelFields.length = 0;
         mockFindOne.mockResolvedValue(null);
         mockSaveChannel.mockResolvedValue(undefined);
@@ -140,6 +172,7 @@ describe('ChannelService SystemLLM persistence', () => {
             isPrivate: false,
             createdBy: 'owner-1',
             systemLlmEnabled: false,
+            systemLlmStance: 'critical',
             allowedTools: persistedTools
         };
         mockFindOne.mockResolvedValue(channelDocument);
@@ -159,6 +192,8 @@ describe('ChannelService SystemLLM persistence', () => {
             'cold-channel',
             persistedTools
         );
+        // The persisted stance is installed on the same cold-load path.
+        expect(mockSetChannelSystemLlmStance).toHaveBeenCalledWith('critical', 'cold-channel');
         expect(mockHydrateChannelAllowedTools.mock.invocationCallOrder[0]).toBeLessThan(
             findOneAndUpdate.mock.invocationCallOrder[0]
         );
@@ -206,7 +241,8 @@ describe('ChannelService SystemLLM persistence', () => {
             createdAt: new Date(),
             updatedAt: new Date(),
             participants: [],
-            allowedTools: persistedTools
+            allowedTools: persistedTools,
+            systemLlmStance: 'hostile'
         };
         mockFindOne
             .mockResolvedValueOnce(null)
@@ -224,6 +260,8 @@ describe('ChannelService SystemLLM persistence', () => {
             'raced-channel',
             persistedTools
         );
+        // The winner's persisted stance is what gets installed, not the loser's request.
+        expect(mockSetChannelSystemLlmStance).toHaveBeenCalledWith('hostile', 'raced-channel');
     });
 
     it('rejects a foreign owner that wins the insert after a not-found preflight', async () => {
@@ -252,6 +290,90 @@ describe('ChannelService SystemLLM persistence', () => {
         expect(mockHydrateChannelAllowedTools).not.toHaveBeenCalledWith(
             'contended-channel',
             ['foreign-only-tool']
+        );
+    });
+
+    it('persists a requested systemLlmStance on the document and installs it in ConfigManager', async () => {
+        const service = ChannelService.getInstance({} as never);
+
+        const channel = await service.createChannel(
+            'hostile-test-channel',
+            'Hostile test channel',
+            'test-user',
+            { systemLlmStance: 'hostile' }
+        );
+
+        expect(channel).not.toBeNull();
+        expect(mockSavedChannelFields).toHaveLength(1);
+        expect(mockSavedChannelFields[0].systemLlmStance).toBe('hostile');
+        expect(mockSetChannelSystemLlmStance).toHaveBeenCalledWith('hostile', 'hostile-test-channel');
+        expect(mockClearChannelSystemLlmStance).not.toHaveBeenCalled();
+    });
+
+    it('omits systemLlmStance from the persisted document and clears it when none is requested', async () => {
+        const service = ChannelService.getInstance({} as never);
+
+        const channel = await service.createChannel(
+            'no-stance-channel',
+            'No stance channel',
+            'test-user'
+        );
+
+        expect(channel).not.toBeNull();
+        expect(mockSavedChannelFields).toHaveLength(1);
+        expect(mockSavedChannelFields[0]).not.toHaveProperty('systemLlmStance');
+        expect(mockClearChannelSystemLlmStance).toHaveBeenCalledWith('no-stance-channel');
+        expect(mockSetChannelSystemLlmStance).not.toHaveBeenCalled();
+    });
+
+    it('rejects an invalid systemLlmStance before the channel document is constructed or persisted', async () => {
+        const service = ChannelService.getInstance({} as never);
+        const ChannelMock = (jest.requireMock('@mxf-dev/core/models/channel') as {
+            Channel: jest.Mock;
+        }).Channel;
+
+        await expect(service.createChannel(
+            'nonsense-stance-channel',
+            'Bad stance channel',
+            'test-user',
+            { systemLlmStance: 'nonsense' }
+        )).rejects.toThrow(/invalid systemLlmStance/i);
+
+        expect(mockSavedChannelFields).toHaveLength(0);
+        expect(ChannelMock).not.toHaveBeenCalled();
+    });
+
+    it('persists a channel-specific stance from the CHANNEL_SYSTEM_LLM_CHANGED event', async () => {
+        ChannelService.getInstance({} as never);
+        const updateOne = (jest.requireMock('@mxf-dev/core/models/channel') as {
+            Channel: { updateOne: jest.Mock };
+        }).Channel.updateOne;
+        updateOne.mockResolvedValue({ matchedCount: 1, modifiedCount: 1 });
+
+        await deliverServerEvent(ConfigEvents.CHANNEL_SYSTEM_LLM_CHANGED, {
+            data: { channelId: 'channel-critical', enabled: true, stance: 'critical', timestamp: 1 }
+        });
+
+        expect(updateOne).toHaveBeenCalledWith(
+            { channelId: 'channel-critical', active: true },
+            { $set: { systemLlmEnabled: true, systemLlmStance: 'critical' } }
+        );
+    });
+
+    it('leaves systemLlmStance out of $set when the CHANNEL_SYSTEM_LLM_CHANGED event carries none', async () => {
+        ChannelService.getInstance({} as never);
+        const updateOne = (jest.requireMock('@mxf-dev/core/models/channel') as {
+            Channel: { updateOne: jest.Mock };
+        }).Channel.updateOne;
+        updateOne.mockResolvedValue({ matchedCount: 1, modifiedCount: 1 });
+
+        await deliverServerEvent(ConfigEvents.CHANNEL_SYSTEM_LLM_CHANGED, {
+            data: { channelId: 'channel-enabled-only', enabled: true, timestamp: 1 }
+        });
+
+        expect(updateOne).toHaveBeenCalledWith(
+            { channelId: 'channel-enabled-only', active: true },
+            { $set: { systemLlmEnabled: true } }
         );
     });
 });

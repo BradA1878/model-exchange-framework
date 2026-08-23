@@ -22,6 +22,8 @@
  * Channel Interface
  * Defines the structure of a channel in the MXF
  */
+import type { SystemLlmStance } from '../types/SystemLlmStanceTypes.js';
+
 export interface IChannel {
     id: string;
     name: string;
@@ -33,4 +35,6 @@ export interface IChannel {
     // Channel-level access control and configuration
     allowedTools?: string[];
     systemLlmEnabled?: boolean;
+    /** Channel SystemLLM stance; unset inherits the server's SYSTEMLLM_STANCE. */
+    systemLlmStance?: SystemLlmStance;
 }

@@ -214,6 +214,11 @@ SYSTEMLLM_MODEL_<OPERATION> Per-operation override — OBSERVATION, REASONING, A
                             or REFLECTION — replaces the default model for that one operation.
 SYSTEMLLM_DAILY_BUDGET_USD  Daily SystemLLM ceiling (default 10). Calls are refused past it.
 SYSTEMLLM_BUDGET_WARN_AT    Warning threshold as a fraction of the ceiling (default 0.8).
+SYSTEMLLM_STANCE            supportive (default) | critical | hostile. critical challenges unsupported
+                            claims, plans, and completions from evidence; hostile is a disclosed test
+                            mode that sends wrong ones on purpose. An unknown value fails boot.
+SYSTEMLLM_STANCE_MAX        Ceiling on every channel's effective stance (default hostile, no ceiling).
+                            supportive turns challenges off server-wide; critical keeps hostile out.
 MXF_WEBHOOK_ENABLED         n8n webhook routes are unmounted unless this is true.
 MXF_WEBHOOK_SECRET          Required when webhooks are enabled — HMAC signing key. Fails fast.
 MAGIC_LINK_WEBHOOK_URL      Where magic links are delivered. The token is never returned in

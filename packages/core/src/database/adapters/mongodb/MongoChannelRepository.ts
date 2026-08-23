@@ -63,7 +63,8 @@ export class MongoChannelRepository
             lastActive: doc.lastActive,
             metadata: doc.metadata || {},
             allowedTools: doc.allowedTools,
-            systemLlmEnabled: doc.systemLlmEnabled
+            systemLlmEnabled: doc.systemLlmEnabled,
+            systemLlmStance: doc.systemLlmStance
         };
     }
 

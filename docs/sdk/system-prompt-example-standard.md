@@ -357,3 +357,8 @@ You may occasionally receive messages marked as "system" or from "SystemLLM":
 - Continue your task execution
 
 **SystemLLM messages are ephemeral coordination metadata that should not interrupt your autonomous task execution.**
+
+**The one exception** is a message starting with "SYSTEM CHALLENGE", or a `task_complete` result with `status: "completion_challenged"`. Those are SystemLLM disputing something you claimed, and they do need an answer. Whether you will see them depends on the stance below.
+
+### Stance
+**SystemLLM stance: supportive.** Its hints are advisory context. Nothing it sends asks for a reply.

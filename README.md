@@ -4,7 +4,7 @@ Author: [Brad Anderson](brada1878@gmail.com)
 Copyright 2024-2026 Brad Anderson
 
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](http://www.apache.org/licenses/LICENSE-2.0)
-[![Version](https://img.shields.io/badge/version-3.0.0-blue.svg)](https://github.com/BradA1878/model-exchange-framework)
+[![Version](https://img.shields.io/badge/version-3.1.0-blue.svg)](https://github.com/BradA1878/model-exchange-framework)
 [![npm](https://img.shields.io/badge/npm-@mxf--dev%2Fsdk-red.svg)](https://www.npmjs.com/package/@mxf-dev/sdk)
 [![Bun](https://img.shields.io/badge/Bun-1.1+-green.svg)](https://bun.sh/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.0+-blue.svg)](https://www.typescriptlang.org/)
@@ -810,6 +810,8 @@ SYSTEMLLM_ENABLED=true
 SYSTEMLLM_PROVIDER=openrouter  # Options: openrouter, azure-openai, openai, anthropic, gemini, xai, ollama
 SYSTEMLLM_DEFAULT_MODEL=~anthropic/claude-sonnet-latest  # Required when enabled - no built-in model, check your provider's current list
 SYSTEMLLM_DYNAMIC_MODEL_SELECTION=true  # Opt in to complexity-based upgrades into the latest Claude aliases (default: false)
+SYSTEMLLM_STANCE=supportive  # supportive (default), critical, or hostile (test mode); unknown value fails boot
+SYSTEMLLM_STANCE_MAX=hostile  # Ceiling on every channel's stance (default: hostile, i.e. no ceiling)
 
 # MXP Protocol (Optional - for efficient agent communication)
 MXP_ENCRYPTION_KEY=your_secure_key_here

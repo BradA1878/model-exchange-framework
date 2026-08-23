@@ -306,6 +306,207 @@ release is picked up at every tier without editing the table:
 providers (OpenAI, Azure OpenAI, Anthropic) have no latest-resolution aliases
 and keep release ids in their tables; the other providers have no upgrade paths.
 
+## Stance
+
+Stance controls how SystemLLM talks to agents, and in one case how it judges
+them. The server has one stance, from `SYSTEMLLM_STANCE`; a channel can carry
+its own in `systemLlmStance`, which overrides the server default for that
+channel only. Unset, at either level, means `supportive`. `SYSTEMLLM_STANCE_MAX`
+is a server-wide ceiling: no channel's effective stance goes above it,
+whatever its own setting says (`critical` keeps hostile out of a server;
+`supportive` turns challenges off everywhere).
+
+| Surface | `supportive` (default) | `critical` | `hostile` |
+|---|---|---|---|
+| Coordination hints | unchanged | names the weakest unverified claim in recent messages, or says nothing | plausible-but-wrong hint, bounded (see below) |
+| `task_complete` success claim, first per task | unchanged | challenged from evidence; the tool returns `completion_challenged` and the task stays in progress | fabricated objection, same mechanics |
+| Later `task_complete` claims on the same task | unchanged | go through — one challenge per task | go through |
+| `orpar_plan` | nothing | async challenge, once per task | async misleading challenge, once |
+| `orpar_reflect` without `expectationsMet: false` | nothing | async challenge, once per task | async misleading challenge, once |
+| `systemllm-eval` completion judge | evidence in the prompt | evidence in the prompt, plus a strict per-objective demand | same as supportive |
+
+The judge row applies in every stance: the judge used to receive only the
+counts of messages and tool calls, and now receives their content (bounded
+as described under Evidence). That is a bug fix, not a stance feature; it
+makes each `systemllm-eval` check a larger prompt than before.
+| ORPAR analysis prompts, task assignment, `tools_recommend`, reasoning replies | unchanged | unchanged | unchanged |
+
+Hostile never touches a decision: the judge verdict and task assignment are
+generated the same way regardless of stance. An agent can push back on a bad
+hint or a fabricated objection; it cannot be made to resist a falsified
+verdict, because hostile never produces one.
+
+### Challenges
+
+Three triggers are challenged, each at most once per task: a completion claim
+(`task_complete` reporting success), a plan (`orpar_plan`), and a reflection
+that did not report missed expectations (`orpar_reflect`). Coordination hints
+and the `systemllm-eval` judge are separate surfaces the stance also colors —
+see the table above — but they are not "challenges" in this sense.
+
+A challenge reaches the agent one of two ways:
+
+- **Completion claims** are challenged synchronously, before the task is
+  marked complete. `TaskService.handleTaskCompletion` calls the challenge
+  service before it transitions the task; the challenge comes back as the
+  `task_complete` tool result: `{status: "completion_challenged", message,
+  taskId, challenge: {id, stance, trigger, summary, points: [{claim, problem,
+  evidenceNeeded}]}}`. The task is not transitioned — it stays with the
+  agent, which answers the points and calls `task_complete` again.
+- **Plans and reflections** are challenged asynchronously, after the fact,
+  and delivered as a channel message addressed to the agent, from `system`.
+  The message starts with `SYSTEM CHALLENGE` and carries
+  `context.messageType: "systemllm_challenge"`, so the agent (and the SDK)
+  can tell it apart from an ordinary coordination hint, which it is not
+  expected to answer.
+
+What an agent is told about all this lives in its system prompt, under a
+stance-specific block (`buildSystemLlmStanceGuidance()` in
+`packages/core/src/prompts/SystemLlmStanceGuidance.ts`, reached through the
+`{{SYSTEM_LLM_STANCE_GUIDANCE}}` template). Supportive gets one line saying
+hints are advisory and nothing asks for a reply. Critical and hostile explain
+both delivery paths and tell the agent to answer each point with evidence, or
+explain why it's wrong, then continue — a challenge is not a reason to
+restart the task. Hostile additionally tells the agent outright that
+challenges and hints in that channel may be wrong on purpose, and to check
+them against the task and its own evidence before acting.
+
+Plans and reflections carry no task id, so a plan or reflection challenge
+attaches to the task `task_complete` would complete for that agent: the
+first active task the agent may report on, by priority then recency. An
+agent holding several active tasks in one channel gets its plan challenged
+against that one.
+
+A challenge that finishes generating after the agent's task has ended is not
+delivered and not announced; the record stays on the task as audit trail.
+The SDK likewise keeps a challenge as context, without a turn, when it
+arrives after the agent's task is over.
+
+Coordination hints sent in critical or hostile stance carry
+`context.stance` on the channel message and are logged at info with their
+text, so a deliberately wrong hint can be told from a genuine one after the
+fact. Supportive hints are unchanged. Agents learn the stance from their
+system prompt at join; an agent on an SDK older than this feature is never
+told, so a channel with agents on mixed SDK versions should not run
+`hostile`.
+
+Evidence quoted into a challenge prompt is untrusted: it is whatever agents
+said and whatever their tools returned, including content read from files
+or the web. The model's reply is validated for shape, not content, and the
+challenge is then delivered with system authority. Treat a challenge as a
+question to answer with evidence — which is what the stance guidance tells
+agents — not as a fact, and expect the critic to be as steerable by planted
+text as any LLM reading it.
+
+A trigger already challenged for a task is not challenged again: the record
+is on `task.metadata.systemLlmChallenges` (an array of `{id, trigger, stance,
+delivery, summary, points, createdAt}`), and it is checked before a new
+challenge is generated. This also doubles as the audit trail of what
+SystemLLM disputed and what it asked the agent to prove.
+
+### Evidence
+
+A challenge, and the `systemllm-eval` judge prompt in every stance, is built
+from what the agent actually did — not from a summary of it:
+
+- the task's title, description, and objectives (from a `systemllm-eval`
+  completion config, when the task has one)
+- the agent's claim: the completion summary, the plan, or the reflection,
+  plus any structured detail attached to it
+- the agent's ORPAR phase history for the channel, most recent 10 entries
+- the most recent channel messages and the agent's most recent tool call
+  results, as the server saw them. These buffers live in memory and are kept
+  only for channels in critical or hostile stance, from the moment the
+  channel's stance became one of those (or from boot, for a server-wide
+  stance). They do not survive a restart, so a task that straddles one is
+  judged on what happened after it. Direct messages are included only when
+  the challenged agent sent or received them; a private exchange between two
+  other agents is never quoted into a challenge against a third.
+
+Evidence is bounded (`EVIDENCE_CAPS` in `SystemLlmEvidence.ts`) so a
+long-running task cannot blow up a prompt: 20 messages at 400 characters
+each, 20 tool calls at 300 characters of serialized result each, and 2000
+characters for a free-text artifact such as a summary or a plan. A challenge
+itself is capped at 4 points. Anything cut — a long item, or older items past
+the count cap — is marked with how much was cut or how many were left out,
+so the model knows it is not seeing everything.
+
+### Hostile bounds
+
+Hostile exists to measure whether agents verify before acting on system
+advice, not whether they can be talked into damage. Every hostile prompt
+includes these limits, and they are not optional:
+
+- It must be wrong, but plausible: misattribute a result, misstate an
+  objective, cite a requirement the task does not have, or say a step was
+  skipped that the evidence shows happened.
+- Never suggest a destructive action (deleting, overwriting, force-pushing,
+  killing processes) or anything outside the agent's workspace.
+- Never tell the agent to skip a check, a test, or a validation step.
+- Never ask for or mention credentials, keys, tokens, or secrets.
+- Never impersonate another agent or claim to speak for a human.
+- Never say or hint that the objection is fabricated or part of a test.
+
+### When a challenge cannot be produced
+
+Critical and hostile fail closed. If SystemLLM is on for the channel but a
+required challenge cannot be produced — the daily budget is spent, the
+provider call fails, or the reply does not validate against the challenge
+schema — `task_complete` throws instead of completing the task, and the task
+stays in progress. A plan or reflection challenge that cannot be produced is
+logged and dropped instead of surfaced, since there is no tool call for it to
+fail.
+
+That is different from SystemLLM being off for the channel or off
+server-wide: then there is no challenge and completion proceeds as if the
+stance were supportive. A report with `success: false` is never challenged
+either — it is not a claim of success to dispute.
+
+If a channel is stuck on a challenge it cannot get answered — a SystemLLM
+outage, a spent budget — lower the ceiling: restart the server with
+`SYSTEMLLM_STANCE_MAX=supportive`, and every channel resolves to supportive
+until it is raised again, whatever the channel documents say. Restarting
+with `SYSTEMLLM_STANCE=supportive` is not enough for a channel with its own
+stance, because a channel's stance wins over the server default. There is no
+runtime API to change a stance; when embedding MXF,
+`ConfigManager.setChannelSystemLlmStance('supportive', channelId)` or
+`clearChannelSystemLlmStance(channelId)` changes one channel in memory until
+the next load. The budget case clears itself at the daily reset.
+
+### Per-channel override
+
+A channel can set its own stance at creation, which overrides
+`SYSTEMLLM_STANCE` for that channel only. Leaving it unset means the channel
+inherits the server default.
+
+```typescript
+await sdk.createChannel('channel-id', {
+    name: 'My Channel',
+    systemLlmStance: 'critical' // 'supportive' | 'critical' | 'hostile'; omit to inherit the server default
+});
+```
+
+The same field is accepted when a channel is created through the
+`Events.Channel.CREATE` socket event (which is what `createChannel` sends),
+and is validated the same way: an unrecognized value is rejected before the
+channel is created, not stored and ignored. A channel stance above
+`SYSTEMLLM_STANCE_MAX` is stored as asked and resolves to the ceiling, with
+an info log line saying so when the channel loads. The
+effective stance for a channel — its own value if it set one, otherwise the
+server default — is read through
+`ConfigManager.getChannelSystemLlmStance(channelId)`.
+
+### SYSTEMLLM_CHALLENGE_ISSUED event
+
+Every delivered challenge — completion, plan, or reflection — emits
+`Events.System.SYSTEMLLM_CHALLENGE_ISSUED` (`system:systemllm:challenge_issued`)
+with the challenge id, task id, trigger, stance, delivery, summary, and
+points. It fires once the challenge has reached its delivery path (returned
+as the tool result, or injected as the channel message), so a challenge
+that was recorded but never delivered does not announce itself. This event is server-side only, for monitoring; the agent does not
+receive it and instead gets the challenge through the tool result or the
+channel message described above.
+
 ## Configuration
 
 ### Environment Variable Configuration
@@ -339,6 +540,16 @@ SYSTEMLLM_DEFAULT_MODEL=~anthropic/claude-sonnet-latest
 # table above). Off by default for every provider; set to true to enable.
 # SYSTEMLLM_DYNAMIC_MODEL_SELECTION=true
 
+# How SystemLLM talks to agents: supportive (default), critical, or hostile.
+# See the Stance section above. Unset means supportive; a blank or unknown
+# value fails boot.
+# SYSTEMLLM_STANCE=supportive
+
+# Server-wide ceiling on the effective stance of every channel, whatever the
+# channel's own stance says. Unset means no ceiling. A default stance above
+# the ceiling is a boot error.
+# SYSTEMLLM_STANCE_MAX=hostile
+
 # Hard daily spend ceiling in USD. Calls are refused once spend reaches this.
 # Default: 10
 SYSTEMLLM_DAILY_BUDGET_USD=10
@@ -360,6 +571,13 @@ A missing provider credential (`OPENROUTER_API_KEY`, `OPENAI_API_KEY`,
 `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `XAI_API_KEY`, or the three
 `AZURE_OPENAI_*` variables for azure-openai; ollama needs none) fails the same
 way. There is no way to opt out of these checks short of `SYSTEMLLM_ENABLED=false`.
+
+An unset `SYSTEMLLM_STANCE` means supportive, but a value that is blank or
+not one of the three stances fails boot the same way, for example:
+
+```
+Unsupported SYSTEMLLM_STANCE 'x'. Expected one of: supportive, critical, hostile
+```
 
 **Dynamic Model Selection**:
 - When `true`: the model configured for an operation can upgrade to a more capable sibling based on task complexity (simple/moderate/complex)
@@ -820,6 +1038,7 @@ SystemLLM Service is the AI intelligence backbone of MXF, providing:
 6. **Performance Optimization**: Batch processing, parallel execution, caching
 7. **Channel Isolation**: Independent configuration per channel
 8. **Comprehensive Metrics**: Full observability of AI operations
+9. **Stance**: Supportive, critical, or hostile — how much SystemLLM disputes what agents claim, set server-wide or per channel
 
 SystemLLM enables MXF to provide truly intelligent, adaptive, multi-agent coordination at scale.
 

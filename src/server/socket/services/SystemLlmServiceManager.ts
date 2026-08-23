@@ -42,6 +42,12 @@ import { LlmProviderType } from '@mxf-dev/core/protocols/mcp/LlmProviders';
 import { ConfigManager } from '@mxf-dev/core/config/ConfigManager';
 import { Subscription } from 'rxjs';
 import { requireEnv } from '@mxf-dev/core/utils/env';
+import {
+    DEFAULT_SYSTEMLLM_STANCE,
+    DEFAULT_SYSTEMLLM_STANCE_CEILING,
+    isStanceWithin,
+    parseSystemLlmStance
+} from '@mxf-dev/core/types/SystemLlmStanceTypes';
 
 const logger = new Logger('debug', 'SystemLlmServiceManager', 'server');
 
@@ -169,12 +175,35 @@ export const loadSystemLlmEnvironmentConfig = (): SystemLlmServiceConfig | null 
         orparModels[operation] = value.trim();
     }
 
+    // Stance: how SystemLLM talks to agents. Unset means supportive, which is
+    // the original behavior. Set-but-blank and unknown values are boot errors.
+    const stanceValue = process.env.SYSTEMLLM_STANCE;
+    const stance = stanceValue === undefined
+        ? DEFAULT_SYSTEMLLM_STANCE
+        : parseSystemLlmStance(stanceValue, 'SYSTEMLLM_STANCE');
+
+    // Ceiling: no channel goes above it, whatever its own stance says. Unset
+    // means no ceiling. A default above the ceiling is a contradiction, not a
+    // value to quietly clamp.
+    const ceilingValue = process.env.SYSTEMLLM_STANCE_MAX;
+    const stanceCeiling = ceilingValue === undefined
+        ? DEFAULT_SYSTEMLLM_STANCE_CEILING
+        : parseSystemLlmStance(ceilingValue, 'SYSTEMLLM_STANCE_MAX');
+    if (!isStanceWithin(stance, stanceCeiling)) {
+        throw new Error(
+            `SYSTEMLLM_STANCE '${stance}' is above SYSTEMLLM_STANCE_MAX '${stanceCeiling}'. ` +
+            'Lower the stance or raise the ceiling.'
+        );
+    }
+
     return {
         providerType,
         defaultModel,
         orparModels,
         defaultTemperature: 0.7,
-        defaultMaxTokens: 4096
+        defaultMaxTokens: 4096,
+        stance,
+        stanceCeiling
     };
 };
 
@@ -211,6 +240,26 @@ export class SystemLlmServiceManager {
         // environment is the source otherwise, validated at boot by
         // assertSystemLlmConfigured() and again here.
         this.defaultConfig = defaultConfig ?? loadSystemLlmEnvironmentConfig();
+
+        // The stance is applied by reading ConfigManager at call time (so a
+        // channel can override it), so the server-wide default is installed
+        // there once. Hostile is a test mode: say so loudly at boot.
+        const stance = this.defaultConfig?.stance ?? DEFAULT_SYSTEMLLM_STANCE;
+        const stanceCeiling = this.defaultConfig?.stanceCeiling ?? DEFAULT_SYSTEMLLM_STANCE_CEILING;
+        ConfigManager.getInstance().setChannelSystemLlmStanceCeiling(stanceCeiling);
+        ConfigManager.getInstance().setChannelSystemLlmStance(stance);
+        if (stanceCeiling !== DEFAULT_SYSTEMLLM_STANCE_CEILING) {
+            logger.info(`SYSTEMLLM_STANCE_MAX=${stanceCeiling}: no channel's effective stance goes above it.`);
+        }
+        if (stance === 'hostile') {
+            logger.warn(
+                'SYSTEMLLM_STANCE=hostile: this is a test mode. SystemLLM will send agents ' +
+                'deliberately wrong challenges and coordination hints. Agents are told this ' +
+                'in their system prompt and every hostile message is tagged stance=hostile.'
+            );
+        } else if (stance === 'critical') {
+            logger.info('SYSTEMLLM_STANCE=critical: SystemLLM will challenge unsupported claims, plans, and completions.');
+        }
 
         // Register cleanup listeners
         this.registerCleanupListeners();
