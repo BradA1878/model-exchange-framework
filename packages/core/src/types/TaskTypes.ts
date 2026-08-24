@@ -109,7 +109,11 @@ export interface ChannelTask {
     dependsOn?: string[];               // Task IDs this task depends on
     blockedBy?: string[];               // Task IDs that block this task
     
-    // Results and outcomes
+    // Results and outcomes. `output` is whatever the caller passed to
+    // completeTask() or the REST completion route, or a TaskCompletionOutput
+    // when an agent completed the task by calling task_complete. There is no
+    // `result.summary` — use getTaskCompletionOutput() to read the summary
+    // safely regardless of which completion path produced this task.
     result?: {
         success?: boolean;
         output?: any;
@@ -117,8 +121,71 @@ export interface ChannelTask {
         completedAt?: number;
         completedBy?: string;
     };
-    
+
     assignmentStrategy: AssignmentStrategy;
+}
+
+/**
+ * What `task_complete` stores in `ChannelTask.result.output`.
+ *
+ * This is the shape TaskService.handleTaskCompletion writes when an agent
+ * completes a task through the task_complete tool. It is not the only shape
+ * `result.output` can hold: a caller can also set `result.output` directly
+ * through completeTask() or the REST completion route, so this type is a
+ * guard to check against, not a blanket narrowing of `output`.
+ */
+export interface TaskCompletionOutput {
+    agentId: string;
+    summary: string;
+    details?: Record<string, unknown>;
+    nextSteps?: string;
+    reportedSuccess: boolean;
+    requestId: string;
+}
+
+/**
+ * Checks whether a value matches the TaskCompletionOutput shape.
+ * Used to read `result.output` from a task without assuming which
+ * completion path (task_complete vs. completeTask()/REST) produced it.
+ */
+export function isTaskCompletionOutput(value: unknown): value is TaskCompletionOutput {
+    if (typeof value !== 'object' || value === null) {
+        return false;
+    }
+    const candidate = value as Record<string, unknown>;
+    if (typeof candidate.agentId !== 'string' || candidate.agentId.length === 0) {
+        return false;
+    }
+    if (typeof candidate.summary !== 'string') {
+        return false;
+    }
+    if (typeof candidate.reportedSuccess !== 'boolean') {
+        return false;
+    }
+    if (typeof candidate.requestId !== 'string' || candidate.requestId.length === 0) {
+        return false;
+    }
+    if (candidate.details !== undefined) {
+        if (typeof candidate.details !== 'object' || candidate.details === null || Array.isArray(candidate.details)) {
+            return false;
+        }
+    }
+    if (candidate.nextSteps !== undefined && typeof candidate.nextSteps !== 'string') {
+        return false;
+    }
+    return true;
+}
+
+/**
+ * Reads `task.result.output` as a TaskCompletionOutput, or returns undefined
+ * when the task has no result, no output, or an output that does not match
+ * (e.g. a value a caller passed directly to completeTask()/REST).
+ */
+export function getTaskCompletionOutput(
+    task: Pick<ChannelTask, 'result'> | null | undefined
+): TaskCompletionOutput | undefined {
+    const output = task?.result?.output;
+    return isTaskCompletionOutput(output) ? output : undefined;
 }
 
 /**

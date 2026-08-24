@@ -20,7 +20,14 @@
 
 import { EventBus } from '@mxf-dev/core/events/EventBus';
 import { Events, AgentEvents } from '@mxf-dev/core/events/EventNames';
-import { AgentEventData, AgentEventPayload, createAgentMessageDeliveredPayload, AgentMessageDeliveredEventData } from '@mxf-dev/core/schemas/EventPayloadSchema';
+import {
+    AgentEventData,
+    AgentEventPayload,
+    BaseEventPayload,
+    createAgentMessageDeliveredPayload,
+    AgentMessageDeliveredEventData,
+    MeilisearchBackfillEventData
+} from '@mxf-dev/core/schemas/EventPayloadSchema';
 import { createStrictValidator } from '@mxf-dev/core/utils/validation';
 import { Logger } from '@mxf-dev/core/utils/Logger';
 import { AgentConnectionStatus } from '@mxf-dev/core/types/AgentTypes';
@@ -88,6 +95,11 @@ export class AgentService {
         // Meilisearch backfill events - mark agent as ready when backfill completes
         EventBus.server.on(Events.Meilisearch.BACKFILL_COMPLETE, (payload: any) => this.handleBackfillComplete(payload));
         EventBus.server.on(Events.Meilisearch.BACKFILL_PARTIAL, (payload: any) => this.handleBackfillComplete(payload));
+        // The SDK reports its whole memory-load backfill once it has settled.
+        EventBus.server.on(
+            Events.Meilisearch.BACKFILL_SETTLED,
+            (payload: BaseEventPayload<MeilisearchBackfillEventData>) => this.handleBackfillSettled(payload)
+        );
     }
 
     /**
@@ -509,6 +521,62 @@ export class AgentService {
 
         } catch (error) {
             this.logger.error(`Error handling backfill complete: ${error}`);
+        }
+    }
+
+    /**
+     * Handle the SDK's settled memory-load backfill report.
+     *
+     * The agent is ready for the memory_search_* tools when the report says
+     * the load succeeded or indexed at least part of the history, the same
+     * rule the server's own per-batch COMPLETE/PARTIAL events apply. A report
+     * that indexed nothing it had to index leaves the agent as it was. A load
+     * with nothing to backfill sends no batch at all, so without this report
+     * the server never heard from it and the agent never saw the search tools.
+     * The counts are logged here so a client-side backfill problem shows in
+     * the server log, not only in the agent's.
+     */
+    private handleBackfillSettled(payload: BaseEventPayload<MeilisearchBackfillEventData>): void {
+        try {
+            const validator = createStrictValidator('AgentService.handleBackfillSettled');
+            const agentId = payload.agentId;
+            if (typeof agentId !== 'string' || agentId.length === 0) {
+                this.logger.warn('Backfill settled event missing agentId');
+                return;
+            }
+            const agent = this.agents.get(agentId);
+            if (!agent) {
+                this.logger.warn(`Backfill settled for unknown agent ${agentId}`);
+                return;
+            }
+            const data = payload.data;
+            validator.assertIsNumber(data.totalDocuments, 'totalDocuments must be a number');
+            validator.assertIsNumber(data.indexedDocuments, 'indexedDocuments must be a number');
+            validator.assertIsNumber(data.failedDocuments, 'failedDocuments must be a number');
+            validator.assertIsBoolean(data.success);
+            const skipped: number = data.skippedDocuments ?? 0;
+            validator.assertIsNumber(skipped, 'skippedDocuments must be a number');
+            const notIndexed: number = data.failedDocuments + skipped;
+
+            if (notIndexed > 0) {
+                const reason = typeof data.error === 'string' && data.error.length > 0 ? `: ${data.error}` : '';
+                this.logger.error(
+                    `Agent ${agentId} search backfill settled with ${notIndexed} of ${data.totalDocuments} messages ` +
+                    `not indexed (${data.indexedDocuments} indexed, ${data.failedDocuments} failed, ` +
+                    `${skipped} skipped for size)${reason}`
+                );
+            } else {
+                this.logger.info(
+                    `Agent ${agentId} search backfill settled: ${data.indexedDocuments} of ${data.totalDocuments} messages indexed`
+                );
+            }
+
+            if (data.success === true || data.indexedDocuments > 0) {
+                agent.meilisearchReady = true;
+                this.agents.set(agentId, agent);
+            }
+        } catch (error) {
+            this.logger.error(`Error handling backfill settled: ${error}`);
         }
     }
 

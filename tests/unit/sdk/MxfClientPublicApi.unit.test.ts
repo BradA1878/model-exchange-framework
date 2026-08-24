@@ -87,8 +87,6 @@ jest.mock('@mxf-dev/sdk/services/MxfToolService', () => ({
     MxfToolService: jest.fn().mockImplementation(() => ({
         loadTools: jest.fn().mockResolvedValue([]),
         getCachedTools: jest.fn(() => []),
-        setupPersistentToolListener: jest.fn(),
-        onToolsUpdated: jest.fn(),
         cleanup: jest.fn(),
     })),
 }));

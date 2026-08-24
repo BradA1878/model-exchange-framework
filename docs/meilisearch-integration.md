@@ -261,6 +261,87 @@ callers that need to wait for search to catch up (tests, shutdown hooks).
 Before 3.0 the index request was awaited inline, and one throttled request
 failed the agent's whole generation loop.
 
+An indexing failure is an error for that document, not a quiet degradation:
+when the embedding provider fails, the document cannot be enqueued, or
+Meilisearch fails the task, `MxfMeilisearchService` throws. The server reports
+it to the SDK (`INDEX_ERROR`, or `BACKFILL_PARTIAL` with honest counts) and a
+hybrid search whose query cannot be embedded fails rather than answering with
+keyword-only results. A document is indexed without a vector only when
+embeddings are off or no generator is installed.
+
+### Backfill at memory load
+
+When an agent connects, `loadAgentMemory()` sends its persisted conversation
+history to the search index in the background of the load — everything
+except system prompts (framework boilerplate, not conversation content) and
+turns with no text (an assistant turn that only calls a tool has nothing to
+search).
+
+The SDK plans that history into batches against four limits, all defined once
+in `@mxf-dev/core/config/MeilisearchIngressLimits` and enforced again by the
+server's ingress policy on every request, so a batch the SDK plans is one the
+server accepts:
+
+- `MAX_MEILISEARCH_BACKFILL_MESSAGES` — messages per batch
+- `MAX_MEILISEARCH_BACKFILL_CONTENT_BYTES` — summed message content per batch
+- `MAX_MEILISEARCH_BACKFILL_WIRE_BYTES` — the batch's serialized size on the
+  socket, envelope included (JSON escaping makes this larger than content
+  bytes — a quote or newline in a message costs two bytes on the wire)
+- `MAX_MEILISEARCH_MESSAGE_BYTES` — content of a single message
+
+`MxfMemoryManager` closes the current batch and starts a new one before
+adding a message that would cross any of the first three limits. A message
+whose own content is over `MAX_MEILISEARCH_MESSAGE_BYTES` is skipped
+outright — the server refuses it however it is sent, so it is never sent at
+all.
+
+A backfill problem — a batch the server rejects, a message skipped for size,
+a connection dropped mid-backfill — cannot fail `agent.connect()`. A batch the
+server indexed only partly is credited for the documents it did index; the
+rest count as failed.
+Conversation memory is loaded from MongoDB regardless; only the search index
+over old messages is left incomplete. It is reported three ways:
+
+- one `Events.Agent.ERROR` event with `data.phase === 'memory_backfill'` and
+  the total/indexed/failed/skipped counts, so hosts and channel monitors see
+  it even when the client `Logger` is off
+- one local summary event — `MeilisearchEvents.BACKFILL_COMPLETE` when
+  nothing failed or was skipped, `MeilisearchEvents.BACKFILL_PARTIAL`
+  otherwise — carrying the same counts
+- one `logger.error(...)` line naming the agent, how many messages were not
+  indexed, how many were skipped for size, and the first error
+
+Two server-side settings this depends on:
+
+- `MXF_SOCKET_MAX_HTTP_BUFFER_BYTES` must be large enough to fit one full
+  backfill request; the server refuses to boot otherwise, rather than accept
+  a wire limit its own transport cannot carry
+- `MXF_MEILISEARCH_SOCKET_RATE_LIMIT_MAX` bounds request cost; a request whose
+  cost can never fit under the limit is refused as final, not throttled with
+  a retry hint
+
+When the load has settled — every batch answered or abandoned — the SDK sends
+the server one `meilisearch:backfill:settled` report with the same counts. The
+server validates it like any other ingress request and marks the agent ready
+for the `memory_search_*` tools from it: a settled load that succeeded, or that
+indexed at least part of the history, makes the agent ready; one that indexed
+nothing it had to index does not. (The server's own per-batch
+`BACKFILL_COMPLETE`/`BACKFILL_PARTIAL` events mark readiness the same way.)
+The report is what makes a new agent ready — it has nothing to backfill, so it
+sends no batch at all. The server also logs the report, so a client-side
+backfill problem shows in the server log.
+
+Until the agent is ready the server leaves `memory_search_*` out of its tool
+list. The SDK fetches the tool list at connect, before memory is loaded, so
+`MxfAgent` reloads it once the load has settled and builds the system prompt
+from the reloaded list. (The server used to push a refreshed list; that push
+was dropped when tool discovery became credential-scoped in 3.0.)
+
+**Version skew:** the SDK batches to the limits above. A server still running
+an older, smaller content limit refuses the larger batches — the SDK reports
+that as a partial backfill and continues rather than failing `connect()`, and
+the index for that agent is complete again once the server is updated.
+
 ---
 
 ## 🔧 Configuration Reference

@@ -228,4 +228,20 @@ describe('Meilisearch Integration', () => {
             expect(searchTime).toBeLessThan(TIMEOUTS.standard);
         });
     });
+    describe('Search tool availability', () => {
+        it('lists memory_search_* for a fresh agent once its memory load has settled', async () => {
+            // A new agent has nothing to backfill, so it sends no batch. The
+            // server learns that its load settled from the settled report and
+            // only then lists the search tools; the agent reloads its tool list
+            // after memory init, so the list it holds after connect() has them.
+            const agent = await testSdk.createAndConnectAgent(channelId, {
+                name: 'Fresh Search Agent',
+                allowedTools: ['messaging_send', 'memory_search_conversations'],
+                agentConfigPrompt: 'You search conversation history.'
+            });
+
+            const toolNames = agent.getToolService()?.getCachedTools().map(tool => tool.name) ?? [];
+            expect(toolNames).toContain('memory_search_conversations');
+        });
+    });
 });

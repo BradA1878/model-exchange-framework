@@ -12,7 +12,7 @@
  */
 
 import { v4 as uuidv4 } from 'uuid';
-import { MxfSDK, Events, LlmProviderType } from '@mxf-dev/sdk';
+import { MxfSDK, Events, LlmProviderType, getTaskCompletionOutput } from '@mxf-dev/sdk';
 import type { MxfAgent, MxfChannelMonitor } from '@mxf-dev/sdk';
 import { CORE_MXF_TOOLS } from '@mxf-dev/core/constants/CoreTools';
 import { logSuccess, logError, logInfo, logWarning, logHeader, logStep } from '../utils/output';
@@ -343,9 +343,8 @@ export class SessionRunner {
             if (taskCompleted) return;
             taskCompleted = true;
 
-            // Extract result from completion payload
-            const result = payload.data?.task?.result;
-            const summary = result?.summary || payload.data?.summary || '';
+            // Extract the summary task_complete wrote to result.output
+            const summary = getTaskCompletionOutput(payload.data?.task)?.summary ?? '';
 
             // Brief delay for any final messages to arrive
             setTimeout(() => {

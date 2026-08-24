@@ -21,7 +21,7 @@
  * ```
  */
 
-import { MxfSDK, Events, LlmProviderType } from '@mxf-dev/sdk';
+import { MxfSDK, Events, LlmProviderType, getTaskCompletionOutput } from '@mxf-dev/sdk';
 import type { MxfAgent, MxfChannelMonitor } from '@mxf-dev/sdk';
 import dotenv from 'dotenv';
 
@@ -179,8 +179,9 @@ const setupMonitoring = (channel: MxfChannelMonitor): Promise<void> => {
             taskCompleted = true;
             console.log(`\n${'═'.repeat(50)}`);
             console.log('[Task Completed]');
-            if (payload.data?.summary) {
-                console.log(`Summary: ${payload.data.summary}`);
+            const summary = getTaskCompletionOutput(payload.data?.task)?.summary;
+            if (summary) {
+                console.log(`Summary: ${summary}`);
             }
             console.log(`${'═'.repeat(50)}\n`);
             setTimeout(resolve, 1000);

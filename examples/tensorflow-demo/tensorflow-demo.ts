@@ -25,7 +25,7 @@
  * ```
  */
 
-import { MxfSDK, Events, LlmProviderType } from '@mxf-dev/sdk';
+import { MxfSDK, Events, LlmProviderType, getTaskCompletionOutput } from '@mxf-dev/sdk';
 import type { MxfAgent, MxfChannelMonitor } from '@mxf-dev/sdk';
 import { TensorFlowEvents } from '@mxf-dev/core/events/event-definitions/TensorFlowEvents';
 import dotenv from 'dotenv';
@@ -207,8 +207,9 @@ const setupMonitoring = (channel: MxfChannelMonitor): Promise<void> => {
         channel.on(Events.Task.COMPLETED, (payload: any) => {
             console.log('\n' + '='.repeat(70));
             console.log('[Demo Complete]');
-            if (payload.data?.summary) {
-                console.log(`Summary: ${payload.data.summary}`);
+            const summary = getTaskCompletionOutput(payload.data?.task)?.summary;
+            if (summary) {
+                console.log(`Summary: ${summary}`);
             }
             console.log('='.repeat(70) + '\n');
 

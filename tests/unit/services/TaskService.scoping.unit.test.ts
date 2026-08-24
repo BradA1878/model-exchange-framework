@@ -662,6 +662,32 @@ describe('TaskService scoping', () => {
             expect(mockFind).not.toHaveBeenCalled();
             expect(mockFindOneAndUpdate).not.toHaveBeenCalled();
         });
+
+        it('rejects completion details that are not a plain object before task lookup', async () => {
+            // TaskCompletionOutput promises readers that `details` is a plain object.
+            // The tool input schema already enforces that for task_complete; this is
+            // the contract owner's own check, so no caller can persist an envelope
+            // getTaskCompletionOutput() would refuse to read.
+            await expect(service.handleTaskCompletion('agent-1', 'channel-a', {
+                summary: 'done',
+                details: ['artifact-a', 'artifact-b'] as never,
+                requestId: 'completion-3'
+            })).rejects.toThrow(/details must be a plain object/i);
+
+            expect(mockFind).not.toHaveBeenCalled();
+            expect(mockFindOneAndUpdate).not.toHaveBeenCalled();
+        });
+
+        it('rejects completion nextSteps that are not a string before task lookup', async () => {
+            await expect(service.handleTaskCompletion('agent-1', 'channel-a', {
+                summary: 'done',
+                nextSteps: ['deploy', 'notify QA'] as never,
+                requestId: 'completion-4'
+            })).rejects.toThrow(/nextSteps must be a string/i);
+
+            expect(mockFind).not.toHaveBeenCalled();
+            expect(mockFindOneAndUpdate).not.toHaveBeenCalled();
+        });
     });
 
     describe('authoritative creation and assignment', () => {

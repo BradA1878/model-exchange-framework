@@ -194,6 +194,15 @@ export type { ChannelConfig } from '@mxf-dev/core/interfaces/ChannelConfig';
 export type { SimpleTaskRequest, SimpleTaskResponse, TaskRequestHandler } from '@mxf-dev/core/interfaces/TaskInterfaces';
 
 /**
+ * Task completion output — what `task_complete` stores in
+ * `ChannelTask.result.output`. Use `getTaskCompletionOutput()` to read a
+ * task's completion summary without assuming which completion path
+ * (task_complete vs. completeTask()/REST) produced its `result.output`.
+ */
+export type { TaskCompletionOutput } from '@mxf-dev/core/types/TaskTypes';
+export { isTaskCompletionOutput, getTaskCompletionOutput } from '@mxf-dev/core/types/TaskTypes';
+
+/**
  * LLM Provider types
  */
 export { LlmProviderType } from '@mxf-dev/core/protocols/mcp/LlmProviders';

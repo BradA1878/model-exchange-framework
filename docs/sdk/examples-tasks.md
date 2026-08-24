@@ -108,8 +108,11 @@ same channel.
 ## Observe lifecycle events
 
 ```typescript
-const onCompleted = (payload: unknown): void => {
-    console.log('Task completion event:', payload);
+import { Events, getTaskCompletionOutput } from '@mxf-dev/sdk';
+
+const onCompleted = (payload: any): void => {
+    const summary = getTaskCompletionOutput(payload.data.task)?.summary;
+    console.log('Task completed:', summary);
 };
 
 worker.on(Events.Task.COMPLETED, onCompleted);
@@ -127,6 +130,16 @@ worker.off(Events.Task.COMPLETED, onCompleted);
 For ordinary agent code, prefer `agent.on()`: it applies the public-event whitelist
 and recipient checks. `agent.mxfService.on()` is available when a channel-filtered
 view is specifically needed.
+
+`result.output` on the completed task holds different things depending on which
+path completed it. When an agent finishes the work by calling `task_complete`,
+MXF writes a `TaskCompletionOutput` there (`agentId`, `summary`, `reportedSuccess`,
+`requestId`, and optional `details`/`nextSteps`). When a caller completes the task
+directly through `completeTask()` or the REST completion route, `output` is
+whatever value that caller passed — there is no guaranteed shape. Neither path
+ever populates a `result.summary` field, so read the summary through
+`getTaskCompletionOutput(payload.data.task)?.summary` rather than assuming
+`result.summary` exists.
 
 ## Handle lifecycle rejection
 

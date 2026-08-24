@@ -5,17 +5,29 @@ import type {
     MeilisearchBackfillEventData,
     MeilisearchIndexEventData
 } from '@mxf-dev/core/schemas/EventPayloadSchema';
+import {
+    MAX_MEILISEARCH_BACKFILL_CONTENT_BYTES,
+    MAX_MEILISEARCH_BACKFILL_MESSAGES,
+    MAX_MEILISEARCH_MESSAGE_BYTES,
+    meilisearchContentBytes
+} from '@mxf-dev/core/config/MeilisearchIngressLimits';
 import { BoundedFixedWindowRateLimiter } from '../../security/BoundedFixedWindowRateLimiter';
-import { getMeilisearchSocketRateLimitConfig } from '../../config/IngressSecurityConfig';
-
-export const MAX_MEILISEARCH_MESSAGE_BYTES = 64 * 1024;
-export const MAX_MEILISEARCH_BACKFILL_MESSAGES = 50;
-export const MAX_MEILISEARCH_BACKFILL_CONTENT_BYTES = 256 * 1024;
+import {
+    getMeilisearchSocketRateLimitConfig,
+    MEILISEARCH_SOCKET_RATE_LIMIT_MAX_ENV
+} from '../../config/IngressSecurityConfig';
 
 const INDEX_NAME = 'mxf-conversations';
 const ROLES = new Set(['user', 'assistant', 'system', 'tool']);
 
 let requestLimiter: BoundedFixedWindowRateLimiter | undefined;
+/**
+ * The configured window maximum, set alongside `requestLimiter` the first
+ * time `getLimiter()` builds it. `chargeRateLimit` reads this to refuse a
+ * request whose cost could never fit the window, without reconstructing the
+ * limiter's config on every call.
+ */
+let configuredMaximum: number | undefined;
 
 const getLimiter = (): BoundedFixedWindowRateLimiter => {
     if (!requestLimiter) {
@@ -25,6 +37,7 @@ const getLimiter = (): BoundedFixedWindowRateLimiter => {
             config.windowMs,
             config.maximumKeys
         );
+        configuredMaximum = config.maximum;
     }
     return requestLimiter;
 };
@@ -76,7 +89,7 @@ const parseMessage = (value: unknown, channelId: string, agentId: string): SafeM
     if (typeof value.content !== 'string' || value.content.length === 0) {
         throw new Error('message.content must be a non-empty string');
     }
-    const contentBytes = Buffer.byteLength(value.content, 'utf8');
+    const contentBytes = meilisearchContentBytes(value.content);
     if (contentBytes > MAX_MEILISEARCH_MESSAGE_BYTES) {
         throw new Error(`message.content exceeds ${MAX_MEILISEARCH_MESSAGE_BYTES} bytes`);
     }
@@ -94,12 +107,31 @@ const parseMessage = (value: unknown, channelId: string, agentId: string): SafeM
     };
 };
 
+/**
+ * Charge the ingress rate limiter for one request. A request whose cost is
+ * larger than the window's configured maximum can never be admitted no
+ * matter how long the caller waits: `BoundedFixedWindowRateLimiter.consumeMany`
+ * reports that shape as `{ allowed: false, retryAfterMs: windowMs }` every
+ * time, which would put the SDK in a permanent resend loop instead of telling
+ * it the batch does not fit this server's setting. Refuse it here, before
+ * consuming, with a plain `Error` — `buildMeilisearchIngressFailure` reports
+ * a plain `Error` without a retry hint, since only `MeilisearchRateLimitError`
+ * carries one.
+ */
 const chargeRateLimit = (
     channelId: string,
     agentId: string,
     workUnits: number
 ): void => {
     const limiter = getLimiter();
+    const maximum = configuredMaximum;
+    if (maximum !== undefined && workUnits > maximum) {
+        throw new Error(
+            `Meilisearch request needs ${workUnits} work units, which exceeds the ` +
+            `${MEILISEARCH_SOCKET_RATE_LIMIT_MAX_ENV} maximum of ${maximum}; this ` +
+            'request can never be admitted at this setting'
+        );
+    }
     const decision = limiter.consumeMany(
         [`channel\0${channelId}`, `agent\0${channelId}\0${agentId}`],
         workUnits
@@ -187,6 +219,66 @@ export const buildMeilisearchIngressFailure = (
 
 export type SafeMeilisearchRequestData = Record<string, unknown>;
 
+const SETTLED_SOURCES = new Set(['mongodb', 'memory', 'other']);
+const MAX_SETTLED_ERROR_CHARS = 1024;
+
+/**
+ * Validate the SDK's settled memory-load report: every count a non-negative
+ * safe integer, the counts adding up, a boolean outcome, a bounded error text,
+ * and a known source. Nothing in it is indexed, so it costs one work unit.
+ * AgentService marks the agent ready for the memory_search_* tools from it.
+ */
+const authorizeSettledReport = (
+    rawData: Record<string, unknown>,
+    operationId: string,
+    agentId: string,
+    channelId: string,
+    enforceRateLimit: boolean
+): SafeMeilisearchRequestData => {
+    const readCount = (name: string, fallback?: number): number => {
+        const value = rawData[name] ?? fallback;
+        if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
+            throw new Error('settled counts must be non-negative safe integers');
+        }
+        return value;
+    };
+    const totalDocuments = readCount('totalDocuments');
+    const indexedDocuments = readCount('indexedDocuments');
+    const failedDocuments = readCount('failedDocuments');
+    const skippedDocuments = readCount('skippedDocuments', 0);
+    if (indexedDocuments + failedDocuments + skippedDocuments !== totalDocuments) {
+        throw new Error('settled counts must add up: indexed + failed + skipped = total');
+    }
+    if (typeof rawData.success !== 'boolean') {
+        throw new Error('settled success must be a boolean');
+    }
+    if (rawData.error !== undefined &&
+        (typeof rawData.error !== 'string' || rawData.error.length > MAX_SETTLED_ERROR_CHARS)) {
+        throw new Error(`settled error must be a string of at most ${MAX_SETTLED_ERROR_CHARS} characters`);
+    }
+    if (typeof rawData.source !== 'string' || !SETTLED_SOURCES.has(rawData.source)) {
+        throw new Error('settled source is invalid');
+    }
+    if (enforceRateLimit) {
+        chargeRateLimit(channelId, agentId, 1);
+    }
+
+    return {
+        operationId,
+        indexName: INDEX_NAME,
+        documentType: 'conversation',
+        totalDocuments,
+        indexedDocuments,
+        failedDocuments,
+        skippedDocuments,
+        duration: 0,
+        success: rawData.success,
+        source: rawData.source,
+        ...(rawData.error !== undefined && { error: rawData.error }),
+        metadata: { agentId, channelId }
+    };
+};
+
 /** Validate, bound, and canonicalize a socket indexing request. */
 export const authorizeMeilisearchSocketRequest = (
     eventName: string,
@@ -212,7 +304,7 @@ export const authorizeMeilisearchSocketRequest = (
             chargeRateLimit(
                 channelId,
                 agentId,
-                Math.max(1, Math.ceil(Buffer.byteLength(message.content, 'utf8') / 4096))
+                Math.max(1, Math.ceil(meilisearchContentBytes(message.content) / 4096))
             );
         }
         return {
@@ -231,6 +323,10 @@ export const authorizeMeilisearchSocketRequest = (
         };
     }
 
+    if (eventName === MeilisearchEvents.BACKFILL_SETTLED) {
+        return authorizeSettledReport(rawData, operationId, agentId, channelId, enforceRateLimit);
+    }
+
     if (eventName !== MeilisearchEvents.BACKFILL_REQUEST) {
         throw new Error('Unsupported Meilisearch socket request event');
     }
@@ -244,7 +340,7 @@ export const authorizeMeilisearchSocketRequest = (
     }
     const messages = rawMessages.map(message => parseMessage(message, channelId, agentId));
     const totalBytes = messages.reduce(
-        (total, message) => total + Buffer.byteLength(message.content, 'utf8'),
+        (total, message) => total + meilisearchContentBytes(message.content),
         0
     );
     if (totalBytes > MAX_MEILISEARCH_BACKFILL_CONTENT_BYTES) {
@@ -256,7 +352,7 @@ export const authorizeMeilisearchSocketRequest = (
         const workUnits = messages.reduce(
             (total, message) => total + Math.max(
                 1,
-                Math.ceil(Buffer.byteLength(message.content, 'utf8') / 4096)
+                Math.ceil(meilisearchContentBytes(message.content) / 4096)
             ),
             0
         );
@@ -287,4 +383,5 @@ export const authorizeMeilisearchSocketRequest = (
 export const resetMeilisearchIngressRateLimiterForTests = (): void => {
     requestLimiter?.reset();
     requestLimiter = undefined;
+    configuredMaximum = undefined;
 };

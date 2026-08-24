@@ -34,8 +34,8 @@ import { SystemLlmServiceManager } from './SystemLlmServiceManager';
 import { AgentService } from './AgentService';
 import { ConfigManager } from '@mxf-dev/core/config/ConfigManager';
 import { EphemeralEventPatternService } from './EphemeralEventPatternService';
-import { 
-    ChannelTask, 
+import {
+    ChannelTask,
     TaskOrchestrationConfig,
     ChannelWorkloadAnalysis,
     AgentAssignmentAnalysis,
@@ -44,7 +44,8 @@ import {
     UpdateTaskRequest,
     TaskAssignmentResult,
     TaskQueryFilters,
-    AssignmentStrategy
+    AssignmentStrategy,
+    TaskCompletionOutput
 } from '@mxf-dev/core/types/TaskTypes';
 import { TaskEventData, createTaskEventPayload } from '@mxf-dev/core/schemas/EventPayloadSchema';
 import { AgentId } from '@mxf-dev/core/types/Agent';
@@ -2354,7 +2355,21 @@ Respond with JSON:
             validator.assertIsNonEmptyString(channelId, 'channelId is required');
             validator.assertIsNonEmptyString(completionData.summary, 'completion summary is required');
             validator.assertIsNonEmptyString(completionData.requestId, 'requestId is required');
-            
+            // Optional fields must have the shape TaskCompletionOutput promises its
+            // readers. The task_complete input schema enforces this before the tool
+            // runs; this is the contract owner's own check, so no caller can persist
+            // an envelope getTaskCompletionOutput() would refuse to read.
+            if (completionData.details !== undefined && (
+                typeof completionData.details !== 'object' ||
+                completionData.details === null ||
+                Array.isArray(completionData.details)
+            )) {
+                throw new Error('completion details must be a plain object');
+            }
+            if (completionData.nextSteps !== undefined && typeof completionData.nextSteps !== 'string') {
+                throw new Error('completion nextSteps must be a string');
+            }
+
             const agentTask = await this.findActiveTaskForAgent(channelId, agentId);
             if (!agentTask) {
                 throw new Error(
@@ -2395,7 +2410,7 @@ Respond with JSON:
                 }
             }
 
-            const completionOutput = {
+            const completionOutput: TaskCompletionOutput = {
                 agentId,
                 summary: completionData.summary,
                 ...(completionData.details !== undefined

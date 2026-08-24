@@ -25,6 +25,7 @@ let onTaskCreated: (() => void) | undefined;
 
 jest.mock('@mxf-dev/sdk', () => {
     const { Events } = jest.requireActual('@mxf-dev/core/events/EventNames');
+    const { getTaskCompletionOutput } = jest.requireActual('@mxf-dev/core/types/TaskTypes');
 
     const channel = {
         on: (event: string, handler: (payload: any) => void) => {
@@ -47,6 +48,7 @@ jest.mock('@mxf-dev/sdk', () => {
     return {
         __esModule: true,
         Events,
+        getTaskCompletionOutput,
         LlmProviderType: { OPENROUTER: 'openrouter' },
         MxfSDK: jest.fn().mockImplementation(() => ({
             connect: jest.fn().mockResolvedValue(undefined),
@@ -99,7 +101,7 @@ describe('SessionRunner — timer cleanup', () => {
         // Complete the task as soon as it is created
         onTaskCreated = () => {
             channelHandlers[Events.Task.COMPLETED]?.({
-                data: { task: { result: { summary: 'done' } } },
+                data: { task: { result: { success: true, output: { agentId: 'worker', summary: 'done', reportedSuccess: true, requestId: 'req-1' } } } },
             });
         };
 

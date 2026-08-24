@@ -3226,6 +3226,7 @@ export interface MeilisearchBackfillEventData {
     totalDocuments: number;       // Total documents to backfill
     indexedDocuments: number;     // Number of documents successfully indexed
     failedDocuments: number;      // Number of documents that failed to index
+    skippedDocuments?: number;    // Documents the SDK never sent because they exceed the per-message limit
     duration: number;             // Total time taken in milliseconds
     success: boolean;             // Whether backfill completed successfully
     source: 'mongodb' | 'memory' | 'other'; // Source of backfilled data
@@ -3302,6 +3303,9 @@ export function createMeilisearchBackfillEventPayload(
     validator.assertIsNumber(data.totalDocuments, 'totalDocuments must be a number');
     validator.assertIsNumber(data.indexedDocuments, 'indexedDocuments must be a number');
     validator.assertIsNumber(data.failedDocuments, 'failedDocuments must be a number');
+    if (data.skippedDocuments !== undefined) {
+        validator.assertIsNumber(data.skippedDocuments, 'skippedDocuments must be a number');
+    }
     validator.assertIsNumber(data.duration, 'duration must be a number');
     validator.assertIsBoolean(data.success);
     validator.assertIsNonEmptyString(data.source, 'source');

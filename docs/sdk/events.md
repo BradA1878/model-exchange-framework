@@ -168,7 +168,7 @@ agent.on(Events.Message.MESSAGE_SEND_FAILED, (payload) => {
 Task lifecycle and progress tracking:
 
 ```typescript
-import { Events } from '@mxf-dev/sdk';
+import { Events, getTaskCompletionOutput } from '@mxf-dev/sdk';
 
 // Task created
 agent.on(Events.Task.CREATED, (payload) => {
@@ -187,10 +187,14 @@ agent.on(Events.Task.PROGRESS_UPDATED, (payload) => {
     console.log(`Task ${payload.data.taskId}: ${payload.data.progress}%`);
 });
 
-// Task completion
+// Task completion. There is no payload.data.result — the task itself is at
+// payload.data.task, and its result.output holds a TaskCompletionOutput (from
+// an agent's task_complete call) or whatever completeTask()/REST passed, so
+// read the summary through getTaskCompletionOutput() rather than assuming a
+// result.summary field.
 agent.on(Events.Task.COMPLETED, (payload) => {
     console.log('Task completed:', payload.data.taskId);
-    console.log('Result:', payload.data.result);
+    console.log('Summary:', getTaskCompletionOutput(payload.data.task)?.summary);
 });
 
 // Task failure

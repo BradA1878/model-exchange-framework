@@ -461,25 +461,17 @@ export class MxfAgent extends MxfClient {
             return this.taskExecutionManager.executeTask(taskRequest);
         });
         
-        // Ensure tools are loaded before generating system prompt
+        // Reload the tool list before building the system prompt. The list the
+        // server serves can change during memory initialization: it hides
+        // memory_search_* until this agent's memory-load backfill has settled,
+        // and the load above just reported that. The list MxfClient fetched
+        // before memory was loaded is therefore not the one to build the prompt
+        // from. (The server used to push a refreshed list itself; that push was
+        // dropped when tool discovery became credential-scoped, so the client
+        // asks again.) A reload the server does not answer is logged and the
+        // agent keeps the list it has — the same policy as the load at connect.
         if (this.toolService) {
-            const tools = await this.toolService.loadTools();
-
-            const hasTaskComplete = tools.some(tool => tool.name === 'task_complete');
-
-            if (!hasTaskComplete) {
-                // this.modelLogger.warn(`MISSING TOOL: task_complete not found in loaded tools. Available tools: ${tools.map(t => t.name).join(', ')}`);
-            }
-
-            // Set up persistent listener for tool updates (e.g., after Meilisearch backfill)
-            this.toolService.setupPersistentToolListener();
-
-            // Register callback to regenerate system prompt when tools are updated
-            this.toolService.onToolsUpdated(async (_updatedTools): Promise<void> => {
-                // Regenerate and persist the system prompt before the tool-update
-                // notification is considered handled.
-                await this.systemPromptManager.loadCompleteSystemPrompt();
-            });
+            await this.toolService.reloadTools();
         } else {
             this.modelLogger.error('CRITICAL: toolService not available during initialization');
         }

@@ -1,3 +1,4 @@
+import { MAX_MEILISEARCH_BACKFILL_WIRE_BYTES } from '@mxf-dev/core/config/MeilisearchIngressLimits';
 import {
     CORS_ALLOWED_ORIGINS_ENV,
     DEFAULT_SOCKET_MAX_HTTP_BUFFER_BYTES,
@@ -63,5 +64,17 @@ describe('TransportSecurityConfig', () => {
                 })).toThrow(SOCKET_MAX_HTTP_BUFFER_BYTES_ENV);
             }
         );
+
+        it('rejects a configured buffer too small to carry one Meilisearch backfill request', () => {
+            expect(() => getSocketMaxHttpBufferSize({
+                [SOCKET_MAX_HTTP_BUFFER_BYTES_ENV]: String(MAX_MEILISEARCH_BACKFILL_WIRE_BYTES)
+            })).toThrow(SOCKET_MAX_HTTP_BUFFER_BYTES_ENV);
+        });
+
+        it('accepts a buffer exactly large enough for one backfill request plus framing overhead', () => {
+            expect(getSocketMaxHttpBufferSize({
+                [SOCKET_MAX_HTTP_BUFFER_BYTES_ENV]: String(MAX_MEILISEARCH_BACKFILL_WIRE_BYTES + 1024)
+            })).toBe(MAX_MEILISEARCH_BACKFILL_WIRE_BYTES + 1024);
+        });
     });
 });

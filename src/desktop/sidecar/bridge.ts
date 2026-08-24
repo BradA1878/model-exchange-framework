@@ -24,7 +24,7 @@
 import { InteractiveSessionManager } from '../../cli/tui/services/InteractiveSessionManager';
 import { getEnabledAgentDefinitions, getAgentMaps } from '../../cli/tui/agents/AgentDefinitions';
 import { loadAll, loadBuiltIn } from '../../cli/tui/agents/AgentLoader';
-import { Events } from '@mxf-dev/sdk';
+import { Events, getTaskCompletionOutput } from '@mxf-dev/sdk';
 import { disableClientLogging } from '@mxf-dev/core/utils/Logger';
 import { ConfigService } from '../../cli/services/ConfigService';
 import type { TuiConfig } from '../../cli/tui/types';
@@ -374,7 +374,7 @@ function subscribeToEvents(channel: MxfChannelMonitor, agentNames: Record<string
         sendEvent('task:completed', {
             agentId: task?.completedBy || payload.agentId || '',
             agentName: agentNames[task?.completedBy || ''] || '',
-            summary: result?.summary || payload.data?.summary || '',
+            summary: getTaskCompletionOutput(task)?.summary ?? '',
             title: task?.title || '',
             success: result?.success !== false,
         });

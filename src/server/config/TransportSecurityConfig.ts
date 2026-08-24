@@ -2,12 +2,32 @@
  * Validated HTTP and Socket.IO transport security configuration.
  */
 
+import { MAX_MEILISEARCH_BACKFILL_WIRE_BYTES } from '@mxf-dev/core/config/MeilisearchIngressLimits';
+
 export const CORS_ALLOWED_ORIGINS_ENV = 'MXF_CORS_ALLOWED_ORIGINS';
 export const SOCKET_MAX_HTTP_BUFFER_BYTES_ENV = 'MXF_SOCKET_MAX_HTTP_BUFFER_BYTES';
 
 export const DEFAULT_SOCKET_MAX_HTTP_BUFFER_BYTES = 1024 * 1024;
 export const MAX_SOCKET_MAX_HTTP_BUFFER_BYTES = 10 * 1024 * 1024;
 const MIN_SOCKET_MAX_HTTP_BUFFER_BYTES = 1024;
+
+/**
+ * Reserved for Socket.IO/Engine.IO packet framing (packet type, namespace,
+ * ack id, and the event name) around the serialized payload, so the
+ * configured buffer covers the whole frame on the wire, not just the JSON
+ * bytes an event handler receives.
+ */
+const SOCKET_IO_FRAMING_OVERHEAD_BYTES = 1024;
+
+/**
+ * Smallest buffer that can carry one full Meilisearch backfill request.
+ * Engine.IO closes a socket that sends a frame above the configured limit;
+ * a value below this would put every dense-history agent in a reconnect
+ * loop instead of a policy rejection it could act on, so the server refuses
+ * to boot with a limit this low.
+ */
+const MINIMUM_SOCKET_MAX_HTTP_BUFFER_BYTES =
+    MAX_MEILISEARCH_BACKFILL_WIRE_BYTES + SOCKET_IO_FRAMING_OVERHEAD_BYTES;
 
 const DEVELOPMENT_ORIGINS = [
     'http://localhost:8080',
@@ -73,23 +93,34 @@ export const getSocketMaxHttpBufferSize = (
     environment: NodeJS.ProcessEnv = process.env
 ): number => {
     const configured = environment[SOCKET_MAX_HTTP_BUFFER_BYTES_ENV];
+    let value: number;
 
     if (configured === undefined || configured.trim() === '') {
-        return DEFAULT_SOCKET_MAX_HTTP_BUFFER_BYTES;
+        value = DEFAULT_SOCKET_MAX_HTTP_BUFFER_BYTES;
+    } else {
+        const normalized = configured.trim();
+        if (!/^\d+$/.test(normalized)) {
+            throw new Error(`${SOCKET_MAX_HTTP_BUFFER_BYTES_ENV} must be an integer number of bytes`);
+        }
+
+        value = Number(normalized);
+        if (!Number.isSafeInteger(value) ||
+            value < MIN_SOCKET_MAX_HTTP_BUFFER_BYTES ||
+            value > MAX_SOCKET_MAX_HTTP_BUFFER_BYTES) {
+            throw new Error(
+                `${SOCKET_MAX_HTTP_BUFFER_BYTES_ENV} must be between ` +
+                `${MIN_SOCKET_MAX_HTTP_BUFFER_BYTES} and ${MAX_SOCKET_MAX_HTTP_BUFFER_BYTES} bytes`
+            );
+        }
     }
 
-    const normalized = configured.trim();
-    if (!/^\d+$/.test(normalized)) {
-        throw new Error(`${SOCKET_MAX_HTTP_BUFFER_BYTES_ENV} must be an integer number of bytes`);
-    }
-
-    const value = Number(normalized);
-    if (!Number.isSafeInteger(value) ||
-        value < MIN_SOCKET_MAX_HTTP_BUFFER_BYTES ||
-        value > MAX_SOCKET_MAX_HTTP_BUFFER_BYTES) {
+    // The resolved value — configured or default — must still leave room for
+    // one full Meilisearch backfill request once serialized for the socket.
+    if (value < MINIMUM_SOCKET_MAX_HTTP_BUFFER_BYTES) {
         throw new Error(
-            `${SOCKET_MAX_HTTP_BUFFER_BYTES_ENV} must be between ` +
-            `${MIN_SOCKET_MAX_HTTP_BUFFER_BYTES} and ${MAX_SOCKET_MAX_HTTP_BUFFER_BYTES} bytes`
+            `${SOCKET_MAX_HTTP_BUFFER_BYTES_ENV} must be at least ` +
+            `${MINIMUM_SOCKET_MAX_HTTP_BUFFER_BYTES} bytes (resolved value: ${value}): one full ` +
+            'Meilisearch search backfill request must fit in a single Socket.IO frame'
         );
     }
 

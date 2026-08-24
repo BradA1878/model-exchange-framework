@@ -1,11 +1,13 @@
 import { MeilisearchEvents } from '@mxf-dev/core/events/event-definitions/MeilisearchEvents';
 import {
+    MAX_MEILISEARCH_BACKFILL_CONTENT_BYTES,
+    MAX_MEILISEARCH_BACKFILL_MESSAGES,
+    MAX_MEILISEARCH_MESSAGE_BYTES
+} from '@mxf-dev/core/config/MeilisearchIngressLimits';
+import {
     authorizeMeilisearchSocketRequest,
     buildMeilisearchIngressFailure,
     MeilisearchRateLimitError,
-    MAX_MEILISEARCH_BACKFILL_CONTENT_BYTES,
-    MAX_MEILISEARCH_BACKFILL_MESSAGES,
-    MAX_MEILISEARCH_MESSAGE_BYTES,
     namespaceMeilisearchDocumentId,
     resetMeilisearchIngressRateLimiterForTests
 } from '../../../src/server/socket/security/MeilisearchIngressPolicy';
@@ -36,6 +38,16 @@ const backfillRequest = (messages: ReturnType<typeof message>[]): Record<string,
     indexName: 'mxf-conversations',
     documentType: 'conversation',
     metadata: { messages }
+});
+
+const settledRequest = (fields: Record<string, unknown>): Record<string, unknown> => ({
+    operationId: 'settled-1',
+    indexName: 'mxf-conversations',
+    documentType: 'conversation',
+    metadata: {},
+    source: 'mongodb',
+    duration: 0,
+    ...fields
 });
 
 describe('Meilisearch socket ingress policy', () => {
@@ -101,11 +113,16 @@ describe('Meilisearch socket ingress policy', () => {
             'channel-a'
         )).toThrow(`1-${MAX_MEILISEARCH_BACKFILL_MESSAGES}`);
 
-        const contentPerMessage = Math.floor(MAX_MEILISEARCH_BACKFILL_CONTENT_BYTES / 5) + 1;
+        // Split across 10 messages, not 5: the shared content limit is 512 KiB,
+        // and a 5-way split would put ~104 KiB on each message, which trips the
+        // 64 KiB per-message limit before the aggregate check ever runs. A
+        // 10-way split keeps each message under the per-message limit so only
+        // their sum trips the aggregate one.
+        const contentPerMessage = Math.floor(MAX_MEILISEARCH_BACKFILL_CONTENT_BYTES / 10) + 1;
         expect(() => authorizeMeilisearchSocketRequest(
             MeilisearchEvents.BACKFILL_REQUEST,
             backfillRequest(Array.from(
-                { length: 5 },
+                { length: 10 },
                 (_, index) => message(String(index), 'x'.repeat(contentPerMessage))
             )),
             'agent-a',
@@ -206,5 +223,109 @@ describe('Meilisearch socket ingress policy', () => {
             'agent-a',
             'channel-a'
         )).toThrow(MEILISEARCH_SOCKET_RATE_LIMIT_MAX_ENV);
+    });
+
+    it('refuses a request whose cost can never fit the window as final, not throttled', () => {
+        process.env[MEILISEARCH_SOCKET_RATE_LIMIT_MAX_ENV] = '5';
+        resetMeilisearchIngressRateLimiterForTests();
+
+        const request = backfillRequest(Array.from(
+            { length: 50 },
+            (_, index) => message(String(index), 'x'.repeat(1024))
+        ));
+
+        let thrown: unknown;
+        try {
+            authorizeMeilisearchSocketRequest(
+                MeilisearchEvents.BACKFILL_REQUEST, request, 'agent-a', 'channel-a'
+            );
+        } catch (error) {
+            thrown = error;
+        }
+
+        // Fifty messages at one work unit each need 50 units against a
+        // configured maximum of 5 — that batch can never fit the window no
+        // matter how long the SDK waits, so it must fail as final rather than
+        // as a throttled MeilisearchRateLimitError with a retry hint.
+        expect(thrown).not.toBeInstanceOf(MeilisearchRateLimitError);
+        expect((thrown as Error).message).toContain(MEILISEARCH_SOCKET_RATE_LIMIT_MAX_ENV);
+
+        const failure = buildMeilisearchIngressFailure(
+            MeilisearchEvents.BACKFILL_REQUEST, request, 'agent-a', 'channel-a', thrown
+        );
+        expect(failure.data.retryAfterMs).toBeUndefined();
+    });
+
+    it('accepts a backfill up to the shared content limit and refuses one past it', () => {
+        process.env[MEILISEARCH_SOCKET_RATE_LIMIT_MAX_ENV] = '1000';
+        resetMeilisearchIngressRateLimiterForTests();
+
+        // 10 messages x 51 KiB = 510 KiB: under the shared 512 KiB content
+        // limit, and over the old 256 KiB policy-local limit this replaces,
+        // which would have refused it.
+        const withinLimit = backfillRequest(Array.from(
+            { length: 10 },
+            (_, index) => message(String(index), 'x'.repeat(51 * 1024))
+        ));
+        let accepted: ReturnType<typeof authorizeMeilisearchSocketRequest> | undefined;
+        expect(() => {
+            accepted = authorizeMeilisearchSocketRequest(
+                MeilisearchEvents.BACKFILL_REQUEST, withinLimit, 'agent-a', 'channel-a'
+            );
+        }).not.toThrow();
+        expect(accepted?.totalDocuments).toBe(10);
+
+        // 10 messages x 52 KiB = 520 KiB: each message is still under the
+        // per-message limit, but the aggregate now exceeds 512 KiB.
+        const overLimit = backfillRequest(Array.from(
+            { length: 10 },
+            (_, index) => message(String(index), 'x'.repeat(52 * 1024))
+        ));
+        expect(() => authorizeMeilisearchSocketRequest(
+            MeilisearchEvents.BACKFILL_REQUEST, overLimit, 'agent-a', 'channel-a'
+        )).toThrow('backfill content exceeds');
+    });
+    it('accepts a settled backfill report and canonicalizes it', () => {
+        const safe = authorizeMeilisearchSocketRequest(
+            MeilisearchEvents.BACKFILL_SETTLED,
+            settledRequest({
+                totalDocuments: 51,
+                indexedDocuments: 1,
+                failedDocuments: 50,
+                skippedDocuments: 0,
+                success: false,
+                error: 'backfill content exceeds 262144 bytes'
+            }),
+            'agent-a',
+            'channel-a'
+        );
+
+        expect(safe).toMatchObject({
+            operationId: 'settled-1',
+            indexName: 'mxf-conversations',
+            documentType: 'conversation',
+            totalDocuments: 51,
+            indexedDocuments: 1,
+            failedDocuments: 50,
+            skippedDocuments: 0,
+            success: false,
+            source: 'mongodb',
+            error: 'backfill content exceeds 262144 bytes',
+            metadata: { agentId: 'agent-a', channelId: 'channel-a' }
+        });
+    });
+
+    it('refuses a settled report whose counts do not add up or whose fields are the wrong type', () => {
+        const base = { totalDocuments: 3, indexedDocuments: 1, failedDocuments: 1, skippedDocuments: 1, success: false };
+        const authorize = (fields: Record<string, unknown>): unknown => authorizeMeilisearchSocketRequest(
+            MeilisearchEvents.BACKFILL_SETTLED, settledRequest(fields), 'agent-a', 'channel-a'
+        );
+
+        expect(() => authorize({ ...base, indexedDocuments: 2 })).toThrow('counts');
+        expect(() => authorize({ ...base, failedDocuments: -1 })).toThrow('counts');
+        expect(() => authorize({ ...base, totalDocuments: 1.5 })).toThrow('counts');
+        expect(() => authorize({ ...base, success: 'yes' })).toThrow('success');
+        expect(() => authorize({ ...base, error: 'x'.repeat(1025) })).toThrow('error');
+        expect(() => authorize({ ...base, source: 'disk' })).toThrow('source');
     });
 });

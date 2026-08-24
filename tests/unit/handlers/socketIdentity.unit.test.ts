@@ -567,9 +567,66 @@ describe('socket-to-EventBus identity', () => {
         it('installs Meilisearch request listeners but no server response listeners', () => {
             expect(socket.listensFor(Events.Meilisearch.INDEX_REQUEST)).toBe(true);
             expect(socket.listensFor(Events.Meilisearch.BACKFILL_REQUEST)).toBe(true);
+            expect(socket.listensFor(Events.Meilisearch.BACKFILL_SETTLED)).toBe(true);
             expect(socket.listensFor(Events.Meilisearch.INDEX)).toBe(false);
             expect(socket.listensFor(Events.Meilisearch.BACKFILL_COMPLETE)).toBe(false);
             expect(socket.listensFor(Events.Meilisearch.INDEX_ERROR)).toBe(false);
+        });
+
+        it('forwards a well-formed settled report to the server bus', () => {
+            emitted.length = 0;
+            socket.emit(
+                Events.Meilisearch.BACKFILL_SETTLED,
+                clientEnvelope(Events.Meilisearch.BACKFILL_SETTLED, {
+                    data: {
+                        operationId: 'settled-1',
+                        indexName: 'mxf-conversations',
+                        documentType: 'conversation',
+                        totalDocuments: 0,
+                        indexedDocuments: 0,
+                        failedDocuments: 0,
+                        skippedDocuments: 0,
+                        duration: 0,
+                        success: true,
+                        source: 'memory',
+                        metadata: {}
+                    }
+                })
+            );
+
+            const forwarded = emitted.find((entry) => entry.eventType === Events.Meilisearch.BACKFILL_SETTLED);
+            expect(forwarded?.payload).toMatchObject({
+                agentId: AGENT,
+                channelId: CHANNEL,
+                data: { totalDocuments: 0, success: true, metadata: { agentId: AGENT, channelId: CHANNEL } }
+            });
+        });
+
+        it('refuses a malformed settled report without echoing a backfill error to the agent', () => {
+            emitted.length = 0;
+            socket.emit(
+                Events.Meilisearch.BACKFILL_SETTLED,
+                clientEnvelope(Events.Meilisearch.BACKFILL_SETTLED, {
+                    data: {
+                        operationId: 'settled-2',
+                        indexName: 'mxf-conversations',
+                        documentType: 'conversation',
+                        // 1 + 1 + 1 does not add up to 5
+                        totalDocuments: 5,
+                        indexedDocuments: 1,
+                        failedDocuments: 1,
+                        skippedDocuments: 1,
+                        duration: 0,
+                        success: false,
+                        source: 'memory',
+                        metadata: {}
+                    }
+                })
+            );
+
+            expect(emitted.find((entry) => entry.eventType === Events.Meilisearch.BACKFILL_SETTLED)).toBeUndefined();
+            // Nothing awaits a settled report, and it is not a backfill failure.
+            expect(emitted.find((entry) => entry.eventType === Events.Meilisearch.BACKFILL_ERROR)).toBeUndefined();
         });
     });
 

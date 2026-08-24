@@ -61,6 +61,14 @@ caller; overlapping saves are serialized so an older write cannot overwrite a ne
 state. Do not construct `MxfMemoryManager` yourself—the agent supplies its identity,
 memory service, indexing context, and cleanup ownership.
 
+At `connect()`, persisted history is also sent to the search index in the
+background of the load. A search-index problem there — a rejected batch, a
+skipped oversized message — is reported on `Events.Agent.ERROR` with
+`data.phase === 'memory_backfill'` and does not fail `connect()`; conversation
+memory itself is already loaded by the time backfill runs. The settled load is
+reported to the server, which then lists the `memory_search_*` tools for the
+agent; the agent reloads its tool list before building its system prompt.
+
 For shared channel memory, use `agent.mxfService.getSharedMemory()`,
 `updateSharedMemory()`, and the atomic append method documented in
 [Memory Examples](examples-memory.md).

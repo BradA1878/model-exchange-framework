@@ -112,6 +112,11 @@ export interface SearchResult<T> {
  */
 export type EmbeddingGenerator = (text: string, options?: { model?: string; dimensions?: number }) => Promise<number[]>;
 
+/** The part of a Meilisearch enqueued-task promise the index methods use. */
+interface IndexTaskPromise {
+    waitTask: () => Promise<{ uid: number; status: string; error: { message?: string } | null }>;
+}
+
 /**
  * Meilisearch Service Configuration
  */
@@ -364,8 +369,13 @@ export class MxfMeilisearchService {
     }
 
     /**
-     * Generate embedding for text using provided embedding generator
-     * Respects SYSTEMLLM_PROVIDER configuration from server
+     * Embed text with the generator the server installed.
+     *
+     * Returns undefined only when embeddings are off or no generator is
+     * installed (keyword-only mode). A generator failure is thrown with the
+     * provider's reason: a document indexed without the vector its caller
+     * expects would still be counted as indexed, and semantic searches would
+     * quietly miss it, so the failure has to reach the caller.
      */
     private async generateEmbedding(text: string): Promise<number[] | undefined> {
         if (!this.config.enableEmbeddings || !this.embeddingGenerator) {
@@ -373,26 +383,42 @@ export class MxfMeilisearchService {
         }
 
         try {
-            // Call the embedding generator function (provided by server)
-            const embedding = await this.embeddingGenerator(text, {
+            return await this.embeddingGenerator(text, {
                 model: this.config.embeddingModel,
                 dimensions: this.config.embeddingDimensions
             });
-
-            return embedding;
         } catch (error) {
-            //this.logger.error(`Embedding generation failed:`, error);
-            return undefined;
+            const reason = error instanceof Error ? error.message : String(error);
+            throw new Error(`Embedding generation failed (${this.config.embeddingModel}): ${reason}`);
         }
     }
 
     /**
-     * Index a conversation message
+     * Wait for an indexing task and throw when Meilisearch did not complete
+     * it. waitTask() resolves for a task that ended `failed` or `canceled` —
+     * the outcome is on the task, not in the promise.
+     */
+    private async awaitIndexTask(taskPromise: IndexTaskPromise, what: string): Promise<void> {
+        const task = await taskPromise.waitTask();
+        if (task.status !== 'succeeded') {
+            throw new Error(
+                `Meilisearch ${what} task ${task.uid} ${task.status}: ${task.error?.message ?? 'no error detail'}`
+            );
+        }
+    }
+
+    /**
+     * Index a conversation message.
+     *
+     * Throws when the embedding cannot be generated, the document cannot be
+     * enqueued, or Meilisearch fails the task. The caller decides what a
+     * missing document means: the server reports it to the SDK, and the SDK
+     * counts it against the backfill or drops it from the live index queue.
      */
     public async indexConversation(message: ConversationMessage): Promise<void> {
         try {
             const embedding = await this.generateEmbedding(message.content);
-            
+
             // Build document with proper _vectors format for Meilisearch
             const document: ConversationDocument = {
                 id: message.id,
@@ -407,14 +433,11 @@ export class MxfMeilisearchService {
             };
 
             const index = this.client.index(MeilisearchIndex.CONVERSATIONS);
-            const taskPromise = index.addDocuments([document]);
-
-            // Wait for indexing task to complete so documents are immediately searchable
-            await taskPromise.waitTask();
-
+            // Wait for the task so the document is searchable when this resolves.
+            await this.awaitIndexTask(index.addDocuments([document]), `conversation ${message.id}`);
         } catch (error) {
-            this.logger.error('Failed to index conversation', error);
-            // Don't throw - indexing failures shouldn't break the main flow
+            this.logger.error(`Failed to index conversation ${message.id}`, error);
+            throw error;
         }
     }
 
@@ -444,13 +467,10 @@ export class MxfMeilisearchService {
             };
 
             const index = this.client.index(MeilisearchIndex.ACTIONS);
-            const taskPromise = index.addDocuments([document]);
-
-            // Wait for indexing task to complete
-            await taskPromise.waitTask();
-
+            await this.awaitIndexTask(index.addDocuments([document]), `action ${action.id}`);
         } catch (error) {
-            this.logger.error('Failed to index action', error);
+            this.logger.error(`Failed to index action ${action.id}`, error);
+            throw error;
         }
     }
 
@@ -480,13 +500,10 @@ export class MxfMeilisearchService {
             };
 
             const index = this.client.index(MeilisearchIndex.PATTERNS);
-            const taskPromise = index.addDocuments([document]);
-
-            // Wait for indexing task to complete
-            await taskPromise.waitTask();
-
+            await this.awaitIndexTask(index.addDocuments([document]), `pattern ${pattern.patternId}`);
         } catch (error) {
-            this.logger.error('Failed to index pattern', error);
+            this.logger.error(`Failed to index pattern ${pattern.patternId}`, error);
+            throw error;
         }
     }
 
@@ -535,21 +552,16 @@ export class MxfMeilisearchService {
                 searchParams.attributesToHighlight = params.attributesToHighlight;
             }
 
-            // Enable hybrid search if embeddings are available, generator is configured, and ratio is set
-            // For user-provided embeddings, we must generate and pass the query embedding
+            // Hybrid search needs the query embedded by the same generator that
+            // embedded the documents. A generator failure is thrown (through the
+            // catch below) rather than quietly answering a semantic request with
+            // keyword-only results.
             if (this.config.enableEmbeddings && this.embeddingGenerator && params.hybridRatio !== undefined) {
-                // Generate embedding for the search query
-                const queryEmbedding = await this.generateEmbedding(params.query);
-
-                if (queryEmbedding) {
-                    searchParams.hybrid = {
-                        semanticRatio: params.hybridRatio,
-                        embedder: 'default'
-                    };
-                    // Provide the query embedding for user-provided embedder configuration
-                    searchParams.vector = queryEmbedding;
-                }
-                // If embedding generation fails, fall back to keyword-only search
+                searchParams.hybrid = {
+                    semanticRatio: params.hybridRatio,
+                    embedder: 'default'
+                };
+                searchParams.vector = await this.generateEmbedding(params.query);
             }
 
             const result = await index.search<T>(params.query, searchParams);

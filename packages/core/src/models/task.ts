@@ -90,7 +90,11 @@ export interface ITask extends Document {
     dependsOn?: string[];
     blockedBy?: string[];
     
-    // Results and outcomes - MongoDB version with Date objects
+    // Results and outcomes - MongoDB version with Date objects. `output` is
+    // whatever the caller passed to completeTask() or the REST completion
+    // route, or a TaskCompletionOutput (see types/TaskTypes.ts) when an agent
+    // completed the task by calling task_complete. There is no `result.summary`
+    // - use getTaskCompletionOutput() to read the summary safely.
     result?: {
         success?: boolean;
         output?: any;

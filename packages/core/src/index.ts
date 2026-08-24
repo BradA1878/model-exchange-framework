@@ -30,3 +30,10 @@ export {
     buildServerUrl,
 } from './config/ServerConfig.js';
 export type { ServerConfig } from './config/ServerConfig.js';
+export {
+    MAX_MEILISEARCH_MESSAGE_BYTES,
+    MAX_MEILISEARCH_BACKFILL_MESSAGES,
+    MAX_MEILISEARCH_BACKFILL_CONTENT_BYTES,
+    MAX_MEILISEARCH_BACKFILL_WIRE_BYTES,
+    meilisearchContentBytes,
+} from './config/MeilisearchIngressLimits.js';

@@ -14,7 +14,7 @@
  */
 
 import { useEffect, useRef, useCallback, type Dispatch } from 'react';
-import { Events } from '@mxf-dev/sdk';
+import { Events, getTaskCompletionOutput } from '@mxf-dev/sdk';
 import type { MxfChannelMonitor } from '@mxf-dev/sdk';
 import type { AppAction } from '../state';
 import type { AppState } from '../state';
@@ -546,7 +546,7 @@ export function useEventMonitor(
             if (taskResolved) return;
 
             const result = payload.data?.task?.result;
-            const summary = result?.summary || payload.data?.summary || '';
+            const summary = getTaskCompletionOutput(payload.data?.task)?.summary ?? '';
             const completingAgentId = payload.data?.task?.completedBy ||
                 payload.data?.agentId || payload.agentId;
 

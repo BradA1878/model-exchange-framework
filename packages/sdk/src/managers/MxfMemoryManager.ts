@@ -37,6 +37,7 @@ import { MxfMeilisearchService } from '@mxf-dev/core/services/MxfMeilisearchServ
 import {
     BaseEventPayload,
     createAgentEventPayload,
+    createBaseEventPayload,
     createMeilisearchIndexEventPayload,
     createMeilisearchBackfillEventPayload,
     MeilisearchIndexEventData,
@@ -45,6 +46,12 @@ import {
 import { EventBus } from '@mxf-dev/core/events/EventBus';
 import { AnyEventName } from '@mxf-dev/core/events/EventBusBase';
 import { Events } from '@mxf-dev/core/events/EventNames';
+import { MAX_MEILISEARCH_MESSAGE_BYTES } from '@mxf-dev/core/config/MeilisearchIngressLimits';
+import {
+    planMeilisearchBackfillBatches,
+    DEFAULT_BACKFILL_BATCH_LIMITS,
+    BackfillWireMessage
+} from './MeilisearchBackfillBatching.js';
 
 export interface MemoryManagerConfig {
     agentId: string;
@@ -71,21 +78,71 @@ interface ImportedMemoryData {
 }
 
 /**
+ * What a memory-load backfill accomplished. `totalDocuments` is the count of
+ * eligible messages after the system/empty-content filter — every one of them
+ * ends up counted in exactly one of indexedDocuments, failedDocuments, or
+ * skippedDocuments. `errors` holds one entry per batch/message send that
+ * failed (not per skip — a skip never reaches the server, so it has no error
+ * to report, only a count).
+ */
+interface BackfillOutcome {
+    totalDocuments: number;
+    indexedDocuments: number;
+    failedDocuments: number;
+    skippedDocuments: number;
+    errors: string[];
+}
+
+/** How much of a backfill batch the server indexed before answering BACKFILL_PARTIAL. */
+export interface MeilisearchServerDocumentCounts {
+    indexedDocuments: number;
+    failedDocuments: number;
+}
+
+/**
  * The server answered a search-index request with a failure event.
  *
  * `retryAfterMs` is set when the server throttled the request; the indexing
  * queue waits that long and sends the same document again. Any other
  * rejection is final for that document.
+ *
+ * `serverCounts` is set when the server indexed part of a backfill batch and
+ * said how much (BACKFILL_PARTIAL carries the counts and no error text), so
+ * the caller can credit those documents instead of writing off the batch.
  */
 export class MeilisearchIndexRejectedError extends Error {
     public readonly retryAfterMs: number | null;
+    public readonly serverCounts: MeilisearchServerDocumentCounts | null;
 
-    constructor(message: string, retryAfterMs: number | null) {
+    constructor(
+        message: string,
+        retryAfterMs: number | null,
+        serverCounts: MeilisearchServerDocumentCounts | null = null
+    ) {
         super(message);
         this.name = 'MeilisearchIndexRejectedError';
         this.retryAfterMs = retryAfterMs;
+        this.serverCounts = serverCounts;
     }
 }
+
+/**
+ * Read the server's document counts off a failure event, or null when the
+ * event does not carry a usable pair (an ingress refusal reports zeros for
+ * both, which says nothing about the batch and is treated as absent).
+ */
+const readServerDocumentCounts = (data: unknown): MeilisearchServerDocumentCounts | null => {
+    if (data === null || typeof data !== 'object') {
+        return null;
+    }
+    const { indexedDocuments, failedDocuments } = data as Record<string, unknown>;
+    const isCount = (value: unknown): value is number =>
+        typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+    if (!isCount(indexedDocuments) || !isCount(failedDocuments) || indexedDocuments + failedDocuments === 0) {
+        return null;
+    }
+    return { indexedDocuments, failedDocuments };
+};
 
 /**
  * A search-index request could not be sent, or was cut off, because the
@@ -221,31 +278,19 @@ export class MxfMemoryManager {
                 persistenceLevel: memory.persistenceLevel
             };
             
-            // If memory has conversation history, index it to Meilisearch but DON'T inject into prompts
-            if (memory.conversationHistory && Array.isArray(memory.conversationHistory)) {
-                this.authoritativeConversationHistory = [
-                    ...memory.conversationHistory as ConversationMessage[]
-                ];
+            const persistedHistory = Array.isArray(memory.conversationHistory)
+                ? (memory.conversationHistory as ConversationMessage[])
+                : [];
+            this.authoritativeConversationHistory = [...persistedHistory];
 
-                if (this.conversationHistory.length === 0 && memory.conversationHistory.length > 0) {
-                    // ✅ NEW ARCHITECTURE: Don't restore to working memory
-                    // Historical conversations are indexed to Meilisearch for searching
-                    // but NOT injected into prompts to avoid temporal confusion
-
-
-                    // Backfill historical messages to Meilisearch (async, non-blocking)
-                    if (this.meilisearchService) {
-                        await this.backfillConversationsToMeilisearch(memory.conversationHistory);
-                    } else {
-                        this.emitMeilisearchReady();
-                    }
-                } else if (this.conversationHistory.length === 0 && memory.conversationHistory.length === 0) {
-                    // New agent with no history - emit ready event immediately
-                    this.emitMeilisearchReady();
-                }
+            // Persisted history is indexed for search, not restored into the
+            // prompt (old turns would read as current). It is sent only on a
+            // first load: after a reconnect the working history is non-empty
+            // and the live path already indexed it. Every load reports how it
+            // settled, so the server can mark the agent ready for search tools.
+            if (this.conversationHistory.length === 0 && persistedHistory.length > 0 && this.meilisearchService) {
+                await this.backfillConversationsToMeilisearch(persistedHistory);
             } else {
-                this.authoritativeConversationHistory = [];
-                // No conversation history at all - new agent
                 this.emitMeilisearchReady();
             }
 
@@ -416,10 +461,12 @@ export class MxfMemoryManager {
                         Number.isFinite(data.retryAfterMs) && data.retryAfterMs > 0
                         ? data.retryAfterMs
                         : null;
-                    settleError(new MeilisearchIndexRejectedError(
-                        data.error ?? `${String(requestEvent)} failed`,
-                        retryAfterMs
-                    ));
+                    const serverCounts = readServerDocumentCounts(data);
+                    const message = data.error ?? (serverCounts
+                        ? `${String(requestEvent)}: server indexed ${serverCounts.indexedDocuments} of ` +
+                            `${serverCounts.indexedDocuments + serverCounts.failedDocuments} document(s)`
+                        : `${String(requestEvent)} failed`);
+                    settleError(new MeilisearchIndexRejectedError(message, retryAfterMs, serverCounts));
                     return;
                 }
 
@@ -1067,8 +1114,12 @@ export class MxfMemoryManager {
 
     /**
      * Send one backfill batch and await its acknowledgement. A throttled batch
-     * is sent again after the server's retry hint; any other failure propagates
-     * to initialize(), because a missing backfill is a startup problem.
+     * is sent again after the server's retry hint. Any other rejection, or a
+     * dropped transport, is thrown back to the caller: backfillConversationsToMeilisearch
+     * records it against that batch's messages and moves on to the next one —
+     * it no longer propagates to initialize()/connect(). A missing backfill is
+     * a search-index problem, not a reason to fail agent startup; conversation
+     * memory is already loaded from MongoDB by the time this runs.
      */
     private async sendBackfillBatch(payload: BaseEventPayload<MeilisearchBackfillEventData>): Promise<void> {
         for (;;) {
@@ -1105,8 +1156,17 @@ export class MxfMemoryManager {
     }
 
     /**
-     * Backfill historical conversation messages to Meilisearch
-     * Called when agent memory is loaded from MongoDB
+     * Backfill historical conversation messages to Meilisearch.
+     * Called when agent memory is loaded from MongoDB.
+     *
+     * Never rejects. A backfill problem is a search-index problem, not a
+     * conversation-memory problem — history is already loaded by the time this
+     * runs — so it is recorded and reported by reportBackfillOutcome() instead
+     * of failing initialize()/connect(). Before this, any batch the server
+     * refused (oversized, or any other rejection with no retry hint) rethrew
+     * out of here, out of loadAgentMemory(), out of initialize(), and failed
+     * MxfClient.connect() outright: every future connect failed the same way,
+     * because the same oversized batch was sent again on every retry.
      * @private
      */
     private async backfillConversationsToMeilisearch(history: ConversationMessage[]): Promise<void> {
@@ -1116,85 +1176,127 @@ export class MxfMemoryManager {
 
         // Same rule as live indexing: system prompts are framework boilerplate and
         // a message with no text (a tool-call-only turn) has nothing to search.
-        // The server refuses both, and one refusal fails the whole batch.
+        // The server refuses both, so they are filtered out before any batch is built.
         const messages = history.filter(message =>
             message.role !== 'system' && message.content.trim().length > 0
         );
         if (messages.length === 0) {
-            return; // Nothing to backfill
-        }
-
-        const operationId = uuidv4();
-        const startTime = Date.now();
-
-        // Check if semantic search (embeddings) is enabled
-        const semanticSearchEnabled = process.env.ENABLE_SEMANTIC_SEARCH === 'true';
-
-        if (semanticSearchEnabled) {
-            // The authenticated server boundary accepts at most 50 documents per
-            // request. Each batch is correlated and acknowledged before the next is
-            // sent, so a partial/error response is visible to initialize().
-            const semanticBatchSize = 50;
-            for (let index = 0; index < messages.length; index += semanticBatchSize) {
-                const batch = messages.slice(index, index + semanticBatchSize);
-                const batchOperationId = uuidv4();
-                const metadata: NonNullable<MeilisearchBackfillEventData['metadata']> & {
-                    messages: Array<Pick<
-                        ConversationMessage,
-                        'id' | 'role' | 'content' | 'timestamp'
-                    >>;
-                } = {
-                    agentId: this.config.agentId,
-                    channelId: this.config.channelId,
-                    startTimestamp: batch[0].timestamp,
-                    endTimestamp: batch[batch.length - 1].timestamp,
-                    batchSize: semanticBatchSize,
-                    messages: batch.map(message => ({
-                        id: message.id,
-                        role: message.role,
-                        content: message.content,
-                        timestamp: message.timestamp
-                    }))
-                };
-                const eventData: MeilisearchBackfillEventData & {
-                    documentType: 'conversation';
-                } = {
-                    operationId: batchOperationId,
-                    indexName: 'mxf-conversations',
-                    documentType: 'conversation',
-                    totalDocuments: batch.length,
-                    indexedDocuments: 0,
-                    failedDocuments: 0,
-                    duration: 0,
-                    success: true,
-                    source: 'mongodb',
-                    metadata
-                };
-
-                const payload = createMeilisearchBackfillEventPayload(
-                    MeilisearchEvents.BACKFILL_REQUEST,
-                    this.config.agentId,
-                    this.config.channelId,
-                    eventData,
-                    { source: 'MxfMemoryManager' }
-                );
-
-                await this.sendBackfillBatch(payload);
-            }
+            this.reportBackfillOutcome(
+                { totalDocuments: 0, indexedDocuments: 0, failedDocuments: 0, skippedDocuments: 0, errors: [] }
+            );
             return;
         }
 
-        // Option 2: SDK handles backfill (keyword search only, no embeddings)
+        const semanticSearchEnabled = process.env.ENABLE_SEMANTIC_SEARCH === 'true';
+        try {
+            if (semanticSearchEnabled) {
+                await this.backfillSemantic(messages);
+            } else {
+                await this.backfillKeyword(messages);
+            }
+        } catch (error) {
+            // A throw here is a bug in the backfill path itself (planning, payload
+            // building), not a server answer. It is still a search-index problem
+            // and still must not fail connect(): report it like any other backfill
+            // failure. If reporting is what threw, this rethrows to loadAgentMemory().
+            this.reportBackfillOutcome({
+                totalDocuments: messages.length,
+                indexedDocuments: 0,
+                failedDocuments: messages.length,
+                skippedDocuments: 0,
+                errors: [error instanceof Error ? error.message : String(error)]
+            });
+        }
+    }
+
+    /**
+     * Semantic backfill path: the server generates embeddings, so each batch is
+     * sent and acknowledged over the authenticated socket boundary before the
+     * next is sent. Batches are sized to the shared limits in
+     * MeilisearchIngressLimits (message count, content bytes, and wire bytes),
+     * the same numbers the server's ingress policy enforces, so a batch this
+     * plans is one the server accepts — and a single message too large to ever
+     * fit is skipped up front rather than sent and rejected.
+     */
+    private async backfillSemantic(messages: ConversationMessage[]): Promise<void> {
+        const wireMessages: BackfillWireMessage[] = messages.map(message => ({
+            id: message.id,
+            role: message.role,
+            content: message.content,
+            timestamp: message.timestamp
+        }));
+        const reservedWireBytes = this.reservedBackfillWireBytes();
+        const plan = planMeilisearchBackfillBatches(wireMessages, reservedWireBytes, DEFAULT_BACKFILL_BATCH_LIMITS);
+
+        const outcome: BackfillOutcome = {
+            totalDocuments: messages.length,
+            indexedDocuments: 0,
+            failedDocuments: 0,
+            skippedDocuments: plan.skipped.length,
+            errors: []
+        };
+
+        for (let batchIndex = 0; batchIndex < plan.batches.length; batchIndex++) {
+            const batch = plan.batches[batchIndex];
+            const payload = this.buildBackfillBatchPayload(batch);
+
+            try {
+                await this.sendBackfillBatch(payload);
+                outcome.indexedDocuments += batch.length;
+            } catch (error) {
+                const message = error instanceof Error ? error.message : String(error);
+                outcome.errors.push(message);
+                if (error instanceof MeilisearchTransportUnavailableError) {
+                    // The transport is gone: this batch and everything after it in the
+                    // plan never reached the server, so none of it is "sent".
+                    const unsentBatches = plan.batches.slice(batchIndex);
+                    outcome.failedDocuments += unsentBatches.reduce((sum, unsent) => sum + unsent.length, 0);
+                    break;
+                }
+                // Any other rejection is final for that batch; the next one is unaffected.
+                // A partial answer says how much of the batch the server did index:
+                // credit that, bounded by the batch so every document counts once.
+                const indexed = error instanceof MeilisearchIndexRejectedError && error.serverCounts
+                    ? Math.min(error.serverCounts.indexedDocuments, batch.length)
+                    : 0;
+                outcome.indexedDocuments += indexed;
+                outcome.failedDocuments += batch.length - indexed;
+            }
+        }
+
+        this.reportBackfillOutcome(outcome);
+    }
+
+    /**
+     * Keyword backfill path: the SDK indexes each message directly through the
+     * Meilisearch client, with no server round trip. Keeps the original
+     * chunked loop (100 messages per chunk) and its stop-on-first-failure
+     * shape; a thrown error is recorded in the outcome instead of rethrown —
+     * no fallback added, no retry, just one less place a search-index problem
+     * can fail conversation memory.
+     */
+    private async backfillKeyword(messages: ConversationMessage[]): Promise<void> {
+        const service = this.meilisearchService;
+        if (!service) {
+            return; // Meilisearch not enabled — guarded again for type narrowing.
+        }
+
         let indexedCount = 0;
+        const outcome: BackfillOutcome = {
+            totalDocuments: messages.length,
+            indexedDocuments: 0,
+            failedDocuments: 0,
+            skippedDocuments: 0,
+            errors: []
+        };
 
         try {
-            // Index messages in batches to avoid overwhelming Meilisearch
             const batchSize = 100;
             for (let i = 0; i < messages.length; i += batchSize) {
                 const batch = messages.slice(i, i + batchSize);
 
                 for (const message of batch) {
-                    await this.meilisearchService.indexConversation({
+                    await service.indexConversation({
                         id: message.id,
                         role: message.role,
                         content: message.content,
@@ -1208,72 +1310,204 @@ export class MxfMemoryManager {
                     indexedCount++;
                 }
             }
-
-            const duration = Date.now() - startTime;
-
-            // Emit backfill event
-            const eventData: MeilisearchBackfillEventData = {
-                operationId,
-                indexName: 'mxf-conversations',
-                totalDocuments: messages.length,
-                indexedDocuments: indexedCount,
-                failedDocuments: 0,
-                duration,
-                success: true,
-                source: 'mongodb',
-                metadata: {
-                    agentId: this.config.agentId,
-                    channelId: this.config.channelId,
-                    startTimestamp: messages.length > 0 ? messages[0].timestamp : Date.now(),
-                    endTimestamp: messages.length > 0 ? messages[messages.length - 1].timestamp : Date.now(),
-                    batchSize
-                }
-            };
-
-            const payload = createMeilisearchBackfillEventPayload(
-                MeilisearchEvents.BACKFILL_COMPLETE,
-                this.config.agentId,
-                this.config.channelId,
-                eventData,
-                { source: 'MxfMemoryManager' }
-            );
-
-            this.eventBus.client.emit(MeilisearchEvents.BACKFILL_COMPLETE, payload);
-
+            outcome.indexedDocuments = indexedCount;
         } catch (error) {
-            const duration = Date.now() - startTime;
+            outcome.indexedDocuments = indexedCount;
+            outcome.failedDocuments = messages.length - indexedCount;
+            outcome.errors.push(error instanceof Error ? error.message : String(error));
+        }
 
-            // Emit failure event
-            const eventData: MeilisearchBackfillEventData = {
-                operationId,
-                indexName: 'mxf-conversations',
-                totalDocuments: messages.length,
-                indexedDocuments: indexedCount,
-                failedDocuments: messages.length - indexedCount,
-                duration,
-                success: false,
-                source: 'mongodb',
-                error: error instanceof Error ? error.message : String(error),
-                metadata: {
-                    agentId: this.config.agentId,
-                    channelId: this.config.channelId,
-                    batchSize: 100
-                }
-            };
+        this.reportBackfillOutcome(outcome);
+    }
 
-            const payload = createMeilisearchBackfillEventPayload(
-                MeilisearchEvents.BACKFILL_ERROR,
+    /**
+     * Report a finished backfill: log it when anything did not make it in,
+     * publish Events.Agent.ERROR so hosts and channel monitors see it even
+     * when the client Logger is off, and emit one local summary event
+     * (BACKFILL_COMPLETE or BACKFILL_PARTIAL) other code can observe. Called
+     * by the semantic path, the keyword path, and the nothing-to-backfill case
+     * (through emitMeilisearchReady()) — one code path for how a memory load
+     * reports what it indexed.
+     */
+    private reportBackfillOutcome(
+        outcome: BackfillOutcome,
+        source: MeilisearchBackfillEventData['source'] = 'mongodb'
+    ): void {
+        const notIndexed = outcome.failedDocuments + outcome.skippedDocuments;
+        const success = notIndexed === 0;
+
+        if (!success) {
+            const limitKiB = Math.round(MAX_MEILISEARCH_MESSAGE_BYTES / 1024);
+            const parts = [
+                `Agent ${this.agentId}: ${notIndexed} of ${outcome.totalDocuments} backfill messages not indexed.`
+            ];
+            if (outcome.skippedDocuments > 0) {
+                parts.push(
+                    `${outcome.skippedDocuments} skipped for exceeding the ${limitKiB}KiB per-message limit.`
+                );
+            }
+            if (outcome.errors.length > 0) {
+                parts.push(`First error: ${outcome.errors[0]}.`);
+            }
+            parts.push(
+                "Conversation memory is loaded; search over this agent's history is incomplete " +
+                'until the next memory load.'
+            );
+            const message = parts.join(' ');
+            this.logger.error(message);
+
+            // Surface it on the agent's error channel too, so agent.on(Events.Agent.ERROR)
+            // and channel monitors see it even when the client Logger is off (mirrors the
+            // pattern in MxfAgent's generateResponse()/max-iterations failure paths).
+            this.eventBus.client.emitOn(
+                this.agentId,
+                Events.Agent.ERROR,
+                createBaseEventPayload(
+                    Events.Agent.ERROR,
+                    this.agentId,
+                    this.config.channelId,
+                    {
+                        message,
+                        phase: 'memory_backfill',
+                        totalDocuments: outcome.totalDocuments,
+                        indexedDocuments: outcome.indexedDocuments,
+                        failedDocuments: outcome.failedDocuments,
+                        skippedDocuments: outcome.skippedDocuments
+                    }
+                )
+            );
+        }
+
+        const summaryError = outcome.errors[0] ?? (
+            outcome.skippedDocuments > 0
+                ? `${outcome.skippedDocuments} message(s) skipped for exceeding the per-message limit`
+                : undefined
+        );
+
+        const eventData: MeilisearchBackfillEventData = {
+            operationId: uuidv4(),
+            indexName: 'mxf-conversations',
+            totalDocuments: outcome.totalDocuments,
+            indexedDocuments: outcome.indexedDocuments,
+            failedDocuments: outcome.failedDocuments,
+            skippedDocuments: outcome.skippedDocuments,
+            duration: 0,
+            success,
+            source,
+            ...(summaryError !== undefined && { error: summaryError }),
+            // The optional startTimestamp/endTimestamp/batchSize fields describe
+            // one request's messages; a load summary spans every request, so it
+            // carries only the identity fields rather than made-up values.
+            metadata: {
+                agentId: this.config.agentId,
+                channelId: this.config.channelId
+            }
+        };
+
+        const payload = createMeilisearchBackfillEventPayload(
+            success ? MeilisearchEvents.BACKFILL_COMPLETE : MeilisearchEvents.BACKFILL_PARTIAL,
+            this.config.agentId,
+            this.config.channelId,
+            eventData,
+            { source: 'MxfMemoryManager' }
+        );
+
+        // Local only: this summarizes requests already sent and already
+        // acknowledged (or already failed) over the socket. It is not itself a
+        // new request — emit() would forward it back over the socket and the
+        // server has no handler for it.
+        this.eventBus.client.emitLocal(
+            success ? MeilisearchEvents.BACKFILL_COMPLETE : MeilisearchEvents.BACKFILL_PARTIAL,
+            payload
+        );
+
+        // Tell the server the load settled. It marks the agent ready for the
+        // memory_search_* tools from this report — a load with nothing to
+        // backfill sends no batch, so the server would otherwise never hear
+        // from it — and logs the outcome on its side. Sent on the agent socket
+        // after every batch was answered, so the tool list the agent fetches
+        // next already reflects it.
+        if (!this.meilisearchService) {
+            // Nothing is indexed from this client, so it must not tell the server
+            // the agent is ready for search tools it could never have populated.
+            return;
+        }
+        if (!this.eventBus.client.isRegisteredSocketConnected(this.agentId)) {
+            // emitOn() would fall back to a primary socket agents never register
+            // and drop the report with a debug line. It is not retried: the next
+            // connect() loads memory and reports again.
+            this.logger.error(
+                `Agent ${this.agentId}: search backfill settled report not sent, no connected agent socket; ` +
+                'the server hears it at the next connect'
+            );
+            return;
+        }
+        const settledData: MeilisearchBackfillEventData & { documentType: 'conversation' } = {
+            ...eventData,
+            documentType: 'conversation'
+        };
+        this.eventBus.client.emitOn(
+            this.agentId,
+            MeilisearchEvents.BACKFILL_SETTLED,
+            createMeilisearchBackfillEventPayload(
+                MeilisearchEvents.BACKFILL_SETTLED,
                 this.config.agentId,
                 this.config.channelId,
-                eventData,
+                settledData,
                 { source: 'MxfMemoryManager' }
-            );
+            )
+        );
+    }
 
-            this.eventBus.client.emit(MeilisearchEvents.BACKFILL_ERROR, payload);
+    /**
+     * Serialized size of a backfill request event carrying no messages: the
+     * baseline every planned batch's wire size is measured against. Built from
+     * the same payload shape sendBackfillBatch() sends. A real batch differs
+     * from the empty measurement only in the digits of its two count fields
+     * (`totalDocuments` and `metadata.batchSize`), so the widest those can be
+     * is reserved too, making this an upper bound rather than an estimate.
+     */
+    private reservedBackfillWireBytes(): number {
+        const emptyPayload = this.buildBackfillBatchPayload([]);
+        const countDigitBytes = 2 * (String(DEFAULT_BACKFILL_BATCH_LIMITS.maxMessages).length - 1);
+        return Buffer.byteLength(JSON.stringify(emptyPayload), 'utf8') + countDigitBytes;
+    }
 
-            this.logger.error(`Meilisearch backfill failed: ${error instanceof Error ? error.message : String(error)}`);
-            throw error;
-        }
+    /** Build one backfill request event for a planned batch (possibly empty, to measure overhead). */
+    private buildBackfillBatchPayload(
+        batch: readonly BackfillWireMessage[]
+    ): BaseEventPayload<MeilisearchBackfillEventData> {
+        const now = Date.now();
+        const metadata: NonNullable<MeilisearchBackfillEventData['metadata']> & {
+            messages: BackfillWireMessage[];
+        } = {
+            agentId: this.config.agentId,
+            channelId: this.config.channelId,
+            startTimestamp: batch.length > 0 ? batch[0].timestamp : now,
+            endTimestamp: batch.length > 0 ? batch[batch.length - 1].timestamp : now,
+            batchSize: batch.length,
+            messages: [...batch]
+        };
+        const eventData: MeilisearchBackfillEventData & { documentType: 'conversation' } = {
+            operationId: uuidv4(),
+            indexName: 'mxf-conversations',
+            documentType: 'conversation',
+            totalDocuments: batch.length,
+            indexedDocuments: 0,
+            failedDocuments: 0,
+            duration: 0,
+            success: true,
+            source: 'mongodb',
+            metadata
+        };
+
+        return createMeilisearchBackfillEventPayload(
+            MeilisearchEvents.BACKFILL_REQUEST,
+            this.config.agentId,
+            this.config.channelId,
+            eventData,
+            { source: 'MxfMemoryManager' }
+        );
     }
 
     /**
@@ -1398,37 +1632,23 @@ export class MxfMemoryManager {
     }
 
     /**
-     * Emit Meilisearch ready event (no backfill needed)
+     * Report that there is nothing to backfill: no persisted history, or
+     * Meilisearch disabled. The zero-document case of the same summary
+     * reportBackfillOutcome() builds for a real backfill, so there is one code
+     * path for "memory load done, here is what got indexed."
+     *
+     * Previously this emitted with EventBus.client.emit(), which also forwards
+     * over the socket. There is no server-side backfill behind this call —
+     * it is a local bookkeeping signal — so that sent a fabricated
+     * "backfill complete" event to the server. reportBackfillOutcome() uses
+     * emitLocal() instead.
      * @private
      */
     private emitMeilisearchReady(): void {
-        const eventData: MeilisearchBackfillEventData = {
-            operationId: uuidv4(),
-            indexName: 'mxf-conversations',
-            totalDocuments: 0,
-            indexedDocuments: 0,
-            failedDocuments: 0,
-            duration: 0,
-            success: true,
-            source: 'memory',
-            metadata: {
-                agentId: this.config.agentId,
-                channelId: this.config.channelId,
-                startTimestamp: Date.now(),
-                endTimestamp: Date.now(),
-                batchSize: 0
-            }
-        };
-
-        const payload = createMeilisearchBackfillEventPayload(
-            MeilisearchEvents.BACKFILL_COMPLETE,
-            this.config.agentId,
-            this.config.channelId,
-            eventData,
-            { source: 'MxfMemoryManager' }
+        this.reportBackfillOutcome(
+            { totalDocuments: 0, indexedDocuments: 0, failedDocuments: 0, skippedDocuments: 0, errors: [] },
+            'memory'
         );
-
-        this.eventBus.client.emit(MeilisearchEvents.BACKFILL_COMPLETE, payload);
     }
 
     /**

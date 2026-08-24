@@ -90,7 +90,9 @@ const AGENT_SOCKET_MEMORY_REQUEST_EVENTS = [
 
 const AGENT_SOCKET_MEILISEARCH_REQUEST_EVENTS = [
     Events.Meilisearch.INDEX_REQUEST,
-    Events.Meilisearch.BACKFILL_REQUEST
+    Events.Meilisearch.BACKFILL_REQUEST,
+    // The SDK's settled memory-load report; validated like a request, nothing indexed.
+    Events.Meilisearch.BACKFILL_SETTLED
 ] as const;
 
 const AGENT_SOCKET_TASK_REQUEST_EVENTS = [
@@ -118,6 +120,11 @@ const emitMeilisearchIngressError = (
     channelId: string,
     error: unknown
 ): void => {
+    // A refused settled report has no requester waiting on it and is not a
+    // backfill failure; it was logged by the caller and ends here.
+    if (eventName === Events.Meilisearch.BACKFILL_SETTLED) {
+        return;
+    }
     const failure = buildMeilisearchIngressFailure(eventName, rawData, agentId, channelId, error);
     if (failure.event === Events.Meilisearch.INDEX_ERROR) {
         EventBus.server.emit(failure.event, createMeilisearchIndexEventPayload(

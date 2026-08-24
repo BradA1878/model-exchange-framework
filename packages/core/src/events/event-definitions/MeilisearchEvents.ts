@@ -23,7 +23,7 @@
  * Events for server-side indexing with embeddings
  */
 
-import { BaseEventPayload } from '../../schemas/EventPayloadSchema.js';
+import { BaseEventPayload, MeilisearchBackfillEventData } from '../../schemas/EventPayloadSchema.js';
 
 /**
  * Meilisearch event names
@@ -39,6 +39,11 @@ export const MeilisearchEvents = {
     BACKFILL_COMPLETE: 'meilisearch:backfill:complete',
     BACKFILL_PARTIAL: 'meilisearch:backfill:partial',
     BACKFILL_ERROR: 'meilisearch:backfill:error',
+
+    // Report from the SDK to the server: its memory-load backfill has settled
+    // (every batch answered or abandoned). Carries the final counts so the
+    // server can mark the agent ready for search tools and log the outcome.
+    BACKFILL_SETTLED: 'meilisearch:backfill:settled',
 } as const;
 
 /**
@@ -52,4 +57,5 @@ export interface MeilisearchPayloads {
     'meilisearch:backfill:complete': BaseEventPayload<any>;
     'meilisearch:backfill:partial': BaseEventPayload<any>;
     'meilisearch:backfill:error': BaseEventPayload<any>;
+    'meilisearch:backfill:settled': BaseEventPayload<MeilisearchBackfillEventData>;
 }

@@ -35,6 +35,11 @@ import { MxfMemoryManager } from '@mxf-dev/sdk/managers/MxfMemoryManager';
 import { EventBus } from '@mxf-dev/core/events/EventBus';
 import { Events } from '@mxf-dev/core/events/EventNames';
 import { MeilisearchEvents } from '@mxf-dev/core/events/event-definitions/MeilisearchEvents';
+import { Logger } from '@mxf-dev/core/utils/Logger';
+import {
+    MAX_MEILISEARCH_BACKFILL_CONTENT_BYTES,
+    MAX_MEILISEARCH_BACKFILL_WIRE_BYTES
+} from '@mxf-dev/core/config/MeilisearchIngressLimits';
 import type { ConversationMessage } from '@mxf-dev/core/interfaces/ConversationMessage';
 import type { Observation } from '@mxf-dev/core/types/ControlLoopTypes';
 import { IAgentMemory, MemoryPersistenceLevel } from '@mxf-dev/core/types/MemoryTypes';
@@ -46,6 +51,9 @@ import {
     MeilisearchBackfillEventData,
     MeilisearchIndexEventData
 } from '@mxf-dev/core/schemas/EventPayloadSchema';
+
+/** The BACKFILL_COMPLETE/PARTIAL summary carries a skip count beyond the shared event type. */
+type BackfillSummaryData = MeilisearchBackfillEventData & { skippedDocuments: number };
 
 const makeManager = (overrides: Partial<ConstructorParameters<typeof MxfMemoryManager>[0]> = {}): MxfMemoryManager =>
     new MxfMemoryManager({
@@ -350,7 +358,10 @@ describe('MxfMemoryManager', () => {
             );
         });
 
-        it('surfaces historical backfill failure from initialize', async () => {
+        it('resolves initialize() when historical backfill fails, and reports the failure instead', async () => {
+            // Before this, a backfill failure rejected initialize()/connect() outright:
+            // conversation memory was already loaded from MongoDB by this point, so a
+            // search-index problem is not a reason to fail the agent's whole startup.
             process.env.ENABLE_MEILISEARCH = 'true';
             process.env.ENABLE_SEMANTIC_SEARCH = 'false';
             process.env.MEILISEARCH_HOST = 'http://meilisearch.test';
@@ -359,10 +370,22 @@ describe('MxfMemoryManager', () => {
                 makeMessage('historical', 'user', 'history', 1)
             ])));
             indexConversationMock.mockRejectedValue(new Error('index offline'));
+            const errorSpy = jest.spyOn(Logger.prototype, 'error');
+            const emitOn = jest.spyOn(EventBus.client, 'emitOn');
+            const summaries: BackfillSummaryData[] = [];
+            EventBus.client.on(MeilisearchEvents.BACKFILL_PARTIAL, (payload) => { summaries.push(payload.data); });
 
             const manager = makeManager();
 
-            await expect(manager.initialize()).rejects.toThrow('index offline');
+            await expect(manager.initialize()).resolves.toBeUndefined();
+
+            expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('not indexed'));
+            const agentErrors = emitOn.mock.calls.filter(call => call[1] === Events.Agent.ERROR);
+            expect(agentErrors).toHaveLength(1);
+            const agentErrorPayload = agentErrors[0][2] as BaseEventPayload<{ phase: string }>;
+            expect(agentErrorPayload.data.phase).toBe('memory_backfill');
+            expect(summaries).toHaveLength(1);
+            expect(summaries[0].success).toBe(false);
         });
 
         it('keeps the caller going when the index rejects a message, and retries nothing', async () => {
@@ -514,7 +537,7 @@ describe('MxfMemoryManager', () => {
             expect(manager.pendingIndexCount()).toBe(0);
         });
 
-        it('stopIndexing during a throttled backfill wait fails initialize() instead of resending the batch', async () => {
+        it('stopIndexing during a throttled backfill wait resolves initialize() and reports the batch as failed', async () => {
             jest.useFakeTimers();
             enableSemanticSearch();
             connectAgentSocket();
@@ -533,6 +556,8 @@ describe('MxfMemoryManager', () => {
                     { ...payload.data, success: false, error: 'rate limit exceeded; retry after 60000ms', retryAfterMs: 60_000 }
                 ));
             });
+            const summaries: BackfillSummaryData[] = [];
+            EventBus.client.on(MeilisearchEvents.BACKFILL_PARTIAL, (payload) => { summaries.push(payload.data); });
             const manager = makeManager();
 
             const initialized = manager.initialize();
@@ -541,9 +566,18 @@ describe('MxfMemoryManager', () => {
             expect(jest.getTimerCount()).toBe(1);
 
             manager.stopIndexing('agent disconnecting');
-            await expect(initialized).rejects.toThrow('Search indexing stopped: agent disconnecting');
+            await expect(initialized).resolves.toBeUndefined();
+
+            // The batch was not resent after the stop cut the wait short.
             expect(attempts).toBe(1);
             expect(jest.getTimerCount()).toBe(0);
+            expect(summaries).toHaveLength(1);
+            expect(summaries[0].success).toBe(false);
+            expect(summaries[0].failedDocuments).toBe(1);
+            // A failed backfill leaves no request subscribers behind (the PARTIAL one is this test's own).
+            expect(EventBus.client.listenerCount(MeilisearchEvents.BACKFILL_COMPLETE)).toBe(0);
+            expect(EventBus.client.listenerCount(MeilisearchEvents.BACKFILL_ERROR)).toBe(0);
+            expect(EventBus.client.listenerCount(Events.Agent.DISCONNECT)).toBe(0);
         });
 
         it('a dropped agent socket settles the request in flight and stops indexing', async () => {
@@ -719,8 +753,8 @@ describe('MxfMemoryManager', () => {
 
         it('backfills only messages the search index can hold', async () => {
             // Persisted history carries system prompts and tool-call turns with no
-            // text. The server refuses those documents, and one refusal fails the
-            // whole batch and initialize(), so they are not sent.
+            // text. The server refuses those documents, so they are filtered out
+            // before a batch is ever built, rather than sent and rejected.
             process.env.ENABLE_MEILISEARCH = 'true';
             process.env.ENABLE_SEMANTIC_SEARCH = 'true';
             process.env.MEILISEARCH_HOST = 'http://meilisearch.test';
@@ -762,6 +796,380 @@ describe('MxfMemoryManager', () => {
             await expect(manager.initialize()).resolves.toBeUndefined();
 
             expect(sentIds).toEqual([['user-1', 'reply']]);
+        });
+
+        it('reports a partly-failed semantic backfill and still resolves initialize()', async () => {
+            // The server refuses the batch outright (no retryAfterMs) — the kind of
+            // rejection that used to reject initialize()/connect() and brick the
+            // agent until someone edited MongoDB.
+            enableSemanticSearch();
+            connectAgentSocket();
+            const history = Array.from({ length: 51 }, (_, index) =>
+                makeMessage(`historical-${index}`, 'user', `history-${index}`, index + 1)
+            );
+            getAgentMemoryMock.mockReturnValue(of(persistedMemory(history)));
+            const errorSpy = jest.spyOn(Logger.prototype, 'error');
+            const summaries: BackfillSummaryData[] = [];
+            EventBus.client.on(MeilisearchEvents.BACKFILL_PARTIAL, (payload) => { summaries.push(payload.data); });
+            let attempts = 0;
+            const emitOn = jest.spyOn(EventBus.client, 'emitOn').mockImplementation((_agentId, eventName, rawPayload) => {
+                if (eventName !== MeilisearchEvents.BACKFILL_REQUEST) {
+                    return;
+                }
+                attempts += 1;
+                const payload = rawPayload as BaseEventPayload<MeilisearchBackfillEventData>;
+                if (attempts === 1) {
+                    EventBus.client.emitLocal(MeilisearchEvents.BACKFILL_ERROR, createMeilisearchBackfillEventPayload(
+                        MeilisearchEvents.BACKFILL_ERROR, 'test-agent', 'test-channel',
+                        { ...payload.data, success: false, error: 'backfill content exceeds 262144 bytes' }
+                    ));
+                    return;
+                }
+                EventBus.client.emitLocal(MeilisearchEvents.BACKFILL_COMPLETE, createMeilisearchBackfillEventPayload(
+                    MeilisearchEvents.BACKFILL_COMPLETE, 'test-agent', 'test-channel',
+                    { ...payload.data, indexedDocuments: payload.data.totalDocuments, success: true }
+                ));
+            });
+            const manager = makeManager();
+
+            await expect(manager.initialize()).resolves.toBeUndefined();
+
+            const requests = emitOn.mock.calls.filter(call => call[1] === MeilisearchEvents.BACKFILL_REQUEST);
+            expect(requests).toHaveLength(2);
+            expect(summaries).toHaveLength(1);
+            expect(summaries[0].success).toBe(false);
+            expect(summaries[0].failedDocuments).toBe(50); // first (rejected) batch
+            expect(summaries[0].indexedDocuments).toBe(1); // second (accepted) batch
+
+            const agentErrors = emitOn.mock.calls.filter(call => call[1] === Events.Agent.ERROR);
+            expect(agentErrors).toHaveLength(1);
+            const agentErrorPayload = agentErrors[0][2] as BaseEventPayload<{
+                phase: string;
+                totalDocuments: number;
+                indexedDocuments: number;
+                failedDocuments: number;
+                skippedDocuments: number;
+            }>;
+            expect(agentErrorPayload.data.phase).toBe('memory_backfill');
+            expect(agentErrorPayload.data.totalDocuments).toBe(51);
+            expect(agentErrorPayload.data.indexedDocuments).toBe(1);
+            expect(agentErrorPayload.data.failedDocuments).toBe(50);
+            expect(agentErrorPayload.data.skippedDocuments).toBe(0);
+            expect(errorSpy).toHaveBeenCalledTimes(1);
+            expect(EventBus.client.listenerCount(MeilisearchEvents.BACKFILL_COMPLETE)).toBe(0);
+            expect(EventBus.client.listenerCount(MeilisearchEvents.BACKFILL_ERROR)).toBe(0);
+            expect(EventBus.client.listenerCount(Events.Agent.DISCONNECT)).toBe(0);
+        });
+
+        it('skips a message larger than the per-message limit and still backfills the rest', async () => {
+            enableSemanticSearch();
+            connectAgentSocket();
+            const history = [
+                makeMessage('big', 'user', 'x'.repeat(65 * 1024), 1),
+                makeMessage('small-1', 'user', 'hello', 2),
+                makeMessage('small-2', 'assistant', 'hi there', 3)
+            ];
+            getAgentMemoryMock.mockReturnValue(of(persistedMemory(history)));
+            const errorSpy = jest.spyOn(Logger.prototype, 'error');
+            const summaries: BackfillSummaryData[] = [];
+            EventBus.client.on(MeilisearchEvents.BACKFILL_PARTIAL, (payload) => { summaries.push(payload.data); });
+            const sentIds: string[][] = [];
+            jest.spyOn(EventBus.client, 'emitOn').mockImplementation((_agentId, eventName, rawPayload) => {
+                if (eventName !== MeilisearchEvents.BACKFILL_REQUEST) {
+                    return;
+                }
+                const payload = rawPayload as BaseEventPayload<
+                    MeilisearchBackfillEventData & { metadata: { messages: Array<{ id: string }> } }
+                >;
+                sentIds.push(payload.data.metadata.messages.map(message => message.id));
+                EventBus.client.emitLocal(MeilisearchEvents.BACKFILL_COMPLETE, createMeilisearchBackfillEventPayload(
+                    MeilisearchEvents.BACKFILL_COMPLETE, 'test-agent', 'test-channel',
+                    { ...payload.data, indexedDocuments: payload.data.totalDocuments, success: true }
+                ));
+            });
+            const manager = makeManager();
+
+            await expect(manager.initialize()).resolves.toBeUndefined();
+
+            expect(sentIds.flat()).toEqual(['small-1', 'small-2']);
+            expect(sentIds.flat()).not.toContain('big');
+            expect(summaries).toHaveLength(1);
+            expect(summaries[0].success).toBe(false);
+            expect(summaries[0].skippedDocuments).toBe(1);
+            expect(errorSpy).toHaveBeenCalledTimes(1);
+            expect(errorSpy.mock.calls[0][0]).toEqual(expect.stringContaining('per-message limit'));
+        });
+
+        it('caps semantic backfill batches by content bytes, not just message count', async () => {
+            enableSemanticSearch();
+            connectAgentSocket();
+            const history = Array.from({ length: 20 }, (_, index) =>
+                makeMessage(`big-${index}`, 'user', 'y'.repeat(60 * 1024), index + 1)
+            );
+            getAgentMemoryMock.mockReturnValue(of(persistedMemory(history)));
+            const batchSizes: number[] = [];
+            const contentBytesPerBatch: number[] = [];
+            jest.spyOn(EventBus.client, 'emitOn').mockImplementation((_agentId, eventName, rawPayload) => {
+                if (eventName !== MeilisearchEvents.BACKFILL_REQUEST) {
+                    return;
+                }
+                const payload = rawPayload as BaseEventPayload<
+                    MeilisearchBackfillEventData & { metadata: { messages: Array<{ content: string }> } }
+                >;
+                batchSizes.push(payload.data.totalDocuments);
+                contentBytesPerBatch.push(payload.data.metadata.messages.reduce(
+                    (sum, message) => sum + Buffer.byteLength(message.content, 'utf8'), 0
+                ));
+                EventBus.client.emitLocal(MeilisearchEvents.BACKFILL_COMPLETE, createMeilisearchBackfillEventPayload(
+                    MeilisearchEvents.BACKFILL_COMPLETE, 'test-agent', 'test-channel',
+                    { ...payload.data, indexedDocuments: payload.data.totalDocuments, success: true }
+                ));
+            });
+            const manager = makeManager();
+
+            await expect(manager.initialize()).resolves.toBeUndefined();
+
+            expect(batchSizes).toEqual([8, 8, 4]); // 8 * 60KiB = 480KiB fits under 512KiB; 9 does not
+            for (const contentBytes of contentBytesPerBatch) {
+                expect(contentBytes).toBeLessThanOrEqual(MAX_MEILISEARCH_BACKFILL_CONTENT_BYTES);
+            }
+        });
+
+        it('credits the documents the server did index when a batch comes back partial', async () => {
+            // The server indexes a batch one document at a time and answers
+            // BACKFILL_PARTIAL with how many it managed. Those counts are the
+            // truth for that batch; the whole batch must not be written off.
+            enableSemanticSearch();
+            connectAgentSocket();
+            const history = Array.from({ length: 51 }, (_, index) =>
+                makeMessage(`historical-${index}`, 'user', `history-${index}`, index + 1)
+            );
+            getAgentMemoryMock.mockReturnValue(of(persistedMemory(history)));
+            const summaries: BackfillSummaryData[] = [];
+            EventBus.client.on(MeilisearchEvents.BACKFILL_PARTIAL, (payload) => {
+                // The server's per-batch answer arrives on this event too (the mock below
+                // emits it locally); the load summary is the one carrying a skip count.
+                if ('skippedDocuments' in payload.data) {
+                    summaries.push(payload.data);
+                }
+            });
+            let attempts = 0;
+            const emitOn = jest.spyOn(EventBus.client, 'emitOn').mockImplementation((_agentId, eventName, rawPayload) => {
+                if (eventName !== MeilisearchEvents.BACKFILL_REQUEST) {
+                    return;
+                }
+                attempts += 1;
+                const payload = rawPayload as BaseEventPayload<MeilisearchBackfillEventData>;
+                if (attempts === 1) {
+                    // 48 of 50 indexed; the server sends no error text for a partial answer.
+                    EventBus.client.emitLocal(MeilisearchEvents.BACKFILL_PARTIAL, createMeilisearchBackfillEventPayload(
+                        MeilisearchEvents.BACKFILL_PARTIAL, 'test-agent', 'test-channel',
+                        { ...payload.data, indexedDocuments: 48, failedDocuments: 2, success: false }
+                    ));
+                    return;
+                }
+                EventBus.client.emitLocal(MeilisearchEvents.BACKFILL_COMPLETE, createMeilisearchBackfillEventPayload(
+                    MeilisearchEvents.BACKFILL_COMPLETE, 'test-agent', 'test-channel',
+                    { ...payload.data, indexedDocuments: payload.data.totalDocuments, success: true }
+                ));
+            });
+            const manager = makeManager();
+
+            await expect(manager.initialize()).resolves.toBeUndefined();
+
+            expect(attempts).toBe(2);
+            expect(summaries).toHaveLength(1);
+            expect(summaries[0].indexedDocuments).toBe(49); // 48 from the partial batch + 1
+            expect(summaries[0].failedDocuments).toBe(2);
+            expect(summaries[0].error).toContain('indexed 48 of 50');
+            const agentErrors = emitOn.mock.calls.filter(call => call[1] === Events.Agent.ERROR);
+            expect(agentErrors).toHaveLength(1);
+            const agentErrorPayload = agentErrors[0][2] as BaseEventPayload<{
+                indexedDocuments: number;
+                failedDocuments: number;
+            }>;
+            expect(agentErrorPayload.data.indexedDocuments).toBe(49);
+            expect(agentErrorPayload.data.failedDocuments).toBe(2);
+        });
+
+        it('reports a failure inside the backfill path itself instead of rejecting initialize()', async () => {
+            // A throw from planning or payload building is a bug in the SDK, not a
+            // server answer. It is still a search-index problem: conversation memory
+            // is already loaded, so it is reported like any other backfill failure.
+            enableSemanticSearch();
+            connectAgentSocket();
+            getAgentMemoryMock.mockReturnValue(of(persistedMemory([
+                makeMessage('historical', 'user', 'history', 1)
+            ])));
+            const errorSpy = jest.spyOn(Logger.prototype, 'error');
+            const summaries: BackfillSummaryData[] = [];
+            EventBus.client.on(MeilisearchEvents.BACKFILL_PARTIAL, (payload) => { summaries.push(payload.data); });
+            const emitOn = jest.spyOn(EventBus.client, 'emitOn').mockImplementation(() => undefined);
+            const manager = makeManager();
+            // A reservation that leaves no room for messages makes the planner throw.
+            jest.spyOn(manager as unknown as { reservedBackfillWireBytes: () => number }, 'reservedBackfillWireBytes')
+                .mockReturnValue(MAX_MEILISEARCH_BACKFILL_WIRE_BYTES);
+
+            await expect(manager.initialize()).resolves.toBeUndefined();
+
+            expect(emitOn).not.toHaveBeenCalledWith(expect.anything(), MeilisearchEvents.BACKFILL_REQUEST, expect.anything());
+            expect(summaries).toHaveLength(1);
+            expect(summaries[0].failedDocuments).toBe(1);
+            expect(summaries[0].indexedDocuments).toBe(0);
+            expect(summaries[0].error).toContain('reservedWireBytes');
+            expect(emitOn.mock.calls.filter(call => call[1] === Events.Agent.ERROR)).toHaveLength(1);
+            expect(errorSpy).toHaveBeenCalledTimes(1);
+        });
+
+        it('a dropped agent socket during a backfill request ends the backfill and resolves initialize()', async () => {
+            enableSemanticSearch();
+            const socketConnected = connectAgentSocket();
+            const history = Array.from({ length: 51 }, (_, index) =>
+                makeMessage(`historical-${index}`, 'user', `history-${index}`, index + 1)
+            );
+            getAgentMemoryMock.mockReturnValue(of(persistedMemory(history)));
+            const summaries: BackfillSummaryData[] = [];
+            EventBus.client.on(MeilisearchEvents.BACKFILL_PARTIAL, (payload) => { summaries.push(payload.data); });
+            // The server never answers the first request.
+            const emitOn = jest.spyOn(EventBus.client, 'emitOn').mockImplementation(() => undefined);
+            const manager = makeManager();
+
+            const initialized = manager.initialize();
+            await flushMicrotasks();
+            expect(emitOn.mock.calls.filter(call => call[1] === MeilisearchEvents.BACKFILL_REQUEST)).toHaveLength(1);
+
+            // MxfService emits this locally when the agent socket disconnects.
+            socketConnected.mockReturnValue(false);
+            EventBus.client.emitLocal(Events.Agent.DISCONNECT, createAgentEventPayload(
+                Events.Agent.DISCONNECT, 'test-agent', 'test-channel',
+                { status: 'disconnected', reason: 'transport close' }
+            ));
+
+            await expect(initialized).resolves.toBeUndefined();
+            // The second planned batch was never sent: the transport is gone.
+            expect(emitOn.mock.calls.filter(call => call[1] === MeilisearchEvents.BACKFILL_REQUEST)).toHaveLength(1);
+            expect(summaries).toHaveLength(1);
+            expect(summaries[0].indexedDocuments).toBe(0);
+            expect(summaries[0].failedDocuments).toBe(51);
+            expect(EventBus.client.listenerCount(MeilisearchEvents.BACKFILL_COMPLETE)).toBe(0);
+            expect(EventBus.client.listenerCount(MeilisearchEvents.BACKFILL_ERROR)).toBe(0);
+            expect(EventBus.client.listenerCount(Events.Agent.DISCONNECT)).toBe(0);
+        });
+        it('reports the settled load to the server with the final counts', async () => {
+            // The server marks the agent ready for memory_search_* from this
+            // report, and logs what the client managed to index.
+            enableSemanticSearch();
+            connectAgentSocket();
+            const history = Array.from({ length: 51 }, (_, index) =>
+                makeMessage(`historical-${index}`, 'user', `history-${index}`, index + 1)
+            );
+            getAgentMemoryMock.mockReturnValue(of(persistedMemory(history)));
+            let attempts = 0;
+            const emitOn = jest.spyOn(EventBus.client, 'emitOn').mockImplementation((_agentId, eventName, rawPayload) => {
+                if (eventName !== MeilisearchEvents.BACKFILL_REQUEST) {
+                    return;
+                }
+                attempts += 1;
+                const payload = rawPayload as BaseEventPayload<MeilisearchBackfillEventData>;
+                if (attempts === 1) {
+                    EventBus.client.emitLocal(MeilisearchEvents.BACKFILL_ERROR, createMeilisearchBackfillEventPayload(
+                        MeilisearchEvents.BACKFILL_ERROR, 'test-agent', 'test-channel',
+                        { ...payload.data, success: false, error: 'backfill content exceeds 262144 bytes' }
+                    ));
+                    return;
+                }
+                EventBus.client.emitLocal(MeilisearchEvents.BACKFILL_COMPLETE, createMeilisearchBackfillEventPayload(
+                    MeilisearchEvents.BACKFILL_COMPLETE, 'test-agent', 'test-channel',
+                    { ...payload.data, indexedDocuments: payload.data.totalDocuments, success: true }
+                ));
+            });
+            const manager = makeManager();
+
+            await expect(manager.initialize()).resolves.toBeUndefined();
+
+            const settled = emitOn.mock.calls.filter(call => call[1] === MeilisearchEvents.BACKFILL_SETTLED);
+            expect(settled).toHaveLength(1);
+            expect((settled[0][2] as BaseEventPayload<MeilisearchBackfillEventData>).data).toMatchObject({
+                documentType: 'conversation',
+                totalDocuments: 51,
+                indexedDocuments: 1,
+                failedDocuments: 50,
+                skippedDocuments: 0,
+                success: false,
+                error: 'backfill content exceeds 262144 bytes'
+            });
+            // The report goes out after the last batch was answered.
+            const order = emitOn.mock.calls.map(call => call[1]);
+            expect(order.lastIndexOf(MeilisearchEvents.BACKFILL_REQUEST)).toBeLessThan(order.indexOf(MeilisearchEvents.BACKFILL_SETTLED));
+        });
+
+        it('reports a settled load with nothing to index for a new agent', async () => {
+            enableSemanticSearch();
+            connectAgentSocket();
+            const emitOn = jest.spyOn(EventBus.client, 'emitOn').mockImplementation(() => undefined);
+            const manager = makeManager();
+
+            await expect(manager.initialize()).resolves.toBeUndefined();
+
+            const settled = emitOn.mock.calls.filter(call => call[1] === MeilisearchEvents.BACKFILL_SETTLED);
+            expect(settled).toHaveLength(1);
+            expect((settled[0][2] as BaseEventPayload<MeilisearchBackfillEventData>).data).toMatchObject({
+                totalDocuments: 0, indexedDocuments: 0, failedDocuments: 0, skippedDocuments: 0, success: true
+            });
+        });
+
+        it('reports a settled load on reconnect when the working history was already indexed live', async () => {
+            // The same manager serves every connect(). After a reconnect the
+            // working history is non-empty and nothing is backfilled — the live
+            // path indexed it — but the server still needs to hear that the load
+            // settled, or an agent that reconnects to a restarted server never
+            // gets its search tools back.
+            enableSemanticSearch();
+            connectAgentSocket();
+            const emitOn = answerIndexRequests(() => ({ success: true }));
+            const manager = makeManager();
+            await manager.initialize();
+            await manager.addConversationMessage({ role: 'user', content: 'indexed live' });
+            await manager.flushIndexQueue();
+            getAgentMemoryMock.mockReturnValue(of(persistedMemory(manager.getConversationHistory())));
+            emitOn.mockClear();
+
+            await manager.initialize();
+
+            expect(emitOn).not.toHaveBeenCalledWith(expect.anything(), MeilisearchEvents.BACKFILL_REQUEST, expect.anything());
+            const settled = emitOn.mock.calls.filter(call => call[1] === MeilisearchEvents.BACKFILL_SETTLED);
+            expect(settled).toHaveLength(1);
+            expect((settled[0][2] as BaseEventPayload<MeilisearchBackfillEventData>).data).toMatchObject({
+                totalDocuments: 0, success: true
+            });
+        });
+        it('does not report a settled load to the server when Meilisearch is disabled on the client', async () => {
+            // Nothing is indexed from this client, so it must not tell the server
+            // the agent is ready for search tools it could never have populated.
+            process.env.ENABLE_MEILISEARCH = 'false';
+            connectAgentSocket();
+            const emitOn = jest.spyOn(EventBus.client, 'emitOn').mockImplementation(() => undefined);
+            const manager = makeManager();
+
+            await expect(manager.initialize()).resolves.toBeUndefined();
+
+            expect(emitOn).not.toHaveBeenCalledWith(expect.anything(), MeilisearchEvents.BACKFILL_SETTLED, expect.anything());
+        });
+
+        it('logs instead of reporting a settled load when the agent socket is not connected', async () => {
+            // emitOn() falls back to a primary socket agents never register and
+            // drops the event with only a debug line; the report is not retried,
+            // so the drop has to be visible. The next connect() reports again.
+            enableSemanticSearch();
+            jest.spyOn(EventBus.client, 'isRegisteredSocketConnected').mockReturnValue(false);
+            const emitOn = jest.spyOn(EventBus.client, 'emitOn').mockImplementation(() => undefined);
+            const errorSpy = jest.spyOn(Logger.prototype, 'error');
+            const manager = makeManager();
+
+            await expect(manager.initialize()).resolves.toBeUndefined();
+
+            expect(emitOn).not.toHaveBeenCalledWith(expect.anything(), MeilisearchEvents.BACKFILL_SETTLED, expect.anything());
+            expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('settled report not sent'));
         });
     });
 });

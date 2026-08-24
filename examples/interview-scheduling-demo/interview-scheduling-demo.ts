@@ -98,7 +98,7 @@
  */
 
 // MxfSDK - Primary entry point for all MXF functionality
-import { MxfSDK, Events, LlmProviderType, MxpConfigManager, SecurityLevel, MxfChannelMonitor } from '@mxf-dev/sdk';
+import { MxfSDK, Events, LlmProviderType, MxpConfigManager, SecurityLevel, MxfChannelMonitor, getTaskCompletionOutput } from '@mxf-dev/sdk';
 import type { AgentCreationConfig, MxfAgent } from '@mxf-dev/sdk';
 
 // Demo utilities
@@ -831,7 +831,7 @@ const setupCommunicationMonitoring = (channel: MxfChannelMonitor): void => {
     // Listen for task completions
     channel.on(Events.Task.COMPLETED, (payload: any) => {
         const agentId = payload.agentId || 'Unknown';
-        const summary = payload.data?.summary || 'Task completed';
+        const summary = getTaskCompletionOutput(payload.data?.task)?.summary ?? 'Task completed';
         
         // Extract details from the correct location in the task completion payload
         const details = payload.data?.task?.result?.details || 

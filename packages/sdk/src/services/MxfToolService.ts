@@ -25,7 +25,6 @@
  */
 
 import { v4 as uuidv4 } from 'uuid';
-import type { Subscription } from 'rxjs';
 import { Logger } from '@mxf-dev/core/utils/Logger';
 import { Events } from '@mxf-dev/core/events/EventNames';
 import { EventBus } from '@mxf-dev/core/events/EventBus';
@@ -41,15 +40,14 @@ import { createStrictValidator } from '@mxf-dev/core/utils/validation';
  * Public interface for MxfToolService - only exposes what developers should use
  */
 export interface IToolService {
-    loadTools(filter?: { name?: string; channelId?: string }): Promise<ClientTool[]>;
+    loadTools(filter?: { name?: string; channelId?: string }, force?: boolean): Promise<ClientTool[]>;
+    reloadTools(): Promise<ClientTool[]>;
     getCachedTools(): ClientTool[];
     filterToolsByAllowed(tools: ClientTool[], allowedTools?: string[]): ClientTool[];
     getCachedToolsFiltered(allowedTools?: string[]): ClientTool[];
     isLoaded(): boolean;
     getToolCount(): number;
     getTool(name: string): ClientTool | null;
-    setupPersistentToolListener(): void;
-    onToolsUpdated(callback: (tools: ClientTool[]) => Promise<void>): void;
     cleanup(): void;
 }
 
@@ -79,11 +77,6 @@ export class MxfToolService implements IToolService {
     private toolsLoaded = false;
     private loadingPromise: Promise<ClientTool[]> | null = null;
 
-    // Persistent listener for unsolicited tool updates
-    private persistentToolSubscription?: Subscription;
-    private toolUpdateCallbacks: Array<(tools: ClientTool[]) => Promise<void>> = [];
-    private lastUpdateHash: string = '';  // Deduplication: track last update to prevent redundant regeneration
-
     constructor(private agentId: string, private channelId: string) {
         this.logger = new Logger('debug', `ToolService-${agentId}`, 'client');
     }
@@ -104,6 +97,28 @@ export class MxfToolService implements IToolService {
 
         this.loadingPromise = this.performToolLoad(filter);
         return this.loadingPromise;
+    }
+
+    /**
+     * Ask the server for the tool list again and replace the cache with its
+     * answer. The list an agent may see changes during its own initialization
+     * (the server lists memory_search_* only once the agent's memory-load
+     * backfill has settled), so MxfAgent reloads after memory init.
+     *
+     * Same policy as the load at connect: a tool-list problem is logged at
+     * error level and the agent keeps the list it has, rather than failing
+     * connect() over a request the server did not answer.
+     */
+    public async reloadTools(): Promise<ClientTool[]> {
+        try {
+            return await this.loadTools(undefined, true);
+        } catch (error) {
+            this.logger.error(
+                `Tool list reload failed; keeping the ${this.tools.length} tool(s) loaded at connect: ` +
+                `${error instanceof Error ? error.message : String(error)}`
+            );
+            return this.tools;
+        }
     }
 
     /**
@@ -244,115 +259,6 @@ export class MxfToolService implements IToolService {
     }
 
     /**
-     * Clear cached tools (force reload on next request)
-     */
-    private clearCache(): void {
-        this.tools = [];
-        this.toolsLoaded = false;
-        this.loadingPromise = null;
-    }
-
-    /**
-     * Set up a persistent listener for unsolicited tool list updates from the server
-     * This handles cases like Meilisearch backfill completion where the server sends new tools
-     */
-    public setupPersistentToolListener(): void {
-        if (this.persistentToolSubscription && !this.persistentToolSubscription.closed) {
-            return;
-        }
-        this.persistentToolSubscription = undefined;
-
-        // Listen for ALL MXF_TOOL_LIST_RESULT events, not just ones with matching requestId
-        this.persistentToolSubscription = EventBus.client.on(Events.Mcp.MXF_TOOL_LIST_RESULT, async (
-            payload: BaseEventPayload<MxfToolListResultEventData>
-        ): Promise<void> => {
-            try {
-                // CRITICAL: Only process events for THIS agent
-                // Events are broadcast to entire channel, so we must filter by agentId
-                if (payload.agentId !== this.agentId) {
-                    return;
-                }
-
-                const tools = payload.data.tools;
-                const count = tools?.length || 0;
-
-                // Check if this is an unsolicited update (no requestId or special requestId)
-                const requestId = payload.data.requestId;
-                const isUnsolicitedUpdate = requestId?.startsWith('meilisearch-ready-');
-
-                if (isUnsolicitedUpdate) {
-                    // Deduplication: Deep hash of tool definitions to detect schema/description changes
-                    const currentHash = this.generateToolHash(tools);
-
-                    if (currentHash === this.lastUpdateHash) {
-                        return;
-                    }
-
-                    this.lastUpdateHash = currentHash;
-
-                    // Update cache
-                    this.tools = tools;
-                    this.toolsLoaded = true;
-
-                    // Notify all registered callbacks
-                    for (const callback of this.toolUpdateCallbacks) {
-                        await callback(tools);
-                    }
-
-                }
-            } catch (error) {
-                this.logger.error(`Error handling persistent tool update: ${error}`);
-                throw error;
-            }
-        });
-
-    }
-
-    /**
-     * Register a callback to be notified when tools are updated
-     * Useful for regenerating system prompts with new tools
-     */
-    public onToolsUpdated(callback: (tools: ClientTool[]) => Promise<void>): void {
-        this.toolUpdateCallbacks.push(callback);
-    }
-
-    /**
-     * Generate deep hash of tool definitions to detect any changes
-     * Includes name, description, and inputSchema to catch all meaningful updates
-     */
-    private generateToolHash(tools: ClientTool[]): string {
-        // Sort tools by name for consistent ordering
-        const sortedTools = [...tools].sort((a, b) => a.name.localeCompare(b.name));
-
-        // Create deterministic string representation of relevant properties
-        // Omit metadata and channelId as they change frequently without affecting functionality
-        const toolsString = JSON.stringify(sortedTools.map(t => ({
-            name: t.name,
-            description: t.description,
-            inputSchema: t.inputSchema,
-            providerId: t.providerId,
-            enabled: t.enabled
-        })));
-
-        // Use simple hash function for deduplication
-        return this.simpleHash(toolsString);
-    }
-
-    /**
-     * Simple hash function for string-based deduplication
-     * Not cryptographically secure, but sufficient for detecting changes
-     */
-    private simpleHash(str: string): string {
-        let hash = 0;
-        for (let i = 0; i < str.length; i++) {
-            const char = str.charCodeAt(i);
-            hash = ((hash << 5) - hash) + char;
-            hash = hash & hash; // Convert to 32-bit integer
-        }
-        return hash.toString(36);
-    }
-
-    /**
      * Cleanup method for proper resource management
      * Should be called when agent disconnects
      */
@@ -360,9 +266,5 @@ export class MxfToolService implements IToolService {
         this.tools = [];
         this.toolsLoaded = false;
         this.loadingPromise = null;
-        this.persistentToolSubscription?.unsubscribe();
-        this.persistentToolSubscription = undefined;
-        this.toolUpdateCallbacks = [];
-        this.lastUpdateHash = '';
     }
 }

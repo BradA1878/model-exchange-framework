@@ -46,6 +46,33 @@ bun add @mxf-dev/sdk
 MXF server development uses Bun. The published SDK is ESM-only and supports Bun
 >= 1.2 or Node.js >= 20.19 for client applications.
 
+### New in 3.2
+
+3.2 is a set of fixes for memory-load search indexing, plus the read-side
+contract for a completed task. One SDK interface loses two methods (below).
+
+- **Memory-load backfill can no longer fail `connect()`.** Persisted history is
+  batched to the server's shared limits (`@mxf-dev/core/config/MeilisearchIngressLimits`:
+  50 messages, 512 KiB of content, and 768 KiB on the wire per request; 64 KiB
+  per message, larger messages are skipped). A backfill problem is reported on
+  `Events.Agent.ERROR` with `data.phase === 'memory_backfill'`, as one local
+  `BACKFILL_COMPLETE`/`BACKFILL_PARTIAL` summary, and in the error log. Before
+  3.2 a dense history was refused on every connect and the agent never ran.
+- **`memory_search_*` tools appear after every memory load.** The SDK reports
+  its settled load to the server (`meilisearch:backfill:settled`) and reloads
+  its tool list before building the system prompt. Since 3.0 those tools were
+  missing for agents with no history and for agents without `allowedTools`.
+- **Embedding and indexing failures are errors.** A document is indexed without
+  a vector only when embeddings are off; a hybrid search whose query cannot be
+  embedded fails instead of answering keyword-only.
+- **`getTaskCompletionOutput(task)`** (with `isTaskCompletionOutput` and the
+  `TaskCompletionOutput` type) reads the summary an agent's `task_complete`
+  wrote to `task.result.output`. There is no `result.summary`; readers that
+  used it have received `undefined` since 3.0.
+- **`IToolService` gains `reloadTools()` and loses `setupPersistentToolListener()`
+  and `onToolsUpdated()`.** The server push those two waited for was removed in
+  3.0, so they never fired; code that calls them must be removed.
+
 ### New in 3.1
 
 3.1 adds the SystemLLM stance. Nothing changes for existing code; the defaults

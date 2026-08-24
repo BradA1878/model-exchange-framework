@@ -23,7 +23,7 @@
  * Run with: bun run demo:user-input
  */
 
-import { MxfSDK, Events, LlmProviderType } from '@mxf-dev/sdk';
+import { MxfSDK, Events, LlmProviderType, getTaskCompletionOutput } from '@mxf-dev/sdk';
 import type { MxfAgent, MxfChannelMonitor } from '@mxf-dev/sdk';
 import type {
     UserInputRequestData, UserInputResponseValue,
@@ -303,9 +303,8 @@ const setupMonitoring = (channel: MxfChannelMonitor): Promise<void> => {
             taskCompleted = true;
 
             // Extract summary from the completion result
-            // The task_complete tool stores result at payload.data.task.result
-            const result = payload.data?.task?.result;
-            const summary = result?.summary || payload.data?.summary || '';
+            // The task_complete tool stores the summary at result.output.summary
+            const summary = getTaskCompletionOutput(payload.data?.task)?.summary ?? '';
 
             console.log(`\n${chalk.green('═'.repeat(60))}`);
             console.log(chalk.green.bold('[Task Completed]'));
