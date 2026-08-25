@@ -34,6 +34,10 @@
  * Largest single message content the index accepts, in UTF-8 bytes. A
  * larger message is not indexed: the live path drops it after the server
  * refuses it, and the backfill skips it without sending.
+ *
+ * This is larger than what the embedding model accepts in one request (about
+ * 8192 tokens, see EmbeddingInputLimits). The server cuts the embedding input
+ * to that ceiling; the whole message is still stored and keyword-searchable.
  */
 export const MAX_MEILISEARCH_MESSAGE_BYTES = 64 * 1024;
 

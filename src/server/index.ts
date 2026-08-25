@@ -25,7 +25,6 @@ import cors from 'cors';
 import express from 'express';
 import http from 'http';
 import { Server as socketIo } from 'socket.io';
-import OpenAI from 'openai';
 import { requireEnv } from '@mxf-dev/core/utils/env';
 import { stopAllActiveDemos } from './api/controllers/demoController';
 import {
@@ -57,7 +56,8 @@ import { SystemLlmChallengeService } from './socket/services/SystemLlmChallengeS
 import { allMxfMcpTools } from './mcp/tools/index'; // Import MXF tools
 import { McpToolRegistry } from './api/services/McpToolRegistry'; // Import McpToolRegistry
 import { firstValueFrom } from 'rxjs';
-import { MxfMeilisearchService, EmbeddingGenerator } from '@mxf-dev/core/services/MxfMeilisearchService';
+import { MxfMeilisearchService } from '@mxf-dev/core/services/MxfMeilisearchService';
+import { createEmbeddingGenerator } from './services/EmbeddingGenerator';
 import { CodeExecutionSandboxService } from '@mxf-dev/core/services/CodeExecutionSandboxService';
 import { ToolExecutionPersistenceService } from './services/ToolExecutionPersistenceService';
 import { QValueManager } from '@mxf-dev/core/services/QValueManager';
@@ -92,7 +92,6 @@ import {
     ServerRuntimeState
 } from './services/ServerRuntimeState';
 import { listenForHttpServer } from './services/HttpServerLifecycle';
-import { assertExternalLlmCallAllowed } from '@mxf-dev/core/protocols/mcp/LlmTestEnvironmentGuard';
 import {
     getAllowedCorsOrigins,
     getSocketMaxHttpBufferSize
@@ -413,105 +412,9 @@ const initializeServer = async () => {
         if (process.env.ENABLE_MEILISEARCH === 'true') {
             try {
 
-                // Create embedding generator function (OpenRouter/OpenAI/Anthropic)
-                const embeddingGenerator: EmbeddingGenerator = async (text, options) => {
-                    const providerStr = (process.env.MEILISEARCH_EMBEDDING_PROVIDER || 'openai').toLowerCase();
-                    assertExternalLlmCallAllowed(`${providerStr} Meilisearch embeddings`);
-                    const model = options?.model || process.env.MEILISEARCH_EMBEDDING_MODEL || 'text-embedding-3-small';
-
-                    // OpenRouter - proxies OpenAI embedding models
-                    if (providerStr === 'openrouter') {
-                        if (!process.env.OPENROUTER_API_KEY) {
-                            throw new Error('OPENROUTER_API_KEY not set');
-                        }
-
-                        // App attribution shows in OpenRouter Logs dashboard.
-                        // Override via OPENROUTER_APP_TITLE / OPENROUTER_APP_URL env vars
-                        // when embedding MXF in another application. The "(Meilisearch)"
-                        // suffix differentiates embedding traffic from chat completions.
-                        const baseTitle = process.env.OPENROUTER_APP_TITLE || 'MXF';
-                        const headers: Record<string, string> = {
-                            'Content-Type': 'application/json',
-                            'Authorization': `Bearer ${process.env.OPENROUTER_API_KEY}`,
-                            'HTTP-Referer': process.env.OPENROUTER_APP_URL || 'https://mxf.dev',
-                            'X-Title': `${baseTitle} (Meilisearch)`
-                        };
-
-                        const client = new OpenAI({
-                            apiKey: process.env.OPENROUTER_API_KEY,
-                            baseURL: 'https://openrouter.ai/api/v1',
-                            defaultHeaders: headers
-                        });
-
-                        const response = await client.embeddings.create({
-                            model: model, // Use full model name like 'openai/text-embedding-3-small'
-                            input: text,
-                            dimensions: options?.dimensions
-                        });
-
-                        if (!response?.data?.[0]?.embedding) {
-                            throw new Error('Invalid embedding response from OpenRouter');
-                        }
-
-                        return response.data[0].embedding;
-                    }
-
-                    // OpenAI direct
-                    if (providerStr === 'openai') {
-                        if (!process.env.OPENAI_API_KEY) {
-                            throw new Error('OPENAI_API_KEY not set');
-                        }
-
-                        const client = new OpenAI({
-                            apiKey: process.env.OPENAI_API_KEY
-                        });
-
-                        const response = await client.embeddings.create({
-                            model: model.replace('openai/', ''),
-                            input: text
-                        });
-
-                        if (!response?.data?.[0]?.embedding) {
-                            throw new Error('Invalid embedding response from OpenAI');
-                        }
-
-                        return response.data[0].embedding;
-                    }
-
-                    // Voyage AI (via Anthropic partnership)
-                    if (providerStr === 'anthropic' || providerStr === 'voyage') {
-                        if (!process.env.ANTHROPIC_API_KEY) {
-                            throw new Error('ANTHROPIC_API_KEY not set for Voyage embeddings');
-                        }
-
-                        const response = await fetch('https://api.voyageai.com/v1/embeddings', {
-                            method: 'POST',
-                            headers: {
-                                'Content-Type': 'application/json',
-                                'Authorization': `Bearer ${process.env.ANTHROPIC_API_KEY}`
-                            },
-                            body: JSON.stringify({
-                                model: model,
-                                input: [text],
-                                input_type: 'document'
-                            })
-                        });
-
-                        if (!response.ok) {
-                            const errorText = await response.text();
-                            throw new Error(`Voyage API error [${response.status}]: ${errorText.substring(0, 200)}`);
-                        }
-
-                        const result = await response.json();
-                        if (!result?.data?.[0]?.embedding) {
-                            throw new Error('Invalid embedding response from Voyage');
-                        }
-
-                        return result.data[0].embedding;
-                    }
-
-                    throw new Error(`Unsupported embedding provider: ${providerStr}`);
-                };
+                // Provider selection and the token-limit cut live in
+                // src/server/services/EmbeddingGenerator.ts.
+                const embeddingGenerator = createEmbeddingGenerator();
 
                 const meilisearch = MxfMeilisearchService.getInstance({
                     host: process.env.MEILISEARCH_HOST || 'http://localhost:7700',

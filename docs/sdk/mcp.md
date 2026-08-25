@@ -1168,6 +1168,13 @@ try {
 
 **Note**: Auto-correction and circuit breaker events are currently internal and not exposed via `agent.on()`.
 
+`TOOL_CALL`, `TOOL_RESULT`, and `TOOL_ERROR` are delivered to the requesting
+agent's own connection, never to the channel room. A channel monitor sees them
+when it runs in the same process as the agent (they share `EventBus.client`).
+The call carries the tool arguments — the only record of what the agent asked
+for. Before 3.3 the call was not forwarded at all, so this subscription never
+fired.
+
 For monitoring tool execution, use the available public MCP events:
 
 ```typescript

@@ -204,7 +204,7 @@ export interface McpPayloads {
     'mcp:tool:list': { filter?: string };
     'mcp:tool:list:result': { tools: Array<{ name: string, description: string, inputSchema: Record<string, any> }> };
     'mcp:tool:list:error': { error: string };
-    'mcp:tool:call': { requestId: string, name: string, input: Record<string, any>, agentId?: string, channelId?: string };
+    'mcp:tool:call': { toolName: string, callId: string, arguments: Record<string, unknown>, agentId?: string, channelId?: string };
     'mcp:tool:result': { requestId: string, result: any, metadata?: Record<string, any> };
     'mcp:tool:error': { requestId: string, error: string, code?: string, details?: Record<string, any> };
     'mcp:tool:execution': { requestId: string, result: any, metadata?: Record<string, any> };

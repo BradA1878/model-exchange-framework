@@ -16,6 +16,7 @@
     "paths": {
       "@mxf-dev/core": ["packages/core/src/index.ts"],
       "@mxf-dev/core/*": ["packages/core/src/*"],
+      "gpt-tokenizer/encoding/*": ["node_modules/gpt-tokenizer/cjs/encoding/*"],
       "@mxf-dev/sdk": ["packages/sdk/src/index.ts"],
       "@mxf-dev/sdk/*": ["packages/sdk/src/*"],
       "@tests/*": ["tests/*"]

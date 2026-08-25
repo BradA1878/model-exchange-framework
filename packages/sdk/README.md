@@ -73,6 +73,12 @@ contract for a completed task. One SDK interface loses two methods (below).
   and `onToolsUpdated()`.** The server push those two waited for was removed in
   3.0, so they never fired; code that calls them must be removed.
 
+3.2.1 (server-side fixes, no SDK change): embedding input is cut to the
+model's token limit before the request, so a message between the 64 KiB ingress
+limit and the 8192-token ceiling gets a vector instead of an HTTP 400; and
+`agent.on(Events.Mcp.TOOL_CALL)` now fires — the call was never forwarded to the
+requesting agent before, so subscribers saw results and no calls.
+
 ### New in 3.1
 
 3.1 adds the SystemLLM stance. Nothing changes for existing code; the defaults

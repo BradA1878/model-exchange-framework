@@ -113,6 +113,17 @@ const isRecord = (value: unknown): value is Record<string, unknown> => (
     value !== null && typeof value === 'object' && !Array.isArray(value)
 );
 
+/**
+ * The bus copy of a tool call carries the authorization the ingress attached
+ * for the executor. The requester gets the call back without it: it needs
+ * what it asked for, not its own credential scope.
+ */
+const withoutAuthorization = <T extends object>(payload: T): Omit<T, 'authorization'> => {
+    const copy = { ...(payload as Record<string, unknown>) };
+    delete copy.authorization;
+    return copy as Omit<T, 'authorization'>;
+};
+
 const emitMeilisearchIngressError = (
     eventName: string,
     rawData: unknown,
@@ -904,10 +915,15 @@ export const setupEventBusToSocketForwarding = (socketService: ISocketService): 
         });
         
         // Handle MCP events - Forward back to requesting agents ONLY (not to channels)
-        // Use deduplication to prevent duplicate event forwarding
+        // Use deduplication to prevent duplicate event forwarding.
+        // The tool call itself is forwarded too: its arguments are the only record
+        // of what the agent asked for, and the docs promise them to
+        // agent.on(Events.Mcp.TOOL_CALL). It was left out when this list was
+        // created (results only), so that subscription never fired.
         const mcpEventProcessingKeys = new Set<string>();
 
         [
+            Events.Mcp.TOOL_CALL,
             Events.Mcp.TOOL_RESULT,
             Events.Mcp.TOOL_ERROR,
             Events.Mcp.TOOL_REGISTERED,
@@ -957,9 +973,14 @@ export const setupEventBusToSocketForwarding = (socketService: ISocketService): 
                     // Mark as processing
                     mcpEventProcessingKeys.add(eventKey);
 
-                    // Forward MCP result events directly to the requesting agent ONLY
+                    // Forward MCP events directly to the requesting agent ONLY
                     // IMPORTANT: Do NOT broadcast to channel - MCP results are agent-specific
-                    forwardEventToAgent(socketService, targetAgentId, eventName, payload);
+                    forwardEventToAgent(
+                        socketService,
+                        targetAgentId,
+                        eventName,
+                        eventName === Events.Mcp.TOOL_CALL ? withoutAuthorization(payload) : payload
+                    );
 
                     // Clean up processing key after a short delay to allow for late duplicates
                     setTimeout(() => {

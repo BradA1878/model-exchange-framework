@@ -25,6 +25,7 @@
         "dompurify": "^3.2.4",
         "dotenv": "^16.4.7",
         "express": "^4.18.2",
+        "gpt-tokenizer": "^4.0.0",
         "html-to-text": "^9.0.5",
         "ink": "4",
         "jsdom": "^26.0.0",
@@ -82,7 +83,7 @@
     },
     "packages/core": {
       "name": "@mxf-dev/core",
-      "version": "3.2.0",
+      "version": "3.2.1",
       "dependencies": {
         "@google/genai": "^0.9.0",
         "@mozilla/readability": "^0.6.0",
@@ -129,7 +130,7 @@
     },
     "packages/sdk": {
       "name": "@mxf-dev/sdk",
-      "version": "3.2.0",
+      "version": "3.2.1",
       "dependencies": {
         "@mxf-dev/core": "workspace:*",
         "axios": "^1.8.4",
@@ -1091,6 +1092,8 @@
     "google-logging-utils": ["google-logging-utils@0.0.2", "", {}, ""],
 
     "gopd": ["gopd@1.2.0", "", {}, ""],
+
+    "gpt-tokenizer": ["gpt-tokenizer@4.0.0", "", {}, "sha512-YAWIyzvuVUHEfW7tFfFAxH8qQb+Q3RU9nYOTy7skMNX5qzU6Q8jxTHZLyO56ug1vYvCR7wndzpd3jwD86/mhjQ=="],
 
     "graceful-fs": ["graceful-fs@4.2.11", "", {}, ""],
 

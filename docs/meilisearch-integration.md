@@ -269,6 +269,17 @@ hybrid search whose query cannot be embedded fails rather than answering with
 keyword-only results. A document is indexed without a vector only when
 embeddings are off or no generator is installed.
 
+Input longer than the model accepts is cut to its token limit before the
+request is made — counted with the tokenizer the OpenAI embedding models use,
+not estimated from characters — so a message under the 64 KiB ingress limit but
+over the model's 8192-token ceiling embeds from its prefix instead of failing.
+The whole message is still stored and keyword-searchable. The limit is per
+model (`packages/core/src/config/EmbeddingInputLimits.ts`) and
+`MEILISEARCH_EMBEDDING_MAX_INPUT_TOKENS` overrides it for a provider MXF does
+not know. For a provider with its own tokenizer (Voyage), the cl100k count is
+an approximation; set the override below that provider's limit if it tokenizes
+more densely.
+
 ### Backfill at memory load
 
 When an agent connects, `loadAgentMemory()` sends its persisted conversation
@@ -362,6 +373,7 @@ ENABLE_SEMANTIC_SEARCH=true
 MEILISEARCH_HYBRID_RATIO=0.7        # 0.0=keyword, 1.0=semantic
 MEILISEARCH_EMBEDDING_MODEL=text-embedding-3-small
 MEILISEARCH_EMBEDDING_DIMENSIONS=1536
+MEILISEARCH_EMBEDDING_MAX_INPUT_TOKENS=8192   # provider ceiling; input is cut to it before embedding
 MEILISEARCH_BATCH_SIZE=100
 MEILI_MAX_INDEXING_MEMORY=2GB
 MEILI_MAX_INDEXING_THREADS=4

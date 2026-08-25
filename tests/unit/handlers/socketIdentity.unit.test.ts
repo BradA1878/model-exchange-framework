@@ -866,6 +866,29 @@ describe('socket-to-EventBus identity', () => {
                 expect(agentEmit).toHaveBeenCalledWith(eventName, payload);
             });
 
+            // A tool call is forwarded to its requester too: its arguments are the
+            // only record of what the agent asked for, and the docs promise them
+            // to agent.on(Events.Mcp.TOOL_CALL). The authorization block the
+            // ingress attached for the executor stays on the server.
+            const toolCallHandler = serverListeners.get(Events.Mcp.TOOL_CALL)?.[0];
+            expect(toolCallHandler).toBeDefined();
+            const toolCall = {
+                ...clientEnvelope(Events.Mcp.TOOL_CALL, {
+                    data: { toolName: 'sentinel_close_trade', callId: 'call-1', arguments: { tradeId: 'trade-9' } }
+                }),
+                eventId: 'requester-tool-call',
+                authorization: { keyId: 'key-1', allowedTools: ['sentinel_close_trade'] }
+            };
+            toolCallHandler!(toolCall);
+            const forwardedToolCall = agentEmit.mock.calls.find((call) => call[0] === Events.Mcp.TOOL_CALL)?.[1];
+            expect(forwardedToolCall).toMatchObject({
+                eventId: 'requester-tool-call',
+                agentId: AGENT,
+                channelId: CHANNEL,
+                data: { toolName: 'sentinel_close_trade', callId: 'call-1', arguments: { tradeId: 'trade-9' } }
+            });
+            expect(forwardedToolCall).not.toHaveProperty('authorization');
+
             // None of the requester-only results is sent to the channel room,
             // which also keeps other-channel and unauthenticated sockets out.
             expect(roomEmit).toHaveBeenCalledTimes(3);
