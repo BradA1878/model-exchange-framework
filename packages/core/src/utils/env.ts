@@ -25,3 +25,21 @@ export const requireEnv = (name: string, hint?: string): string => {
     }
     return value;
 };
+
+/**
+ * Reads a positive integer from the environment, failing fast on garbage.
+ * Used for the values that bound how long a silent request may stay pending:
+ * a NaN or zero from a typo'd variable must not quietly remove that bound.
+ * Missing or blank means the default.
+ */
+export const readPositiveIntEnv = (name: string, defaultValue: number): number => {
+    const raw = process.env[name];
+    if (raw === undefined || raw === '') {
+        return defaultValue;
+    }
+    const parsed = parseInt(raw, 10);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+        throw new Error(`${name} must be a positive integer, got "${raw}"`);
+    }
+    return parsed;
+};

@@ -47,6 +47,7 @@ import { EventBus } from '@mxf-dev/core/events/EventBus';
 import { AnyEventName } from '@mxf-dev/core/events/EventBusBase';
 import { Events } from '@mxf-dev/core/events/EventNames';
 import { MAX_MEILISEARCH_MESSAGE_BYTES } from '@mxf-dev/core/config/MeilisearchIngressLimits';
+import { readMemoryBackfillTimeoutMs, readMemoryRequestTimeoutMs } from '@mxf-dev/core/config/MemoryRequestLimits';
 import {
     planMeilisearchBackfillBatches,
     DEFAULT_BACKFILL_BATCH_LIMITS,
@@ -185,6 +186,12 @@ export class MxfMemoryManager {
     private persistedRevision = 0;
     private pendingPersistenceRevisions: number[] = [];
     private saveInFlight: Promise<void> | null = null;
+    /**
+     * Reason persistence was stopped for good (agent disconnect), or null while
+     * it runs. A stopped manager keeps every message in working memory and
+     * queues no save against a closing connection.
+     */
+    private persistenceStopped: string | null = null;
 
     /**
      * Search indexing runs behind the conversation, one request at a time, in
@@ -254,6 +261,7 @@ export class MxfMemoryManager {
         // One manager serves every connect() of its agent. A stop from the
         // previous session (agent disconnect) ends with the next initialize.
         this.indexingStopped = null;
+        this.persistenceStopped = null;
 
         if (this.config.enablePersistence) {
             await this.loadAgentMemory();
@@ -327,8 +335,49 @@ export class MxfMemoryManager {
      * advances after acknowledgement, so retrying a failed request neither skips nor
      * duplicates a message, even when the working history has rolled.
      */
+    /**
+     * Wait until every queued memory revision is persisted, including any
+     * revision queued while a save is in flight.
+     *
+     * disconnect() calls this while the socket is still up, the way it drains
+     * the search-index queue, so the last messages of a turn reach the server
+     * before the connection closes and no caller is left awaiting a save the
+     * disconnect would cancel. Before this, an agent disconnected right after
+     * task_complete had its final tool-result save cancelled under it, and the
+     * task's own turn reported that as a task failure into the closed socket.
+     * A failed save rejects here as it does for the caller that queued it.
+     */
+    public async flushPersistence(): Promise<void> {
+        // With persistence off or stopped, revisions are still marked dirty but
+        // never saved, so the list never drains: there is nothing to wait for.
+        // Looping on it would starve the event loop — each await here yields
+        // only to microtasks.
+        if (!this.config.enablePersistence || this.persistenceStopped !== null) {
+            return;
+        }
+        do {
+            await this.saveAgentMemory();
+        } while (this.pendingPersistenceRevisions.length > 0);
+    }
+
+    /**
+     * Stop persisting for good: disconnect() calls this once flushPersistence()
+     * has drained the queue, the way it stops indexing. A message stored after
+     * this — the tool result of a task_complete whose round trip outlasted the
+     * consumer's disconnect(), say — stays in working memory for the turn, and
+     * no save is queued against the closing connection, where it could only
+     * fail. initialize() at the next connect() lifts the stop.
+     */
+    public stopPersistence(reason: string): void {
+        this.persistenceStopped = reason;
+    }
+
     public saveAgentMemory(): Promise<void> {
         if (!this.config.enablePersistence || this.pendingPersistenceRevisions.length === 0) {
+            return Promise.resolve();
+        }
+        if (this.persistenceStopped !== null) {
+            this.logger.debug(`Persistence is stopped (${this.persistenceStopped}); not saving agent memory`);
             return Promise.resolve();
         }
 
@@ -420,12 +469,23 @@ export class MxfMemoryManager {
         successEvents: readonly AnyEventName[],
         failureEvents: readonly AnyEventName[]
     ): Promise<TData> {
+        // A backfill batch is indexed one message at a time on the server, so
+        // it gets a bound of its own. Read before waiting so a bad value fails
+        // this request, not the bound.
+        const timeoutMs = requestEvent === MeilisearchEvents.BACKFILL_REQUEST
+            ? readMemoryBackfillTimeoutMs()
+            : readMemoryRequestTimeoutMs();
         return new Promise<TData>((resolve, reject) => {
             let settled = false;
             const listeners = new Map<AnyEventName, (rawEvent: unknown) => void>();
             const failureEventSet = new Set(failureEvents);
+            let timer: ReturnType<typeof setTimeout> | undefined;
 
             const cleanup = (): void => {
+                if (timer !== undefined) {
+                    clearTimeout(timer);
+                    timer = undefined;
+                }
                 listeners.forEach((handler, eventName) => {
                     this.eventBus.client.off(eventName, handler);
                 });
@@ -514,6 +574,19 @@ export class MxfMemoryManager {
                 ));
                 return;
             }
+
+            // The server's answer, a socket drop, or stopIndexing() settles this
+            // request; while the socket stays up and the server stays silent,
+            // nothing else does. A silent server is a transport that is not
+            // working, so the drain treats the timeout like a dropped socket:
+            // the queue is re-indexed from persisted history at the next load
+            // instead of waiting out one bound per message. Armed before the
+            // send so an answer delivered during the send still clears it.
+            timer = setTimeout(() => settleError(new MeilisearchTransportUnavailableError(
+                `${String(requestEvent)} timed out after ${timeoutMs}ms waiting for the server's answer`
+            )), timeoutMs);
+            // A pending request must not be what keeps the process alive.
+            timer.unref?.();
 
             try {
                 this.eventBus.client.emitOn(this.agentId, requestEvent, payload);

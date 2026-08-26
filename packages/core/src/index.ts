@@ -37,3 +37,11 @@ export {
     MAX_MEILISEARCH_BACKFILL_WIRE_BYTES,
     meilisearchContentBytes,
 } from './config/MeilisearchIngressLimits.js';
+export {
+    DEFAULT_MEMORY_BACKFILL_TIMEOUT_MS,
+    DEFAULT_MEMORY_REQUEST_TIMEOUT_MS,
+    MEMORY_BACKFILL_TIMEOUT_ENV,
+    MEMORY_REQUEST_TIMEOUT_ENV,
+    readMemoryBackfillTimeoutMs,
+    readMemoryRequestTimeoutMs
+} from './config/MemoryRequestLimits.js';

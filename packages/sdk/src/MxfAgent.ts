@@ -147,6 +147,12 @@ export class MxfAgent extends MxfClient {
     private activeControlLoopId: string | null = null;
     private taskCompleted: boolean = false; // Prevent further LLM calls after task completion
     private isGenerating: boolean = false; // Concurrency guard — prevents concurrent generateResponse calls
+    /**
+     * Set for the rest of the session once disconnect() begins. A turn that is
+     * still finishing then ends quietly instead of reporting a failure nothing
+     * can send; a socket that merely dropped (auto-reconnect follows) stays loud.
+     */
+    private disconnecting: boolean = false;
 
     /**
      * Subscriptions created by performAgentInitialization(). That method runs on every
@@ -339,6 +345,9 @@ export class MxfAgent extends MxfClient {
      * Perform agent-specific initialization after connection
      */
     protected async performAgentInitialization(): Promise<void> {
+        // This runs on every connect(); a disconnect from the previous session ends here.
+        this.disconnecting = false;
+
         // Initialize MCP client
         await this.mcpClientManager.initializeMcpClient();
         
@@ -985,6 +994,15 @@ export class MxfAgent extends MxfClient {
                 if (toolExecutionResult.taskComplete) {
                     taskComplete = true;
                 }
+
+                // The task was cancelled (disconnect() or cancelCurrentTask()) while the
+                // tools ran. Its results are not stored: the socket is closing or gone,
+                // and a save against it would only fail. A task_complete that just
+                // succeeded cleared the task itself and is stored like any other result.
+                if (!this.currentTask && !toolExecutionResult.taskComplete) {
+                    this.modelLogger.debug('🛑 Task canceled during tool execution - discarding results');
+                    break;
+                }
                 
                 // REAL FIX: Properly store tool results in conversation history with correct pairing
                 if (toolExecutionResult.toolResults && toolExecutionResult.toolResults.length > 0) {
@@ -1180,8 +1198,19 @@ export class MxfAgent extends MxfClient {
         const lastAssistantMessage = [...finalMessages].reverse().find(msg => msg.role === 'assistant');
         return lastAssistantMessage?.content ?? '';
         } catch (error) {
-            // Log the error so it's visible when client logging is enabled
             const errorMsg = error instanceof Error ? error.message : String(error);
+
+            // disconnect() began while this turn was finishing. Nothing more can be
+            // saved or reported over the closing socket, so the turn ends here; it
+            // is not a task failure, and a report could not be sent anyway. A socket
+            // that merely dropped is different: auto-reconnect follows, the task is
+            // still this agent's, and the failure below has to reach the consumer.
+            if (this.disconnecting) {
+                this.modelLogger.info(`Turn ended: agent is disconnecting (${errorMsg})`);
+                return '';
+            }
+
+            // Log the error so it's visible when client logging is enabled
             this.modelLogger.error(`generateResponse failed: ${errorMsg}`);
 
             // Emit error event so channel monitors and agent.on() listeners can observe the failure.
@@ -1412,8 +1441,11 @@ This iteration has been skipped. Choose a different action or complete the task.
                 // Check for task completion before returning tool result
                 const taskComplete = toolCall.name === 'task_complete';
                 if (taskComplete) {
-                    // Handle duplicate task_complete calls
-                    if (!this.taskExecutionManager.hasActiveTask()) {
+                    // Handle duplicate task_complete calls. While disconnecting, the
+                    // task was cancelled by disconnect() itself, so a result arriving
+                    // now is the real, first completion — the consumer's task:completed
+                    // listener is what triggered the disconnect — not a duplicate.
+                    if (!this.taskExecutionManager.hasActiveTask() && !this.disconnecting) {
                         this.modelLogger.debug('DUPLICATE TASK_COMPLETE: Task already completed, treating as success');
                         // Still add the tool result for proper pairing, just mark as already complete
                         toolResultContent = {
@@ -2460,6 +2492,11 @@ This iteration has been skipped. Choose a different action or complete the task.
      * connect() rebuilds them exactly once rather than stacking a second set.
      */
     public async disconnect(): Promise<void> {
+        // From here on a turn that is still finishing ends quietly (see the catch
+        // in generateResponse) and a task_complete answer that arrives late is
+        // still the real completion, not a duplicate.
+        this.disconnecting = true;
+
         // Cleanup message aggregator
         if (this.messageAggregator) {
             this.messageAggregator.cleanup();
@@ -2487,9 +2524,25 @@ This iteration has been skipped. Choose a different action or complete the task.
         this.taskExecutionManager?.cleanup();
         await this.mcpClientManager?.cleanup();
 
-        // Let queued search-index requests finish while the socket is still up,
-        // then stop indexing so nothing is queued against a closing connection.
+        // Let queued memory saves and search-index requests finish while the
+        // socket is still up, then stop indexing so nothing is queued against a
+        // closing connection. A consumer that disconnects as soon as it sees
+        // task:completed used to close the socket under the save of the
+        // task_complete tool result that the task's own turn was still awaiting;
+        // the turn then reported the finished task as failed into the closed socket.
         if (this.memoryManager) {
+            try {
+                await this.memoryManager.flushPersistence();
+            } catch (error) {
+                this.modelLogger.error(
+                    'Could not persist queued memory before disconnect: ' +
+                    `${error instanceof Error ? error.message : String(error)}`
+                );
+            }
+            // A message stored from here on (a task_complete result whose round
+            // trip outlasted this call) stays in working memory; no save is queued
+            // against the closing connection, where it could only fail.
+            this.memoryManager.stopPersistence('agent disconnecting');
             await this.memoryManager.flushIndexQueue();
             this.memoryManager.stopIndexing('agent disconnecting');
         }

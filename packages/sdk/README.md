@@ -79,6 +79,16 @@ limit and the 8192-token ceiling gets a vector instead of an HTTP 400; and
 `agent.on(Events.Mcp.TOOL_CALL)` now fires — the call was never forwarded to the
 requesting agent before, so subscribers saw results and no calls.
 
+3.2.2 (SDK fixes, no API change): a memory save or load and a live search-index
+request now wait at most `MXF_MEMORY_REQUEST_TIMEOUT_MS` (default 60000 ms) for
+the server's answer, and a backfill batch at most `MXF_MEMORY_BACKFILL_TIMEOUT_MS`
+(default 300000 ms). Before this, a server that stopped answering held the
+request — and `agent.disconnect()`, which waits for queued saves — open for good.
+A request past its bound fails like any other failed request and is not retried.
+Also, `agent.disconnect()` now waits for queued memory saves before closing the
+socket, so a consumer that disconnects on `task:completed` no longer sees the
+finished task reported as failed into the closed socket.
+
 ### New in 3.1
 
 3.1 adds the SystemLLM stance. Nothing changes for existing code; the defaults

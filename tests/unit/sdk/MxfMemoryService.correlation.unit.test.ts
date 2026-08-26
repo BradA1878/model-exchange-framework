@@ -82,6 +82,7 @@ describe('MxfMemoryService correlated memory proxy', () => {
     });
 
     afterEach(() => {
+        jest.useRealTimers();
         jest.restoreAllMocks();
         EventBus.reset();
         (MxfMemoryService as unknown as { instance?: MxfMemoryService }).instance = undefined;
@@ -506,13 +507,14 @@ describe('MxfMemoryService correlated memory proxy', () => {
         expect(EventBus.client.listenerCount(Events.Agent.DISCONNECT)).toBe(0);
     });
 
-    it('uses no timer and unsubscribe removes every listener from an unanswered request', () => {
-        const setTimeoutSpy = jest.spyOn(global, 'setTimeout');
+    it('unsubscribe removes every listener and the request bound from an unanswered request', () => {
+        jest.useFakeTimers();
         jest.spyOn(EventBus.client, 'emitOn').mockImplementation(() => undefined);
 
         const subscription = service.getAgentMemory(AGENT_ID, CHANNEL_ID).subscribe();
 
-        expect(setTimeoutSpy).not.toHaveBeenCalled();
+        // The only timer is the request's own bound (MXF_MEMORY_REQUEST_TIMEOUT_MS).
+        expect(jest.getTimerCount()).toBe(1);
         expect(EventBus.client.listenerCount(Events.Memory.GET_RESULT)).toBe(1);
         expect(EventBus.client.listenerCount(Events.Memory.GET_ERROR)).toBe(1);
         expect(EventBus.client.listenerCount(Events.Agent.DISCONNECT)).toBe(1);
@@ -522,7 +524,7 @@ describe('MxfMemoryService correlated memory proxy', () => {
         expect(EventBus.client.listenerCount(Events.Memory.GET_RESULT)).toBe(0);
         expect(EventBus.client.listenerCount(Events.Memory.GET_ERROR)).toBe(0);
         expect(EventBus.client.listenerCount(Events.Agent.DISCONNECT)).toBe(0);
-        expect(setTimeoutSpy).not.toHaveBeenCalled();
+        expect(jest.getTimerCount()).toBe(0);
     });
 
     it('rejects a forged agent deletion target before emitting', () => {

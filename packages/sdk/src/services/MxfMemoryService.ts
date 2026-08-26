@@ -36,6 +36,7 @@ import {
     MemoryUpdateResultEventData
 } from '@mxf-dev/core/schemas/EventPayloadSchema';
 import { createStrictValidator } from '@mxf-dev/core/utils/validation';
+import { readMemoryRequestTimeoutMs } from '@mxf-dev/core/config/MemoryRequestLimits';
 
 import { 
     MemoryScope, 
@@ -159,11 +160,18 @@ export class MxfMemoryService {
         payload: BaseEventPayload<BaseMemoryOperationData>,
         mapResult: (data: TResultData) => TResult
     ): Observable<TResult> {
+        // Read before subscribing so a bad value fails this call, not the bound.
+        const timeoutMs = readMemoryRequestTimeoutMs();
         return new Observable<TResult>((observer) => {
             let settled = false;
             let unregisterPendingOperation: (() => void) | undefined;
+            let timer: ReturnType<typeof setTimeout> | undefined;
 
             const cleanup = (): void => {
+                if (timer !== undefined) {
+                    clearTimeout(timer);
+                    timer = undefined;
+                }
                 unregisterPendingOperation?.();
                 unregisterPendingOperation = undefined;
                 EventBus.client.off(resultEvent, resultHandler);
@@ -264,6 +272,16 @@ export class MxfMemoryService {
                         `agent socket '${callerAgentId}' is not connected`
                     );
                 }
+                // The server's answer, a socket drop, or a cancellation settles
+                // this request; while the socket stays up and the server stays
+                // silent, nothing else does. Armed before the send so an answer
+                // delivered during the send still clears it.
+                timer = setTimeout(() => settleError(new Error(
+                    `Memory operation ${payload.data.operationId} timed out after ${timeoutMs}ms ` +
+                    'waiting for the server\'s answer'
+                )), timeoutMs);
+                // A pending request must not be what keeps the process alive.
+                timer.unref?.();
                 EventBus.client.emitOn(callerAgentId, requestEvent, payload);
             } catch (error) {
                 settleError(error);

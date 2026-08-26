@@ -103,7 +103,15 @@ Task lifecycle methods await exact server acknowledgements. See
 
 ## Lifecycle ownership
 
-`agent.connect()` initializes its composed services. `agent.disconnect()` disposes
+`agent.connect()` initializes its composed services. `agent.disconnect()` first
+waits for queued memory saves and search-index requests to reach the server, then
+stops both so a turn that is still finishing (a consumer that disconnects as soon
+as it sees `task:completed`, say) queues nothing against the closing socket and
+does not report a finished task as failed into it — a message stored after
+`disconnect()` began stays in the agent's working memory only. Each of those
+waits is bounded by `MXF_MEMORY_REQUEST_TIMEOUT_MS` (default 60000 ms): a save
+or index request the server never answers fails after that long, the failure is
+logged, and `disconnect()` goes on to close the socket. It then disposes
 their EventBus subscriptions, pending acknowledged requests, sockets, and local
 state. Constructing an internal manager independently bypasses that ownership and is
 unsupported.

@@ -142,6 +142,8 @@ describe('MxfMemoryManager', () => {
         EventBus.reset();
         process.env.ENABLE_MEILISEARCH = 'false';
         delete process.env.ENABLE_SEMANTIC_SEARCH;
+        delete process.env.MXF_MEMORY_REQUEST_TIMEOUT_MS;
+        delete process.env.MXF_MEMORY_BACKFILL_TIMEOUT_MS;
     });
 
     describe('saveAgentMemory', () => {
@@ -347,6 +349,85 @@ describe('MxfMemoryManager', () => {
         });
     });
 
+    describe('flushPersistence', () => {
+        it('resolves once every queued revision is persisted, so disconnect() can wait for it', async () => {
+            // disconnect() closed the socket under the save that
+            // addConversationMessage() was awaiting: the task's final turn then
+            // failed with "Cannot start memory operation … not connected" and
+            // was reported as a task failure into the closed socket.
+            const inFlight = new Subject<void>();
+            updateAgentMemoryMock.mockReturnValueOnce(inFlight.asObservable()).mockReturnValue(of(undefined));
+            const manager = makeManager();
+
+            const firstAdd = manager.addConversationMessage({ role: 'user', content: 'first' });
+            await flushMicrotasks();
+            const secondAdd = manager.addConversationMessage({ role: 'user', content: 'second' });
+            await flushMicrotasks();
+            expect(updateAgentMemoryMock).toHaveBeenCalledTimes(1);
+
+            let flushed = false;
+            const flushing = manager.flushPersistence().then(() => { flushed = true; });
+            await flushMicrotasks();
+            expect(flushed).toBe(false);
+
+            inFlight.next(); inFlight.complete();
+            await Promise.all([firstAdd, secondAdd, flushing]);
+
+            expect(flushed).toBe(true);
+            expect(updateAgentMemoryMock).toHaveBeenCalledTimes(2);
+            const lastSnapshot = updateAgentMemoryMock.mock.calls[1][2] as IAgentMemory;
+            expect(lastSnapshot.conversationHistory?.map(message => message.content)).toEqual(['first', 'second']);
+        });
+
+        it('rejects when a save fails, instead of pretending the memory is persisted', async () => {
+            updateAgentMemoryMock.mockReturnValue(throwError(() => new Error('memory service down')));
+            const manager = makeManager();
+            await expect(manager.addConversationMessage({ role: 'user', content: 'unsaved' })).rejects.toThrow('memory service down');
+
+            await expect(manager.flushPersistence()).rejects.toThrow('memory service down');
+        });
+
+        it('resolves at once when nothing is queued', async () => {
+            const manager = makeManager();
+
+            await expect(manager.flushPersistence()).resolves.toBeUndefined();
+            expect(updateAgentMemoryMock).not.toHaveBeenCalled();
+        });
+
+        it('resolves at once when persistence is disabled, even with dirty revisions', async () => {
+            // Every mutation marks a revision dirty whether or not persistence is
+            // on; with it off, saveAgentMemory() is a no-op and the list never
+            // drains. Waiting for it here would spin disconnect() forever.
+            const manager = makeManager({ enablePersistence: false });
+            await manager.addConversationMessage({ role: 'user', content: 'not persisted' });
+
+            await expect(manager.flushPersistence()).resolves.toBeUndefined();
+            expect(updateAgentMemoryMock).not.toHaveBeenCalled();
+        });
+
+        it('stopPersistence keeps later messages in working memory without a save, until the next initialize()', async () => {
+            // disconnect() stops persistence once it has drained the queue, the
+            // way it stops indexing: a message stored while the socket closes is
+            // kept for the turn but no save is queued against a closing connection.
+            const manager = makeManager();
+            await manager.addConversationMessage({ role: 'user', content: 'before' });
+            expect(updateAgentMemoryMock).toHaveBeenCalledTimes(1);
+
+            manager.stopPersistence('agent disconnecting');
+            await expect(manager.addConversationMessage({ role: 'user', content: 'during' })).resolves.toBeUndefined();
+            await expect(manager.flushPersistence()).resolves.toBeUndefined();
+
+            expect(updateAgentMemoryMock).toHaveBeenCalledTimes(1);
+            expect(manager.getConversationHistory().map(message => message.content)).toContain('during');
+
+            // The same manager serves the next connect(); a stop from the previous session ends with it.
+            await manager.initialize();
+            await manager.addConversationMessage({ role: 'user', content: 'after' });
+            expect(updateAgentMemoryMock).toHaveBeenCalledTimes(2);
+        });
+    });
+
+
     describe('Meilisearch configuration', () => {
         it('fails construction when search is enabled without explicit connection settings', () => {
             process.env.ENABLE_MEILISEARCH = 'true';
@@ -390,8 +471,8 @@ describe('MxfMemoryManager', () => {
 
         it('keeps the caller going when the index rejects a message, and retries nothing', async () => {
             enableSemanticSearch();
+            jest.useFakeTimers();
             connectAgentSocket();
-            const setTimeoutSpy = jest.spyOn(global, 'setTimeout');
             const failures: MeilisearchIndexEventData[] = [];
             EventBus.client.on(MeilisearchEvents.INDEX_ERROR, (payload) => { failures.push(payload.data); });
             const emitOn = answerIndexRequests(() => ({ success: false, error: 'embedding index unavailable' }));
@@ -411,7 +492,8 @@ describe('MxfMemoryManager', () => {
             expect(EventBus.client.listenerCount(MeilisearchEvents.INDEX)).toBe(0);
             expect(EventBus.client.listenerCount(MeilisearchEvents.INDEX_ERROR)).toBe(1); // the test's own
             expect(EventBus.client.listenerCount(Events.Agent.DISCONNECT)).toBe(0);
-            expect(setTimeoutSpy).not.toHaveBeenCalled();
+            // No retry wait was scheduled; the request's own bound went with the answer.
+            expect(jest.getTimerCount()).toBe(0);
         });
 
         it('sends one index request at a time, in arrival order', async () => {
@@ -617,6 +699,98 @@ describe('MxfMemoryManager', () => {
 
             expect(emitOn).not.toHaveBeenCalledWith(expect.anything(), MeilisearchEvents.INDEX_REQUEST, expect.anything());
             expect(manager.pendingIndexCount()).toBe(0);
+        });
+
+        it('ends an index request the server never answers after MXF_MEMORY_REQUEST_TIMEOUT_MS, so flushIndexQueue() returns', async () => {
+            // Before this bound, a server that stopped answering held the index
+            // drain — and disconnect(), which waits for it — for as long as the
+            // socket stayed up.
+            jest.useFakeTimers();
+            enableSemanticSearch();
+            connectAgentSocket();
+            process.env.MXF_MEMORY_REQUEST_TIMEOUT_MS = '5000';
+            const emitOn = jest.spyOn(EventBus.client, 'emitOn').mockImplementation(() => undefined);
+            const warnSpy = jest.spyOn(Logger.prototype, 'warn');
+            const manager = makeManager();
+
+            await manager.addConversationMessage({ role: 'user', content: 'one' });
+            await manager.addConversationMessage({ role: 'user', content: 'two' });
+            await flushMicrotasks();
+            expect(emitOn).toHaveBeenCalledTimes(1);
+            expect(jest.getTimerCount()).toBe(1);
+
+            let flushed = false;
+            const flushing = manager.flushIndexQueue().then(() => { flushed = true; });
+            await jest.advanceTimersByTimeAsync(4999);
+            expect(flushed).toBe(false);
+            await jest.advanceTimersByTimeAsync(1);
+            await flushing;
+
+            // One unanswered request ends the drain: the second message is not
+            // sent to wait out another bound. Both are indexed from persisted
+            // history at the next memory load.
+            expect(emitOn).toHaveBeenCalledTimes(1);
+            expect(manager.pendingIndexCount()).toBe(0);
+            expect(jest.getTimerCount()).toBe(0);
+            expect(warnSpy).toHaveBeenCalledWith(expect.stringMatching(
+                /timed out after 5000ms waiting for the server's answer; 2 queued message\(s\) not indexed now/
+            ));
+        });
+
+        it('reports a backfill batch the server never answers as failed after MXF_MEMORY_BACKFILL_TIMEOUT_MS, and initialize() resolves', async () => {
+            // The server indexes a batch one message at a time — an embedding
+            // call and a Meilisearch task wait each — so a full batch takes far
+            // longer than one live request. The batch has its own bound; the
+            // per-request one must not cut it short.
+            jest.useFakeTimers();
+            enableSemanticSearch();
+            connectAgentSocket();
+            process.env.MXF_MEMORY_REQUEST_TIMEOUT_MS = '1000';
+            process.env.MXF_MEMORY_BACKFILL_TIMEOUT_MS = '5000';
+            getAgentMemoryMock.mockReturnValue(of(persistedMemory([
+                makeMessage('historical-1', 'user', 'history', 1)
+            ])));
+            const errorSpy = jest.spyOn(Logger.prototype, 'error');
+            const summaries: BackfillSummaryData[] = [];
+            EventBus.client.on(MeilisearchEvents.BACKFILL_PARTIAL, (payload) => { summaries.push(payload.data); });
+            const emitOn = jest.spyOn(EventBus.client, 'emitOn').mockImplementation(() => undefined);
+            const manager = makeManager();
+
+            let initialized = false;
+            const initializing = manager.initialize().then(() => { initialized = true; });
+            await jest.advanceTimersByTimeAsync(4999);
+            expect(initialized).toBe(false);
+            await jest.advanceTimersByTimeAsync(1);
+            await initializing;
+
+            expect(summaries).toHaveLength(1);
+            expect(summaries[0].failedDocuments).toBe(1);
+            expect(summaries[0].error).toMatch(/timed out after 5000ms waiting for the server's answer/);
+            expect(emitOn.mock.calls.filter(call => call[1] === Events.Agent.ERROR)).toHaveLength(1);
+            expect(errorSpy).toHaveBeenCalledTimes(1);
+            expect(jest.getTimerCount()).toBe(0);
+        });
+
+        it('waits five minutes for a backfill batch when MXF_MEMORY_BACKFILL_TIMEOUT_MS is not set', async () => {
+            jest.useFakeTimers();
+            enableSemanticSearch();
+            connectAgentSocket();
+            getAgentMemoryMock.mockReturnValue(of(persistedMemory([
+                makeMessage('historical-1', 'user', 'history', 1)
+            ])));
+            jest.spyOn(Logger.prototype, 'error');
+            jest.spyOn(EventBus.client, 'emitOn').mockImplementation(() => undefined);
+            const manager = makeManager();
+
+            let initialized = false;
+            const initializing = manager.initialize().then(() => { initialized = true; });
+            await jest.advanceTimersByTimeAsync(299_999);
+            expect(initialized).toBe(false);
+            await jest.advanceTimersByTimeAsync(1);
+            await initializing;
+
+            expect(initialized).toBe(true);
+            expect(jest.getTimerCount()).toBe(0);
         });
 
         it('retries a throttled backfill batch after the server\'s delay', async () => {

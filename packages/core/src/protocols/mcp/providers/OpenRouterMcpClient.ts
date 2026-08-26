@@ -30,6 +30,7 @@
 import { Observable } from 'rxjs';
 import { v4 as uuidv4 } from 'uuid';
 import { BaseMcpClient } from './BaseMcpClient.js';
+import { readPositiveIntEnv } from '../../../utils/env.js';
 import {
     McpMessage,
     McpTool,
@@ -113,23 +114,6 @@ interface OpenRouterResponse {
         total_tokens: number;
     };
 }
-
-/**
- * Read a positive integer from the environment, failing fast on garbage.
- * These values bound how long a hung request can stay silent — a NaN or zero
- * from a typo'd env var must not silently disable that bound.
- */
-const parsePositiveIntEnv = (name: string, defaultValue: number): number => {
-    const raw = process.env[name];
-    if (raw === undefined || raw === '') {
-        return defaultValue;
-    }
-    const parsed = parseInt(raw, 10);
-    if (!Number.isFinite(parsed) || parsed <= 0) {
-        throw new Error(`${name} must be a positive integer, got "${raw}"`);
-    }
-    return parsed;
-};
 
 /**
  * True when an error came from an aborted fetch. AbortSignal.timeout() rejects
@@ -428,9 +412,9 @@ export class OpenRouterMcpClient extends BaseMcpClient {
         // for minutes on large contexts, so this is a hang detector, not a latency
         // budget. It is enforced twice: as an AbortSignal on the fetch itself and
         // as an operation bound inside NetworkRecoveryManager.executeWithRetry.
-        this.requestTimeoutMs = parsePositiveIntEnv('OPENROUTER_REQUEST_TIMEOUT_MS', 300000);
-        this.streamIdleTimeoutMs = parsePositiveIntEnv('OPENROUTER_STREAM_IDLE_TIMEOUT_MS', 120000);
-        this.slowRequestWarnMs = parsePositiveIntEnv('OPENROUTER_SLOW_REQUEST_WARN_MS', 60000);
+        this.requestTimeoutMs = readPositiveIntEnv('OPENROUTER_REQUEST_TIMEOUT_MS', 300000);
+        this.streamIdleTimeoutMs = readPositiveIntEnv('OPENROUTER_STREAM_IDLE_TIMEOUT_MS', 120000);
+        this.slowRequestWarnMs = readPositiveIntEnv('OPENROUTER_SLOW_REQUEST_WARN_MS', 60000);
 
         // Initialize network recovery configuration from environment or defaults
         const networkRecoveryConfig: NetworkRecoveryConfig = {

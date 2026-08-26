@@ -309,7 +309,14 @@ all.
 A backfill problem — a batch the server rejects, a message skipped for size,
 a connection dropped mid-backfill — cannot fail `agent.connect()`. A batch the
 server indexed only partly is credited for the documents it did index; the
-rest count as failed.
+rest count as failed. A batch the server never answers fails after
+`MXF_MEMORY_BACKFILL_TIMEOUT_MS` (default 300000 ms) and ends the backfill — a
+silent server is a transport that is not working. The bound is per batch and
+larger than the per-request one because the server indexes a batch one
+message at a time, with an embedding call and a Meilisearch task wait each.
+A live index request is bounded by `MXF_MEMORY_REQUEST_TIMEOUT_MS` (default
+60000 ms) instead; one that gets no answer ends the index drain, and the
+queued messages are indexed from persisted history at the next memory load.
 Conversation memory is loaded from MongoDB regardless; only the search index
 over old messages is left incomplete. It is reported three ways:
 

@@ -240,6 +240,24 @@ OPENROUTER_SLOW_REQUEST_WARN_MS    WARN when a request is still in flight past t
                                    model, agent, and request size — makes slow-vs-hung visible in logs.
 ```
 
+**SDK request bounds (agent socket):**
+```
+MXF_MEMORY_REQUEST_TIMEOUT_MS      Max wait for the server's answer to a memory save or load, or to a
+                                   search-index request (default 60000). A request settles on the answer,
+                                   on a socket drop, or on cancellation — while the socket stays up and the
+                                   server stays silent nothing else settled it, and disconnect() waits on
+                                   queued saves, so a server that stopped answering held disconnect() open
+                                   for good. Past the bound the request fails loudly and is not retried; a
+                                   silent index request ends the drain and the queue is re-indexed from
+                                   persisted history at the next memory load.
+MXF_MEMORY_BACKFILL_TIMEOUT_MS     Max wait for the server's answer to one backfill batch (default 300000).
+                                   The server indexes a batch one message at a time — an embedding call
+                                   and a Meilisearch task wait each — so a full 50-message batch takes far
+                                   longer than one live request and gets its own bound. A silent batch
+                                   ends the backfill; it is reported like any other backfill failure and
+                                   cannot fail connect().
+```
+
 See `.env.example` or config files in `packages/core/src/config/` for full variable listings and defaults.
 
 ## Boy Scout rule
