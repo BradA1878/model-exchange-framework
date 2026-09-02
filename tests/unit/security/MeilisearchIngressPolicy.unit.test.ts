@@ -293,6 +293,7 @@ describe('Meilisearch socket ingress policy', () => {
                 indexedDocuments: 1,
                 failedDocuments: 50,
                 skippedDocuments: 0,
+                alreadyIndexedDocuments: 1,
                 success: false,
                 error: 'backfill content exceeds 262144 bytes'
             }),
@@ -308,6 +309,7 @@ describe('Meilisearch socket ingress policy', () => {
             indexedDocuments: 1,
             failedDocuments: 50,
             skippedDocuments: 0,
+            alreadyIndexedDocuments: 1,
             success: false,
             source: 'mongodb',
             error: 'backfill content exceeds 262144 bytes',
@@ -324,6 +326,9 @@ describe('Meilisearch socket ingress policy', () => {
         expect(() => authorize({ ...base, indexedDocuments: 2 })).toThrow('counts');
         expect(() => authorize({ ...base, failedDocuments: -1 })).toThrow('counts');
         expect(() => authorize({ ...base, totalDocuments: 1.5 })).toThrow('counts');
+        // Already-indexed documents are a subset of the indexed ones.
+        expect(() => authorize({ ...base, alreadyIndexedDocuments: 2 })).toThrow('already indexed');
+        expect(() => authorize({ ...base, alreadyIndexedDocuments: -1 })).toThrow('counts');
         expect(() => authorize({ ...base, success: 'yes' })).toThrow('success');
         expect(() => authorize({ ...base, error: 'x'.repeat(1025) })).toThrow('error');
         expect(() => authorize({ ...base, source: 'disk' })).toThrow('source');

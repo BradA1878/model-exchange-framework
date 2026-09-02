@@ -62,6 +62,13 @@ export interface MemoryManagerConfig {
     enablePersistence: boolean;
     enableDeduplication?: boolean;
     maxMessageSize?: number; // Max size in bytes for a single message (default: 100KB)
+    /**
+     * Send persisted history to the search index at load (default true).
+     * false for an agent whose history is intentionally ephemeral: nothing
+     * old is indexed, the load still reports as settled, and the agent is
+     * ready for the search tools over what it indexes live.
+     */
+    backfillSearchIndexOnLoad?: boolean;
 }
 
 export interface ConversationMessageInput {
@@ -91,6 +98,8 @@ interface BackfillOutcome {
     indexedDocuments: number;
     failedDocuments: number;
     skippedDocuments: number;
+    /** Documents the index already had; counted in indexedDocuments, not indexed again. */
+    alreadyIndexedDocuments: number;
     errors: string[];
 }
 
@@ -294,9 +303,12 @@ export class MxfMemoryManager {
             // Persisted history is indexed for search, not restored into the
             // prompt (old turns would read as current). It is sent only on a
             // first load: after a reconnect the working history is non-empty
-            // and the live path already indexed it. Every load reports how it
-            // settled, so the server can mark the agent ready for search tools.
-            if (this.conversationHistory.length === 0 && persistedHistory.length > 0 && this.meilisearchService) {
+            // and the live path already indexed it. An agent configured with
+            // backfillSearchIndexOnLoad: false never sends it. Every load
+            // reports how it settled, so the server can mark the agent ready
+            // for search tools.
+            if (this.conversationHistory.length === 0 && persistedHistory.length > 0 && this.meilisearchService &&
+                this.config.backfillSearchIndexOnLoad !== false) {
                 await this.backfillConversationsToMeilisearch(persistedHistory);
             } else {
                 this.emitMeilisearchReady();
@@ -1194,10 +1206,10 @@ export class MxfMemoryManager {
      * a search-index problem, not a reason to fail agent startup; conversation
      * memory is already loaded from MongoDB by the time this runs.
      */
-    private async sendBackfillBatch(payload: BaseEventPayload<MeilisearchBackfillEventData>): Promise<void> {
+    private async sendBackfillBatch(payload: BaseEventPayload<MeilisearchBackfillEventData>): Promise<MeilisearchBackfillEventData> {
         for (;;) {
             try {
-                await this.awaitMeilisearchOperation(
+                const answer = await this.awaitMeilisearchOperation(
                     MeilisearchEvents.BACKFILL_REQUEST,
                     payload,
                     [MeilisearchEvents.BACKFILL_COMPLETE],
@@ -1206,7 +1218,7 @@ export class MxfMemoryManager {
                         MeilisearchEvents.BACKFILL_ERROR
                     ]
                 );
-                return;
+                return answer;
             } catch (error) {
                 if (error instanceof MeilisearchIndexRejectedError && error.retryAfterMs !== null) {
                     this.logger.warn(
@@ -1255,7 +1267,7 @@ export class MxfMemoryManager {
         );
         if (messages.length === 0) {
             this.reportBackfillOutcome(
-                { totalDocuments: 0, indexedDocuments: 0, failedDocuments: 0, skippedDocuments: 0, errors: [] }
+                { totalDocuments: 0, indexedDocuments: 0, failedDocuments: 0, skippedDocuments: 0, alreadyIndexedDocuments: 0, errors: [] }
             );
             return;
         }
@@ -1277,6 +1289,7 @@ export class MxfMemoryManager {
                 indexedDocuments: 0,
                 failedDocuments: messages.length,
                 skippedDocuments: 0,
+                alreadyIndexedDocuments: 0,
                 errors: [error instanceof Error ? error.message : String(error)]
             });
         }
@@ -1306,6 +1319,7 @@ export class MxfMemoryManager {
             indexedDocuments: 0,
             failedDocuments: 0,
             skippedDocuments: plan.skipped.length,
+            alreadyIndexedDocuments: 0,
             errors: []
         };
 
@@ -1314,8 +1328,9 @@ export class MxfMemoryManager {
             const payload = this.buildBackfillBatchPayload(batch);
 
             try {
-                await this.sendBackfillBatch(payload);
+                const answer = await this.sendBackfillBatch(payload);
                 outcome.indexedDocuments += batch.length;
+                outcome.alreadyIndexedDocuments += answer.alreadyIndexedDocuments ?? 0;
             } catch (error) {
                 const message = error instanceof Error ? error.message : String(error);
                 outcome.errors.push(message);
@@ -1360,6 +1375,7 @@ export class MxfMemoryManager {
             indexedDocuments: 0,
             failedDocuments: 0,
             skippedDocuments: 0,
+            alreadyIndexedDocuments: 0,
             errors: []
         };
 
@@ -1368,7 +1384,16 @@ export class MxfMemoryManager {
             for (let i = 0; i < messages.length; i += batchSize) {
                 const batch = messages.slice(i, i + batchSize);
 
+                // Same reason as the server's backfill handler: documents the live path
+                // indexed on an earlier connect are still there, and asking is cheaper
+                // than indexing again. A lookup failure ends the backfill like any other.
+                const alreadyIndexed = await service.findIndexedConversationIds(batch.map(message => message.id));
                 for (const message of batch) {
+                    if (alreadyIndexed.has(message.id)) {
+                        indexedCount++;
+                        outcome.alreadyIndexedDocuments++;
+                        continue;
+                    }
                     await service.indexConversation({
                         id: message.id,
                         role: message.role,
@@ -1445,12 +1470,19 @@ export class MxfMemoryManager {
                         totalDocuments: outcome.totalDocuments,
                         indexedDocuments: outcome.indexedDocuments,
                         failedDocuments: outcome.failedDocuments,
-                        skippedDocuments: outcome.skippedDocuments
+                        skippedDocuments: outcome.skippedDocuments,
+                        alreadyIndexedDocuments: outcome.alreadyIndexedDocuments
                     }
                 )
             );
         }
 
+        if (outcome.alreadyIndexedDocuments > 0) {
+            this.logger.info(
+                `Agent ${this.agentId}: ${outcome.alreadyIndexedDocuments} of ${outcome.totalDocuments} backfill messages ` +
+                'were already in the search index and were not indexed again'
+            );
+        }
         const summaryError = outcome.errors[0] ?? (
             outcome.skippedDocuments > 0
                 ? `${outcome.skippedDocuments} message(s) skipped for exceeding the per-message limit`
@@ -1464,6 +1496,7 @@ export class MxfMemoryManager {
             indexedDocuments: outcome.indexedDocuments,
             failedDocuments: outcome.failedDocuments,
             skippedDocuments: outcome.skippedDocuments,
+            alreadyIndexedDocuments: outcome.alreadyIndexedDocuments,
             duration: 0,
             success,
             source,
@@ -1719,7 +1752,7 @@ export class MxfMemoryManager {
      */
     private emitMeilisearchReady(): void {
         this.reportBackfillOutcome(
-            { totalDocuments: 0, indexedDocuments: 0, failedDocuments: 0, skippedDocuments: 0, errors: [] },
+            { totalDocuments: 0, indexedDocuments: 0, failedDocuments: 0, skippedDocuments: 0, alreadyIndexedDocuments: 0, errors: [] },
             'memory'
         );
     }

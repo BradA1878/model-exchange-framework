@@ -171,11 +171,35 @@ describe('TaskCompletionMonitoringService correctness', () => {
         expect(secondTransition).not.toHaveBeenCalled();
     });
 
+    it('counts a failed tool call as activity but never as an output', async () => {
+        // The agent is not stalled — it acted and the tool failed — but a failure
+        // produced nothing an output-based strategy may count.
+        const transition = jest.fn();
+        service.startMonitoring(task('channel-a'), outputConfig, transition);
+        await Promise.resolve();
+        const before = service.getMonitoringStatus('channel-a', 'same-task');
+        jest.setSystemTime(5_000);
+
+        deliver(Events.Mcp.TOOL_ERROR, {
+            agentId: 'worker',
+            channelId: 'channel-a',
+            data: { toolName: 'verified_tool', callId: 'call-3', error: 'Tool execution error: unreachable' }
+        });
+
+        const after = service.getMonitoringStatus('channel-a', 'same-task');
+        expect(after.activityCount).toBe((before.activityCount ?? 0) + 1);
+        expect(after.lastActivityTime).toBe(5_000);
+        await jest.advanceTimersByTimeAsync(30_000);
+        expect(transition).not.toHaveBeenCalled();
+        expect(service.getMonitoringStatus('channel-a', 'same-task').active).toBe(true);
+    });
+
     it('owns and tears down its official EventBus subscriptions and timers', () => {
         service.startMonitoring(task('channel-a'), outputConfig, jest.fn());
 
         expect(mockHandlers.has(Events.Message.AGENT_MESSAGE_DELIVERED)).toBe(true);
         expect(mockHandlers.has(Events.Mcp.TOOL_RESULT)).toBe(true);
+        expect(mockHandlers.has(Events.Mcp.TOOL_ERROR)).toBe(true);
         expect(mockHandlers.has(Events.Plan.PLAN_STEP_COMPLETED)).toBe(true);
         expect(jest.getTimerCount()).toBe(1);
 

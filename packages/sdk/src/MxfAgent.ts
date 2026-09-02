@@ -257,7 +257,8 @@ export class MxfAgent extends MxfClient {
             maxHistory: this.modelConfig.maxHistory!,
             maxObservations: this.modelConfig.maxObservations!,
             enablePersistence: true,
-            maxMessageSize: this.modelConfig.maxMessageSize
+            maxMessageSize: this.modelConfig.maxMessageSize,
+            backfillSearchIndexOnLoad: this.modelConfig.backfillSearchIndexOnLoad
         };
         this.memoryManager = new MxfMemoryManager(memoryConfig);
         

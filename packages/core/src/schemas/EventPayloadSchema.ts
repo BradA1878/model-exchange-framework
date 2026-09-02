@@ -3227,6 +3227,7 @@ export interface MeilisearchBackfillEventData {
     indexedDocuments: number;     // Number of documents successfully indexed
     failedDocuments: number;      // Number of documents that failed to index
     skippedDocuments?: number;    // Documents the SDK never sent because they exceed the per-message limit
+    alreadyIndexedDocuments?: number; // Documents the index already had and were not indexed again (counted in indexedDocuments)
     duration: number;             // Total time taken in milliseconds
     success: boolean;             // Whether backfill completed successfully
     source: 'mongodb' | 'memory' | 'other'; // Source of backfilled data

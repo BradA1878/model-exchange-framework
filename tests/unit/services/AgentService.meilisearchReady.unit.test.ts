@@ -97,6 +97,22 @@ describe('AgentService Meilisearch readiness', () => {
         expect(mockLoggerError).toHaveBeenCalledWith(expect.stringContaining('backfill content exceeds'));
     });
 
+    it('says how many of the settled messages the index already had', () => {
+        // A long-lived history is mostly indexed by the live path on earlier
+        // connects; the log shows the backfill did not pay for it again.
+        service.registerAgent('agent-a');
+
+        reportSettled('agent-a', {
+            totalDocuments: 329,
+            indexedDocuments: 329,
+            alreadyIndexedDocuments: 320,
+            source: 'mongodb'
+        });
+
+        expect(service.getAgent('agent-a')?.meilisearchReady).toBe(true);
+        expect(mockLoggerInfo).toHaveBeenCalledWith(expect.stringContaining('329 of 329 messages indexed (320 already in the index)'));
+    });
+
     it('leaves an agent not ready when a settled load indexed nothing it had to index', () => {
         service.registerAgent('agent-a');
 

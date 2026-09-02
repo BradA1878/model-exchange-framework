@@ -16,9 +16,11 @@
 const mockWaitTask = jest.fn();
 const mockAddDocuments = jest.fn();
 const mockSearch = jest.fn();
+const mockGetDocument = jest.fn();
 const mockIndex = jest.fn(() => ({
     addDocuments: mockAddDocuments,
-    search: mockSearch
+    search: mockSearch,
+    getDocument: mockGetDocument
 }));
 
 jest.mock('meilisearch', () => ({
@@ -69,6 +71,47 @@ describe('MxfMeilisearchService', () => {
     });
 
     afterAll(resetSingleton);
+
+    describe('findIndexedConversationIds', () => {
+        // The on-load backfill re-sent every persisted message on every
+        // connect, paying an embedding call and an index task again for
+        // documents the live path had indexed earlier. One GET by primary
+        // key per document tells the caller which ones to skip.
+        const notFound = (): Error => Object.assign(new Error('Document `x` not found.'), {
+            cause: { message: 'Document `x` not found.', code: 'document_not_found', type: 'invalid_request', link: '' }
+        });
+
+        it('returns the ids the index has and leaves out the ones it reports as not found', async () => {
+            const service = makeService();
+            mockGetDocument.mockImplementation(async (id: string) => {
+                if (id === 'message-2') {
+                    throw notFound();
+                }
+                return { id };
+            });
+
+            await expect(service.findIndexedConversationIds(['message-1', 'message-2', 'message-3']))
+                .resolves.toEqual(new Set(['message-1', 'message-3']));
+
+            expect(mockIndex).toHaveBeenCalledWith(MeilisearchIndex.CONVERSATIONS);
+            expect(mockGetDocument).toHaveBeenCalledTimes(3);
+            expect(mockGetDocument).toHaveBeenCalledWith('message-2', { fields: ['id'] });
+        });
+
+        it('throws any error other than a missing document, so an unreachable index fails the caller loudly', async () => {
+            const service = makeService();
+            mockGetDocument.mockRejectedValue(new Error('connect ECONNREFUSED 127.0.0.1:7700'));
+
+            await expect(service.findIndexedConversationIds(['message-1'])).rejects.toThrow('ECONNREFUSED');
+        });
+
+        it('asks nothing for an empty list', async () => {
+            const service = makeService();
+
+            await expect(service.findIndexedConversationIds([])).resolves.toEqual(new Set());
+            expect(mockGetDocument).not.toHaveBeenCalled();
+        });
+    });
 
     describe('indexConversation', () => {
         it('indexes a conversation with the vector the generator returned', async () => {

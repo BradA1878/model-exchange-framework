@@ -408,6 +408,35 @@ export class MxfMeilisearchService {
     }
 
     /**
+     * Which of these conversation document ids the index already has.
+     *
+     * The on-load backfill sent every persisted message on every connect,
+     * paying an embedding call and an index task again for documents the
+     * live path had indexed on an earlier connect. One GET by primary key
+     * per document (the id is not a filterable attribute) is cheap next to
+     * that. A missing document is the normal answer; any other failure —
+     * Meilisearch unreachable, a bad key — is thrown to the caller.
+     */
+    public async findIndexedConversationIds(ids: readonly string[]): Promise<Set<string>> {
+        const index = this.client.index(MeilisearchIndex.CONVERSATIONS);
+        const present = await Promise.all(ids.map(async (id): Promise<string | null> => {
+            try {
+                await index.getDocument(id, { fields: ['id'] });
+                return id;
+            } catch (error) {
+                // meilisearch-js carries the server's error body as `cause`;
+                // `document_not_found` is the answer for an id the index lacks.
+                const code = (error as { cause?: { code?: unknown } }).cause?.code;
+                if (code === 'document_not_found') {
+                    return null;
+                }
+                throw error;
+            }
+        }));
+        return new Set(present.filter((id): id is string => id !== null));
+    }
+
+    /**
      * Index a conversation message.
      *
      * Throws when the embedding cannot be generated, the document cannot be

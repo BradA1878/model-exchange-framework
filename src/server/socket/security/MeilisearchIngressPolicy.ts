@@ -246,8 +246,13 @@ const authorizeSettledReport = (
     const indexedDocuments = readCount('indexedDocuments');
     const failedDocuments = readCount('failedDocuments');
     const skippedDocuments = readCount('skippedDocuments', 0);
+    const alreadyIndexedDocuments = readCount('alreadyIndexedDocuments', 0);
     if (indexedDocuments + failedDocuments + skippedDocuments !== totalDocuments) {
         throw new Error('settled counts must add up: indexed + failed + skipped = total');
+    }
+    // Documents the index already had are a subset of the indexed ones.
+    if (alreadyIndexedDocuments > indexedDocuments) {
+        throw new Error('settled counts must add up: already indexed cannot exceed indexed');
     }
     if (typeof rawData.success !== 'boolean') {
         throw new Error('settled success must be a boolean');
@@ -271,6 +276,7 @@ const authorizeSettledReport = (
         indexedDocuments,
         failedDocuments,
         skippedDocuments,
+        alreadyIndexedDocuments,
         duration: 0,
         success: rawData.success,
         source: rawData.source,

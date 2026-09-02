@@ -190,6 +190,12 @@ export const setupMeilisearchHandlers = (): void => {
 
             // Get Meilisearch service instance (server has embedding generator)
             const meilisearch = MxfMeilisearchService.getInstance();
+            // Documents the live path indexed on an earlier connect are still in
+            // the index. Asking is one GET each; indexing again is an embedding
+            // call and an index task each — paid for the whole history on every
+            // connect before this.
+            const alreadyIndexed = await meilisearch.findIndexedConversationIds(messages.map(message => message.id));
+            let alreadyIndexedCount = 0;
 
             // Index messages in batches
             const batchSize = Math.min(25, messages.length);
@@ -197,6 +203,11 @@ export const setupMeilisearchHandlers = (): void => {
                 const batch = messages.slice(i, i + batchSize);
 
                 for (const message of batch) {
+                    if (alreadyIndexed.has(message.id)) {
+                        indexedCount++;
+                        alreadyIndexedCount++;
+                        continue;
+                    }
                     const messageStartTime = Date.now();
                     try {
                         await meilisearch.indexConversation({
@@ -246,6 +257,12 @@ export const setupMeilisearchHandlers = (): void => {
             }
 
             const duration = Date.now() - startTime;
+            if (alreadyIndexedCount > 0) {
+                logger.info(
+                    `Backfill ${operationId}: ${alreadyIndexedCount} of ${messages.length} documents were already ` +
+                    'in the index and were not indexed again'
+                );
+            }
             const success = failedCount === 0;
 
             // Emit backfill event back to SDK
@@ -254,6 +271,7 @@ export const setupMeilisearchHandlers = (): void => {
                 indexName: 'mxf-conversations',
                 totalDocuments: messages.length,
                 indexedDocuments: indexedCount,
+                alreadyIndexedDocuments: alreadyIndexedCount,
                 failedDocuments: failedCount,
                 duration,
                 success,

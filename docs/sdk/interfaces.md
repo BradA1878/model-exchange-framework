@@ -47,6 +47,7 @@ export interface AgentCreationConfig {
     useMessageAggregate?: boolean;           // Enable message aggregation
     maxIterations?: number;                  // Max LLM iterations per task (default: 10)
     disableTaskHandling?: boolean;           // Disable automatic task handling
+    backfillSearchIndexOnLoad?: boolean;     // Send persisted history to the search index at connect (default: true)
 
     // Optional: MXP settings
     mxpEnabled?: boolean;                    // Enable MXP protocol

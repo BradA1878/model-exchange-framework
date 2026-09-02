@@ -61,6 +61,13 @@ caller; overlapping saves are serialized so an older write cannot overwrite a ne
 state. Do not construct `MxfMemoryManager` yourself—the agent supplies its identity,
 memory service, indexing context, and cleanup ownership.
 
+Agent memory is owned by the server. It serves memory from an in-process cache
+and reads the database only on a miss, so a change written straight to the
+collection — clearing an agent's `conversationHistory` in Mongo, say — is not
+seen until the server restarts. Clear or change history through the SDK
+(`clearConversationHistory()`) or the REST route (`DELETE
+/api/agents/:agentId/memory`), never by writing to the collection.
+
 At `connect()`, persisted history is also sent to the search index in the
 background of the load. A search-index problem there — a rejected batch, a
 skipped oversized message — is reported on `Events.Agent.ERROR` with
@@ -68,6 +75,12 @@ skipped oversized message — is reported on `Events.Agent.ERROR` with
 memory itself is already loaded by the time backfill runs. The settled load is
 reported to the server, which then lists the `memory_search_*` tools for the
 agent; the agent reloads its tool list before building its system prompt.
+Messages the index already has — indexed by the live path on an earlier
+connect — are not indexed again; the load summary and the settled report count
+them as `alreadyIndexedDocuments`. An agent whose history is intentionally
+ephemeral can set `backfillSearchIndexOnLoad: false` in its config: nothing old
+is indexed, the load still reports as settled, and the agent is ready for the
+search tools over what it indexes live.
 
 For shared channel memory, use `agent.mxfService.getSharedMemory()`,
 `updateSharedMemory()`, and the atomic append method documented in

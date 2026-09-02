@@ -164,6 +164,15 @@ const result = await agent.executeTool({
 console.log('Search results:', result);
 ```
 
+### Tool errors
+
+`executeTool()` rejects when the tool failed: the server answers a thrown
+handler error or a `defineTool` failure envelope with `Events.Mcp.TOOL_ERROR`,
+and the call throws with that message. Inside the agent's generation loop the
+same failure becomes the tool's result for the model, which gets another turn
+to correct the call — a `task_complete` without a summary is retried by the
+model, not taken for a completion.
+
 ### List Available Tools
 
 ```typescript

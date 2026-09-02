@@ -13,6 +13,7 @@ process.env.ENABLE_MEILISEARCH = 'false';
 const updateAgentMemoryMock = jest.fn();
 const getAgentMemoryMock = jest.fn();
 const indexConversationMock = jest.fn();
+const findIndexedConversationIdsMock = jest.fn();
 
 jest.mock('@mxf-dev/sdk/services/MxfMemoryService', () => ({
     MxfMemoryService: {
@@ -25,8 +26,12 @@ jest.mock('@mxf-dev/sdk/services/MxfMemoryService', () => ({
 
 jest.mock('@mxf-dev/core/services/MxfMeilisearchService', () => ({
     MxfMeilisearchService: {
-        getInstance: (): { indexConversation: typeof indexConversationMock } => ({
-            indexConversation: indexConversationMock
+        getInstance: (): {
+            indexConversation: typeof indexConversationMock;
+            findIndexedConversationIds: typeof findIndexedConversationIdsMock;
+        } => ({
+            indexConversation: indexConversationMock,
+            findIndexedConversationIds: findIndexedConversationIdsMock
         })
     }
 }));
@@ -134,6 +139,8 @@ describe('MxfMemoryManager', () => {
         getAgentMemoryMock.mockReturnValue(of(persistedMemory()));
         indexConversationMock.mockReset();
         indexConversationMock.mockResolvedValue(undefined);
+        findIndexedConversationIdsMock.mockReset();
+        findIndexedConversationIdsMock.mockResolvedValue(new Set());
     });
 
     afterEach(() => {
@@ -791,6 +798,87 @@ describe('MxfMemoryManager', () => {
 
             expect(initialized).toBe(true);
             expect(jest.getTimerCount()).toBe(0);
+        });
+
+        it('skips the on-load backfill when backfillSearchIndexOnLoad is false, and still reports the load as settled', async () => {
+            // An agent whose history is intentionally ephemeral has nothing old
+            // worth indexing; the settled report still makes it ready for the
+            // search tools over what it indexes live.
+            enableSemanticSearch();
+            connectAgentSocket();
+            getAgentMemoryMock.mockReturnValue(of(persistedMemory([
+                makeMessage('historical-1', 'user', 'history', 1)
+            ])));
+            const emitOn = jest.spyOn(EventBus.client, 'emitOn').mockImplementation(() => undefined);
+            const manager = makeManager({ backfillSearchIndexOnLoad: false });
+
+            await expect(manager.initialize()).resolves.toBeUndefined();
+
+            expect(emitOn).not.toHaveBeenCalledWith(expect.anything(), MeilisearchEvents.BACKFILL_REQUEST, expect.anything());
+            const settled = emitOn.mock.calls.filter(call => call[1] === MeilisearchEvents.BACKFILL_SETTLED);
+            expect(settled).toHaveLength(1);
+            expect((settled[0][2] as BaseEventPayload<MeilisearchBackfillEventData>).data).toEqual(
+                expect.objectContaining({ totalDocuments: 0, indexedDocuments: 0, failedDocuments: 0, success: true })
+            );
+        });
+
+        it('does not index again what the index already has, on the keyword path', async () => {
+            process.env.ENABLE_MEILISEARCH = 'true';
+            process.env.MEILISEARCH_HOST = 'http://meilisearch.test';
+            process.env.MEILISEARCH_MASTER_KEY = 'test-key';
+            connectAgentSocket();
+            getAgentMemoryMock.mockReturnValue(of(persistedMemory([
+                makeMessage('historical-1', 'user', 'one', 1),
+                makeMessage('historical-2', 'user', 'two', 2),
+                makeMessage('historical-3', 'user', 'three', 3)
+            ])));
+            findIndexedConversationIdsMock.mockResolvedValue(new Set(['historical-2']));
+            const summaries: BackfillSummaryData[] = [];
+            EventBus.client.on(MeilisearchEvents.BACKFILL_COMPLETE, (payload) => { summaries.push(payload.data); });
+            jest.spyOn(EventBus.client, 'emitOn').mockImplementation(() => undefined);
+            const manager = makeManager();
+
+            await expect(manager.initialize()).resolves.toBeUndefined();
+
+            expect(findIndexedConversationIdsMock).toHaveBeenCalledWith(['historical-1', 'historical-2', 'historical-3']);
+            expect(indexConversationMock).toHaveBeenCalledTimes(2);
+            expect(indexConversationMock).not.toHaveBeenCalledWith(expect.objectContaining({ id: 'historical-2' }));
+            expect(summaries).toHaveLength(1);
+            expect(summaries[0]).toEqual(expect.objectContaining({
+                totalDocuments: 3, indexedDocuments: 3, alreadyIndexedDocuments: 1, failedDocuments: 0, success: true
+            }));
+        });
+
+        it('carries the server\'s already-indexed count into the load summary and the settled report', async () => {
+            enableSemanticSearch();
+            connectAgentSocket();
+            getAgentMemoryMock.mockReturnValue(of(persistedMemory([
+                makeMessage('historical-1', 'user', 'one', 1),
+                makeMessage('historical-2', 'user', 'two', 2)
+            ])));
+            const summaries: BackfillSummaryData[] = [];
+            EventBus.client.on(MeilisearchEvents.BACKFILL_COMPLETE, (payload) => { summaries.push(payload.data); });
+            const emitOn = jest.spyOn(EventBus.client, 'emitOn').mockImplementation((_agentId, eventName, rawPayload) => {
+                if (eventName !== MeilisearchEvents.BACKFILL_REQUEST) {
+                    return;
+                }
+                const payload = rawPayload as BaseEventPayload<MeilisearchBackfillEventData>;
+                EventBus.client.emitLocal(MeilisearchEvents.BACKFILL_COMPLETE, createMeilisearchBackfillEventPayload(
+                    MeilisearchEvents.BACKFILL_COMPLETE, 'test-agent', 'test-channel',
+                    { ...payload.data, indexedDocuments: payload.data.totalDocuments, alreadyIndexedDocuments: 1, success: true }
+                ));
+            });
+            const manager = makeManager();
+
+            await expect(manager.initialize()).resolves.toBeUndefined();
+
+            // Both the server's per-batch answer and the SDK's load summary arrive
+            // as BACKFILL_COMPLETE locally; the summary is the one from the manager.
+            const summary = summaries.find(data => data.totalDocuments === 2 && data.duration === 0);
+            expect(summary).toEqual(expect.objectContaining({ indexedDocuments: 2, alreadyIndexedDocuments: 1, success: true }));
+            const settled = emitOn.mock.calls.filter(call => call[1] === MeilisearchEvents.BACKFILL_SETTLED);
+            expect(settled).toHaveLength(1);
+            expect((settled[0][2] as BaseEventPayload<MeilisearchBackfillEventData>).data.alreadyIndexedDocuments).toBe(1);
         });
 
         it('retries a throttled backfill batch after the server\'s delay', async () => {

@@ -662,6 +662,21 @@ export const tools_recommend = {
 };
 
 /**
+ * The task_complete rejection for a call with no usable summary or result.
+ * Lists the parameters that did arrive (a blank summary or result counts as
+ * received but empty) so the model can add the missing one.
+ */
+const describeMissingSummary = (input: Record<string, unknown>): string => {
+    const received = Object.keys(input)
+        .filter(key => input[key] !== undefined)
+        .map(key => (key === 'summary' || key === 'result') ? `${key} (empty)` : key);
+    return 'Task completion summary or result is required: pass "summary" (prose, or an object stored as JSON) ' +
+        'or "result". ' +
+        (received.length > 0 ? `Received only: ${received.join(', ')}. ` : 'Received no parameters. ') +
+        'Call task_complete again with a summary.';
+};
+
+/**
  * Task completion tool - signal when an assigned task is complete
  */
 export const task_complete = {
@@ -719,9 +734,12 @@ export const task_complete = {
         // Validate context (but be forgiving on input)
         validator.assertIsNonEmptyString(context.agentId, 'agentId is required');
         validator.assertIsNonEmptyString(context.channelId, 'channelId is required');
-        validator.assertIsNonEmptyString(summaryText, 'completion summary or result is required');
-        if (summaryText === undefined) {
-            throw new Error('Task completion summary or result is required');
+        // The rejection is the model's only guidance for its next turn, so it
+        // says what arrived and what is missing. A model that fills details and
+        // nextSteps and drops the summary (seen in production) then knows what
+        // to send instead of guessing.
+        if (summaryText === undefined || summaryText.trim().length === 0) {
+            throw new Error(describeMissingSummary(input));
         }
         if (typeof context.agentId !== 'string' || typeof context.channelId !== 'string') {
             throw new Error('Task completion requires exact authenticated agent and channel identity');

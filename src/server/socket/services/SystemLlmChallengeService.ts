@@ -53,6 +53,7 @@ import {
     createSystemLlmChallengeIssuedEventPayload,
     type AgentMessageDeliveredEventPayload,
     type ChannelMessageEventPayload,
+    type McpToolErrorEventPayload,
     type McpToolResultEventPayload
 } from '@mxf-dev/core/schemas/EventPayloadSchema';
 import { ConfigManager } from '@mxf-dev/core/config/ConfigManager';
@@ -155,6 +156,9 @@ export class SystemLlmChallengeService {
         this.subscriptions.push(
             EventBus.server.on(Events.Mcp.TOOL_RESULT, payload => {
                 this.recordToolResult(payload as McpToolResultEventPayload);
+            }),
+            EventBus.server.on(Events.Mcp.TOOL_ERROR, payload => {
+                this.recordToolFailure(payload as McpToolErrorEventPayload);
             }),
             EventBus.server.on(Events.Message.AGENT_MESSAGE_DELIVERED, payload => {
                 const event = payload as AgentMessageDeliveredEventPayload;
@@ -583,16 +587,33 @@ export class SystemLlmChallengeService {
             typeof event.data?.toolName !== 'string') {
             return;
         }
-        if (!this.collectsEvidence(event.channelId)) {
+        this.recordToolEvidence(event.channelId, event.agentId, event.data.toolName, serializeToolResult(event.data.result));
+    }
+
+    /**
+     * A failed tool call is evidence too. The executor answers a tool that
+     * threw or was refused with TOOL_ERROR, never TOOL_RESULT, so without this
+     * a critical stance would see only the calls that succeeded.
+     */
+    private recordToolFailure(event: McpToolErrorEventPayload): void {
+        if (typeof event.agentId !== 'string' || typeof event.channelId !== 'string' ||
+            typeof event.data?.toolName !== 'string') {
             return;
         }
-        const key = `${event.channelId}:${event.agentId}`;
+        this.recordToolEvidence(event.channelId, event.agentId, event.data.toolName, `failed: ${event.data.error}`);
+    }
+
+    private recordToolEvidence(channelId: string, agentId: string, toolName: string, result: string): void {
+        if (!this.collectsEvidence(channelId)) {
+            return;
+        }
+        const key = `${channelId}:${agentId}`;
         const buffer = this.toolCalls.get(key) ?? [];
         buffer.push({
-            agentId: event.agentId,
-            toolName: event.data.toolName,
+            agentId,
+            toolName,
             // Truncated at record time so the buffer is bounded in bytes, not just entries.
-            result: truncateEvidence(serializeToolResult(event.data.result), EVIDENCE_CAPS.toolResultChars)
+            result: truncateEvidence(result, EVIDENCE_CAPS.toolResultChars)
         });
         if (buffer.length > TOOL_CALL_BUFFER) {
             buffer.splice(0, buffer.length - TOOL_CALL_BUFFER);

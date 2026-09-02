@@ -4,7 +4,7 @@ Author: [Brad Anderson](brada1878@gmail.com)
 Copyright 2024-2026 Brad Anderson
 
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](http://www.apache.org/licenses/LICENSE-2.0)
-[![Version](https://img.shields.io/badge/version-3.2.2-blue.svg)](https://github.com/BradA1878/model-exchange-framework)
+[![Version](https://img.shields.io/badge/version-3.2.3-blue.svg)](https://github.com/BradA1878/model-exchange-framework)
 [![npm](https://img.shields.io/badge/npm-@mxf--dev%2Fsdk-red.svg)](https://www.npmjs.com/package/@mxf-dev/sdk)
 [![Bun](https://img.shields.io/badge/Bun-1.1+-green.svg)](https://bun.sh/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.0+-blue.svg)](https://www.typescriptlang.org/)

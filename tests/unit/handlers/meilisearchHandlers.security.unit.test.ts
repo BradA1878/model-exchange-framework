@@ -3,6 +3,7 @@ type AsyncEventHandler = (payload: unknown) => Promise<void>;
 const listeners = new Map<string, AsyncEventHandler>();
 const mockEmit = jest.fn();
 const mockIndexConversation = jest.fn();
+const mockFindIndexedConversationIds = jest.fn();
 
 jest.mock('@mxf-dev/core/events/EventBus', () => ({
     EventBus: {
@@ -16,8 +17,12 @@ jest.mock('@mxf-dev/core/events/EventBus', () => ({
 }));
 jest.mock('@mxf-dev/core/services/MxfMeilisearchService', () => ({
     MxfMeilisearchService: {
-        getInstance: (): { indexConversation: typeof mockIndexConversation } => ({
-            indexConversation: mockIndexConversation
+        getInstance: (): {
+            indexConversation: typeof mockIndexConversation;
+            findIndexedConversationIds: typeof mockFindIndexedConversationIds;
+        } => ({
+            indexConversation: mockIndexConversation,
+            findIndexedConversationIds: mockFindIndexedConversationIds
         })
     }
 }));
@@ -56,6 +61,7 @@ describe('Meilisearch server handler defense in depth', () => {
     beforeEach(() => {
         jest.clearAllMocks();
         mockIndexConversation.mockResolvedValue(undefined);
+        mockFindIndexedConversationIds.mockResolvedValue(new Set());
     });
 
     it('indexes only the deterministic authenticated namespace', async () => {
@@ -150,6 +156,70 @@ describe('Meilisearch server handler defense in depth', () => {
                     indexedDocuments: 2,
                     failedDocuments: 1,
                     success: false
+                })
+            })
+        );
+    });
+
+    const backfillRequest = (): Record<string, unknown> => ({
+        agentId: 'agent-a',
+        channelId: 'channel-a',
+        data: {
+            operationId: 'backfill-2',
+            indexName: 'mxf-conversations',
+            documentType: 'conversation',
+            metadata: {
+                messages: ['first', 'second', 'third'].map((content, index) => ({
+                    id: `message-${index}`,
+                    role: 'assistant',
+                    content,
+                    timestamp: index + 1
+                }))
+            }
+        }
+    });
+
+    it('indexes only the documents the index does not have and counts the rest as already indexed', async () => {
+        // The live path indexed the middle message on an earlier connect. Before
+        // this, every connect embedded and indexed the whole history again.
+        const namespaced = (id: string): string => namespaceMeilisearchDocumentId('channel-a', 'agent-a', id);
+        mockFindIndexedConversationIds.mockResolvedValue(new Set([namespaced('message-1')]));
+
+        await listeners.get(MeilisearchEvents.BACKFILL_REQUEST)!(backfillRequest());
+
+        expect(mockFindIndexedConversationIds).toHaveBeenCalledWith(
+            [namespaced('message-0'), namespaced('message-1'), namespaced('message-2')]
+        );
+        expect(mockIndexConversation).toHaveBeenCalledTimes(2);
+        expect(mockIndexConversation).not.toHaveBeenCalledWith(expect.objectContaining({ id: namespaced('message-1') }));
+        expect(mockEmit).toHaveBeenCalledWith(
+            MeilisearchEvents.BACKFILL_COMPLETE,
+            expect.objectContaining({
+                data: expect.objectContaining({
+                    operationId: 'backfill-2',
+                    totalDocuments: 3,
+                    indexedDocuments: 3,
+                    alreadyIndexedDocuments: 1,
+                    failedDocuments: 0,
+                    success: true
+                })
+            })
+        );
+    });
+
+    it('fails the batch loudly when the index cannot be asked what it has, indexing nothing', async () => {
+        mockFindIndexedConversationIds.mockRejectedValue(new Error('connect ECONNREFUSED 127.0.0.1:7700'));
+
+        await listeners.get(MeilisearchEvents.BACKFILL_REQUEST)!(backfillRequest());
+
+        expect(mockIndexConversation).not.toHaveBeenCalled();
+        expect(mockEmit).toHaveBeenCalledWith(
+            MeilisearchEvents.BACKFILL_ERROR,
+            expect.objectContaining({
+                data: expect.objectContaining({
+                    operationId: 'backfill-2',
+                    success: false,
+                    error: expect.stringContaining('ECONNREFUSED')
                 })
             })
         );

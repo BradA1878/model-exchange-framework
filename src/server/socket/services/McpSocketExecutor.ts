@@ -55,6 +55,32 @@ import {
 const validator = createStrictValidator('McpSocketExecutor');
 
 /**
+ * The failure a tool reported inside its result, or null for a success.
+ *
+ * defineTool marks failure with `isError` and carries a ToolError's data
+ * (`code`, `message`); the registry's wrapper for the older tools turns a
+ * thrown error into content of type 'error' whose data is the message.
+ */
+const describeToolResultFailure = (result: McpToolHandlerResult & { isError?: boolean }): string | null => {
+    const content = result.content as { type?: unknown; data?: unknown } | undefined;
+    const data = content?.data;
+    const asText = (): string => (typeof data === 'string' ? data : JSON.stringify(data));
+    if (result.isError === true) {
+        if (data && typeof data === 'object') {
+            const { code, message } = data as { code?: unknown; message?: unknown };
+            if (typeof message === 'string') {
+                return typeof code === 'string' ? `${code}: ${message}` : message;
+            }
+        }
+        return asText();
+    }
+    if (content?.type === 'error' || result.metadata?.error === true) {
+        return asText();
+    }
+    return null;
+};
+
+/**
  * Validates that event payload has required agentId and channelId
  * @param payload Event payload to validate
  * @param eventType Event type for error context
@@ -180,6 +206,27 @@ export class McpSocketExecutor {
                     const result = await firstValueFrom(
                         this.executeTool(payload.data.toolName, payload.data.arguments, context)
                     );
+                    // A handler reports failure inside its result — defineTool's isError
+                    // envelope, or the registry's wrapper for a thrown error — and only
+                    // `content` crosses the socket. Answer a failed tool with TOOL_ERROR so
+                    // the SDK rejects the call, the way it does for a throw here. Forwarded
+                    // as a result, the failure passed for a success and a rejected
+                    // task_complete ended the agent's turn with the task still open.
+                    const failure = describeToolResultFailure(result);
+                    if (failure !== null) {
+                        this.logger.error(`Tool ${payload.data.toolName} failed: ${failure}`);
+                        EventBus.server.emit(Events.Mcp.TOOL_ERROR, createMcpToolErrorPayload(
+                            Events.Mcp.TOOL_ERROR,
+                            payload.agentId,
+                            payload.channelId,
+                            {
+                                toolName: payload.data.toolName,
+                                callId: payload.data.callId,
+                                error: failure
+                            }
+                        ));
+                        return;
+                    }
                     EventBus.server.emit(Events.Mcp.TOOL_RESULT, createMcpToolResultPayload(
                         Events.Mcp.TOOL_RESULT,
                         payload.agentId,

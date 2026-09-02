@@ -680,6 +680,25 @@ describe('SystemLlmChallengeService', () => {
         return mockGenerateChallenge.mock.calls[mockGenerateChallenge.mock.calls.length - 1][2] as ChallengeEvidence;
     };
 
+    it('keeps a failed tool call as evidence too', async () => {
+        // The executor answers a tool that threw or was refused with TOOL_ERROR,
+        // never TOOL_RESULT; a critical stance has to see that the agent's
+        // fetch failed, not only the calls that succeeded.
+        mockGetStance.mockReturnValue('critical');
+        service.start();
+        deliver(Events.Mcp.TOOL_ERROR, {
+            agentId: 'a',
+            channelId: 'c',
+            data: { toolName: 'fetch_feed', callId: 'call-1', error: 'Tool execution error: feed unreachable' }
+        });
+
+        const evidence = await claimEvidence('c', 'a');
+
+        expect(evidence.toolCalls).toEqual([
+            { agentId: 'a', toolName: 'fetch_feed', result: 'failed: Tool execution error: feed unreachable' }
+        ]);
+    });
+
     it('quotes only broadcasts and the agent\'s own direct messages, never a private exchange between others', async () => {
         mockGetStance.mockReturnValue('critical');
         service.start();

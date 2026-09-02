@@ -200,6 +200,7 @@ const llmAgent = await sdk.createAgent({
 
     // Optional: Behavioral settings
     maxIterations: 15,                 // Max LLM iterations per task (default: 10)
+    backfillSearchIndexOnLoad: true,   // Index persisted history at connect; false for ephemeral history
 
     // Optional: MXP settings
     mxpEnabled: false,                 // Enable efficient binary messaging

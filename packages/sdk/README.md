@@ -89,6 +89,17 @@ Also, `agent.disconnect()` now waits for queued memory saves before closing the
 socket, so a consumer that disconnects on `task:completed` no longer sees the
 finished task reported as failed into the closed socket.
 
+3.2.3 (fixes; one new option): a tool the server rejected no longer passes for a
+success — the server answers a failed tool with `Events.Mcp.TOOL_ERROR` and
+`executeTool()` rejects, so in the agent loop a rejected `task_complete` (a summary
+the model dropped, say) gives the model the error and another turn instead of
+ending the task's turn with the task still open. The on-load search backfill no
+longer re-indexes messages the index already has (the live path indexed them on
+an earlier connect); the load summary reports them as `alreadyIndexedDocuments`.
+New `AgentConfig.backfillSearchIndexOnLoad` (default `true`): `false` skips the
+on-load backfill for an agent whose history is intentionally ephemeral; the agent
+is still ready for the search tools over what it indexes live.
+
 ### New in 3.1
 
 3.1 adds the SystemLLM stance. Nothing changes for existing code; the defaults

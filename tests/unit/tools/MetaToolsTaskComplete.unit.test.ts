@@ -178,6 +178,20 @@ describe('task_complete handler summary normalization', () => {
         expect(mockHandleTaskCompletion).not.toHaveBeenCalled();
     });
 
+    it('names what it received and what is missing when details arrive without a summary', async () => {
+        // Sentinel, 2026-09-01: the model filled details and nextSteps and dropped
+        // the summary. The rejection has to say what to send on the next turn.
+        await expect(task_complete.handler(
+            { details: { alertEvaluated: 'BTC breakout', tradesOpened: 0 }, nextSteps: 'Hold cash' },
+            context
+        )).rejects.toThrow(
+            'Task completion summary or result is required: pass "summary" (prose, or an object stored as JSON) ' +
+            'or "result". Received only: details, nextSteps. Call task_complete again with a summary.'
+        );
+
+        expect(mockHandleTaskCompletion).not.toHaveBeenCalled();
+    });
+
     it('falls through an empty-string summary to result (unchanged behavior)', async () => {
         await task_complete.handler({ summary: '', result: 'from result' }, context);
 

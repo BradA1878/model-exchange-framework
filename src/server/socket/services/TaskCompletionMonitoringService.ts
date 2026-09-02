@@ -23,6 +23,7 @@ import type { PlanStepCompletedEventData } from '@mxf-dev/core/events/event-defi
 import type {
     AgentMessageDeliveredEventPayload,
     BaseEventPayload,
+    McpToolErrorEventPayload,
     McpToolResultEventPayload
 } from '@mxf-dev/core/schemas/EventPayloadSchema';
 import { createTaskEventPayload } from '@mxf-dev/core/schemas/EventPayloadSchema';
@@ -315,6 +316,19 @@ export class TaskCompletionMonitoringService {
                 const key = this.findTaskForAgent(event.agentId, event.channelId);
                 if (key) {
                     this.recordToolCall(key, event.agentId, event.data.toolName, event.data.result);
+                }
+                })
+            );
+            this.eventSubscriptions.push(
+                EventBus.server.on(Events.Mcp.TOOL_ERROR, payload => {
+                const event = payload as McpToolErrorEventPayload;
+                if (typeof event.agentId !== 'string' || typeof event.channelId !== 'string' ||
+                    typeof event.data?.toolName !== 'string') {
+                    return;
+                }
+                const key = this.findTaskForAgent(event.agentId, event.channelId);
+                if (key) {
+                    this.recordToolFailure(key, event.agentId);
                 }
                 })
             );
@@ -708,6 +722,19 @@ export class TaskCompletionMonitoringService {
             return;
         }
         state.evidence.toolCalls.push({ agentId, toolName, result, timestamp: Date.now() });
+        this.recordActivity(state, agentId, 'tool');
+    }
+
+    /**
+     * A failed tool call is activity — the agent acted; it is not stalled — but
+     * it produced nothing an output-based strategy may count, so it is not
+     * evidence. The executor answers a failed tool with TOOL_ERROR only.
+     */
+    private recordToolFailure(key: string, agentId: string): void {
+        const state = this.entries.get(key)?.state;
+        if (!state) {
+            return;
+        }
         this.recordActivity(state, agentId, 'tool');
     }
 

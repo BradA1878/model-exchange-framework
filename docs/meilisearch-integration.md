@@ -288,6 +288,21 @@ except system prompts (framework boilerplate, not conversation content) and
 turns with no text (an assistant turn that only calls a tool has nothing to
 search).
 
+Before a batch is embedded, the server asks the index which of its documents
+it already has (one GET by primary key per document) and indexes only the
+rest. The live path indexes every message as it is stored, so on the next
+connect most of the history is already there; before this, every connect paid
+an embedding call and an index task for the whole history again. The answer
+counts those documents in `indexedDocuments` and reports them separately as
+`alreadyIndexedDocuments`; a lookup that fails (Meilisearch unreachable) fails
+the batch like any other error. The keyword-only path does the same check
+from the SDK.
+
+An agent whose history is intentionally ephemeral can set
+`backfillSearchIndexOnLoad: false` in its `AgentConfig`: no batch is sent, the
+load still reports as settled, and the agent is ready for the search tools
+over what it indexes live.
+
 The SDK plans that history into batches against four limits, all defined once
 in `@mxf-dev/core/config/MeilisearchIngressLimits` and enforced again by the
 server's ingress policy on every request, so a batch the SDK plans is one the

@@ -222,6 +222,17 @@ export class McpToolHandlers extends McpHandler {
 
                         // If result has type and data fields (MCP format), extract the data
                         if (result && typeof result === 'object' && 'type' in result && 'data' in result) {
+                            // A server up to 3.2.2 answers a tool whose handler threw with a
+                            // result whose content type is 'error' (its registry wraps the throw
+                            // into a result envelope). That is a failed call, not a result:
+                            // unwrapping it to its message made a rejected task_complete look
+                            // like a completion.
+                            if (result.type === 'error') {
+                                reject(new Error(
+                                    typeof result.data === 'string' ? result.data : JSON.stringify(result.data)
+                                ));
+                                return;
+                            }
                             resolve(result.data);
                         } else {
                             // Legacy format or direct data

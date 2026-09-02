@@ -566,8 +566,11 @@ export class AgentService {
                     `${skipped} skipped for size)${reason}`
                 );
             } else {
+                const alreadyIndexed: number = data.alreadyIndexedDocuments ?? 0;
+                validator.assertIsNumber(alreadyIndexed, 'alreadyIndexedDocuments must be a number');
+                const reused = alreadyIndexed > 0 ? ` (${alreadyIndexed} already in the index)` : '';
                 this.logger.info(
-                    `Agent ${agentId} search backfill settled: ${data.indexedDocuments} of ${data.totalDocuments} messages indexed`
+                    `Agent ${agentId} search backfill settled: ${data.indexedDocuments} of ${data.totalDocuments} messages indexed${reused}`
                 );
             }
 

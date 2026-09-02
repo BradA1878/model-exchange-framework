@@ -89,6 +89,7 @@ export interface AgentConfig {
     maxTokens?: number;
     maxHistory?: number;
     maxMessageSize?: number;                // Max size in bytes for a single message (default: 100KB) - prevents MongoDB 16MB limit errors
+    backfillSearchIndexOnLoad?: boolean;    // Send persisted history to the search index at connect (default: true). false for an agent whose history is intentionally ephemeral: nothing old is indexed, the load still reports as settled
     defaultModel?: string;
     llmProvider?: string;                   // e.g., 'openrouter', 'azure-openai', 'openai', 'anthropic'
     enableTooling?: boolean;
