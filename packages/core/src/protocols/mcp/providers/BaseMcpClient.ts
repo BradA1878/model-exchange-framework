@@ -85,7 +85,7 @@ export abstract class BaseMcpClient implements IMcpClient {
             // Store configuration
             this.config = {
                 ...config,
-                temperature: config.temperature || 0.7,
+                temperature: config.temperature ?? 0.7,
                 maxTokens: config.maxTokens || 4096,
             };
             

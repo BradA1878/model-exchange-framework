@@ -291,10 +291,15 @@ export class StratumManager {
   ): Promise<number> {
     if (!this.enabled) return 0;
 
+    // An explicit zero disables decay; invalid values must not silently change
+    // retention behavior or enter the probability calculation.
+    const rate = decayRate ?? DEFAULT_DECAY_RATES[stratum];
+    if (!Number.isFinite(rate) || rate < 0 || rate > 1) {
+      throw new Error('Memory decay rate must be a finite number in [0, 1]');
+    }
     const storage = this.getStorage(scope, scopeId, stratum);
     if (!storage) return 0;
 
-    const rate = decayRate || DEFAULT_DECAY_RATES[stratum];
     const memoriesToRemove: string[] = [];
 
     for (const [id, memory] of storage.memories) {

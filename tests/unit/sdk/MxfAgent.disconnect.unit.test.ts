@@ -93,6 +93,7 @@ jest.mock('@mxf-dev/sdk/services/MxfToolService', () => ({
         loadTools: jest.fn().mockResolvedValue(cachedTools),
         reloadTools: jest.fn().mockResolvedValue(cachedTools),
         getCachedTools: jest.fn(() => cachedTools),
+        isLoaded: jest.fn(() => true),
         cleanup: jest.fn()
     }))
 }));
@@ -150,6 +151,8 @@ import { EventBus } from '@mxf-dev/core/events/EventBus';
 import { Events } from '@mxf-dev/core/events/EventNames';
 import type { AgentConfig } from '@mxf-dev/core/interfaces/AgentInterfaces';
 import { MxfAgent } from '@mxf-dev/sdk/MxfAgent';
+import { MxfAgentSystemPrompt } from '@mxf-dev/core/prompts/MxfAgentSystemPrompt';
+import { MxfTaskExecutionManager } from '@mxf-dev/sdk/managers/MxfTaskExecutionManager';
 
 const CONFIG: AgentConfig = {
     agentId: 'test-agent',
@@ -329,4 +332,264 @@ describe('MxfAgent.disconnect() against a finishing turn', () => {
         expect(toolMessages[0].content).toContain('Classified 12 items');
         expect(mockLoggerError).not.toHaveBeenCalled();
     });
+
+    it('rejects overlapping admission before adding its prompt or changing task identity', async () => {
+        const agent = new MxfAgent({ ...CONFIG });
+        const manager = (agent as unknown as { taskExecutionManager: MxfTaskExecutionManager }).taskExecutionManager;
+        let releasePreparation!: () => void;
+        mockAddConversationMessage.mockImplementationOnce(() => new Promise<void>(resolve => { releasePreparation = resolve; }));
+        const first = manager.executeTask({ taskId: 'task-A', content: 'First task' });
+        await expect(manager.executeTask({ taskId: 'task-B', content: 'Second task' })).rejects.toThrow('already executing task task-A');
+        expect(manager.getCurrentTask()?.taskId).toBe('task-A');
+        expect(mockAddConversationMessage).toHaveBeenCalledTimes(1);
+        expect(mockAddConversationMessage.mock.calls[0][0].content).toContain('First task');
+        manager.cancelCurrentTask('test finished');
+        releasePreparation();
+        await first;
+        expect(mockSendWithContextStreaming).not.toHaveBeenCalled();
+    });
+
+    it('discards a stopped task response and drains it before preparing the next task', async () => {
+        const agent = new MxfAgent({ ...CONFIG });
+        const manager = (agent as unknown as { taskExecutionManager: MxfTaskExecutionManager }).taskExecutionManager;
+        let releaseFirst!: (response: unknown) => void;
+        let reachedProvider!: () => void;
+        const providerStarted = new Promise<void>(resolve => { reachedProvider = resolve; });
+        mockSendWithContextStreaming.mockImplementationOnce(() => {
+            reachedProvider();
+            return new Promise(resolve => { releaseFirst = resolve; });
+        }).mockResolvedValueOnce({
+            content: [{ type: 'tool_use', id: 'call-B', name: 'task_complete', input: { summary: 'Second finished' } }],
+            model: 'test-model'
+        });
+        const execute = jest.spyOn(agent, 'executeTool').mockImplementation(async () => {
+            manager.clearCurrentTask('completed');
+            return { status: 'task_completed', taskId: 'task-B', message: 'Second finished' };
+        });
+        const first = manager.executeTask({ taskId: 'task-A', content: 'First task' });
+        await providerStarted;
+        manager.cancelCurrentTask('cancelled by consumer');
+        const second = manager.executeTask({ taskId: 'task-B', content: 'Second task' });
+        expect(manager.getCurrentTask()?.taskId).toBe('task-B');
+        expect(mockAddConversationMessage).toHaveBeenCalledTimes(1);
+        releaseFirst({
+            content: [{ type: 'tool_use', id: 'stale-call', name: 'fetch_feed', input: { url: 'https://example.com/stale' } }],
+            model: 'test-model'
+        });
+        await Promise.all([first, second]);
+        expect(execute.mock.calls.map(call => call[0])).toEqual(['task_complete']);
+        expect(mockSendWithContextStreaming).toHaveBeenCalledTimes(2);
+        const history = JSON.stringify(mockAddConversationMessage.mock.calls);
+        expect(history).not.toContain('stale-call');
+        expect(history).toContain('Second task');
+        expect(history).toContain('Second finished');
+        expect(manager.getCurrentTask()).toBeNull();
+    });
+
+    it('drains an event-triggered contributor turn before preparing the next task', async () => {
+        const agent = new MxfAgent({ ...CONFIG, maxIterations: 1 });
+        const manager = agent.getTaskExecutionManager();
+        const internal = agent as unknown as {
+            provideImmediateToolFeedback(from: string, tool: string, data: string, type: string): Promise<string>;
+        };
+        let releaseFeedback!: (response: unknown) => void;
+        let reachedFeedbackProvider!: () => void;
+        const feedbackProviderStarted = new Promise<void>(resolve => { reachedFeedbackProvider = resolve; });
+        mockSendWithContextStreaming.mockReset()
+            .mockResolvedValueOnce(textResponse)
+            .mockImplementationOnce(() => {
+                reachedFeedbackProvider();
+                return new Promise(resolve => { releaseFeedback = resolve; });
+            })
+            .mockResolvedValueOnce({
+                content: [{ type: 'tool_use', id: 'call-B', name: 'task_complete', input: { summary: 'Second finished' } }],
+                model: 'test-model'
+            });
+        const execute = jest.spyOn(agent, 'executeTool').mockImplementation(async () => {
+            manager.clearCurrentTask('completed');
+            return { status: 'task_completed', taskId: 'task-B', message: 'Second finished' };
+        });
+
+        // A contributor stays available for messages after its assigned loop ends.
+        await manager.executeTask({ taskId: 'task-A', content: 'First task', completionAgentId: 'peer' });
+        expect(manager.getCurrentTask()?.taskId).toBe('task-A');
+        expect(mockSendWithContextStreaming).toHaveBeenCalledTimes(1);
+        const feedback = internal.provideImmediateToolFeedback('peer', 'messaging_send', 'Continue task A', 'agent message');
+        const feedbackOutcome = Promise.allSettled([feedback]);
+        await Promise.race([
+            feedbackProviderStarted,
+            feedback.then(() => { throw new Error('Feedback returned before reaching its provider'); })
+        ]);
+
+        manager.clearCurrentTask('completed by peer');
+        const second = manager.executeTask({ taskId: 'task-B', content: 'Second task' });
+        const secondOutcome = Promise.allSettled([second]);
+        let historyBeforeRelease: string;
+        try {
+            // Let B reach preparation while A's message-triggered provider stays pending.
+            await new Promise<void>(resolve => { setImmediate(resolve); });
+            historyBeforeRelease = JSON.stringify(mockAddConversationMessage.mock.calls);
+            expect(manager.getCurrentTask()?.taskId).toBe('task-B');
+        } finally {
+            releaseFeedback({
+                content: [{ type: 'tool_use', id: 'stale-feedback-call', name: 'fetch_feed', input: {} }],
+                model: 'test-model'
+            });
+            await Promise.all([feedbackOutcome, secondOutcome]);
+        }
+
+        expect(historyBeforeRelease).not.toContain('Second task');
+        expect((await feedbackOutcome)[0].status).toBe('fulfilled');
+        expect((await secondOutcome)[0].status).toBe('fulfilled');
+        expect(mockSendWithContextStreaming).toHaveBeenCalledTimes(3);
+        expect(execute.mock.calls.map(call => call[0])).toEqual(['task_complete']);
+        const history = JSON.stringify(mockAddConversationMessage.mock.calls);
+        expect(history).not.toContain('stale-feedback-call');
+        expect(history).toContain('Second task');
+        expect(history).toContain('Second finished');
+        expect(manager.getCurrentTask()).toBeNull();
+    });
+
+    it('keeps feedback from starting the first turn while assigned task preparation is pending', async () => {
+        const agent = new MxfAgent({ ...CONFIG, maxIterations: 1 });
+        const manager = agent.getTaskExecutionManager();
+        const internal = agent as unknown as {
+            provideImmediateToolFeedback(from: string, tool: string, data: string, type: string): Promise<string>;
+        };
+        let releasePreparation!: () => void;
+        mockAddConversationMessage.mockImplementationOnce(() => new Promise<void>(resolve => { releasePreparation = resolve; }));
+        mockSendWithContextStreaming.mockReset().mockResolvedValue({
+            content: [{ type: 'tool_use', id: 'prepared-call', name: 'task_complete', input: { summary: 'Prepared task finished' } }],
+            model: 'test-model'
+        });
+        const execute = jest.spyOn(agent, 'executeTool').mockImplementation(async () => {
+            manager.clearCurrentTask('completed');
+            return { status: 'task_completed', taskId: 'task-B', message: 'Prepared task finished' };
+        });
+        const assigned = manager.executeTask({ taskId: 'task-B', content: 'Second task' });
+        const assignedOutcome = Promise.allSettled([assigned]);
+        const feedback = internal.provideImmediateToolFeedback('peer', 'messaging_send', 'Message during preparation', 'agent message');
+        const feedbackOutcome = Promise.allSettled([feedback]);
+        let providerCallsBeforePreparation: number;
+        try {
+            await feedback;
+            providerCallsBeforePreparation = mockSendWithContextStreaming.mock.calls.length;
+        } finally {
+            releasePreparation();
+            await Promise.all([assignedOutcome, feedbackOutcome]);
+        }
+
+        expect(providerCallsBeforePreparation).toBe(0);
+        expect((await assignedOutcome)[0].status).toBe('fulfilled');
+        expect(mockSendWithContextStreaming).toHaveBeenCalledTimes(1);
+        expect(agent.getSystemPromptManager().updatePromptForTask).toHaveBeenCalledWith(expect.objectContaining({ id: 'task-B' }));
+        expect(execute.mock.calls.map(call => call[0])).toEqual(['task_complete']);
+        expect(JSON.stringify(mockAddConversationMessage.mock.calls)).toContain('Prepared task finished');
+        expect(manager.getCurrentTask()).toBeNull();
+    });
+
+    it('does not let a late completion result clear or append to a newer task', async () => {
+        const agent = new MxfAgent({ ...CONFIG });
+        const manager = (agent as unknown as { taskExecutionManager: MxfTaskExecutionManager }).taskExecutionManager;
+        mockSendWithContextStreaming.mockResolvedValue({
+            content: [{ type: 'tool_use', id: 'completion-call', name: 'task_complete', input: { summary: 'Done' } }],
+            model: 'test-model'
+        });
+        let second!: Promise<unknown>;
+        let callsToComplete = 0;
+        jest.spyOn(agent, 'executeTool').mockImplementation(async () => {
+            callsToComplete++;
+            if (callsToComplete === 1) {
+                manager.clearCurrentTask('completed');
+                second = manager.executeTask({ taskId: 'task-B', content: 'Second task' });
+                return { status: 'task_completed', taskId: 'task-A', message: 'Old completion' };
+            }
+            expect(manager.getCurrentTask()?.taskId).toBe('task-B');
+            manager.clearCurrentTask('completed');
+            return { status: 'task_completed', taskId: 'task-B', message: 'New completion' };
+        });
+        await manager.executeTask({ taskId: 'task-A', content: 'First task' });
+        await second;
+        expect(callsToComplete).toBe(2);
+        const toolMessages = mockAddConversationMessage.mock.calls.map(call => call[0]).filter(message => message.role === 'tool');
+        expect(toolMessages).toHaveLength(1);
+        expect(toolMessages[0].content).toContain('New completion');
+        expect(toolMessages[0].content).not.toContain('Old completion');
+    });
+
+
+    it('refreshes the real prompt manager when the accepted request uses taskId', async () => {
+        const agent = new MxfAgent({ ...CONFIG });
+        const { MxfSystemPromptManager: RealPromptManager } = jest.requireActual<typeof import('@mxf-dev/sdk/managers/MxfSystemPromptManager')>('@mxf-dev/sdk/managers/MxfSystemPromptManager');
+        const update = jest.fn().mockResolvedValue(undefined);
+        const framework = jest.spyOn(MxfAgentSystemPrompt, 'buildFrameworkSystemPrompt')
+            .mockResolvedValue('Framework prompt for current tools');
+        const real = new RealPromptManager(CONFIG.agentId, CONFIG, {
+            getConversationHistory: (): Array<{ id: string; role: 'system'; content: string; timestamp: number }> => [{ id: 'system', role: 'system', content: 'old prompt', timestamp: 1 }],
+            updateConversationMessage: update,
+            getCachedTools: (): typeof cachedTools => cachedTools
+        });
+        jest.spyOn(agent.getSystemPromptManager(), 'updatePromptForTask').mockImplementation(task => real.updatePromptForTask(task));
+        const manager = agent.getTaskExecutionManager();
+        mockSendWithContextStreaming.mockImplementation(async () => {
+            manager.cancelCurrentTask('finished checking prompt');
+            return textResponse;
+        });
+        try {
+            await manager.executeTask({ taskId: 'accepted-task', title: 'Current review', content: 'Review the evidence' });
+            expect(update).toHaveBeenCalledWith(0, expect.objectContaining({
+                role: 'system', content: expect.stringContaining('Framework prompt for current tools')
+            }));
+        } finally {
+            framework.mockRestore();
+        }
+    });
+
+    it('retains task context without accumulating system messages across session reconnects', async () => {
+        const agent = new MxfAgent({ ...CONFIG, memoryMode: 'session' });
+        const { MxfMemoryManager: RealMemoryManager } = jest.requireActual<typeof import('@mxf-dev/sdk/managers/MxfMemoryManager')>('@mxf-dev/sdk/managers/MxfMemoryManager');
+        const memory = new RealMemoryManager({
+            agentId: CONFIG.agentId, channelId: CONFIG.channelId,
+            maxHistory: 5, maxObservations: 5, enablePersistence: false, memoryMode: 'session'
+        });
+        const internal = agent as unknown as {
+            memoryManager: typeof memory;
+            performAgentInitialization(): Promise<void>;
+        };
+        internal.memoryManager = memory;
+        await internal.performAgentInitialization();
+        await memory.addConversationMessage({ role: 'user', content: 'Keep this session context' });
+        for (let reconnect = 0; reconnect < 12; reconnect++) {
+            await internal.performAgentInitialization();
+        }
+        const history = memory.getConversationHistory();
+        expect(history.filter(message => message.role === 'system')).toHaveLength(1);
+        expect(history.some(message => message.content === 'Keep this session context')).toBe(true);
+        expect(history.length).toBeLessThanOrEqual(5);
+        await agent.disconnect();
+    });
+
+    it('does not resume an aggregated response against a newer task', async () => {
+        const agent = new MxfAgent({ ...CONFIG });
+        const manager = agent.getTaskExecutionManager();
+        // Keep both task executions in preparation so this exercises the separate
+        // aggregation entry path without a provider response taking ownership.
+        let releaseFirst!: () => void;
+        let releaseBatch!: () => void;
+        mockAddConversationMessage
+            .mockImplementationOnce(() => new Promise<void>(resolve => { releaseFirst = resolve; }))
+            .mockImplementationOnce(() => new Promise<void>(resolve => { releaseBatch = resolve; }));
+        const first = manager.executeTask({ taskId: 'task-A', title: 'First', content: 'First task' });
+        const internal = agent as unknown as { handleAggregatedMessage(from: string[], content: string): Promise<void> };
+        const batch = internal.handleAggregatedMessage(['peer'], 'Old task message');
+        manager.cancelCurrentTask('cancelled');
+        const second = manager.executeTask({ taskId: 'task-B', title: 'Second', content: 'Second task' });
+        releaseBatch();
+        await batch;
+        expect(mockSendWithContextStreaming).not.toHaveBeenCalled();
+        manager.cancelCurrentTask('test done');
+        releaseFirst();
+        await Promise.all([first, second]);
+    });
+
 });

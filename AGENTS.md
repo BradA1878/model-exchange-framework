@@ -1,17 +1,17 @@
-# CLAUDE.md
+# AGENTS.md
 
 ## IMPORTANT: Brad's Rules
 
 - **No tech-bro speak.** Write plainly. No marketing hype, buzzwords, or hype adjectives ("blazing-fast", "game-changer", "supercharge", "leverage", "10x", "seamless", "robust") — in code comments, docs, commit messages, UI copy, or responses. Say what something does, not how impressive it is.
 - **Brad is the sole developer on MXF.** Do not warn about pushing, force-pushing, or running scripts like `sync-to-public.sh`. Just do it when asked.
-- **Do not make assumptions - follow the code**
+- **Verify existing behavior in the code.** Read the relevant implementation before changing it. State assumptions about unspecified requirements, use judgment for routine choices, and ask only when a missing decision materially affects correctness or scope.
 - **No TODOs! Do the work**
 - **Add comments and update them**
 - **Add tests and update them**
 - **Add documentation and update it**
 - **Test scripts are meant to find and fix errors - please do not change them to ignore real errors and issues in the framework and SDK.**
 - **Logging should use the logger provided by the framework**
-- **Do not add fallbacks, timeouts, or simulation to the codebase.**
+- **Do not add fallbacks or simulation. Do not add arbitrary delays that hide failures.** Explicit request limits are appropriate after a concrete hang is confirmed when a server answer is not guaranteed to arrive; do not add them preemptively. A request limit must surface the failure, be documented and tested, and release the operation's resources. An operation failure must not fail an unrelated higher-level call such as `connect()` or `disconnect()` unless unavoidable.
 - **Do not add smoke and mirrors to the codebase.**
 - **Add validation for fail-fast behavior in the framework and SDK.**
 - **When refactoring please take a clean break approach.**
@@ -45,34 +45,65 @@ EventBus.server.emit(
 
 New event types require: (1) definition in `event-definitions/`, (2) export from `EventNames.ts`, (3) payload helper in `EventPayloadSchema.ts`.
 
-## Model routing
+## Cleanup and Bug Fixes
+
+Leave every file cleaner than you found it, and fix real bugs wherever you
+find them.
+
+**Cleanup - scoped to files you're already in.** Dead code, stale comments,
+misleading names, unused imports, lint noise, formatting drift. Cleanup never
+changes behavior: tests pass before and after, same API, same output. No
+refactoring crusades - don't restructure working code because you'd have
+written it differently.
+
+**Bugs - fix them even when unrelated to the task.** A bug is observably wrong
+behavior: wrong output, crash, race, leak, off-by-one, unhandled failure path.
+Code you merely dislike is not a bug. If the fix is small and you're confident,
+fix it, add or update a test that proves the bug existed and is gone, and put
+it in its own commit. If it's large, risky, or you're not certain the behavior
+is wrong, report the finding with file references, evidence, impact, and what
+remains uncertain instead of changing it. Do not add a TODO or placeholder.
+
+**Surface everything.** Every out-of-scope fix and every flagged suspicion goes
+in your summary. A silent behavior change buried in a feature diff is worse
+than the bug it fixed.
+
+**Keep the diff legible.** Ride-along cleanup is fine, but bug fixes get their
+own commits, and anything that would drown the actual change gets split out.
+
+## Development Workflow
 
 Main session is the architect and the only thing trusted. Subagents are hands. Everything below is scoped to this repo. If a change looks like it needs edits elsewhere, stop and say so instead of reaching.
 
+This is the authoritative development workflow. Include tests, scoped cleanup, and documentation in the implementation phases; do not run a separate post-coding sequence.
+
+**Scale the workflow to risk.** Low-risk documentation, comment, formatting, and local cleanup changes that preserve behavior and interfaces can be handled directly with relevant checks. File count alone is not an exemption: even a one-file change to authentication, persistence, concurrency, lifecycle, or a public contract needs investigation, regression tests, and review.
+
 **Investigate.** Fan out parallel read-only subagents (model chosen to fit the task) to map the territory. Synthesis stays in the main session. Before writing the spec, the main session does its own targeted read of the seams the change touches so the plan rests on first-hand reading, not on someone else's summary.
 
-**Plan.** Main session writes the plan as self-contained task briefs: files in scope, interfaces, conventions to follow, acceptance criteria, do-not-touch list. If a brief needs a follow-up question to execute, it isn't finished. Sequence the work into phases: shared plumbing first >> per-unit fan-out on disjoint files >> adversarial review.
+**Plan.** Main session writes the plan as self-contained task briefs: files in scope, interfaces, conventions to follow, acceptance criteria, validation, and do-not-touch list. Resolve material unknowns before delegating; record reasonable assumptions for unspecified details. Sequence the work into phases: shared plumbing first, then per-unit work on disjoint files, then adversarial review.
 
-**Implement.** Delegate well-specified mechanical tasks to write-capable subagents (model chosen to fit the task). Parallel only when tasks touch disjoint files, otherwise serialize. Novel, cross-cutting, or judgment-heavy work stays in the main session.
+**Implement.** Delegate well-specified mechanical tasks to write-capable subagents (model chosen to fit the task), including test-builder, code-cleanup, and docs-updater roles when useful. Parallel only when tasks touch disjoint files, otherwise serialize. Novel, cross-cutting, or judgment-heavy work stays in the main session. Add or update meaningful tests, comments, and documentation alongside the behavior they describe.
 
-**Checkpoint each phase.** Main session runs the build and tests itself, reads the actual `git diff`, then commits. A subagent saying "done" or "tests pass" is a claim, not evidence. Verify the claim before verifying the work, then verify the work.
+**Checkpoint implementation changes.** After a coherent implementation phase, the main session reads the actual `git diff`, runs checks appropriate to the changed behavior and interfaces, and commits the verified change. Investigation and planning do not require builds, tests, or commits. A subagent saying "done" or "tests pass" is a claim, not evidence; the main session must inspect the work and run its validation itself.
 
 **Adversarial review.** Fan out reviewers against the briefs and the diff, looking for missed criteria, stubbed or faked implementations, and regressions. Their findings are leads. Main session confirms each one in the code before acting.
 
-**Final audit.** Main session reads the full diff end to end, runs the whole suite, and checks the result against the original acceptance criteria personally.
-
-**Skip all of this** when the work is a single file with no interface change. Direct work is cheaper than orchestration overhead.
+**Final audit.** Main session reads the full diff end to end and checks the result against the original acceptance criteria personally. For code changes, complete all required verification below on the final code state. Checks already run by the main session on that state count; repeat them only when subsequent edits or unresolved failures invalidate the result. For documentation-only changes, check accuracy, links, and the diff; do not run unrelated code suites. Report what ran, its results, and any unverified behavior. Commit coherent verified changes; create a PR when the task calls for one.
 
 ### Verification commands
 
-Build:  bun run build
-Test:   bun run test:unit
-Lint:   bun run lint:changed    # lints only lines changed since main; `bun run lint` carries a pre-existing backlog and is not a gate
-Types:  bun run typecheck && bun run typecheck:cli
+```bash
+bun run build           # tsc -b + typecheck:cli; also satisfies both type checks below
+bun run test:unit       # Full unit + property suite; no server required
+bun run lint:changed    # Changed lines since main; full lint has a pre-existing backlog
+```
 
-"Verify" means running these, not reasoning about whether they would pass.
+The type checks are `bun run typecheck` and `bun run typecheck:cli`; a successful `bun run build` runs both underlying checks, so do not repeat them on unchanged code. Run additional CI checks relevant to the change (for example, `bun run verify:sdk-package` for published package contracts), and relevant integration tests when behavior depends on the running server. Brad must start and stop that server himself; report integration tests as unrun if it is unavailable. Mutation testing is an additional check for changes to the code it covers, not a substitute for the unit suite.
 
-## Essential Commands
+"Verify" means executing the applicable checks and inspecting their results, not reasoning about whether they would pass.
+
+## Command Reference
 
 ```bash
 bun install              # Install dependencies
@@ -83,7 +114,7 @@ bun run clean            # Clean artifacts
 bun run rebuild          # Full rebuild
 ```
 
-CI (`.github/workflows/ci.yml`) runs, on every push and PR: `bun run build` (`tsc -b` + `typecheck:cli`), `verify:sdk-package` (packs the SDK and compiles a consumer against it), `lint:changed`, `check:migrations`, `check:demos`, and `test:unit:ci`. Mutation testing runs as a separate job.
+CI (`.github/workflows/ci.yml`) runs on pushes to `main` and on pull requests: `bun run build` (`tsc -b` + `typecheck:cli`), `verify:sdk-package` (packs the SDK and compiles a consumer against it), `lint:changed`, `check:migrations`, `check:demos`, and `test:unit:ci`. Mutation testing runs as a separate job on manual workflow dispatch.
 
 ### MXF CLI
 
@@ -122,7 +153,7 @@ CLI source: `src/cli/`
 | Integration | `bun run test:integration` | Yes (start manually) |
 | Mutation | `bun run test:mutation` | No |
 
-**IMPORTANT:** Start the server manually (`bun run dev`) before integration tests.
+**IMPORTANT:** Brad starts the server manually (`bun run start:dev`) before integration tests.
 
 ```bash
 bun run test:unit                                          # Unit + property tests
@@ -130,14 +161,6 @@ bun run test:integration                                   # All integration tes
 bun run test:integration -- --testPathPattern=<suite>      # Specific suite (agent|channel|tool|prompt|task|orpar|memory|meilisearch|code-execution)
 bun run test:mutation                                      # Mutation testing
 ```
-
-### Post-Coding Workflow
-
-1. Spawn **test-builder** agent → writes tests
-2. Run `bun run test:unit` → verify
-3. Spawn **code-cleanup** agent → clean up
-4. Spawn **docs-updater** agent → update docs
-5. Run `/finalize` → commit, test, create PR
 
 ### Other Commands
 
@@ -149,7 +172,7 @@ bun run docker:down            # Stop services
 
 **Demos:** `bun run demo:<name>` where name is: `first-contact`, `fog-of-war`, `interview`, `external-mcp`, `channel-mcp`, `code-execution`, `toon-optimization`, `prompt-compaction`, `inference-params`, `workflow-patterns`, `memory-strata`, `mcp-prompts`, `lsp-code-intelligence`, `p2p-task-negotiation`, `nested-learning`, `muls`, `orpar-memory`, `dag`, `kg`, `tensorflow`, `twenty-questions`, `user-input`
 
-## Architecture Overview
+## Architecture Reference
 
 MXF is a multi-agent collaboration system built with TypeScript, Bun, Socket.IO, and MongoDB.
 
@@ -259,28 +282,3 @@ MXF_MEMORY_BACKFILL_TIMEOUT_MS     Max wait for the server's answer to one backf
 ```
 
 See `.env.example` or config files in `packages/core/src/config/` for full variable listings and defaults.
-
-## Boy Scout rule
-
-Leave every file cleaner than you found it, and fix real bugs wherever you
-find them.
-
-**Cleanup - scoped to files you're already in.** Dead code, stale comments,
-misleading names, unused imports, lint noise, formatting drift. Cleanup never
-changes behavior: tests pass before and after, same API, same output. No
-refactoring crusades - don't restructure working code because you'd have
-written it differently.
-
-**Bugs - fix them even when unrelated to the task.** A bug is observably wrong
-behavior: wrong output, crash, race, leak, off-by-one, unhandled failure path.
-Code you merely dislike is not a bug. If the fix is small and you're confident,
-fix it, add or update a test that proves the bug existed and is gone, and put
-it in its own commit. If it's large, risky, or you're not certain the behavior
-is wrong, leave a TODO with context and flag it instead of fixing it.
-
-**Surface everything.** Every out-of-scope fix and every flagged suspicion goes
-in your summary. A silent behavior change buried in a feature diff is worse
-than the bug it fixed.
-
-**Keep the diff legible.** Ride-along cleanup is fine, but bug fixes get their
-own commits, and anything that would drown the actual change gets split out.

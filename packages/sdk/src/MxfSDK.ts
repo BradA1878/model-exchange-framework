@@ -86,6 +86,7 @@ import type { McpServerRegistrationResult } from './MxfClient.js';
 import type { KeyGenerateResult } from './services/MxfService.js';
 import { default as socketIO } from 'socket.io-client';
 import type { ManagerOptions, SocketOptions } from 'socket.io-client';
+import { v4 as uuidv4 } from 'uuid';
 
 const moduleLogger = new Logger('debug', 'MxfSDK', 'client');
 
@@ -163,6 +164,12 @@ export interface AgentCreationConfig {
     temperature?: number;
     maxTokens?: number;
     maxHistory?: number;  // Max conversation history entries (default: 50) - keep low for long-running agents
+    /** Local session memory or the default persistent agent memory. */
+    memoryMode?: AgentConfig['memoryMode'];
+    /** Whether to index persisted history when the agent connects (default true). */
+    backfillSearchIndexOnLoad?: AgentConfig['backfillSearchIndexOnLoad'];
+    /** Provider-specific settings, such as an Azure endpoint and deployment. */
+    providerOptions?: AgentConfig['providerOptions'];
     reasoning?: LlmReasoningConfig;  // Reasoning tokens: { enabled: true, effort: 'medium' } to request, { enabled: false } to disable models that reason by default (GLM, Qwen, DeepSeek)
     allowedTools?: string[];
     circuitBreakerExemptTools?: string[];  // Tools exempt from circuit breaker detection (for game tools, etc.)
@@ -186,6 +193,8 @@ export interface AgentCreationConfig {
  * MxfSDK - Main SDK class
  */
 export class MxfSDK {
+    /** Distinguishes this SDK's local lifecycle events from other sessions for the same user. */
+    private readonly sdkInstanceId = uuidv4();
     private config: MxfSDKConfig;
     private socket: SdkSocket | null = null;
     private connectionPromise: Promise<void> | null = null;
@@ -365,6 +374,8 @@ export class MxfSDK {
      * connect() resolves so a later manager reconnect can restore SDK state.
      */
     private installSocketLifecycleHandlers(socket: SdkSocket): void {
+        // Socket-scoped history distinguishes real recovery from first or repeated auth.
+        let authenticatedBefore = false;
         const handleConnectError = (error: Error): void => {
             if (this.socket !== socket) {
                 return;
@@ -420,13 +431,15 @@ export class MxfSDK {
 
             // When no connect() call is waiting on this socket, the socket manager
             // restored the session on its own after a dropped transport.
-            const restoredBySocketManager = this.pendingConnection?.socket !== socket;
+            const restoredBySocketManager = authenticatedBefore && !this.authenticated &&
+                this.pendingConnection?.socket !== socket;
             const attempt = this.pendingTransportReconnectAttempt;
             this.pendingTransportReconnectAttempt = null;
 
             this.userId = data.userId;
             this.authenticatedUserId = data.userId;
             this.authenticated = true;
+            authenticatedBefore = true;
             EventBus.client.setClientSocket(socket);
             this.resolvePendingConnection(socket);
 
@@ -498,13 +511,13 @@ export class MxfSDK {
      * A server restart kills the channel MCP server processes it was running,
      * so this is the place to register them again.
      *
-     * @param listener - Called with the server-confirmed user id and the
+     * @param listener - Called with the SDK instance id, server-confirmed user id and the
      *                   transport reconnect attempt count when known
      * @returns A function that removes the listener
      */
     public onReconnected(listener: (info: SdkReconnectedEventData) => void): () => void {
         const subscription = EventBus.client.on(Events.Sdk.RECONNECTED, (payload) => {
-            if (payload.data.userId !== this.authenticatedUserId) {
+            if (payload.data.sdkInstanceId !== this.sdkInstanceId) {
                 return;
             }
             listener(payload.data);
@@ -520,7 +533,11 @@ export class MxfSDK {
         );
         EventBus.client.emitLocal(
             Events.Sdk.RECONNECTED,
-            createSdkReconnectedEventPayload(Events.Sdk.RECONNECTED, userId, { userId, attempt }, { source: 'MxfSDK' })
+            createSdkReconnectedEventPayload(
+                Events.Sdk.RECONNECTED, userId,
+                { sdkInstanceId: this.sdkInstanceId, userId, attempt },
+                { source: 'MxfSDK' }
+            )
         );
     }
 
@@ -617,6 +634,9 @@ export class MxfSDK {
             temperature: config.temperature,
             maxTokens: config.maxTokens,
             maxHistory: config.maxHistory,
+            memoryMode: config.memoryMode,
+            backfillSearchIndexOnLoad: config.backfillSearchIndexOnLoad,
+            providerOptions: config.providerOptions,
             reasoning: config.reasoning,
             allowedTools: config.allowedTools,
             circuitBreakerExemptTools: config.circuitBreakerExemptTools,

@@ -46,7 +46,7 @@ import { Logger } from '@mxf-dev/core/utils/Logger';
 import { TaskService } from '../../socket/services/TaskService';
 import { EventBus } from '@mxf-dev/core/events/EventBus';
 import { Events } from '@mxf-dev/core/events/EventNames';
-import { createBaseEventPayload, createTaskEventPayload } from '@mxf-dev/core/schemas/EventPayloadSchema';
+import { createBaseEventPayload } from '@mxf-dev/core/schemas/EventPayloadSchema';
 import { authenticateWebhook, requireWebhookSecret } from '../middleware/webhookAuth';
 import { createWebhookRateLimiter } from '../middleware/rateLimit';
 import {
@@ -124,6 +124,9 @@ router.post('/task', authenticateWebhook, async (req: Request, res: Response) =>
         validator.assertIsNonEmptyString(channelId, 'channelId is required');
         validator.assertIsNonEmptyString(title, 'title is required');
         validator.assertIsNonEmptyString(description, 'description is required');
+        if (assignTo !== undefined) {
+            validator.assertIsNonEmptyString(assignTo, 'assignTo must be a non-empty agent ID');
+        }
         
         // Clean up n8n expression artifacts (remove leading "=" if present)
         const cleanTitle = title.startsWith('=') ? title.substring(1) : title;
@@ -158,6 +161,7 @@ router.post('/task', authenticateWebhook, async (req: Request, res: Response) =>
             priority: priority as TaskPriority,
             coordinationMode: coordinationMode as 'collaborative' | 'sequential' | 'hierarchical',
             assignmentStrategy: assignTo ? 'manual' : 'intelligent',
+            assignedAgentId: assignTo,
             assignmentScope: 'single',
             metadata: {
                 ...cleanMetadata,
@@ -169,47 +173,9 @@ router.post('/task', authenticateWebhook, async (req: Request, res: Response) =>
             }
         };
         
-        // Create task via TaskService
+        // TaskService persists explicit assignments and emits their ASSIGNED
+        // outcomes; its CREATED handler owns any intelligent assignment.
         const task = await taskService.createTask(createRequest, 'n8n-webhook');
-        
-        // If specific agent requested, assign it
-        if (assignTo) {
-            await taskService.updateTask(task.id, {
-                assignedAgentId: assignTo,
-                status: 'assigned'
-            });
-            
-        } else {
-            // Trigger intelligent assignment
-            await taskService.assignTaskIntelligently(task.id);
-            
-        }
-        
-        // Emit task event for monitoring (with fail-fast validation)
-        try {
-            const taskEventPayload = createTaskEventPayload(
-                Events.Task.REQUEST,
-                'n8n-webhook',
-                channelId,
-                {
-                    taskId: task.id,
-                    task: {
-                        title: task.title,
-                        description: task.description,
-                        priority: task.priority,
-                        coordinationMode: task.coordinationMode,
-                        assignmentStrategy: task.assignmentStrategy,
-                        assignmentScope: task.assignmentScope,
-                        metadata: task.metadata
-                    }
-                },
-                { source: 'n8n-webhook' }
-            );
-            EventBus.server.emit(Events.Task.REQUEST, taskEventPayload);
-        } catch (eventError) {
-            logger.error(`❌ Failed to create task event payload: ${eventError}`);
-            // Continue anyway - task was created successfully, event emission is optional
-        }
         
         res.status(201).json({
             success: true,
@@ -270,6 +236,9 @@ router.post('/task/batch', authenticateWebhook, async (req: Request, res: Respon
         validator.assertIsNonEmptyString(channelId, 'channelId is required');
         validator.assertIsNonEmptyString(title, 'title is required');
         validator.assertIsNonEmptyString(description, 'description is required');
+        if (assignTo !== undefined) {
+            validator.assertIsNonEmptyString(assignTo, 'assignTo must be a non-empty agent ID');
+        }
         
         if (!Array.isArray(items) || items.length === 0) {
             throw new Error('items array is required and must not be empty');
@@ -310,6 +279,7 @@ router.post('/task/batch', authenticateWebhook, async (req: Request, res: Respon
             priority: priority as TaskPriority,
             coordinationMode: coordinationMode as 'collaborative' | 'sequential' | 'hierarchical',
             assignmentStrategy: assignTo ? 'manual' : 'intelligent',
+            assignedAgentId: assignTo,
             assignmentScope: 'single',
             metadata: {
                 source: 'n8n-webhook-batch',
@@ -322,46 +292,9 @@ router.post('/task/batch', authenticateWebhook, async (req: Request, res: Respon
             }
         };
         
-        // Create task via TaskService
+        // Keep creation, assignment, and their events on the same service path
+        // used by ordinary task requests, including participant validation.
         const task = await taskService.createTask(createRequest, 'n8n-webhook');
-        
-        // Assign if specific agent requested
-        if (assignTo) {
-            await taskService.updateTask(task.id, {
-                assignedAgentId: assignTo,
-                status: 'assigned'
-            });
-            
-        } else {
-            await taskService.assignTaskIntelligently(task.id);
-            
-        }
-        
-        // Emit task event for monitoring (with fail-fast validation)
-        try {
-            const taskEventPayload = createTaskEventPayload(
-                Events.Task.REQUEST,
-                'n8n-webhook',
-                channelId,
-                {
-                    taskId: task.id,
-                    task: {
-                        title: task.title,
-                        description: task.description,
-                        priority: task.priority,
-                        coordinationMode: task.coordinationMode,
-                        assignmentStrategy: task.assignmentStrategy,
-                        assignmentScope: task.assignmentScope,
-                        metadata: task.metadata
-                    }
-                },
-                { source: 'n8n-webhook-batch' }
-            );
-            EventBus.server.emit(Events.Task.REQUEST, taskEventPayload);
-        } catch (eventError) {
-            logger.error(`❌ Failed to create batch task event payload: ${eventError}`);
-            // Continue anyway - task was created successfully, event emission is optional
-        }
         
         res.status(201).json({
             success: true,

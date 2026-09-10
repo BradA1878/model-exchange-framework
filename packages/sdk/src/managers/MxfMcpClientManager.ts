@@ -41,6 +41,7 @@ export interface McpClientConfig {
     temperature?: number;
     maxTokens?: number;
     timeout?: number;
+    providerOptions?: AgentConfig['providerOptions'];
 }
 
 export class MxfMcpClientManager {
@@ -50,6 +51,10 @@ export class MxfMcpClientManager {
     private config: McpClientConfig;
     private isInitialized = false;
     private initializationPromise: Promise<void> | null = null;
+    /** Configuration updates replace a client in order, after the replacement is ready. */
+    private configurationUpdate: Promise<void> = Promise.resolve();
+    /** Invalidates setup work that finishes after cleanup or explicit reinitialization. */
+    private lifecycleGeneration = 0;
     private registeredTools: McpTool[] = [];
 
     constructor(agentId: string, agentConfig: AgentConfig) {
@@ -68,6 +73,7 @@ export class MxfMcpClientManager {
             temperature: agentConfig.temperature,
             maxTokens: agentConfig.maxTokens,
             timeout: agentConfig.requestTimeoutMs ?? 30000,
+            providerOptions: agentConfig.providerOptions,
         };
 
         this.validateConfig();
@@ -76,12 +82,21 @@ export class MxfMcpClientManager {
     /**
      * Validate the MCP client configuration
      */
-    private validateConfig(): void {
-        if (!this.config.provider) {
+    private validateConfig(config: McpClientConfig = this.config): void {
+        if (!config.provider) {
             throw new Error('LLM provider is required for MCP client');
         }
+        if (!Object.values(LlmProviderType).includes(config.provider)) {
+            throw new Error(`Unsupported LLM provider: ${config.provider}`);
+        }
+        if (config.providerOptions !== undefined && (
+            config.providerOptions === null || typeof config.providerOptions !== 'object' ||
+            Array.isArray(config.providerOptions)
+        )) {
+            throw new Error('Provider options must be an object');
+        }
         
-        if (!this.config.apiKey) {
+        if (!config.apiKey) {
             this.logger.warn('No API key provided - some providers may require authentication');
         }
         
@@ -109,40 +124,47 @@ export class MxfMcpClientManager {
      * Perform the actual MCP client initialization
      */
     private async performInitialization(): Promise<void> {
+        const generation = this.lifecycleGeneration;
         try {
-            
-            // Get the provider implementation class
-            const ProviderClass = await LlmProviderFactory.getImplementation(this.config.provider);
-            
-            // Create an instance of the provider
-            this.mcpClient = new ProviderClass();
-            
-            // Create MCP configuration
-            if (!this.config.apiKey) {
-                throw new Error('API key is required for MCP client initialization');
-            }
-            
-            const mcpConfig = {
-                apiKey: this.config.apiKey,
-                defaultModel: this.config.defaultModel,
-                temperature: this.config.temperature,
-                maxTokens: this.config.maxTokens,
-                timeout: this.config.timeout
-            };
-            
-            // Initialize the client
-            const initialized = await firstValueFrom(this.mcpClient.initialize(mcpConfig));
-            
-            if (!initialized) {
-                throw new Error('Failed to initialize MCP client');
-            }
-            
+            const client = await this.createInitializedClient(this.config);
+            this.assertCurrentLifecycle(generation);
+            this.mcpClient = client;
             this.isInitialized = true;
         } catch (error) {
-            this.isInitialized = false;
-            this.initializationPromise = null;
+            if (generation === this.lifecycleGeneration) {
+                this.isInitialized = false;
+                this.initializationPromise = null;
+            }
             this.logger.error(`Error initializing MCP client: ${error instanceof Error ? error.message : String(error)}`);
             throw error;
+        }
+    }
+
+    /** Construct a replacement without changing the working client or its configuration. */
+    private async createInitializedClient(config: McpClientConfig): Promise<IMcpClient> {
+        const ProviderClass = LlmProviderFactory.getImplementation(config.provider);
+        if (!config.apiKey) {
+            throw new Error('API key is required for MCP client initialization');
+        }
+        const client = new ProviderClass();
+        const providerConfig = {
+            apiKey: config.apiKey,
+            defaultModel: config.defaultModel,
+            temperature: config.temperature,
+            maxTokens: config.maxTokens,
+            timeout: config.timeout,
+            providerOptions: config.providerOptions,
+        };
+        const initialized = await firstValueFrom(client.initialize(providerConfig));
+        if (!initialized) {
+            throw new Error('Failed to initialize MCP client');
+        }
+        return client;
+    }
+
+    private assertCurrentLifecycle(generation: number): void {
+        if (generation !== this.lifecycleGeneration) {
+            throw new Error('MCP client setup cancelled by a lifecycle change');
         }
     }
 
@@ -346,26 +368,41 @@ export class MxfMcpClientManager {
     /**
      * Update MCP client configuration
      */
-    public async updateConfig(newConfig: Partial<McpClientConfig>): Promise<void> {
-        
-        this.config = {
-            ...this.config,
-            ...newConfig
-        };
-        
-        this.validateConfig();
-        
-        // If provider changed, reinitialize
-        if (newConfig.provider && newConfig.provider !== this.config.provider) {
-            await this.reinitialize();
-        }
+    public updateConfig(newConfig: Partial<McpClientConfig>): Promise<void> {
+        const generation = this.lifecycleGeneration;
+        const update = this.configurationUpdate.then(async () => {
+            this.assertCurrentLifecycle(generation);
+            const nextConfig = { ...this.config, ...newConfig };
+            this.validateConfig(nextConfig);
+            const changed = Object.entries(newConfig).some(
+                ([key, value]) => value !== this.config[key as keyof McpClientConfig]
+            );
+            if (!changed) return;
+
+            // Let initial setup finish before deciding whether a live client needs
+            // replacing. Failed validation or initialization leaves it untouched.
+            if (this.initializationPromise) await this.initializationPromise;
+            this.assertCurrentLifecycle(generation);
+            if (this.isInitialized) {
+                const replacement = await this.createInitializedClient(nextConfig);
+                this.assertCurrentLifecycle(generation);
+                this.mcpClient = replacement;
+                this.initializationPromise = null;
+            }
+            this.config = nextConfig;
+        });
+        // One rejected update must not prevent the caller's next valid update.
+        // The original promise still rejects for the caller that submitted it.
+        this.configurationUpdate = update.catch(() => undefined);
+        return update;
     }
 
     /**
      * Reinitialize the MCP client (useful after config changes)
      */
     public async reinitialize(): Promise<void> {
-        
+        this.lifecycleGeneration++;
+        this.configurationUpdate = Promise.resolve();
         // Reset state
         this.isInitialized = false;
         this.initializationPromise = null;
@@ -440,7 +477,8 @@ export class MxfMcpClientManager {
      * Cleanup the MCP client manager
      */
     public async cleanup(): Promise<void> {
-        
+        this.lifecycleGeneration++;
+        this.configurationUpdate = Promise.resolve();
         try {
             // Clear registered tools
             this.registeredTools = [];
@@ -466,6 +504,9 @@ export class MxfMcpClientManager {
      * Set a custom MCP client (for testing or custom implementations)
      */
     public setMcpClient(client: IMcpClient): void {
+        this.lifecycleGeneration++;
+        this.configurationUpdate = Promise.resolve();
+        this.initializationPromise = null;
         this.mcpClient = client;
         this.isInitialized = true;
     }

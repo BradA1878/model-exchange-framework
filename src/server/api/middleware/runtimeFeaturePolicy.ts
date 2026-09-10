@@ -72,22 +72,27 @@ export const requireDemoApiEnabled = (req: Request, res: Response, next: NextFun
  */
 export const requireUnsafeStdioMcpEnabled = (req: Request, res: Response, next: NextFunction): void => {
     const transport = req.body?.transport;
+    let isStdio: boolean;
 
-    if (transport === 'http') {
+    try {
+        // Classification rejects malformed values. Keep those input failures
+        // separate from the valid stdio request's operator-permission check.
+        isStdio = isStdioMcpTransport(transport);
+    } catch (error) {
+        res.status(400).json({
+            success: false,
+            error: error instanceof Error ? error.message : 'Invalid MCP transport'
+        });
+        return;
+    }
+
+    if (!isStdio) {
         // ExternalMcpServerManager currently implements stdio only. Treating an
         // HTTP-labelled payload as supported would still hand its `command` to
         // spawn(), creating a feature-gate bypass.
         res.status(501).json({
             success: false,
             error: 'HTTP transport registration is not implemented by this MXF server'
-        });
-        return;
-    }
-
-    if (!isStdioMcpTransport(transport)) {
-        res.status(400).json({
-            success: false,
-            error: `Invalid MCP transport: ${String(transport)}`
         });
         return;
     }

@@ -60,8 +60,10 @@ export class TaskHandlers extends Handler {
     // Task-related handlers and callbacks
     private taskRequestHandler: TaskRequestHandler | null = null;
     private taskEndedHandler: TaskEndedHandler | null = null;
-    /** The task this agent is currently assigned, until the server ends it. */
+    /** Assignment identity for terminal outcomes and custom-client admission. */
     private activeAssignedTaskId: string | null = null;
+    /** When supplied, the execution manager alone decides whether another task can start. */
+    private activeTaskIdProvider: (() => string | null) | null = null;
     private responseHandlers: Map<string, (response: SimpleTaskResponse) => void> = new Map();
     private globalResponseHandler: (response: SimpleTaskResponse) => void = () => {};
     
@@ -103,6 +105,7 @@ export class TaskHandlers extends Handler {
     public cleanup(): void {
         this.subscriptions.forEach(sub => sub.unsubscribe());
         this.subscriptions = [];
+        this.activeAssignedTaskId = null;
     }
     
     /**
@@ -114,6 +117,17 @@ export class TaskHandlers extends Handler {
     public setTaskRequestHandler(handler: TaskRequestHandler): void {
         this.validator.assertIsFunction(handler);
         this.taskRequestHandler = handler;
+    }
+
+    /**
+     * Use the execution owner's current task for admission. Local cancellation
+     * can release that task before the server broadcasts its terminal outcome.
+     * Clients with custom request handlers retain assignment-based admission.
+     * @internal
+     */
+    public setActiveTaskIdProvider(provider: () => string | null): void {
+        this.validator.assertIsFunction(provider);
+        this.activeTaskIdProvider = provider;
     }
 
     /**
@@ -402,9 +416,18 @@ export class TaskHandlers extends Handler {
                     assignedAgentIds: assignedTask.assignedAgentIds,
                     metadata: assignedTask.metadata
                 };
+
+                const activeTaskId = this.activeTaskIdProvider
+                    ? this.activeTaskIdProvider()
+                    : this.activeAssignedTaskId;
+                if (activeTaskId !== null && activeTaskId !== assignedTask.id) {
+                    this.failAssignedTask(taskRequest, assignedTask.channelId || this.channelId,
+                        new Error(`Agent ${this.agentId} is already executing task ${activeTaskId}`));
+                    return;
+                }
                 
-                // Emit an event to notify that a task has been assigned
-                // This allows MxfAgent to update its currentTask immediately
+                // Publish assignment only after admission; a rejected task must not
+                // replace active identity or inject its prompt into the running task.
                 const taskAssignmentPayload = createBaseEventPayload(
                     AgentEvents.TASK_ASSIGNED,
                     this.agentId,
@@ -415,14 +438,17 @@ export class TaskHandlers extends Handler {
                         taskRequest: taskRequest
                     }
                 );
-                EventBus.client.emitOn(this.agentId,AgentEvents.TASK_ASSIGNED, taskAssignmentPayload);
-                
                 this.activeAssignedTaskId = assignedTask.id;
 
                 // Always trigger task execution — agent roles affect behaviour, not whether
                 // the task is processed.
                 if (this.taskRequestHandler) {
-                    this.taskRequestHandler(taskRequest).catch((error: unknown) => {
+                    // The agent reserves task identity synchronously before its first
+                    // await. Notify observers afterward so a reentrant cancel or
+                    // disconnect sees the task it is stopping.
+                    const execution = this.taskRequestHandler(taskRequest);
+                    EventBus.client.emitOn(this.agentId, AgentEvents.TASK_ASSIGNED, taskAssignmentPayload);
+                    execution.catch((error: unknown) => {
                         // A local execution failure has to become a real task failure.
                         // This used to only call logger.error() — and the client Logger is
                         // disabled by default — so the server kept the task in `in_progress`

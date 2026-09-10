@@ -32,6 +32,7 @@ jest.mock('@mxf-dev/core/events/EventBus', () => {
                 isRegisteredSocketConnected: jest.fn((): boolean => true),
                 emitOn: jest.fn((socketId: string, event: string, payload: any) => {
                     emitted.push({ socketId, event, payload });
+                    [...(handlers.get(event) ?? [])].forEach(handler => handler(payload));
                 }),
                 emit: jest.fn(),
                 off: jest.fn(),
@@ -52,6 +53,8 @@ jest.mock('@mxf-dev/core/events/EventBus', () => {
 import { EventBus } from '@mxf-dev/core/events/EventBus';
 import { TaskEvents } from '@mxf-dev/core/events/event-definitions/TaskEvents';
 import { AgentEvents } from '@mxf-dev/core/events/event-definitions/AgentEvents';
+import { createBaseEventPayload } from '@mxf-dev/core/schemas/EventPayloadSchema';
+import { MxfTaskExecutionManager } from '@mxf-dev/sdk/managers/MxfTaskExecutionManager';
 import { TaskHandlers } from '@mxf-dev/sdk/handlers/TaskHandlers';
 import { TaskHelper } from '@mxf-dev/sdk/services/internal/TaskHelper';
 
@@ -133,6 +136,125 @@ describe('TaskHandlers terminal task events', () => {
             data: { taskId, fromAgentId: 'lead-agent', toAgentId: 'lead-agent', task: { id: taskId, status: 'failed' } }
         });
     };
+
+    it('rejects an overlapping assignment without publishing it or replacing active identity', async () => {
+        const execute = jest.fn().mockResolvedValue({ ok: true });
+        handlers.setTaskRequestHandler(execute);
+        bus._deliver(TaskEvents.ASSIGNED, assignedPayload('task-A'));
+        bus._deliver(TaskEvents.ASSIGNED, assignedPayload('task-B'));
+        await flush();
+        expect(execute).toHaveBeenCalledTimes(1);
+        expect(execute.mock.calls[0][0].taskId).toBe('task-A');
+        expect(bus._emitted().filter((event: EmittedEvent) => event.event === AgentEvents.TASK_ASSIGNED)).toHaveLength(1);
+        expect(failRequests()).toHaveLength(1);
+        expect(failRequests()[0].payload.data.taskId).toBe('task-B');
+        terminal(TaskEvents.FAILED, 'task-B');
+        expect(ended).not.toHaveBeenCalled();
+        terminal(TaskEvents.COMPLETED, 'task-A');
+        expect(ended).toHaveBeenCalledWith('task-A', 'completed');
+    });
+
+    it('reserves the real task before notifying a listener that cancels it', async () => {
+        let releasePreparation!: () => void;
+        const generate = jest.fn().mockResolvedValue('unused');
+        const manager = new MxfTaskExecutionManager(AGENT_ID, {
+            generateResponse: generate, getCachedTools: (): Array<{ name: string }> => [{ name: 'task_complete' }],
+            onTaskStarted: (): void => undefined,
+            updateSystemPromptForTask: (): Promise<void> => new Promise<void>(resolve => { releasePreparation = resolve; }),
+            isToolGatekeepingDisabled: (): boolean => false, getAllowedTools: (): undefined => undefined
+        });
+        handlers.setActiveTaskIdProvider((): string | null => manager.getCurrentTask()?.taskId ?? null);
+        let execution!: Promise<unknown>;
+        handlers.setTaskRequestHandler(request => {
+            const task = manager.executeTask(request);
+            execution = task;
+            return task;
+        });
+        const assignmentListener = EventBus.client.on(AgentEvents.TASK_ASSIGNED, () => {
+            expect(manager.getCurrentTask()?.taskId).toBe('cancel-on-assignment');
+            manager.cancelCurrentTask('consumer cancelled on assignment');
+        });
+        bus._deliver(TaskEvents.ASSIGNED, assignedPayload('cancel-on-assignment'));
+        releasePreparation();
+        await execution;
+        expect(manager.hasActiveTask()).toBe(false);
+        expect(generate).not.toHaveBeenCalled();
+        assignmentListener.unsubscribe();
+
+        // No server outcome has arrived for A; admission must still reflect the
+        // execution manager's cancellation rather than the handler's old ID.
+        bus._deliver(TaskEvents.ASSIGNED, assignedPayload('task-after-cancel'));
+        expect(manager.getCurrentTask()?.taskId).toBe('task-after-cancel');
+        releasePreparation();
+        await execution;
+        expect(generate).toHaveBeenCalledTimes(1);
+        expect(failRequests()).toHaveLength(0);
+        terminal(TaskEvents.CANCELLED, 'cancel-on-assignment');
+        expect(ended).not.toHaveBeenCalled();
+        terminal(TaskEvents.COMPLETED, 'task-after-cancel');
+        expect(ended).toHaveBeenCalledWith('task-after-cancel', 'completed');
+        manager.cleanup();
+    });
+
+    it('releases assignment correlation through cleanup and accepts B after reconnect', async () => {
+        const generate = jest.fn().mockResolvedValue('turn finished');
+        const manager = new MxfTaskExecutionManager(AGENT_ID, {
+            generateResponse: generate,
+            getCachedTools: (): Array<{ name: string }> => [{ name: 'task_complete' }],
+            onTaskStarted: (): void => undefined,
+            updateSystemPromptForTask: async (): Promise<void> => undefined,
+            isToolGatekeepingDisabled: (): boolean => false,
+            getAllowedTools: (): undefined => undefined
+        });
+        handlers.setActiveTaskIdProvider((): string | null => manager.getCurrentTask()?.taskId ?? null);
+        let execution!: Promise<unknown>;
+        handlers.setTaskRequestHandler(request => {
+            const task = manager.executeTask(request);
+            execution = task;
+            return task;
+        });
+        bus._deliver(TaskEvents.ASSIGNED, assignedPayload('task-A'));
+        await execution;
+
+        manager.cleanup();
+        handlers.cleanup();
+        handlers.initialize();
+        terminal(TaskEvents.COMPLETED, 'task-A');
+        expect(ended).not.toHaveBeenCalled();
+
+        bus._deliver(TaskEvents.ASSIGNED, assignedPayload('task-B'));
+        await execution;
+        expect(manager.getCurrentTask()?.taskId).toBe('task-B');
+        expect(generate).toHaveBeenCalledTimes(2);
+        expect(failRequests()).toHaveLength(0);
+        terminal(TaskEvents.COMPLETED, 'task-B');
+        expect(ended).toHaveBeenCalledWith('task-B', 'completed');
+        manager.cleanup();
+    });
+
+    it('uses manager admission before publishing a task assigned during direct execution', async () => {
+        const manager = new MxfTaskExecutionManager(AGENT_ID, {
+            generateResponse: async (): Promise<string> => 'turn finished',
+            getCachedTools: (): Array<{ name: string }> => [{ name: 'task_complete' }],
+            onTaskStarted: (): void => undefined,
+            updateSystemPromptForTask: async (): Promise<void> => undefined,
+            isToolGatekeepingDisabled: (): boolean => false,
+            getAllowedTools: (): undefined => undefined
+        });
+        handlers.setActiveTaskIdProvider((): string | null => manager.getCurrentTask()?.taskId ?? null);
+        const execute = jest.fn(request => manager.executeTask(request));
+        handlers.setTaskRequestHandler(execute);
+        await manager.executeTask({ taskId: 'direct-task', content: 'Direct request' });
+
+        bus._deliver(TaskEvents.ASSIGNED, assignedPayload('task-B'));
+        await flush();
+        expect(manager.getCurrentTask()?.taskId).toBe('direct-task');
+        expect(execute).not.toHaveBeenCalled();
+        expect(bus._emitted().filter((event: EmittedEvent) => event.event === AgentEvents.TASK_ASSIGNED)).toHaveLength(0);
+        expect(failRequests()).toHaveLength(1);
+        expect(failRequests()[0].payload.data.taskId).toBe('task-B');
+        manager.cleanup();
+    });
 
     it('reports the assigned task as ended once when the server broadcasts its outcome', async () => {
         bus._deliver(TaskEvents.ASSIGNED, assignedPayload('task-1'));
@@ -308,15 +430,22 @@ describe('TaskHandlers task failure reporting', () => {
     });
 
     it('bounds processedTaskAssignments instead of growing it without limit', async () => {
-        handlers.setTaskRequestHandler(async () => ({ ok: true }) as any);
+        const handler = jest.fn().mockResolvedValue({ ok: true });
+        handlers.setTaskRequestHandler(handler);
 
-        // Push well past the 1000-entry cap.
+        // Complete each assignment before admitting the next. The cap applies
+        // to processed tasks, rather than a flood of rejected overlaps.
         for (let i = 0; i < 1200; i++) {
-            bus._deliver(TaskEvents.ASSIGNED, assignedPayload(`bulk-${i}`));
+            const taskId = `bulk-${i}`;
+            bus._deliver(TaskEvents.ASSIGNED, assignedPayload(taskId));
+            bus._deliver(TaskEvents.COMPLETED,
+                createBaseEventPayload(TaskEvents.COMPLETED, AGENT_ID, CHANNEL_ID, { taskId }));
         }
         await flush();
 
-        const processed = (handlers as any).processedTaskAssignments as Set<string>;
+        expect(handler).toHaveBeenCalledTimes(1200);
+        expect(failRequests()).toHaveLength(0);
+        const processed = (handlers as unknown as { processedTaskAssignments: Set<string> }).processedTaskAssignments;
         expect(processed.size).toBeLessThanOrEqual(1000);
 
         // Oldest entries were evicted; the most recent are still remembered.

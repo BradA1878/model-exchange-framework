@@ -16,6 +16,7 @@ jest.mock('socket.io-client', () => ({
 import { EventBus } from '@mxf-dev/core/events/EventBus';
 import type { SocketLike } from '@mxf-dev/core/events/EventBusBase';
 import { AuthEvents, CoreSocketEvents, Events } from '@mxf-dev/core/events/EventNames';
+import { createSdkReconnectedEventPayload } from '@mxf-dev/core/schemas/EventPayloadSchema';
 import { MxfSDK, type MxfSDKConfig } from '@mxf-dev/sdk';
 
 type Listener = (...args: unknown[]) => void;
@@ -248,7 +249,9 @@ describe('MxfSDK connection lifecycle', () => {
         socket.io.deliver(CoreSocketEvents.RECONNECT, 3);
         socket.deliver(AuthEvents.SUCCESS, { userId: 'user-a' });
 
-        expect(reconnects).toEqual([{ userId: 'user-a', attempt: 3 }]);
+        expect(reconnects).toEqual([{
+            sdkInstanceId: expect.any(String), userId: 'user-a', attempt: 3
+        }]);
         expect(busEvents).toHaveLength(1);
         expect(busEvents[0]).toMatchObject({
             eventType: Events.Sdk.RECONNECTED,
@@ -257,6 +260,87 @@ describe('MxfSDK connection lifecycle', () => {
         });
         // A local lifecycle signal must not be sent back over the socket.
         expect(socket.emit).not.toHaveBeenCalledWith(Events.Sdk.RECONNECTED, expect.anything());
+    });
+
+    it('does not treat repeated authentication as a restored connection', async () => {
+        const sdk = new MxfSDK(createConfig());
+        const listener = jest.fn();
+        sdk.onReconnected(listener);
+        const connection = sdk.connect();
+        const socket = sockets[0];
+        socket.connected = true;
+        socket.deliver(AuthEvents.SUCCESS, { userId: 'user-a' });
+        await connection;
+        socket.deliver(AuthEvents.SUCCESS, { userId: 'user-a' });
+        expect(listener).not.toHaveBeenCalled();
+
+        socket.connected = false;
+        socket.deliver(CoreSocketEvents.DISCONNECT, 'transport close');
+        socket.connected = true;
+        socket.deliver(AuthEvents.SUCCESS, { userId: 'user-a' });
+        socket.deliver(AuthEvents.SUCCESS, { userId: 'user-a' });
+        expect(listener).toHaveBeenCalledTimes(1);
+    });
+
+    it('isolates SDK reconnects for the same authenticated user', async () => {
+        const first = new MxfSDK(createConfig());
+        const second = new MxfSDK(createConfig());
+        const firstListener = jest.fn();
+        const secondListener = jest.fn();
+        first.onReconnected(firstListener);
+        second.onReconnected(secondListener);
+        const firstConnection = first.connect();
+        const secondConnection = second.connect();
+        for (const socket of sockets) {
+            socket.connected = true;
+            socket.deliver(AuthEvents.SUCCESS, { userId: 'same-user' });
+        }
+        await Promise.all([firstConnection, secondConnection]);
+
+        const restore = (socket: FakeSocket): void => {
+            socket.connected = false;
+            socket.deliver(CoreSocketEvents.DISCONNECT, 'transport close');
+            socket.connected = true;
+            socket.deliver(AuthEvents.SUCCESS, { userId: 'same-user' });
+        };
+        restore(sockets[0]);
+        expect(firstListener).toHaveBeenCalledTimes(1);
+        expect(secondListener).not.toHaveBeenCalled();
+        const firstId = firstListener.mock.calls[0][0].sdkInstanceId;
+
+        restore(sockets[1]);
+        expect(firstListener).toHaveBeenCalledTimes(1);
+        expect(secondListener).toHaveBeenCalledTimes(1);
+        expect(secondListener.mock.calls[0][0].sdkInstanceId).not.toBe(firstId);
+        restore(sockets[0]);
+        expect(firstListener.mock.calls[1][0].sdkInstanceId).toBe(firstId);
+    });
+
+    it('does not emit a reconnect when an explicit connect owns recovery', async () => {
+        const sdk = new MxfSDK(createConfig());
+        const listener = jest.fn();
+        sdk.onReconnected(listener);
+        const connection = sdk.connect();
+        const socket = sockets[0];
+        socket.connected = true;
+        socket.deliver(AuthEvents.SUCCESS, { userId: 'user-a' });
+        await connection;
+
+        socket.connected = false;
+        socket.deliver(CoreSocketEvents.DISCONNECT, 'transport close');
+        const recovery = sdk.connect();
+        socket.connected = true;
+        socket.io.deliver(CoreSocketEvents.RECONNECT, 1);
+        socket.deliver(AuthEvents.SUCCESS, { userId: 'user-a' });
+        await recovery;
+        expect(listener).not.toHaveBeenCalled();
+    });
+
+    it.each(['', '   ', undefined])('rejects reconnect payloads with invalid SDK instance id %p', (sdkInstanceId) => {
+        expect(() => createSdkReconnectedEventPayload(
+            Events.Sdk.RECONNECTED, 'user-a',
+            { sdkInstanceId: sdkInstanceId as string, userId: 'user-a', attempt: null }
+        )).toThrow(/sdkInstanceId/);
     });
 
     it('stops delivering reconnect signals after the listener unsubscribes', async () => {

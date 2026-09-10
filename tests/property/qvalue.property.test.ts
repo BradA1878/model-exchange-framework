@@ -32,52 +32,51 @@ describe('Q-Value Property Tests', () => {
     });
 
     describe('EMA Convergence Properties', () => {
-        it('Q-value converges to mean reward over time', () => {
-            fc.assert(
-                fc.property(
-                    // Generate a reward value in [-1, 1]
-                    fc.double({ min: -1, max: 1, noNaN: true }),
-                    // Generate a learning rate in (0, 1)
+        it('production updates converge to the bounded reward target', async () => {
+            await fc.assert(
+                fc.asyncProperty(
+                    fc.double({ min: 0, max: 1, noNaN: true }),
                     fc.double({ min: 0.01, max: 0.5, noNaN: true }),
-                    // Generate number of iterations (enough for convergence)
                     fc.integer({ min: 50, max: 200 }),
-                    (reward, alpha, iterations) => {
-                        const memoryId = `convergence-${Math.random()}`;
+                    async (reward, alpha, iterations) => {
+                        qValueManager.clearCache();
+                        const memoryId = 'convergence';
                         qValueManager.setQValueInCache(memoryId, 0.5);
 
-                        // Apply same reward multiple times
                         let finalQ = 0.5;
                         for (let i = 0; i < iterations; i++) {
-                            finalQ = finalQ + alpha * (reward - finalQ);
+                            finalQ = await qValueManager.updateQValue(memoryId, reward, alpha);
                         }
 
-                        // After many iterations, Q-value should approach reward
-                        // Tolerance depends on iterations and learning rate
+                        // The closed-form bound is independent of the update loop.
                         const tolerance = Math.pow(1 - alpha, iterations) * Math.abs(0.5 - reward);
-                        return Math.abs(finalQ - reward) <= tolerance + 0.01;
+                        expect(qValueManager.getQValue(memoryId)).toBe(finalQ);
+                        expect(Math.abs(finalQ - reward)).toBeLessThanOrEqual(tolerance + 1e-12);
                     }
                 ),
                 { numRuns: 50 }
             );
         });
 
-        it('Q-value stays within [0, 1] for any reward sequence', () => {
-            fc.assert(
-                fc.property(
+        it('production updates remain bounded for any reward sequence', async () => {
+            await fc.assert(
+                fc.asyncProperty(
                     // Generate array of rewards in [-1, 1]
                     fc.array(fc.double({ min: -1, max: 1, noNaN: true }), { minLength: 1, maxLength: 100 }),
                     // Generate starting Q-value in [0, 1]
                     fc.double({ min: 0, max: 1, noNaN: true }),
                     // Generate learning rate
                     fc.double({ min: 0.01, max: 0.5, noNaN: true }),
-                    (rewards, startQ, alpha) => {
-                        let q = startQ;
+                    async (rewards, startQ, alpha) => {
+                        qValueManager.clearCache();
+                        const memoryId = 'bounded';
+                        qValueManager.setQValueInCache(memoryId, startQ);
                         for (const reward of rewards) {
-                            q = q + alpha * (reward - q);
-                            // Clamp (as the real implementation does)
-                            q = Math.max(0, Math.min(1, q));
+                            const q = await qValueManager.updateQValue(memoryId, reward, alpha);
+                            expect(q).toBeGreaterThanOrEqual(0);
+                            expect(q).toBeLessThanOrEqual(1);
+                            expect(qValueManager.getQValue(memoryId)).toBe(q);
                         }
-                        return q >= 0 && q <= 1;
                     }
                 ),
                 { numRuns: 100 }

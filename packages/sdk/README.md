@@ -46,6 +46,40 @@ bun add @mxf-dev/sdk
 MXF server development uses Bun. The published SDK is ESM-only and supports Bun
 >= 1.2 or Node.js >= 20.19 for client applications.
 
+### Upgrading to 4.0
+
+Update core and SDK together. This major release changes two exported core contracts:
+
+- Custom `QValueManager` persistence must register both callbacks with
+  `setPersistenceCallback(write, read)`. The reader returns the persisted Q-value
+  or `undefined` when none exists, and rejects on storage failure. MXF's
+  `MemoryService` supplies both callbacks. Values must be finite and in `[0, 1]`.
+- Code constructing `SdkReconnectedEventData` or calling
+  `createSdkReconnectedEventPayload()` must supply a nonempty `sdkInstanceId`.
+  Applications subscribing through `sdk.onReconnected()` receive it automatically.
+
+The release also changes agent memory and execution behavior:
+
+- `createAgent({ memoryMode: 'session' })` keeps SDK-managed memory in one agent
+  instance without automatic remote loading, persistence, or indexing. Reconnects
+  retain local context; a new instance starts empty. Explicit memory tools and
+  application trace storage are independent of this choice.
+- `createAgent()` forwards `backfillSearchIndexOnLoad` and `providerOptions`.
+  Disabling backfill alone still loads and saves persistent history.
+- `onReconnected()` is isolated per SDK instance, including two sessions for the
+  same user, and ignores first or duplicate authentication. Its payload includes
+  `sdkInstanceId` alongside `userId` and `attempt`.
+- Task admission has one owner. Overlapping assignments are rejected, and async
+  responses from an older task cannot complete or write context into its successor.
+  A new assignment waits for the previous turn to return; this is not remote
+  cancellation of already-issued model requests or tool side effects.
+- Provider replacement initializes and validates the replacement before switching.
+  Explicit temperature zero is retained by the provider request builders.
+
+See [memory and lifecycle contracts](../../docs/sdk/session-memory.md) and the
+[recurring review example](../../examples/recurring-review/README.md). These APIs
+are available in matching core and SDK packages starting with 4.0.0.
+
 ### New in 3.2
 
 3.2 is a set of fixes for memory-load search indexing, plus the read-side
@@ -533,6 +567,8 @@ See [SDK CLI Documentation](../../docs/sdk/cli.md) for complete details.
 ### Agent Creation Options
 
 ```typescript
+import type { AgentConfig } from '@mxf-dev/sdk';
+
 interface AgentCreationConfig {
     // Required
     agentId: string;
@@ -552,6 +588,9 @@ interface AgentCreationConfig {
     apiKey?: string;
     temperature?: number;
     maxTokens?: number;
+    memoryMode?: 'persistent' | 'session';
+    backfillSearchIndexOnLoad?: boolean;
+    providerOptions?: AgentConfig['providerOptions'];
     reasoning?: { enabled: boolean };  // false explicitly disables models that reason by default (GLM, Qwen, DeepSeek)
     
     // Optional: Tool Access

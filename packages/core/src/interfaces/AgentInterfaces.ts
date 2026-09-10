@@ -88,8 +88,16 @@ export interface AgentConfig {
     temperature?: number;
     maxTokens?: number;
     maxHistory?: number;
+    /**
+     * Lifetime of SDK-managed conversation, observations, reasoning, and plans.
+     * Persistent (default) loads/saves agent memory and supports search indexing.
+     * Session keeps memory only in this agent instance, including across transport
+     * reconnects; create a new instance to start empty. Explicit memory tools and
+     * application storage are independent of this setting.
+     */
+    memoryMode?: 'persistent' | 'session';
     maxMessageSize?: number;                // Max size in bytes for a single message (default: 100KB) - prevents MongoDB 16MB limit errors
-    backfillSearchIndexOnLoad?: boolean;    // Send persisted history to the search index at connect (default: true). false for an agent whose history is intentionally ephemeral: nothing old is indexed, the load still reports as settled
+    backfillSearchIndexOnLoad?: boolean;    // Index persisted history at connect (default: true). false skips backfill only; remote loading, saving, and live indexing remain enabled in persistent mode
     defaultModel?: string;
     llmProvider?: string;                   // e.g., 'openrouter', 'azure-openai', 'openai', 'anthropic'
     enableTooling?: boolean;

@@ -1,574 +1,168 @@
-/**
- * Property-based tests for Knowledge Graph
- * Uses fast-check to verify graph query and Q-value properties
- */
-
+/** Production graph traversal and entity reward properties; only database I/O is stubbed. */
 import fc from 'fast-check';
-import {
-    EntityType,
-    RelationshipType,
-    Entity,
-    Relationship,
-    DEFAULT_ENTITY_UTILITY,
-    EntityUtility,
-} from '@mxf-dev/core/types/KnowledgeGraphTypes';
+import { EntityModel } from '@mxf-dev/core/models/entity';
+import { RelationshipModel } from '@mxf-dev/core/models/relationship';
+import { MongoKnowledgeGraphRepository } from '@mxf-dev/core/database/adapters/mongodb/MongoKnowledgeGraphRepository';
+import { EntityQValueManager } from '@mxf-dev/core/services/kg/EntityQValueManager';
+import { DEFAULT_ENTITY_UTILITY, Entity, EntityType, RelationshipType } from '@mxf-dev/core/types/KnowledgeGraphTypes';
 
-/**
- * Create a test entity
- */
-function createEntity(
-    id: string,
-    name: string,
-    type: EntityType,
-    channelId: string = 'test',
-    qValue: number = 0.5
-): Entity {
+jest.mock('@mxf-dev/core/config/knowledge-graph.config', () => ({
+    isKnowledgeGraphEnabled: (): boolean => true,
+    isQValueLearningEnabled: (): boolean => true,
+    getQValueLearningRate: (): number => 0.1,
+    getContextLimits: (): { maxEntities: number; maxRelationships: number } => ({ maxEntities: 50, maxRelationships: 100 })
+}));
+
+type Row = Record<string, unknown>;
+const channelId = 'property-channel';
+const repository = MongoKnowledgeGraphRepository.getInstance();
+
+/** Interpret the Mongo predicates used by these reads; traversal remains in the repository. */
+const matches = (row: Row, query: Row): boolean => Object.entries(query).every(([key, value]) => {
+    if (key === '$or') return (value as Row[]).some(branch => matches(row, branch));
+    if (value && typeof value === 'object' && '$in' in value) {
+        return (value as { $in: unknown[] }).$in.includes(row[key]);
+    }
+    return row[key] === value;
+});
+
+interface QueryRows {
+    limit(count: number): QueryRows;
+    lean(): Promise<Row[]>;
+}
+
+const queryResult = (rows: Row[]): QueryRows => {
+    let limit = rows.length;
     return {
-        id,
-        channelId,
-        type,
-        name,
-        aliases: [],
-        properties: {},
-        utility: {
-            ...DEFAULT_ENTITY_UTILITY,
-            qValue,
-        },
-        confidence: 0.8,
-        source: 'test',
-        sourceMemoryIds: [],
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-        merged: false,
+        limit(count: number): QueryRows { limit = count; return this; },
+        async lean(): Promise<Row[]> { return rows.slice(0, limit); }
     };
-}
+};
 
-/**
- * Create a test relationship
- */
-function createRelationship(
-    id: string,
-    fromId: string,
-    toId: string,
-    type: RelationshipType,
-    channelId: string = 'test'
-): Relationship {
-    return {
-        id,
-        channelId,
-        fromEntityId: fromId,
-        toEntityId: toId,
-        type,
-        properties: {},
-        confidence: 0.8,
-        surpriseScore: 0,
-        source: 'test',
-        sourceMemoryIds: [],
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-        weight: 1.0,
-    };
-}
+const installRows = (entities: Row[], relationships: Row[]): void => {
+    jest.spyOn(EntityModel, 'find').mockImplementation(((query: Row) =>
+        queryResult(entities.filter(row => matches(row, query)))) as never);
+    jest.spyOn(RelationshipModel, 'find').mockImplementation(((query: Row) =>
+        queryResult(relationships.filter(row => matches(row, query)))) as never);
+};
 
-/**
- * Simple in-memory graph for testing
- */
-class SimpleGraph {
-    entities: Map<string, Entity> = new Map();
-    relationships: Map<string, Relationship> = new Map();
-    adjacency: Map<string, Set<string>> = new Map(); // entityId -> set of connected entityIds
+const entityRow = (id: string, scope = channelId): Row => ({
+    _id: id, channelId: scope, name: id, type: EntityType.Concept,
+    merged: false, createdAt: new Date(1), updatedAt: new Date(1)
+});
 
-    addEntity(entity: Entity): void {
-        this.entities.set(entity.id, entity);
-        this.adjacency.set(entity.id, new Set());
-    }
+const relationshipRow = (
+    id: string, fromEntityId: string, toEntityId: string, scope = channelId
+): Row => ({
+    _id: id, fromEntityId, toEntityId, channelId: scope,
+    type: RelationshipType.RELATED_TO, confidence: 0.8, weight: 2,
+    createdAt: new Date(1), updatedAt: new Date(1)
+});
 
-    addRelationship(rel: Relationship): void {
-        this.relationships.set(rel.id, rel);
-        this.adjacency.get(rel.fromEntityId)?.add(rel.toEntityId);
-        this.adjacency.get(rel.toEntityId)?.add(rel.fromEntityId);
-    }
+describe('Production knowledge-graph traversal properties', () => {
+    afterEach(() => jest.restoreAllMocks());
 
-    getNeighbors(entityId: string): string[] {
-        return Array.from(this.adjacency.get(entityId) || []);
-    }
+    it('finds generated directed chains within the hop limit and excludes foreign shortcuts', async () => {
+        await fc.assert(fc.asyncProperty(fc.integer({ min: 1, max: 8 }), async hops => {
+            jest.restoreAllMocks();
+            const ids = Array.from({ length: hops + 1 }, (_, index) => `node-${index}`);
+            const relationships = ids.slice(1).map((id, index) =>
+                relationshipRow(`edge-${index}`, ids[index], id));
+            relationships.push(relationshipRow('foreign-shortcut', ids[0], ids[hops], 'foreign'));
+            // A cycle must not lead traversal to repeat vertices.
+            relationships.push(relationshipRow('back-edge', ids[hops], ids[0]));
+            installRows(ids.map(id => entityRow(id)), relationships);
 
-    findPath(fromId: string, toId: string, maxHops: number): string[] | null {
-        if (fromId === toId) return [fromId];
-        if (!this.entities.has(fromId) || !this.entities.has(toId)) return null;
+            const path = await repository.findPath(ids[0], ids[hops], hops, channelId);
+            expect(path?.entityIds).toEqual(ids);
+            expect(path?.relationshipIds).toEqual(ids.slice(1).map((_, index) => `edge-${index}`));
+            expect(path?.length).toBe(hops);
+            expect(path?.totalWeight).toBe(hops * 2);
+            expect(path?.confidence).toBeCloseTo(Math.pow(0.8, hops), 12);
+            expect(await repository.findPath(ids[0], ids[hops], hops - 1, channelId)).toBeNull();
+            expect(await repository.findPath(ids[0], 'absent', hops + 1, channelId)).toBeNull();
+        }), { numRuns: 50 });
+    });
 
-        // BFS for shortest path
-        const visited = new Set<string>([fromId]);
-        const queue: Array<{ id: string; path: string[] }> = [{ id: fromId, path: [fromId] }];
+    it('returns a direct edge as the shortest path when a longer alternative exists', async () => {
+        await fc.assert(fc.asyncProperty(fc.integer({ min: 1, max: 6 }), async middleCount => {
+            jest.restoreAllMocks();
+            const ids = ['start', ...Array.from({ length: middleCount }, (_, i) => `middle-${i}`), 'end'];
+            const edges = ids.slice(1).map((id, i) => relationshipRow(`edge-${i}`, ids[i], id));
+            edges.push(relationshipRow('direct', 'start', 'end'));
+            installRows(ids.map(id => entityRow(id)), edges);
 
-        while (queue.length > 0) {
-            const { id, path } = queue.shift()!;
-            // If current path already has maxHops edges, we can't add more
-            if (path.length > maxHops) continue;
+            expect((await repository.findPath('start', 'end', ids.length, channelId))?.entityIds)
+                .toEqual(['start', 'end']);
+            expect(await repository.findPath('end', 'start', ids.length, channelId)).toBeNull();
+        }), { numRuns: 30 });
+    });
 
-            const neighbors = this.getNeighbors(id);
-            for (const neighbor of neighbors) {
-                if (neighbor === toId) {
-                    return [...path, neighbor];
-                }
-                if (!visited.has(neighbor)) {
-                    visited.add(neighbor);
-                    queue.push({ id: neighbor, path: [...path, neighbor] });
+    it('returns exactly the requested neighbor directions with matching scoped relationships', async () => {
+        await fc.assert(fc.asyncProperty(
+            fc.array(fc.boolean(), { minLength: 1, maxLength: 12 }),
+            fc.constantFrom<'incoming' | 'outgoing' | 'both'>('incoming', 'outgoing', 'both'),
+            async (outgoing, direction) => {
+                jest.restoreAllMocks();
+                const ids = outgoing.map((_, index) => `neighbor-${index}`);
+                const edges = ids.map((id, index) => relationshipRow(`edge-${index}`,
+                    outgoing[index] ? 'center' : id, outgoing[index] ? id : 'center'));
+                edges.push(relationshipRow('foreign-edge', 'center', 'foreign-node', 'foreign'));
+                installRows([entityRow('center'), ...ids.map(id => entityRow(id)), entityRow('foreign-node', 'foreign')], edges);
+
+                const result = await repository.getNeighbors('center', { direction }, channelId);
+                const expected = ids.filter((_, index) => direction === 'both' ||
+                    outgoing[index] === (direction === 'outgoing'));
+                expect(result.entities.map(entity => entity.id).sort()).toEqual([...expected].sort());
+                expect(result.relationships).toHaveLength(expected.length);
+                expect(result.relationships.every(edge => edge.channelId === channelId)).toBe(true);
+                for (const entity of result.entities) {
+                    const reverse = await repository.getNeighbors(entity.id, { direction: 'both' }, channelId);
+                    expect(reverse.entities.map(neighbor => neighbor.id)).toContain('center');
                 }
             }
-        }
+        ), { numRuns: 50 });
+    });
+});
 
-        return null;
-    }
-}
+describe('Production entity Q-value properties', () => {
+    const manager = EntityQValueManager.getInstance();
+    afterEach(() => jest.restoreAllMocks());
 
-/**
- * Arbitrary for generating entity types
- */
-const entityTypeArbitrary = fc.constantFrom(
-    EntityType.Person,
-    EntityType.Organization,
-    EntityType.Project,
-    EntityType.Technology,
-    EntityType.Concept
-);
+    it('updates persisted entities with bounded rewards and converges to the normalized target', async () => {
+        await fc.assert(fc.asyncProperty(
+            fc.double({ min: 0, max: 1, noNaN: true }),
+            fc.double({ min: -1, max: 1, noNaN: true }),
+            async (initialQ, reward) => {
+                jest.restoreAllMocks();
+                const entity: Entity = {
+                    id: 'rewarded', channelId, name: 'Rewarded', type: EntityType.Concept,
+                    aliases: [], properties: {}, utility: { ...DEFAULT_ENTITY_UTILITY, qValue: initialQ },
+                    confidence: 0.8, source: 'test', sourceMemoryIds: [],
+                    createdAt: 1, updatedAt: 1, merged: false
+                };
+                jest.spyOn(repository, 'getEntity').mockImplementation(async (id, scope) =>
+                    id === entity.id && scope === channelId ? entity : null);
+                const persist = jest.spyOn(repository, 'updateEntityQValue').mockImplementation(async (id, scope, qValue) => {
+                    expect(id).toBe(entity.id);
+                    expect(scope).toBe(channelId);
+                    entity.utility.qValue = qValue;
+                    return entity;
+                });
 
-/**
- * Arbitrary for generating relationship types
- */
-const relationshipTypeArbitrary = fc.constantFrom(
-    RelationshipType.WORKS_ON,
-    RelationshipType.USES,
-    RelationshipType.DEPENDS_ON,
-    RelationshipType.OWNS,
-    RelationshipType.CREATED,
-    RelationshipType.RELATED_TO
-);
-
-/**
- * Arbitrary for generating Q-values (bounded)
- */
-const qValueArbitrary = fc.double({ min: 0, max: 1, noNaN: true });
-
-/**
- * Arbitrary for generating a simple graph
- */
-function graphArbitrary(maxEntities: number = 10): fc.Arbitrary<SimpleGraph> {
-    return fc.record({
-        entityCount: fc.integer({ min: 1, max: maxEntities }),
-        relationshipIndices: fc.array(
-            fc.tuple(
-                fc.integer({ min: 0, max: maxEntities - 1 }),
-                fc.integer({ min: 0, max: maxEntities - 1 })
-            ),
-            { maxLength: maxEntities * 2 }
-        ),
-        entityTypes: fc.array(entityTypeArbitrary, { minLength: maxEntities, maxLength: maxEntities }),
-        relationshipTypes: fc.array(relationshipTypeArbitrary, { maxLength: maxEntities * 2 }),
-        qValues: fc.array(qValueArbitrary, { minLength: maxEntities, maxLength: maxEntities }),
-    }).map(({ entityCount, relationshipIndices, entityTypes, relationshipTypes, qValues }) => {
-        const graph = new SimpleGraph();
-
-        // Add entities
-        for (let i = 0; i < entityCount; i++) {
-            graph.addEntity(createEntity(
-                `e${i}`,
-                `Entity ${i}`,
-                entityTypes[i % entityTypes.length],
-                'test',
-                qValues[i % qValues.length]
-            ));
-        }
-
-        // Add relationships (no self-loops)
-        let relIndex = 0;
-        for (const [from, to] of relationshipIndices) {
-            if (from !== to && from < entityCount && to < entityCount) {
-                const relId = `r${relIndex}`;
-                const relType = relationshipTypes[relIndex % relationshipTypes.length];
-                const rel = createRelationship(relId, `e${from}`, `e${to}`, relType);
-                graph.addRelationship(rel);
-                relIndex++;
+                const target = (reward + 1) / 2;
+                for (let iteration = 0; iteration < 80; iteration++) {
+                    const result = await manager.updateEntityQValue({
+                        entityId: entity.id, channelId, reward, reason: 'property reward'
+                    });
+                    expect(result?.newQValue).toBeGreaterThanOrEqual(0);
+                    expect(result?.newQValue).toBeLessThanOrEqual(1);
+                    expect(result?.newQValue).toBe(entity.utility.qValue);
+                }
+                expect(persist).toHaveBeenCalledTimes(80);
+                expect(Math.abs(entity.utility.qValue - target))
+                    .toBeLessThanOrEqual(Math.pow(0.9, 80) * Math.abs(initialQ - target) + 1e-12);
             }
-        }
-
-        return graph;
-    });
-}
-
-describe('Knowledge Graph Property Tests', () => {
-    describe('Entity Lookup Properties', () => {
-        it('creating then finding entity returns same entity', () => {
-            fc.assert(
-                fc.property(
-                    fc.string({ minLength: 1, maxLength: 50 }),
-                    entityTypeArbitrary,
-                    qValueArbitrary,
-                    (name, type, qValue) => {
-                        const graph = new SimpleGraph();
-                        const entity = createEntity('test-id', name, type, 'test', qValue);
-                        graph.addEntity(entity);
-
-                        const found = graph.entities.get('test-id');
-                        return found !== undefined &&
-                            found.name === name &&
-                            found.type === type &&
-                            Math.abs(found.utility.qValue - qValue) < 0.001;
-                    }
-                ),
-                { numRuns: 100 }
-            );
-        });
-
-        it('entity not in graph returns undefined', () => {
-            fc.assert(
-                fc.property(
-                    graphArbitrary(),
-                    fc.string({ minLength: 20, maxLength: 30 }), // unlikely to match
-                    (graph, unknownId) => {
-                        const found = graph.entities.get(unknownId);
-                        return found === undefined;
-                    }
-                ),
-                { numRuns: 50 }
-            );
-        });
-    });
-
-    describe('Path Finding Properties', () => {
-        it('findPath returns path only if path exists', () => {
-            fc.assert(
-                fc.property(
-                    graphArbitrary(),
-                    fc.integer({ min: 0, max: 9 }),
-                    fc.integer({ min: 0, max: 9 }),
-                    fc.integer({ min: 1, max: 5 }),
-                    (graph, fromIdx, toIdx, maxHops) => {
-                        const fromId = `e${fromIdx}`;
-                        const toId = `e${toIdx}`;
-
-                        if (!graph.entities.has(fromId) || !graph.entities.has(toId)) {
-                            return true; // Skip if entities don't exist
-                        }
-
-                        const path = graph.findPath(fromId, toId, maxHops);
-
-                        if (path === null) {
-                            return true; // No path found is valid
-                        }
-
-                        // Verify path is valid
-                        if (path[0] !== fromId || path[path.length - 1] !== toId) {
-                            return false;
-                        }
-
-                        // Verify path length respects maxHops
-                        if (path.length - 1 > maxHops) {
-                            return false;
-                        }
-
-                        // Verify each step in path has an edge
-                        for (let i = 0; i < path.length - 1; i++) {
-                            const neighbors = graph.getNeighbors(path[i]);
-                            if (!neighbors.includes(path[i + 1])) {
-                                return false;
-                            }
-                        }
-
-                        return true;
-                    }
-                ),
-                { numRuns: 100 }
-            );
-        });
-
-        it('path from A to A returns single-element path', () => {
-            fc.assert(
-                fc.property(
-                    graphArbitrary(),
-                    fc.integer({ min: 0, max: 9 }),
-                    (graph, idx) => {
-                        const entityId = `e${idx}`;
-                        if (!graph.entities.has(entityId)) {
-                            return true;
-                        }
-
-                        const path = graph.findPath(entityId, entityId, 5);
-                        return path !== null && path.length === 1 && path[0] === entityId;
-                    }
-                ),
-                { numRuns: 50 }
-            );
-        });
-    });
-
-    describe('Neighbor Query Properties', () => {
-        it('getNeighbors returns only connected entities', () => {
-            fc.assert(
-                fc.property(
-                    graphArbitrary(),
-                    fc.integer({ min: 0, max: 9 }),
-                    (graph, idx) => {
-                        const entityId = `e${idx}`;
-                        if (!graph.entities.has(entityId)) {
-                            return true;
-                        }
-
-                        const neighbors = graph.getNeighbors(entityId);
-
-                        // Every neighbor should be connected via a relationship
-                        for (const neighborId of neighbors) {
-                            let hasConnection = false;
-                            for (const rel of graph.relationships.values()) {
-                                if (
-                                    (rel.fromEntityId === entityId && rel.toEntityId === neighborId) ||
-                                    (rel.fromEntityId === neighborId && rel.toEntityId === entityId)
-                                ) {
-                                    hasConnection = true;
-                                    break;
-                                }
-                            }
-                            if (!hasConnection) {
-                                return false;
-                            }
-                        }
-
-                        return true;
-                    }
-                ),
-                { numRuns: 100 }
-            );
-        });
-
-        it('neighbors are symmetric (undirected graph view)', () => {
-            fc.assert(
-                fc.property(
-                    graphArbitrary(),
-                    fc.integer({ min: 0, max: 9 }),
-                    (graph, idx) => {
-                        const entityId = `e${idx}`;
-                        if (!graph.entities.has(entityId)) {
-                            return true;
-                        }
-
-                        const neighbors = graph.getNeighbors(entityId);
-
-                        for (const neighborId of neighbors) {
-                            const reverseNeighbors = graph.getNeighbors(neighborId);
-                            if (!reverseNeighbors.includes(entityId)) {
-                                return false; // Not symmetric
-                            }
-                        }
-
-                        return true;
-                    }
-                ),
-                { numRuns: 50 }
-            );
-        });
-    });
-
-    describe('Q-Value Properties', () => {
-        it('Q-value updates are bounded (0-1)', () => {
-            fc.assert(
-                fc.property(
-                    qValueArbitrary,
-                    fc.array(fc.double({ min: -1, max: 1, noNaN: true }), { minLength: 1, maxLength: 50 }),
-                    fc.double({ min: 0.01, max: 0.5, noNaN: true }),
-                    (initialQ, rewards, learningRate) => {
-                        let q = initialQ;
-
-                        for (const reward of rewards) {
-                            q = q + learningRate * (reward - q);
-                            q = Math.max(0, Math.min(1, q)); // Clamp
-                        }
-
-                        return q >= 0 && q <= 1;
-                    }
-                ),
-                { numRuns: 100 }
-            );
-        });
-
-        it('Q-value converges towards consistent rewards', () => {
-            fc.assert(
-                fc.property(
-                    qValueArbitrary,
-                    fc.double({ min: 0, max: 1, noNaN: true }),
-                    fc.integer({ min: 50, max: 100 }),
-                    (initialQ, reward, iterations) => {
-                        let q = initialQ;
-                        const learningRate = 0.1;
-
-                        for (let i = 0; i < iterations; i++) {
-                            q = q + learningRate * (reward - q);
-                            q = Math.max(0, Math.min(1, q));
-                        }
-
-                        // After many iterations with same reward, Q should be close to reward
-                        return Math.abs(q - reward) < 0.1;
-                    }
-                ),
-                { numRuns: 50 }
-            );
-        });
-
-        it('higher Q-values rank entities higher', () => {
-            fc.assert(
-                fc.property(
-                    fc.array(qValueArbitrary, { minLength: 3, maxLength: 10 }),
-                    fc.double({ min: 0, max: 1, noNaN: true }), // lambda
-                    (qValues, lambda) => {
-                        const entities = qValues.map((q, i) =>
-                            createEntity(`e${i}`, `Entity ${i}`, EntityType.Concept, 'test', q)
-                        );
-
-                        // Sort by Q-value descending
-                        const sorted = [...entities].sort(
-                            (a, b) => b.utility.qValue - a.utility.qValue
-                        );
-
-                        // First entity should have highest Q
-                        const maxQ = Math.max(...qValues);
-                        return sorted[0].utility.qValue === maxQ;
-                    }
-                ),
-                { numRuns: 50 }
-            );
-        });
-    });
-
-    describe('Relationship Properties', () => {
-        it('relationship connects two existing entities', () => {
-            fc.assert(
-                fc.property(
-                    graphArbitrary(),
-                    (graph) => {
-                        for (const rel of graph.relationships.values()) {
-                            if (!graph.entities.has(rel.fromEntityId) ||
-                                !graph.entities.has(rel.toEntityId)) {
-                                return false;
-                            }
-                        }
-                        return true;
-                    }
-                ),
-                { numRuns: 100 }
-            );
-        });
-
-        it('no self-referential relationships', () => {
-            fc.assert(
-                fc.property(
-                    graphArbitrary(),
-                    (graph) => {
-                        for (const rel of graph.relationships.values()) {
-                            if (rel.fromEntityId === rel.toEntityId) {
-                                return false;
-                            }
-                        }
-                        return true;
-                    }
-                ),
-                { numRuns: 100 }
-            );
-        });
-    });
-
-    describe('Surprise Score Properties', () => {
-        it('surprise score is bounded (0-1)', () => {
-            fc.assert(
-                fc.property(
-                    fc.double({ min: 0, max: 1, noNaN: true }), // conflict factor
-                    fc.double({ min: 0, max: 1, noNaN: true }), // pattern surprise
-                    fc.double({ min: 0, max: 1, noNaN: true }), // q-diff
-                    fc.double({ min: 0, max: 1, noNaN: true }), // confidence
-                    (conflictFactor, patternSurprise, qDiff, confidence) => {
-                        // Simulate surprise calculation
-                        let score = 0;
-
-                        if (conflictFactor > 0.5) score += 0.4;
-                        score += patternSurprise * 0.3;
-                        if (qDiff > 0.5) score += qDiff * 0.2;
-                        if (confidence < 0.5) score += (1 - confidence) * 0.2;
-
-                        score = Math.min(1, score);
-
-                        return score >= 0 && score <= 1;
-                    }
-                ),
-                { numRuns: 100 }
-            );
-        });
-    });
-
-    describe('Entity Similarity Properties', () => {
-        /**
-         * Simple name similarity (Jaccard on character trigrams)
-         */
-        function nameSimilarity(name1: string, name2: string): number {
-            const trigrams1 = new Set<string>();
-            const trigrams2 = new Set<string>();
-
-            const n1 = name1.toLowerCase();
-            const n2 = name2.toLowerCase();
-
-            for (let i = 0; i <= n1.length - 3; i++) {
-                trigrams1.add(n1.substring(i, i + 3));
-            }
-            for (let i = 0; i <= n2.length - 3; i++) {
-                trigrams2.add(n2.substring(i, i + 3));
-            }
-
-            if (trigrams1.size === 0 && trigrams2.size === 0) return 1;
-            if (trigrams1.size === 0 || trigrams2.size === 0) return 0;
-
-            const intersection = new Set([...trigrams1].filter(t => trigrams2.has(t)));
-            const union = new Set([...trigrams1, ...trigrams2]);
-
-            return intersection.size / union.size;
-        }
-
-        it('similarity is symmetric', () => {
-            fc.assert(
-                fc.property(
-                    fc.string({ minLength: 3, maxLength: 20 }),
-                    fc.string({ minLength: 3, maxLength: 20 }),
-                    (name1, name2) => {
-                        const sim1 = nameSimilarity(name1, name2);
-                        const sim2 = nameSimilarity(name2, name1);
-                        return Math.abs(sim1 - sim2) < 0.001;
-                    }
-                ),
-                { numRuns: 100 }
-            );
-        });
-
-        it('similarity with self is 1', () => {
-            fc.assert(
-                fc.property(
-                    fc.string({ minLength: 3, maxLength: 20 }),
-                    (name) => {
-                        const sim = nameSimilarity(name, name);
-                        return sim === 1;
-                    }
-                ),
-                { numRuns: 50 }
-            );
-        });
-
-        it('similarity is bounded (0-1)', () => {
-            fc.assert(
-                fc.property(
-                    fc.string({ minLength: 3, maxLength: 20 }),
-                    fc.string({ minLength: 3, maxLength: 20 }),
-                    (name1, name2) => {
-                        const sim = nameSimilarity(name1, name2);
-                        return sim >= 0 && sim <= 1;
-                    }
-                ),
-                { numRuns: 100 }
-            );
-        });
+        ), { numRuns: 40 });
     });
 });

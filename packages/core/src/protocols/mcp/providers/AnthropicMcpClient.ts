@@ -385,7 +385,7 @@ export class AnthropicMcpClient extends BaseMcpClient {
             
             // Prepare request parameters
             const model = options?.model || this.config.defaultModel || 'claude-3-opus-20240229';
-            const temperature = options?.temperature || this.config.temperature || 0.7;
+            const temperature = options?.temperature ?? this.config.temperature ?? 0.7;
             const maxTokens = options?.maxTokens || this.config.maxTokens || 4096;
             
             // Prepare request body
@@ -480,7 +480,7 @@ export class AnthropicMcpClient extends BaseMcpClient {
 
         // Prepare request parameters
         const model = options?.model || this.config.defaultModel || 'claude-3-opus-20240229';
-        const temperature = options?.temperature || this.config.temperature || 0.7;
+        const temperature = options?.temperature ?? this.config.temperature ?? 0.7;
         const maxTokens = options?.maxTokens || this.config.maxTokens || 4096;
 
         // Prepare request body - Anthropic uses system as a top-level parameter

@@ -547,7 +547,7 @@ export class OpenAiMcpClient extends BaseMcpClient {
         };
         
         // Add optional parameters
-        if (options?.temperature) {
+        if (options?.temperature !== undefined) {
             params.temperature = options.temperature;
         }
         

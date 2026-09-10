@@ -25,6 +25,7 @@
  * for LLM agents. Handles both single-agent and multi-agent task scenarios.
  */
 
+import type { SimpleTaskRequest } from '@mxf-dev/core/interfaces/TaskInterfaces';
 import { Logger } from '@mxf-dev/core/utils/Logger';
 import { TaskHelpers, AgentContext } from '../MxfAgentHelpers.js';
 import { IntentFormulationHelper } from '../helpers/IntentFormulationHelper.js';
@@ -32,8 +33,7 @@ import { IntentFormulationHelper } from '../helpers/IntentFormulationHelper.js';
 export interface TaskExecutionCallbacks {
     generateResponse: (prompt: string | null, tools?: any[], taskPrompt?: string) => Promise<string>;
     getCachedTools: () => any[];
-    setCurrentTask: (task: any) => void;
-    getCurrentTask: () => any;
+    onTaskStarted: (task: SimpleTaskRequest) => void;
     updateSystemPromptForTask: (task: any) => Promise<void>;
     isToolGatekeepingDisabled: () => boolean;
     getAllowedTools: () => string[] | undefined;  // Get agent's allowed tools list
@@ -43,7 +43,10 @@ export class MxfTaskExecutionManager {
     private logger: Logger;
     private agentId: string;
     private callbacks: TaskExecutionCallbacks;
-    private currentTask: any = null;
+    private currentTask: SimpleTaskRequest | null = null;
+    private executionGeneration = 0;
+    /** A new assignment after a terminal event waits for the previous turn to drain. */
+    private executionDrain: Promise<void> | null = null;
     private taskExecutionStartTime: number = 0;
     private taskExecutionMetrics: Map<string, any> = new Map();
 
@@ -57,19 +60,32 @@ export class MxfTaskExecutionManager {
      * Execute a task request in a continuous loop until completion
      */
     public async executeTask(taskRequest: any): Promise<any> {
+        if (!taskRequest || typeof taskRequest.taskId !== 'string' || !taskRequest.taskId.trim()) {
+            throw new Error('Task execution requires a non-empty taskId');
+        }
+        if (this.currentTask) {
+            throw new Error(`Agent ${this.agentId} is already executing task ${this.currentTask.taskId}`);
+        }
+        const generation = ++this.executionGeneration;
+        const previousDrain = this.executionDrain;
+        let releaseDrain!: () => void;
+        const drain = new Promise<void>(resolve => { releaseDrain = resolve; });
+        this.executionDrain = drain;
+        // Admission is synchronous, before prompt preparation or ORPAR can yield.
+        this.currentTask = taskRequest;
         this.taskExecutionStartTime = Date.now();
         
         try {
-            // Track current task context for tool gatekeeper
-            this.currentTask = taskRequest;
-            this.callbacks.setCurrentTask(taskRequest);
-            
-            // Update system prompt based on task context
-            if (taskRequest.metadata) {
-                await this.callbacks.updateSystemPromptForTask(taskRequest);
+            if (previousDrain) {
+                await previousDrain;
             }
+            if (generation !== this.executionGeneration || !this.currentTask) return;
+            this.callbacks.onTaskStarted(taskRequest);
+            await this.callbacks.updateSystemPromptForTask(taskRequest);
+            if (generation !== this.executionGeneration || !this.currentTask) return;
             
             await this.executeTaskLoop(taskRequest);
+            if (generation !== this.executionGeneration) return;
             
             const executionTime = Date.now() - this.taskExecutionStartTime;
             
@@ -82,12 +98,13 @@ export class MxfTaskExecutionManager {
                 content: 'Task processing initiated - agent will signal completion via task_complete tool'
             };
         } catch (error) {
+            if (generation !== this.executionGeneration) return;
             this.logger.error(`Error executing task ${taskRequest.taskId}: ${error}`);
+            this.clearCurrentTask('execution failed');
             throw error;
         } finally {
-            // Don't clear current task context here - let it be cleared when task_complete is called
-            // This prevents rapid fire tool calls due to "No active task" fallback logic
-            // The task context will be cleared in MxfAgent when task_complete is detected
+            releaseDrain();
+            if (this.executionDrain === drain) this.executionDrain = null;
         }
     }
 
@@ -278,8 +295,13 @@ ${intentGuidance}${planningGuidance}`;
     /**
      * Get current task information
      */
-    public getCurrentTask(): any {
+    public getCurrentTask(): SimpleTaskRequest | null {
         return this.currentTask;
+    }
+
+    /** Identity captured by asynchronous work to reject results from a superseded turn. */
+    public getExecutionGeneration(): number {
+        return this.executionGeneration;
     }
 
     /**
@@ -374,7 +396,6 @@ ${intentGuidance}${planningGuidance}`;
         }
         this.logger.info(`Task ${this.currentTask.taskId} ended (${reason}); agent is idle until the next assignment`);
         this.currentTask = null;
-        this.callbacks.setCurrentTask(null);
     }
 
     /**
@@ -397,7 +418,6 @@ ${intentGuidance}${planningGuidance}`;
             
             // Clear current task
             this.currentTask = null;
-            this.callbacks.setCurrentTask(null);
         }
     }
 
@@ -460,10 +480,8 @@ This task involves mathematical calculations. When using 'tools_recommend' to di
      * Cleanup task execution manager
      */
     public cleanup(): void {
-        
-        if (this.currentTask) {
-            this.cancelCurrentTask('Manager cleanup');
-        }
+        // End admission state; a later assignment receives a new generation.
+        this.cancelCurrentTask('Manager cleanup');
         
         this.taskExecutionMetrics.clear();
     }

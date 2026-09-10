@@ -39,7 +39,7 @@ jest.mock('@mxf-dev/core/services/AutoCorrectionService', () => ({
 }));
 
 import { Events } from '@mxf-dev/core/events/EventNames';
-import { ExternalMcpServerManager } from '@mxf-dev/core/protocols/mcp/services/ExternalMcpServerManager';
+import { ExternalMcpServerManager, ExternalServerConfig } from '@mxf-dev/core/protocols/mcp/services/ExternalMcpServerManager';
 
 const registrationPayload = {
     agentId: 'admin-1',
@@ -78,5 +78,38 @@ describe('ExternalMcpServerManager EventBus lifecycle', () => {
         expect(firstRegister).toHaveBeenCalledTimes(1);
         expect(secondRegister).toHaveBeenCalledTimes(1);
         await second.shutdown();
+    });
+
+    it.each(['sse', 'http'])('refuses %s registration before spawning a process', async transport => {
+        const manager = new ExternalMcpServerManager();
+        const start = jest.spyOn(manager, 'startServer').mockResolvedValue(undefined);
+        try {
+            await expect(manager.registerServer({
+                id: 'invalid-transport', name: 'Invalid transport', version: '1.0.0',
+                command: 'must-not-run', args: [], autoStart: true,
+                restartOnCrash: false, healthCheckInterval: 30000,
+                maxRestartAttempts: 0, startupTimeout: 10000,
+                transport: transport as ExternalServerConfig['transport']
+            })).rejects.toThrow(/Unsupported MCP transport|HTTP transport registration is not implemented/);
+            expect(start).not.toHaveBeenCalled();
+        } finally {
+            await manager.shutdown();
+        }
+    });
+
+    it('refuses HTTP channel registration before its transport can be discarded', async () => {
+        const manager = new ExternalMcpServerManager();
+        const register = jest.spyOn(manager, 'registerChannelServer').mockResolvedValue(undefined);
+        try {
+            mockEventEmit(Events.Mcp.CHANNEL_SERVER_REGISTER, registrationPayload);
+            await Promise.resolve();
+            expect(register).not.toHaveBeenCalled();
+            expect(mockEventEmit).toHaveBeenCalledWith(
+                Events.Mcp.CHANNEL_SERVER_REGISTRATION_FAILED,
+                expect.objectContaining({ data: expect.objectContaining({ error: expect.stringContaining('HTTP transport') }) })
+            );
+        } finally {
+            await manager.shutdown();
+        }
     });
 });

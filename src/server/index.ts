@@ -60,7 +60,7 @@ import { MxfMeilisearchService } from '@mxf-dev/core/services/MxfMeilisearchServ
 import { createEmbeddingGenerator } from './services/EmbeddingGenerator';
 import { CodeExecutionSandboxService } from '@mxf-dev/core/services/CodeExecutionSandboxService';
 import { ToolExecutionPersistenceService } from './services/ToolExecutionPersistenceService';
-import { QValueManager } from '@mxf-dev/core/services/QValueManager';
+import { initializeMemoryUtilityPersistence } from './services/MemoryUtilityLifecycle';
 import { RewardSignalProcessor } from '@mxf-dev/core/services/RewardSignalProcessor';
 import { UtilityScorerService } from '@mxf-dev/core/services/UtilityScorerService';
 import { OrparMemoryCoordinator } from '@mxf-dev/core/services/orpar-memory/OrparMemoryCoordinator';
@@ -89,6 +89,7 @@ import { UserInputRequestManager } from '@mxf-dev/core/services/UserInputRequest
 import { assertJwtSecretConfigured } from './api/security/jwtTokenPolicy';
 import {
     registerServerHealthRoutes,
+    requireServerReady,
     ServerRuntimeState
 } from './services/ServerRuntimeState';
 import { listenForHttpServer } from './services/HttpServerLifecycle';
@@ -170,7 +171,10 @@ const io = new socketIo(server, {
     pingInterval: 60000,  // 1 minute - send ping interval (increased from 25s default)
     // Additional connection settings for stability during LLM processing
     connectTimeout: 60000, // 1 minute - connection timeout
-    maxHttpBufferSize: socketMaxHttpBufferSize
+    maxHttpBufferSize: socketMaxHttpBufferSize,
+    allowRequest: (_request, callback): void => {
+        callback(null, runtimeState.getLifecycle() === 'ready');
+    }
 });
 
 // Make Socket.IO instance available to controllers
@@ -235,6 +239,10 @@ const closeHttpServer = async (): Promise<void> => {
 };
 
 const shutdownCoordinator = new ServerShutdownCoordinator([
+    // Close prompt admission before waiting on startup, transports, or handlers.
+    // A REST user_input call holds its HTTP request open until its prompt settles.
+    { name: 'user-input-requests', run: (): void => { UserInputRequestManager.stopAcceptingRequests(); } },
+    { name: 'startup', run: (): Promise<void> => runtimeState.waitForStartupCompletion() },
     {
         name: 'socket-ingress',
         run: async (): Promise<void> => { await socketService?.shutdown(); }
@@ -251,7 +259,6 @@ const shutdownCoordinator = new ServerShutdownCoordinator([
     { name: 'periodic-producers', run: (): void => { taskService?.stopPeriodicWork(); } },
     { name: 'accepted-event-work', run: (): Promise<void> => EventBus.drain() },
     { name: 'task-handlers', run: shutdownTaskHandlers },
-    { name: 'user-input-requests', run: (): void => { UserInputRequestManager.shutdownExisting(); } },
     { name: 'task-orchestration', run: (): void => { taskService?.shutdown(); } },
     { name: 'orpar-memory', run: (): void => { orparMemoryCoordinator?.shutdown(); } },
     { name: 'ephemeral-patterns', run: (): void => { ephemeralEventPatternService?.shutdown(); } },
@@ -323,6 +330,10 @@ const shutdownCoordinator = new ServerShutdownCoordinator([
     { name: 'event-bus', run: (): void => { EventBus.server.cleanup(); } },
     { name: 'database', run: closeDatabase }
 ], [
+    { before: 'user-input-requests', after: 'startup' },
+    { before: 'startup', after: 'socket-ingress' },
+    { before: 'user-input-requests', after: 'http-ingress' },
+    { before: 'user-input-requests', after: 'accepted-event-work' },
     { before: 'socket-ingress', after: 'accepted-event-work' },
     { before: 'http-ingress', after: 'accepted-event-work' },
     { before: 'http-ingress', after: 'demo-processes' },
@@ -331,7 +342,6 @@ const shutdownCoordinator = new ServerShutdownCoordinator([
     { before: 'socket-ingress', after: 'periodic-producers' },
     { before: 'periodic-producers', after: 'accepted-event-work' },
     { before: 'accepted-event-work', after: 'task-handlers' },
-    { before: 'accepted-event-work', after: 'user-input-requests' },
     { before: 'accepted-event-work', after: 'task-orchestration' },
     { before: 'accepted-event-work', after: 'orpar-memory' },
     { before: 'accepted-event-work', after: 'system-llm' },
@@ -382,31 +392,24 @@ process.once('unhandledRejection', handleFatalProcessError);
 /**
  * Initialize all services and then mount API routes
  */
-const initializeServer = async () => {
+const initializeServer = async (): Promise<void> => {
     try {
         // Step 0: Initialize MemoryService with persistence FIRST (before anything else uses it)
         memoryService = MemoryService.getInstance({
             persistenceService: MemoryPersistenceService.getInstance()
         });
 
-        // Step 0.1: Give MULS a persistence sink.
-        //
-        // QValueManager already calls its persistence callback on every Q-value change and
-        // on dirty-cache eviction — but no callback was ever registered, so every learned
-        // Q-value lived only in the process cache and was lost on restart. This is the
-        // registration that makes memory-utility learning durable.
-        const qValueManager = QValueManager.getInstance();
-        if (qValueManager.isEnabled()) {
-            qValueManager.setPersistenceCallback(
-                (memoryId, utility) => memoryService.updateMemoryUtility(memoryId, utility)
-            );
-            logger.info('[Boot] MULS enabled — Q-value persistence callback registered');
+        // Step 0.1: Pair MULS persistence reads and writes. A reward cache miss
+        // reloads its learned value, so eviction or restart does not reset learning.
+        if (initializeMemoryUtilityPersistence(memoryService)) {
+            logger.info('[Boot] MULS enabled — Q-value persistence read and write callbacks registered');
         } else {
             logger.info('[Boot] MULS disabled (MEMORY_UTILITY_LEARNING_ENABLED not set)');
         }
 
         // Step 1: Connect to database
         await connectToDatabase();
+        if (!runtimeState.canContinueStartup()) return;
 
         // Step 1.5: Initialize Meilisearch if enabled
         if (process.env.ENABLE_MEILISEARCH === 'true') {
@@ -425,6 +428,7 @@ const initializeServer = async () => {
                     embeddingGenerator
                 });
                 await meilisearch.initialize();
+                if (!runtimeState.canContinueStartup()) return;
             } catch (error) {
                 logger.error(`❌ Failed to initialize Meilisearch: ${error instanceof Error ? error.message : String(error)}`);
                 throw error;
@@ -437,6 +441,7 @@ const initializeServer = async () => {
         try {
             codeExecutionSandboxService = CodeExecutionSandboxService.getInstance();
             const dockerAvailable = await codeExecutionSandboxService.initialize();
+            if (!runtimeState.canContinueStartup()) return;
             if (dockerAvailable) {
                 logger.info('Code execution sandbox initialized with Docker');
             } else {
@@ -488,12 +493,13 @@ const initializeServer = async () => {
 
         // Initialize EphemeralEventPatternService
         await ephemeralEventPatternService.initialize();
+        if (!runtimeState.canContinueStartup()) return;
 
         // Step 2.5: Initialize MULS services if enabled
         if (process.env.MEMORY_UTILITY_LEARNING_ENABLED === 'true') {
             try {
-                // Initialize all MULS services - this sets enabled=true based on env config
-                QValueManager.getInstance().initialize();
+                // Q-values and their store were initialized together before database startup.
+                // Reward processing starts only after the services it calls are available.
                 rewardSignalProcessor = RewardSignalProcessor.getInstance();
                 rewardSignalProcessor.initialize();
                 UtilityScorerService.getInstance().initialize();
@@ -544,10 +550,12 @@ const initializeServer = async () => {
             try {
                 machineLearningService = MxfMLService.getInstance();
                 await machineLearningService.initialize();
+                if (!runtimeState.canContinueStartup()) return;
                 logger.info('TensorFlow.js integration initialized');
 
                 // Step 2.9: Initialize TF.js models in the already-owned analytics service.
                 await predictiveAnalyticsService.initializeTensorFlowModels();
+                if (!runtimeState.canContinueStartup()) return;
                 logger.info('PredictiveAnalyticsService TF.js models initialized');
             } catch (error) {
                 logger.error(`Failed to initialize TensorFlow.js: ${error instanceof Error ? error.message : String(error)}`);
@@ -559,6 +567,7 @@ const initializeServer = async () => {
         try {
             hybridMcpService = ServerHybridMcpService.getInstance();
             await hybridMcpService.initialize();
+            if (!runtimeState.canContinueStartup()) return;
         } catch (error) {
             logger.error(`❌ Failed to initialize Hybrid MCP Service: ${error instanceof Error ? error.message : String(error)}`);
             throw error;
@@ -568,6 +577,7 @@ const initializeServer = async () => {
         // This listens to tool execution events and persists them to the database
         try {
             await ToolExecutionPersistenceService.getInstance().initialize();
+            if (!runtimeState.canContinueStartup()) return;
             logger.info('Tool execution persistence service initialized');
         } catch (error) {
             logger.error(`❌ Failed to initialize Tool Execution Persistence Service: ${error instanceof Error ? error.message : String(error)}`);
@@ -592,9 +602,11 @@ const initializeServer = async () => {
                 'mxf-server',
                 'system'
             );
+            if (!runtimeState.canContinueStartup()) return;
 
             // Final count
             const finalTools = await firstValueFrom(mcpToolRegistry.listTools());
+            if (!runtimeState.canContinueStartup()) return;
             loadedToolCount = finalTools.length;
 
             // Refresh the hybrid registry so it sees newly registered tools
@@ -613,6 +625,7 @@ const initializeServer = async () => {
         // NOTE: Must happen AFTER tool registration so McpService loads the new tools
         try {
             await McpService.getInstance().initialize();
+            if (!runtimeState.canContinueStartup()) return;
         } catch (error) {
             logger.error(`❌ Failed to initialize McpService: ${error}`);
             throw error;
@@ -626,6 +639,7 @@ const initializeServer = async () => {
         const toolCount = loadedToolCount;
 
         await listenForHttpServer(server, PORT);
+        if (!runtimeState.canContinueStartup()) return;
         runtimeState.markReady();
         logger.info('╔════════════════════════════════════════════════════════════════╗');
         logger.info('║              MXF Server Ready                                  ║');
@@ -638,12 +652,7 @@ const initializeServer = async () => {
     } catch (error) {
         runtimeState.markFailed();
         logger.error('❌ Server initialization failed:', error);
-        try {
-            await shutdownCoordinator.shutdown('initialization failure');
-        } catch (shutdownError) {
-            logger.error('Cleanup after server initialization failure did not complete', shutdownError);
-        }
-        process.exitCode = 1;
+        throw error;
     }
 };
 
@@ -656,7 +665,7 @@ const setupApiRoutes = (): void => {
     }
 
     // API routes with dual authentication (JWT for users, key-based for agents)
-    app.use('/api', (req, res, next) => {
+    app.use('/api', requireServerReady(runtimeState), (req, res, next) => {
         // Check if endpoint is public (doesn't require authentication)
         const isPublic = isPublicEndpoint(req.path) ||
             req.path.startsWith('/mcp/capabilities') ||
@@ -672,8 +681,15 @@ const setupApiRoutes = (): void => {
     
 };
 
-// Start the initialization process
-initializeServer();
+// Release the startup barrier before failure cleanup waits on it.
+void runtimeState.runStartup(initializeServer).catch(async (): Promise<void> => {
+    process.exitCode = 1;
+    try {
+        await shutdownCoordinator.shutdown('initialization failure');
+    } catch (shutdownError) {
+        logger.error('Cleanup after server initialization failure did not complete', shutdownError);
+    }
+});
 
 // This entry module must not export anything. When the compiled file is run
 // with `bun run dist/server/index.js`, Bun inspects the entry's exports and

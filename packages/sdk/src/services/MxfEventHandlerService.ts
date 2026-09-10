@@ -251,6 +251,9 @@ export class MxfEventHandlerService {
      * Handle agent message events with immediate feedback
      */
     private async handleAgentMessage(eventData: any, payload: BaseEventPayload<any>): Promise<void> {
+        // The manager owns this exact task object. Decoding or persistence can
+        // outlast it; the resumed event must not start work for its replacement.
+        const acceptedTask = this.callbacks.getCurrentTask();
         // Process agent messages targeted to this agent
         if (eventData.receiverId !== this.agentId) {
             return; // Not targeted to this agent
@@ -332,6 +335,7 @@ export class MxfEventHandlerService {
                 // Continue with original data
             }
         }
+        if (this.callbacks.getCurrentTask() !== acceptedTask) return;
         
         // Create immediate feedback prompt
         const toolUsedForMessage = processedEventData.metadata?.toolName || 'messaging_send';
@@ -371,6 +375,7 @@ export class MxfEventHandlerService {
         
         // Add the clean dialogue message to conversation history
         await this.callbacks.addConversationMessage(dialogueMessage);
+        if (this.callbacks.getCurrentTask() !== acceptedTask) return;
         
         // Skip immediate feedback if agent is messaging itself (tool execution in progress)
         // This prevents race conditions where feedback is triggered before tool results are added
@@ -426,6 +431,7 @@ export class MxfEventHandlerService {
      * Handle channel message events with immediate feedback
      */
     private async handleChannelMessage(eventData: any, payload: BaseEventPayload<any>): Promise<void> {
+        const acceptedTask = this.callbacks.getCurrentTask();
         // Process channel messages from other agents (not from self)
         if (eventData.senderId === this.agentId) {
             return; // Don't respond to our own messages
@@ -511,6 +517,7 @@ export class MxfEventHandlerService {
                 // Continue with original data
             }
         }
+        if (this.callbacks.getCurrentTask() !== acceptedTask) return;
         
         // Create immediate feedback prompt
         const toolUsedForMessage = processedEventData.metadata?.toolName || 'messaging_broadcast';
@@ -547,6 +554,7 @@ export class MxfEventHandlerService {
             content: immediatePrompt,
             metadata: messageMetadata
         });
+        if (this.callbacks.getCurrentTask() !== acceptedTask) return;
         
         // Provide immediate feedback
         
@@ -577,6 +585,7 @@ export class MxfEventHandlerService {
         eventData: SystemLlmChallengeEventData,
         payload: BaseEventPayload<unknown>
     ): Promise<void> {
+        const acceptedTask = this.callbacks.getCurrentTask();
         const context = eventData.context ?? {};
         const content = eventData.content;
         const text = typeof content === 'string'
@@ -630,6 +639,7 @@ export class MxfEventHandlerService {
         }
 
         await this.callbacks.addConversationMessage({ role: 'user', content: text, metadata });
+        if (this.callbacks.getCurrentTask() !== acceptedTask) return;
         this.logger.info(
             `SystemLLM ${context.stance ?? ''} challenge ${context.challengeId ?? ''} received` +
             `${context.taskId ? ` for task ${context.taskId}` : ''}; responding`
@@ -646,12 +656,14 @@ export class MxfEventHandlerService {
      * Process event response using available tools
      */
     private async processEventResponse(messageContent: string, messageMetadata: any, eventType: string): Promise<void> {
+        const acceptedTask = this.callbacks.getCurrentTask();
         // Add the event to conversation history as a user message
         await this.callbacks.addConversationMessage({
             role: 'user',
             content: messageContent,
             metadata: messageMetadata
         });
+        if (this.callbacks.getCurrentTask() !== acceptedTask) return;
 
         // Get available tools for response generation
         const availableTools = this.callbacks.getAvailableTools();
@@ -1026,6 +1038,7 @@ export class MxfEventHandlerService {
      * @private
      */
     private async handleTaskEvent(eventData: any, payload: BaseEventPayload<any>, eventType: string): Promise<void> {
+        const acceptedTask = this.callbacks.getCurrentTask();
         // Create message content from task event
         let taskContent = '';
         let shouldTriggerResponse = false;
@@ -1063,6 +1076,7 @@ export class MxfEventHandlerService {
 
         // Always add to conversation history for context
         await this.callbacks.addConversationMessage(dialogueMessage);
+        if (this.callbacks.getCurrentTask() !== acceptedTask) return;
         
         // Only trigger LLM response for initial task and completion
         if (shouldTriggerResponse) {
@@ -1085,6 +1099,7 @@ export class MxfEventHandlerService {
      * Handle message error events - provides feedback to agents for validation failures
      */
     private async handleMessageError(payload: BaseEventPayload): Promise<void> {
+        const acceptedTask = this.callbacks.getCurrentTask();
         try {
             // Check if this error is for this agent
             if (payload.agentId !== this.agentId) {
@@ -1106,6 +1121,7 @@ export class MxfEventHandlerService {
             };
 
             await this.callbacks.addConversationMessage(errorMessage);
+            if (this.callbacks.getCurrentTask() !== acceptedTask) return;
 
             // CRITICAL: Trigger a new response so the agent can see the error and correct its behavior
             // Without this, the error just sits in conversation history but never gets sent to the LLM

@@ -66,19 +66,16 @@ interface WorkflowExecutionRecord {
 }
 
 /**
- * WorkflowExecutionEngine - Server-side workflow orchestration
+ * WorkflowExecutionEngine - In-memory workflow execution registry.
  *
- * Responsibilities:
- * - Workflow execution coordination
- * - State persistence and recovery
- * - Execution monitoring and analytics
- * - Workflow template management
+ * Currently exercised by workflow tests; the server does not wire this registry
+ * into its task execution path. Definitions and execution records are process-local.
  */
 export class WorkflowExecutionEngine {
     private static instance: WorkflowExecutionEngine;
     private logger: Logger;
 
-    // In-memory storage (replace with database in production)
+    // Definitions and execution records exist only for this process lifetime.
     private workflows = new Map<string, WorkflowDefinition>();
     private executions = new Map<string, WorkflowExecutionRecord>();
     private templates = new Map<string, WorkflowTemplate>();
@@ -163,7 +160,9 @@ export class WorkflowExecutionEngine {
             executionId,
             agentId,
             channelId,
-            state: workflow.initialState || {
+            // Each execution owns its nested variables and step outputs. A
+            // structured copy retains Maps and Dates without sharing the template.
+            state: workflow.initialState ? structuredClone(workflow.initialState) : {
                 completedSteps: [],
                 failedSteps: [],
                 stepOutputs: new Map(),

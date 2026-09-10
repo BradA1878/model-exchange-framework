@@ -260,7 +260,20 @@ export function resolveWorkspacePath(
     }
 
     let existingAncestor = resolved;
-    while (!fs.existsSync(existingAncestor)) {
+    let ancestorFound = false;
+    while (!ancestorFound) {
+        try {
+            // existsSync follows symlinks and reports a dangling link as absent.
+            // Such a link is still a filesystem entry and must never be treated
+            // as a new leaf that a later write may follow outside the workspace.
+            fs.lstatSync(existingAncestor);
+            ancestorFound = true;
+            continue;
+        } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+                throw error;
+            }
+        }
         const parent = path.dirname(existingAncestor);
         if (parent === existingAncestor) {
             throw new Error(`${consumer} path has no existing workspace ancestor`);
@@ -268,7 +281,15 @@ export function resolveWorkspacePath(
         existingAncestor = parent;
     }
 
-    const realAncestor = fs.realpathSync(existingAncestor);
+    let realAncestor: string;
+    try {
+        realAncestor = fs.realpathSync(existingAncestor);
+    } catch (error) {
+        if (fs.lstatSync(existingAncestor).isSymbolicLink()) {
+            throw new Error(`${consumer} path contains an unresolved symlink`);
+        }
+        throw error;
+    }
     if (!isWithinPath(realRoot, realAncestor)) {
         throw new Error(`${consumer} path escapes MXF_WORKSPACE_ROOT through a symlink`);
     }

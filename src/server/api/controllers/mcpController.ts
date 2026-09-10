@@ -321,9 +321,15 @@ export const executeTool = async (req: Request, res: Response): Promise<void> =>
         
         // Execute tool
         McpSocketExecutor.getInstance().executeTool(name, input, context).subscribe({
-            next: (result: McpToolHandlerResult) => {
+            next: (result: McpToolHandlerResult & { isError?: boolean }) => {
+                // A completed handler may explicitly report failure. Preserve
+                // the same result semantics the socket executor exposes instead
+                // of turning its error envelope into an HTTP success.
+                const isError = result.isError === true ||
+                    result.content?.type === 'error' || result.metadata?.error === true;
                 res.status(200).json({
-                    success: true,
+                    success: !isError,
+                    isError,
                     requestId: context.requestId,
                     data: result.content,
                     metadata: result.metadata

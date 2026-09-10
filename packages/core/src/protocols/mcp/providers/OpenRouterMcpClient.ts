@@ -748,7 +748,7 @@ export class OpenRouterMcpClient extends BaseMcpClient {
         const useExacto = options?.useExactoVariant !== false;
         model = this.applyExactoVariant(model, useExacto);
 
-        const temperature = options?.temperature || this.config.temperature || 0.7;
+        const temperature = options?.temperature ?? this.config.temperature ?? 0.7;
         const maxTokens = options?.maxTokens || this.config.maxTokens || 4096;
 
         const requestBody: Record<string, any> = {
@@ -1235,7 +1235,7 @@ export class OpenRouterMcpClient extends BaseMcpClient {
             const useExacto = options?.useExactoVariant !== false; // Default: true
             model = this.applyExactoVariant(model, useExacto);
 
-            const temperature = options?.temperature || this.config.temperature || 0.7;
+            const temperature = options?.temperature ?? this.config.temperature ?? 0.7;
             const maxTokens = options?.maxTokens || this.config.maxTokens || 4096;
             
             // Prepare request body with model name as-is (OpenRouter handles model variants correctly)

@@ -702,7 +702,7 @@ export class AzureOpenAiMcpClient extends BaseMcpClient {
             const requestParams: any = {
                 model: modelName,
                 messages: azureMessages,
-                temperature: options?.temperature || this.config.temperature || 1,
+                temperature: options?.temperature ?? this.config.temperature ?? 1,
                 max_completion_tokens: options?.maxTokens || this.config.maxTokens || 4096,
                 top_p: options?.topP || 1,
                 frequency_penalty: options?.frequencyPenalty || 0,

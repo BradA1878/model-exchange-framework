@@ -521,8 +521,17 @@ const setupAdminSocketForwarding = (socket: Socket, userId: string): void => {
 
                 const isRegistration = eventName === Events.Mcp.CHANNEL_SERVER_REGISTER ||
                     eventName === Events.Mcp.EXTERNAL_SERVER_REGISTER;
+                if (isRegistration && !isStdioMcpTransport(request.data.transport)) {
+                    // Reject before publishing: channel persistence also listens
+                    // to this event and must not retain an unusable transport.
+                    emitAdminMcpFailure(
+                        eventName,
+                        payload,
+                        'HTTP transport registration is not implemented by this MXF server'
+                    );
+                    return;
+                }
                 const registrationDenied = isRegistration &&
-                    isStdioMcpTransport(request.data.transport) &&
                     !isUnsafeStdioMcpEnabled();
                 if (registrationDenied) {
                     moduleLogger.warn(

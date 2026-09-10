@@ -654,20 +654,14 @@ export class MongoKnowledgeGraphRepository implements IKnowledgeGraphRepository 
             },
         ];
 
-        const visited = new Map<string, number>(); // Track minimum path length to each node
-
         while (queue.length > 0 && paths.length < maxPaths) {
             const current = queue.shift()!;
 
             if (current.path.length > maxDepth + 1) continue;
 
-            // Check if we've found a shorter path to this node before
-            const prevLength = visited.get(current.currentId);
-            if (prevLength !== undefined && prevLength < current.path.length) {
-                continue;
-            }
-            visited.set(current.currentId, current.path.length);
-
+            // Different prefixes reaching the same vertex are distinct paths.
+            // Per-path membership below prevents cycles without discarding a
+            // longer valid route. Breadth-first order still returns shortest first.
             if (current.currentId === toEntityId && current.path.length > 1) {
                 paths.push({
                     entityIds: current.path,

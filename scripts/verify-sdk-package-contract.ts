@@ -129,6 +129,9 @@ if (internalSubpathExposed) {
 import {
     ContentFormat,
     MemoryScope,
+    MxfSDK,
+    LlmProviderType,
+    type AgentCreationConfig,
     type ChannelMemoryUpdate,
     type McpServerRegistrationResult,
     type MxfMessageOptions,
@@ -144,8 +147,28 @@ const registration: McpServerRegistrationResult = { toolsDiscovered: [] };
 const memory: ChannelMemoryUpdate = { sharedState: { verified: true } };
 const message: MxfMessageOptions = { format: ContentFormat.JSON };
 
-void [task, registration, memory, message, MemoryScope.CHANNEL];
+const agentOptions: AgentCreationConfig = {
+    agentId: 'reviewer', name: 'Reviewer', channelId: 'reviews',
+    keyId: 'key', secretKey: 'secret', llmProvider: LlmProviderType.OPENROUTER,
+    defaultModel: 'configured-by-consumer', memoryMode: 'session',
+    backfillSearchIndexOnLoad: false,
+    providerOptions: { endpoint: 'https://provider.example' }
+};
+declare const sdk: MxfSDK;
+void sdk.createAgent(agentOptions);
+const unsubscribe: () => void = sdk.onReconnected(info => {
+    const instanceId: string = info.sdkInstanceId;
+    const userId: string = info.userId;
+    const attempt: number | null = info.attempt;
+    void [instanceId, userId, attempt];
+});
+void [task, registration, memory, message, MemoryScope.CHANNEL, unsubscribe];
 `);
+    // Compile the small application example against packed declarations too.
+    for (const file of ['run.ts', 'task-outcome.ts']) {
+        await writeFile(join(consumerRoot, file),
+            await readFile(join(repositoryRoot, 'examples/recurring-review', file), 'utf8'));
+    }
     await writeFile(join(consumerRoot, 'tsconfig.json'), JSON.stringify({
         compilerOptions: {
             target: 'ES2022',
@@ -156,7 +179,7 @@ void [task, registration, memory, message, MemoryScope.CHANNEL];
             skipLibCheck: false,
             types: ['node'],
         },
-        include: ['consumer.ts'],
+        include: ['consumer.ts', 'run.ts', 'task-outcome.ts'],
     }, null, 2));
 
     const tscPath = join(repositoryRoot, 'node_modules', 'typescript', 'bin', 'tsc');

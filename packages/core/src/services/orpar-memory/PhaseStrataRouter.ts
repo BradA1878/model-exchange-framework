@@ -51,11 +51,9 @@ import { OrparMemoryEvents } from '../../events/event-definitions/OrparMemoryEve
 import {
     getOrparMemoryConfig,
     isOrparMemoryIntegrationEnabled,
-    getPhaseStrataMapping
 } from '../../config/orpar-memory.config.js';
 import { StratumManager } from '../StratumManager.js';
 import { QValueManager } from '../QValueManager.js';
-import { AgentId, ChannelId } from '../../types/ChannelContext.js';
 
 /**
  * PhaseStrataRouter routes memory queries to appropriate strata based on ORPAR phase
@@ -66,9 +64,6 @@ export class PhaseStrataRouter {
     private stratumManager: StratumManager;
     private qValueManager: QValueManager;
     private enabled: boolean = false;
-
-    // Fix #9: Named constant for access count normalization threshold
-    private static readonly ACCESS_COUNT_NORMALIZATION_THRESHOLD = 10;
 
     private constructor() {
         this.logger = new Logger('info', 'PhaseStrataRouter');
@@ -201,7 +196,24 @@ export class PhaseStrataRouter {
             limit: options.maxResults ?? 10
         };
 
-        let allMemories: MemoryEntry[] = [];
+        const candidates = new Map<string, { memory: MemoryEntry; relevance: number }>();
+        // A memory returned through multiple scopes/strata keeps its strongest
+        // query match and occupies one result slot.
+        const mergeResult = (result: MemoryRetrievalResult): void => {
+            const scored = result.memories.map(memory => {
+                const relevance = result.scores.get(memory.id);
+                if (relevance === undefined || !Number.isFinite(relevance)) {
+                    throw new Error(`Missing or invalid query relevance for memory ${memory.id}`);
+                }
+                return { memory, relevance };
+            });
+            for (const candidate of scored) {
+                const existing = candidates.get(candidate.memory.id);
+                if (!existing || candidate.relevance > existing.relevance) {
+                    candidates.set(candidate.memory.id, candidate);
+                }
+            }
+        };
         let primaryResultCount = 0;
         let secondaryResultCount = 0;
 
@@ -213,7 +225,7 @@ export class PhaseStrataRouter {
                 const primaryQuery: MemoryQuery = { ...query, strata: primaryStrata };
                 const primaryResult = await this.stratumManager.queryMemories('agent', options.agentId, primaryQuery);
                 primaryResultCount = primaryResult.memories.length;
-                allMemories = [...primaryResult.memories];
+                mergeResult(primaryResult);
             } catch (error) {
                 this.logger.error(
                     `[PhaseStrataRouter] Failed to query agent primary strata: ` +
@@ -223,12 +235,12 @@ export class PhaseStrataRouter {
             }
 
             // Query secondary strata if needed
-            if (secondaryStrata.length > 0 && allMemories.length < (options.maxResults ?? 10)) {
+            if (secondaryStrata.length > 0 && candidates.size < (options.maxResults ?? 10)) {
                 try {
                     const secondaryQuery: MemoryQuery = { ...query, strata: secondaryStrata };
                     const secondaryResult = await this.stratumManager.queryMemories('agent', options.agentId, secondaryQuery);
                     secondaryResultCount = secondaryResult.memories.length;
-                    allMemories = [...allMemories, ...secondaryResult.memories];
+                    mergeResult(secondaryResult);
                 } catch (error) {
                     this.logger.error(
                         `[PhaseStrataRouter] Failed to query agent secondary strata: ` +
@@ -246,7 +258,7 @@ export class PhaseStrataRouter {
                 const primaryQuery: MemoryQuery = { ...query, strata: primaryStrata };
                 const primaryResult = await this.stratumManager.queryMemories('channel', options.channelId, primaryQuery);
                 primaryResultCount += primaryResult.memories.length;
-                allMemories = [...allMemories, ...primaryResult.memories];
+                mergeResult(primaryResult);
             } catch (error) {
                 this.logger.error(
                     `[PhaseStrataRouter] Failed to query channel primary strata: ` +
@@ -256,12 +268,12 @@ export class PhaseStrataRouter {
             }
 
             // Query secondary strata if needed
-            if (secondaryStrata.length > 0 && allMemories.length < (options.maxResults ?? 10)) {
+            if (secondaryStrata.length > 0 && candidates.size < (options.maxResults ?? 10)) {
                 try {
                     const secondaryQuery: MemoryQuery = { ...query, strata: secondaryStrata };
                     const secondaryResult = await this.stratumManager.queryMemories('channel', options.channelId, secondaryQuery);
                     secondaryResultCount += secondaryResult.memories.length;
-                    allMemories = [...allMemories, ...secondaryResult.memories];
+                    mergeResult(secondaryResult);
                 } catch (error) {
                     this.logger.error(
                         `[PhaseStrataRouter] Failed to query channel secondary strata: ` +
@@ -272,10 +284,11 @@ export class PhaseStrataRouter {
             }
         }
 
-        // If MULS is enabled, apply utility scoring
-        if (this.qValueManager.isEnabled() && allMemories.length > 0) {
-            allMemories = this.applyUtilityScoring(allMemories, lambda);
-        }
+        // Rank the combined pool by actual query relevance, with Q-values only
+        // contributing when utility learning is enabled.
+        let allMemories = this.applyUtilityScoring(
+            [...candidates.values()], this.qValueManager.isEnabled() ? lambda : 0
+        );
 
         // Limit to max results
         const maxResults = options.maxResults ?? 10;
@@ -310,19 +323,20 @@ export class PhaseStrataRouter {
 
     /**
      * Apply utility scoring to sort memories by composite score
-     * score = (1-λ) × sim_normalized + λ × Q_normalized
+     * Relevance is min-max normalized across the combined candidate pool;
+     * Q-values already lie in [0, 1]. Equal relevance retains retrieval order.
      */
-    private applyUtilityScoring(memories: MemoryEntry[], lambda: number): MemoryEntry[] {
-        // Get Q-values for all memories
-        const memoriesWithScores = memories.map(memory => {
+    private applyUtilityScoring(
+        candidates: Array<{ memory: MemoryEntry; relevance: number }>,
+        lambda: number
+    ): MemoryEntry[] {
+        if (candidates.length === 0) return [];
+        const relevanceValues = candidates.map(candidate => candidate.relevance);
+        const minRelevance = Math.min(...relevanceValues);
+        const relevanceRange = Math.max(...relevanceValues) - minRelevance;
+        const memoriesWithScores = candidates.map(({ memory, relevance }) => {
             const qValue = this.qValueManager.getQValue(memory.id);
-            // Use access count as a proxy for base relevance (similarity)
-            // In a full implementation, this would use actual similarity scores
-            // Fix #9: Use named constant instead of magic number
-            const baseRelevance = Math.min(
-                memory.accessCount / PhaseStrataRouter.ACCESS_COUNT_NORMALIZATION_THRESHOLD,
-                1
-            );
+            const baseRelevance = relevanceRange === 0 ? 1 : (relevance - minRelevance) / relevanceRange;
 
             // Composite score: (1-λ) × relevance + λ × Q-value
             const compositeScore = (1 - lambda) * baseRelevance + lambda * qValue;

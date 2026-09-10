@@ -752,6 +752,7 @@ export function createSdkReconnectedEventPayload(
     options: { source?: string; eventId?: string; timestamp?: number; } = {}
 ): BaseEventPayload<SdkReconnectedEventData> {
     const validator = createStrictValidator('createSdkReconnectedEventPayload');
+    validator.assertIsNonEmptyString(data.sdkInstanceId, 'data.sdkInstanceId');
     validator.assertIsNonEmptyString(data.userId, 'data.userId');
     if (data.attempt !== null && (!Number.isInteger(data.attempt) || data.attempt < 0)) {
         throw new Error('data.attempt must be a non-negative integer or null');

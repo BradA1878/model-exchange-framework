@@ -1,501 +1,145 @@
 # Model Exchange Framework (MXF) Documentation
 
-Welcome to the comprehensive technical documentation for the Model Exchange Framework (MXF). This documentation is designed to help developers, product teams, and contributors understand, use, and extend the MXF platform for building sophisticated multi-agent AI systems.
+MXF runs agents that share tasks, tools, messages, and memory through a server.
+The server owns authentication, channel membership, tool permissions, and persisted
+outcomes. The SDK runs each agent's model and tool loop. Applications supply the
+roles, evidence, permitted tools, and rules for using the results.
 
-## Quick Navigation
+## Start here
 
-### 🚀 **New to MXF?**
-- **[Getting Started Guide](./getting-started.md)** - Complete introduction with examples
-- **[Docker Deployment Guide](./deployment.md)** - Production deployment with Docker
-
-### 📚 **Core Documentation**
-- **[SDK Reference](./sdk/index.md)** - TypeScript SDK for building agents
-- **[API Reference](./api/index.md)** - REST and WebSocket APIs
-- **[Tool Reference](./mxf/tool-reference.md)** - Complete guide to 100+ built-in tools
-- **[Core Architecture](./mxf/index.md)** - System design and patterns
-- **[Dashboard Guide](./dashboard/index.md)** - Web interface documentation (⚠️ in development)
-
-### 🔍 **Semantic Search & Memory**
-- **[Meilisearch Integration Guide](./meilisearch-integration.md)** - Semantic search setup and usage
-- **[Docker Deployment](./deployment.md)** - Complete stack deployment
-
-### 🔀 **DAG, Knowledge Graph & ML**
-- **[Task DAG & Knowledge Graph](./features/dag-knowledge-graph.md)** - DAG workflows and KG operations
-- **[DAG API Tools](./api/dag-tools.md)** - DAG tool reference
-- **[Knowledge Graph API Tools](./api/knowledge-graph-tools.md)** - KG tool reference
-- **[Memory Utility Learning (MULS)](./mxf/memory-utility-learning.md)** - Q-value weighted memory retrieval
-- **[ORPAR-Memory Integration](./mxf/orpar-memory-integration.md)** - Phase-aware memory coupling
-- **[User Memory](./mxf/user-memory.md)** - Cross-session memory about the user, exposed as four MCP tools
-
-### 🖥️ **Interactive CLI**
-- **[Interactive CLI Guide](./mxf/interactive-cli.md)** - TUI interface, slash commands, agent system, one-shot mode
-
-### 🤖 **Advanced Systems**
-- **[TensorFlow.js Integration](./mxf/index.md#tensorflow)** - On-device ML models
-- **[Code Execution](./mxf/code-execution.md)** - Secure sandboxed execution
-- **[Shell Execution](./mxf/shell-execution.md)** - Enhanced shell parsing, classification, sandboxing
-- **[Compaction Pipeline](./mxf/compaction-pipeline.md)** - Multi-layer compaction system
-- **[Prompting Enhancements](./mxf/prompting-enhancements.md)** - Behavioral guidance, deferred schemas
-- **[Workflow System](./mxf/workflow-system.md)** - Sequential, parallel, loop patterns
-- **[LSP Integration](./mxf/lsp-integration.md)** - Language Server Protocol bridge
-- **[P2P Foundation](./mxf/p2p-foundation.md)** - Decentralized coordination
-- **[Nested Learning](./mxf/nested-learning.md)** - Multi-timescale memory
-- **[Dynamic Inference Parameters](./mxf/dynamic-inference-parameters.md)** - Complexity-based model selection
-- **[TOON Optimization](./mxf/toon-optimization.md)** - Token-optimized encoding
-- **[Prompt Auto-Compaction](./mxf/prompt-auto-compaction.md)** - Automatic prompt compression
-
-### ⚡ **Optimization & Performance**
-- **[MXP 2.0 Protocol](./mxf/mxp-protocol.md)** - Token & bandwidth optimization protocol
-- **[MXP Technical Specification](./mxf/mxp-technical-specification.md)** - Detailed MXP architecture
-- **[MXP Enterprise Guide](./mxf/mxp-enterprise.md)** - Enterprise deployment and ROI tracking
-- **[MXP Monitoring](./mxf/mxp-monitoring.md)** - Production monitoring and analytics
-- **[MXP Troubleshooting](./mxf/mxp-troubleshooting.md)** - Diagnostic and resolution guide
-- **[Analytics & Metrics](./analytics/index.md)** - Performance tracking
-
-### 🔧 **Developer Resources**
-- **[Configuration Management](./sdk/config-manager.md)** - Feature toggles, LLM selection
-- **[SDK Managers](./sdk/managers.md)** - MCP, Memory, Prompt, Task managers
-- **[SDK Handlers](./sdk/handlers.md)** - Control loop, tools, messaging
-- **[Event System](./sdk/events.md)** - Event-driven architecture
-
----
+- [Getting started](getting-started.md): install and configure MXF.
+- [SDK guide](sdk/index.md): connect an application and create agents.
+- [Core and SDK 4.0 upgrade guide](../packages/sdk/README.md#upgrading-to-40):
+  changed persistence and reconnect contracts, plus the new session-memory option.
+- [Agent memory lifetime and task outcomes](sdk/session-memory.md): persistent
+  versus session memory, task identity, and authenticated reconnects.
+- [Recurring evidence review example](../examples/recurring-review/README.md):
+  one input file, one task, the actual terminal outcome, and connection cleanup.
+- [Framework review](reviews/2026-09-06-framework-review.md): implemented fixes,
+  remaining defects, test results, and the limits of that evidence.
 
 ## What is MXF?
 
-The **Model Exchange Framework (MXF)** is a framework for building autonomous multi-agent AI systems. It provides:
+Core, SDK, and server have separate responsibilities:
 
-### Core Capabilities
+| Component | Responsibility |
+| --- | --- |
+| `@mxf-dev/core` | Events, payload schemas, shared types, provider adapters, tools, configuration, and services |
+| `@mxf-dev/sdk` | Application client, agent execution, local context, memory synchronization, and reconnect handling |
+| Server | HTTP and Socket.IO ingress, authentication, channel and tool access, task coordination, and persistence |
+| CLI | Provisioning, configuration, interactive sessions, and task execution |
+| Desktop | Tauri application with a local SDK sidecar |
+| Dashboard | Separate `@mxf-dev/dashboard` package connecting to the server |
 
-- **🤖 Multi-Agent Collaboration**: Agents work together naturally through goal-oriented task prompting
-- **⚡ Real-Time Communication**: WebSocket-based messaging with Socket.IO
-- **Hybrid Tool System**: 100+ built-in tools plus external MCP server integration (including 3 memory search tools)
-- **🔍 Semantic Search**: Meilisearch integration for intelligent memory retrieval
-- **🧠 ORPAR Control Loop**: Structured cognitive cycle (Observation, Reasoning, Planning, Action, Reflection)
-- **💾 Multi-Scope Memory**: Agent-private, channel-shared, and relationship memory with semantic search
-- **🐳 Docker Deployment**: Docker Compose stack with full service orchestration
-- **📊 Enterprise Infrastructure**: MongoDB persistence, Meilisearch search, Redis caching, JWT authentication, comprehensive analytics, optional n8n workflow integration
+Core and SDK are published together; this checkout uses 4.0.0. The root application
+version has a separate release cadence. Use SDK root imports in applications and
+read the upgrade guide before moving a 3.x consumer to 4.0.
 
-### Advanced Features
+## Current feature boundaries
 
-- **MXP 2.0 Protocol**: Token and bandwidth optimization
-- **SystemLLM Integration**: AI-powered task assignment and reasoning
-- **Pattern Learning**: Cross-agent knowledge sharing with ML-based predictions
-- **Proactive Validation**: Pre-execution validation with low latency, risk assessment, and multi-level caching
-- **Auto-Correction System**: Intelligent parameter correction with safety guards
-- **Error Prediction**: ML-based error prediction using a TF.js Dense classifier when `TENSORFLOW_ENABLED=true`, with heuristic fallback when disabled
-- **Anomaly Detection**: TF.js autoencoder (12->8->4->8->12) detects parameter anomalies via reconstruction error when `TENSORFLOW_ENABLED=true`, with heuristic distance-based isolation score fallback when disabled
-- **Configurable Security**: Four security levels (standard → enhanced → regulated → classified)
-- **TensorFlow.js Integration**: On-device ML models for error prediction (Phase 2 Dense classifier), anomaly detection (Phase 3 autoencoder), and knowledge graph embeddings (opt-in via `TENSORFLOW_ENABLED=true`)
+These distinctions matter when choosing an API for a running application. A service,
+model architecture, or demonstration alone does not establish an end-to-end contract.
 
-## Documentation Structure
+| Area | Implemented behavior and remaining limits |
+| --- | --- |
+| Tasks and tools | Task identities, assignments, and outcomes are persisted. Tool grants are enforced by the server. Failed tool execution remains a failure over HTTP and sockets. |
+| Session memory | `memoryMode: 'session'` keeps SDK-managed history in one agent instance without automatic remote loading, saving, backfill, or indexing. Reconnect retains that context; a new instance starts empty. Explicit memory tools and application storage remain independent. |
+| Task lifecycle | One accepted task owns an agent's execution context. Older asynchronous responses cannot mutate a successor task. Local cancellation does not guarantee that an issued provider request or remote tool was aborted. |
+| Memory utility | Retrieval blends relevance with learned Q-values. Persistence reads and writes are paired; cache admission is bounded and preserves unpersisted rewards. This is not evidence of improved application decisions. |
+| ORPAR memory strata | Phase routing uses process-local collections. Configuration alone does not provide durable strata storage or enforce every retention setting. |
+| Workflows | Definitions and an internal execution engine exist. The engine is tested but is not wired into normal task execution. Use the implemented task, plan, and DAG APIs. |
+| P2P and federation | Design material and a task-negotiation demonstration exist. Cross-server peer transport and federated memory are not shipped. |
+| Predictive analytics | Event listeners and model code exist, but tool-result ingestion is broken and some historical inputs are fabricated. Prediction scores must not be presented as measured reliability. These issues remain open after the review. |
+| TensorFlow.js | Optional model training, inference, and persistence are implemented. Their presence does not establish that every analytics consumer receives real observations or produces validated predictions. |
+| SystemLLM spending | Usage is recorded, including charged responses with unusable content. The daily budget counter is process-local and checks admission between calls; it is not a durable account spending limit. |
+| Provider support | Adapters exist for multiple providers. Mocked request and response tests do not replace live conformance checks for each provider and model. |
 
-### For Developers
+The [review record](reviews/2026-09-06-framework-review.md) contains the source
+locations, consequences, and verification limits behind these findings. Older design
+and feature documents should be read alongside these current boundaries.
 
-**Getting Started**
-1. [Getting Started Guide](./getting-started.md) - Installation, first agent, multi-agent systems
+## Quick start
 
-**SDK Development**
-2. [SDK Index](./sdk/index.md) - Main SDK documentation
-3. [Configuration Manager](./sdk/config-manager.md) - Feature toggles and settings
-4. [MXP Configuration](./sdk/mxp-config.md) - Optimization configuration
-5. [SDK Managers](./sdk/managers.md) - Core manager classes
-6. [SDK Handlers](./sdk/handlers.md) - Event and operation handlers
-7. [Examples](./sdk/examples.md) - Code examples and patterns
+For an application connecting to an existing MXF server:
 
-**API Integration**
-8. [API Index](./api/index.md) - REST and WebSocket APIs
-9. [Channels API](./api/channels.md) - Channel management
-10. [Agents API](./api/agents.md) - Agent operations
-11. [Tasks API](./api/tasks.md) - Task management
-12. [Memory API](./api/memory.md) - Memory persistence
-
-### For Product & Business
-
-**Understanding MXF**
-- [Getting Started](./getting-started.md#what-is-mxf) - High-level overview
-- [Core Architecture](./mxf/system-overview.md) - System capabilities
-- [Key Concepts](./mxf/key-concepts.md) - Fundamental concepts
-- [Use Cases](./sdk/examples.md) - Example applications and demos
-
-**Performance & Optimization**
-- [MXP 2.0 Benefits](./mxf/mxp-protocol.md) - Cost savings and efficiency
-- [Analytics](./analytics/index.md) - Performance metrics
-- [Validation System](./mxf/validation-system.md) - Error prevention
-
-**Enterprise Features**
-- [Security Model](./mxf/security.md) - Authentication and encryption
-- [Extensibility](./mxf/extensibility.md) - Custom integrations
-- [Dashboard](./dashboard/index.md) - Management interface (⚠️ in development)
-
-## What's New in MXF (Q2 2026)
-
-### Interactive CLI
-
-MXF now includes a full **Interactive TUI CLI** (`bun run mxf`) — an Ink/React-based terminal interface with 27+ slash commands, built-in agents (Planner, Operator, Executor, Reviewer), cost tracking, streaming reasoning, and one-shot task execution via `mxf run "task"`.
-
-📖 **[Interactive CLI Guide →](./mxf/interactive-cli.md)**
-
-### Multi-Layer Compaction Pipeline
-
-A comprehensive **compaction pipeline** for managing context window usage: tool result microcompaction (no LLM call), reactive compaction with escalating strategies (413 recovery), post-compaction artifact restoration, and system reminders. All features behind opt-in flags.
-
-📖 **[Compaction Pipeline →](./mxf/compaction-pipeline.md)** | **[Prompting Enhancements →](./mxf/prompting-enhancements.md)**
-
-### Enhanced Shell Execution
-
-Shell commands are now parsed by a **recursive descent parser**, classified by category and risk, with **semantic exit code interpretation** (grep returning 1 = no matches, not failure), destructive command warnings, optional Docker sandboxing, large output handling, and background task execution.
-
-📖 **[Shell Execution →](./mxf/shell-execution.md)**
-
----
-
-## What's New in MXF (Q1 2026)
-
-### Task DAG & Knowledge Graph
-
-MXF now includes a **Task DAG** system for defining complex task dependencies with automatic topological ordering and parallel execution, plus a **Knowledge Graph** for entity-relationship modeling with traversal queries and TransE embeddings.
-
-📖 **[Task DAG & Knowledge Graph Guide →](./features/dag-knowledge-graph.md)**
-
-### Memory Utility Learning System (MULS)
-
-The **MULS** system adds Q-value weighted memory retrieval with ORPAR phase-specific lambdas, retroactive reward propagation, and memory strata (episodic, semantic, procedural).
-
-📖 **[MULS Guide →](./mxf/memory-utility-learning.md)** | **[ORPAR-Memory Integration →](./mxf/orpar-memory-integration.md)**
-
-### Advanced Feature Systems
-
-- **[Workflow System](./mxf/workflow-system.md)** - Sequential, parallel, and loop workflow patterns
-- **[LSP Integration](./mxf/lsp-integration.md)** - Language Server Protocol bridge for code intelligence
-- **[Nested Learning](./mxf/nested-learning.md)** - Multi-timescale memory consolidation
-- **[P2P Foundation](./mxf/p2p-foundation.md)** - Decentralized agent coordination
-- **[Code Execution](./mxf/code-execution.md)** - Secure Docker sandboxed execution
-- **[Dynamic Inference Parameters](./mxf/dynamic-inference-parameters.md)** - Complexity-based model selection
-- **[TOON Optimization](./mxf/toon-optimization.md)** - Token-optimized encoding
-- **[Prompt Auto-Compaction](./mxf/prompt-auto-compaction.md)** - Automatic prompt compression
-- **[Database Abstraction](./mxf/database-abstraction.md)** - Swappable database backends
-
-### TensorFlow.js Integration
-
-MXF now includes an opt-in **TensorFlow.js integration** for on-device machine learning:
-
-**Phase 1 -- Foundation Layer (MxfMLService):**
-- **MxfMLService Singleton**: Manages TF.js model lifecycle (register, build, train, predict, save/load)
-- **7 Model Architectures**: Dense classifiers, autoencoders, LSTMs, DQNs, regression, embeddings, TransE knowledge graph embeddings
-- **Safe Inference API**: `predict()` and `predictBatch()` encapsulate `tf.tidy()` -- consumers receive plain `number[]` values, never touching tensors
-- **Custom Training Loops**: `trainCustom()` supports contrastive loss, experience replay, and margin-based ranking
-- **Anomaly Detection**: `predictWithReconstruction()` for autoencoder-based anomaly scoring via reconstruction error
-- **GridFS Model Persistence**: Models saved/loaded to MongoDB GridFS (production) or filesystem (development)
-- **Tensor Memory Monitoring**: Periodic `tf.memory()` logging with `MEMORY_WARNING` events when usage exceeds threshold
-- **Graceful Degradation**: Heuristic fallback when TF.js is disabled or models are untrained -- zero overhead when feature flag is off
-- **10 Typed Events**: Full observability via model lifecycle, inference, and memory events
-
-**Phase 2 -- Error Prediction (PredictiveAnalyticsService):**
-- **Real TF.js Error Prediction Model**: Dense(12->32->16->1) binary classifier with binary cross-entropy loss replaces the heuristic-only prediction when `TENSORFLOW_ENABLED=true`
-- **12-Feature Input Vector**: Tool complexity, parameter count, pattern match, agent experience, error rate, time-of-day, day-of-week, system load, concurrent requests, recent errors, recent successes, average latency
-- **Automatic Training**: Collects labeled training data from tool execution results; trains via `MxfMLService.train()` when 100+ samples are available (batch size 32, 10 epochs, 0.2 validation split)
-- **Auto-Retrain Scheduling**: A single hourly interval in `PredictiveAnalyticsService` retrains the error predictor and the anomaly autoencoder sequentially (TF.js rejects overlapping `fit()` calls on one model); `TENSORFLOW_AUTO_TRAIN_ENABLED` gates it. Training is skipped when the collected labels are all one class -- one-class data cannot train a discriminator
-- **Three-Tier Fallback**: TF.js model inference -> heuristic rule-based prediction -> conservative default (30% error probability, 50% confidence)
-- **INFERENCE_FALLBACK Events**: Emitted when falling back to heuristic, enabling monitoring of model readiness
-- **Model Persistence**: Trained model saved to/loaded from GridFS automatically
-
-**Phase 3 -- Anomaly Detection Autoencoder (PredictiveAnalyticsService):**
-- **TF.js Autoencoder Model**: Architecture `input(12) -> Dense(8, relu) -> Dense(4, relu) -> Dense(8, relu) -> Dense(12, linear)` with MSE loss and Adam optimizer (lr=0.001)
-- **Encoder-Decoder Design**: Encoder compresses the 12-feature vector to a 4-dimensional bottleneck; decoder reconstructs the original input. Normal patterns reconstruct well; anomalies produce high reconstruction error
-- **Same 12-Feature Input Vector**: Reuses the error prediction feature vector for consistency across models
-- **Unsupervised Training**: Trains on ALL collected feature vectors (input = output) -- no labels needed. Learns "normal" parameter patterns regardless of error outcomes (minimum 100 samples, batch size 32, 20 epochs, 0.1 validation split)
-- **Anomaly Scoring**: MSE between input and reconstruction, normalized to 0-1 via scale factor of 10 (calibrated so MSE ~0.08 maps to the 0.8 anomaly threshold)
-- **Graceful Degradation**: TF.js autoencoder -> heuristic distance-based isolation score when TF.js is disabled or autoencoder is untrained
-- **INFERENCE_FALLBACK Events**: Emitted when falling back to heuristic, enabling monitoring of autoencoder readiness
-- **Model Persistence**: Trained autoencoder saved to/loaded from GridFS automatically
-
-**Quick Start:**
 ```bash
-# Start server with TensorFlow.js enabled
-TENSORFLOW_ENABLED=true bun run dev
-
-# Run the TensorFlow.js demo
-bun run demo:tensorflow
+bun add @mxf-dev/sdk
 ```
 
-### 🔍 Semantic Search & Memory
+The SDK is ESM-only and supports Bun >= 1.2 or Node.js >= 20.19. Follow the
+[SDK guide](sdk/index.md) for credentials and agent configuration. The
+[recurring review example](../examples/recurring-review/README.md) provides a
+complete task-outcome pattern and is compiled by the packed-package check.
 
-MXF now includes **Meilisearch integration** for semantic search capabilities:
-
-**Key Features:**
-- **Memory Search Tools**: `memory_search_conversations`, `memory_search_actions`, `memory_search_patterns`
-- **Intelligent Context Retrieval**: Semantic search reduces token usage by retrieving only relevant context
-- **Hybrid Search**: Configurable keyword + semantic search (default 70% semantic)
-- **OpenAI Embeddings**: Using text-embedding-3-small for semantic understanding
-- **Fast Queries**: Optimized for real-time agent queries
-- **Automatic Indexing**: All conversations and tool executions indexed in real-time
-
-📖 **[Learn about Meilisearch Integration →](./meilisearch-integration.md)**
-
-### 🐳 Production Docker Stack
-
-Complete containerization with orchestrated services:
-
-**Services Deployed:**
-- **MXF Server**: Bun application server (Port 3001)
-- **MongoDB**: Primary database for persistence (Port 27017)
-- **Meilisearch**: Semantic search engine (Port 7700)
-- **Redis**: High-performance caching layer (Port 6379)
-- **Dashboard**: Vue.js management interface — separate package, `npx @mxf-dev/dashboard` (Port 4173)
-- **n8n** (Optional): Workflow automation platform (Port 5678) - requires self-hosted or n8n Cloud
-
-📖 **[Docker Deployment Guide →](./deployment.md)**
-
-### 🛡️ Advanced Validation & Error Handling
-
-Comprehensive error prevention and correction system:
-
-**Capabilities:**
-- **Proactive Validation**: Pre-execution checks with risk assessment
-- **Auto-Correction**: Intelligent parameter correction with pattern learning
-- **ML Error Prediction**: TF.js Dense(12->32->16->1) classifier predicts and prevents failures (heuristic fallback when TF.js is disabled)
-- **ML Anomaly Detection**: TF.js autoencoder (12->8->4->8->12) detects unusual parameter patterns via reconstruction error (heuristic fallback when TF.js is disabled)
-- **Pattern Learning**: Cross-agent knowledge sharing
-- **Multi-Level Caching**: Memory → Redis → MongoDB
-- **Performance Optimization**: Low-latency validation
-
-📖 **[Proactive Validation API →](./api/proactive-validation.md)** | **[Auto-Correction API →](./api/auto-correction.md)**
-
-### MXP 2.0 Protocol
-
-MXF includes **MXP 2.0**, a modular optimization suite that delivers measurable performance improvements:
-
-**Benefits:**
-- **Token optimization** through AI-powered context compression
-- **Bandwidth optimization** via binary encoding and enhanced aggregation
-- **Progressive security architecture** with four security levels
-- **Zero breaking changes** with full backward compatibility
-- **Real-time analytics** with cost calculation and performance tracking
-
-**Key Modules:**
-- **Token Optimization**: Context compression, prompt optimization, conversation summarization
-- **Bandwidth Optimization**: Binary encoding, enhanced message aggregation
-- **Security**: Four levels from standard to classified
-- **Analytics**: Real-time metrics, cost calculation, performance tracking
-
-📖 **[Learn about MXP 2.0 →](./mxf/mxp-protocol.md)**
-
-### SDK Configuration System
-
-Comprehensive configuration management with:
-- **Feature Toggles**: Enable/disable SDK features dynamically
-- **LLM Model Management**: Support for multiple providers and models
-- **Agent Type System**: Roles, service types, specializations
-- **Channel-Level SystemLLM Control**: Fine-grained control over LLM usage
-
-📖 **[Learn about ConfigManager →](./sdk/config-manager.md)**
-
-### Advanced Manager & Handler System
-
-Four core manager classes and five handler categories:
-- **MxfMcpClientManager**: MCP client connections and tool discovery
-- **MxfMemoryManager**: Conversation history with intelligent deduplication
-- **MxfSystemPromptManager**: Dynamic prompt generation with tool filtering
-- **MxfTaskExecutionManager**: Task lifecycle and execution coordination
-
-📖 **[Explore SDK Managers →](./sdk/managers.md)** | **[Explore SDK Handlers →](./sdk/handlers.md)**
-
-## Quick Start
-
-### Installation
-
-**Option A: Docker Deployment (Recommended for Production)**
+For server development:
 
 ```bash
-git clone https://github.com/BradA1878/model-exchange-framework
-cd mxf
-
-# Configure environment
-cp .env.example .env
-# Edit .env with your API keys and secrets
-
-# Deploy the stack (MXF + MongoDB + Meilisearch + Redis); dashboard is separate (npx @mxf-dev/dashboard)
-bun run docker:up
-
-# Check service health
-bun run docker:health
-```
-
-📖 **[Complete Docker Deployment Guide →](./deployment.md)**
-
-**Option B: Local Development**
-
-```bash
-git clone https://github.com/BradA1878/model-exchange-framework
-cd mxf
+git clone https://github.com/BradA1878/model-exchange-framework.git
+cd model-exchange-framework
 bun install
+bun run mxf install
+bun run mxf init
 bun run build
-bun run start
+bun run start:dev
 ```
 
-### Your First Agent
-
-```typescript
-// Install with: bun add @mxf-dev/sdk
-import { MxfSDK, LlmProviderType } from '@mxf-dev/sdk';
-
-// Initialize SDK with Personal Access Token (recommended)
-const sdk = new MxfSDK({
-    serverUrl: 'http://localhost:3001',
-    domainKey: process.env.MXF_DOMAIN_KEY!,
-    accessToken: process.env.MXF_DEMO_ACCESS_TOKEN!
-});
-
-await sdk.connect();
-
-// Create channel and generate keys first
-await sdk.createChannel('getting-started', {
-    name: 'Getting Started',
-    description: 'First agent channel'
-});
-
-const keys = await sdk.generateKey(
-    'getting-started',
-    'my-first-agent',
-    'first-agent-key'
-);
-
-// Create agent
-const agent = await sdk.createAgent({
-    // Required: Agent identity
-    agentId: 'my-first-agent',
-    name: 'My First Agent',
-    channelId: 'getting-started',
-
-    // Required: Authentication (use generated keys)
-    keyId: keys.keyId,
-    secretKey: keys.secretKey,
-
-    // Required: LLM configuration
-    llmProvider: LlmProviderType.OPENROUTER,
-    apiKey: process.env.OPENROUTER_API_KEY!,
-    defaultModel: '~anthropic/claude-sonnet-latest',
-
-    // Required: Agent personality/behavior
-    agentConfigPrompt: `You are a helpful AI assistant. Be concise and friendly.`,
-
-    // Optional: LLM parameters
-    temperature: 0.7,
-    maxTokens: 4000
-});
-
-await agent.connect();
-```
-
-📖 **[Complete Getting Started Guide →](./getting-started.md)**
-
-## Example Projects
-
-MXF includes 20 comprehensive demos and examples:
+Follow the setup output and [installation guide](getting-started.md). Keep the server
+in a terminal you control. SystemLLM makes paid provider calls when enabled; select
+its model explicitly. In another terminal, complete provisioning if needed:
 
 ```bash
-# Strategy & Collaboration
-bun run demo:first-contact       # First contact scenario (6 agents)
-bun run demo:fog-of-war          # Strategy game with 8 agents
-bun run demo:interview           # Interview scheduling
-
-# Memory & Learning
-bun run demo:orpar-memory        # ORPAR-Memory integration
-bun run demo:muls                # Memory Utility Learning System
-bun run demo:nested-learning     # Nested learning / continuum memory
-bun run demo:memory-strata       # Memory strata demo
-
-# Advanced Features
-bun run demo:dag                 # Task DAG workflows
-bun run demo:kg                  # Knowledge Graph operations
-bun run demo:tensorflow          # TensorFlow.js ML models (requires TENSORFLOW_ENABLED=true)
-bun run demo:code-execution      # Sandboxed code execution
-bun run demo:workflow-patterns   # Workflow system patterns
-bun run demo:lsp-code-intelligence  # LSP integration
-bun run demo:p2p-task-negotiation   # P2P task negotiation
-
-# Optimization
-bun run demo:toon-optimization   # TOON encoding
-bun run demo:prompt-compaction   # Prompt auto-compaction
-bun run demo:inference-params    # Dynamic inference parameters
-bun run demo:mcp-prompts         # MCP prompt templates
-
-# SDK Patterns
-bun run demo:external-mcp        # External MCP server registration
-bun run demo:channel-mcp         # Channel-scoped MCP registration
+bun run mxf install --complete-setup
+bun run mxf run "Summarize the supplied evidence and identify unanswered questions" --context ./notes
 ```
 
-📖 **[View All Example Documentation →](./examples/first-contact.md)**
+## Documentation structure
 
-## Architecture Highlights
+### SDK, API, and tools
 
-### Event-Driven Design
-- Central EventBus for decoupled communication
-- Pub/sub pattern for real-time updates
-- Event sourcing for audit trails
+- [SDK reference](sdk/index.md), [authentication](sdk/authentication.md), and [examples](sdk/examples.md)
+- [Configuration](sdk/config-manager.md), [managers](sdk/managers.md), and [handlers](sdk/handlers.md)
+- [Event system](sdk/events.md) and [MCP integration](sdk/mcp.md)
+- [REST and WebSocket APIs](api/index.md): [channels](api/channels.md), [agents](api/agents.md), [tasks](api/tasks.md), and [memory](api/memory.md)
+- [Tool reference](mxf/tool-reference.md) and [extensibility](mxf/extensibility.md)
+- [Interactive CLI](mxf/interactive-cli.md) and [dashboard](dashboard/index.md)
 
-### Service-Oriented Architecture
-- Modular services with single responsibilities
-- Dependency injection for testability
-- Clear separation of concerns
+### Memory, graphs, and execution
 
-### Multi-Scope Memory
-- Agent-private memory for preferences
-- Channel-shared memory for collaboration
-- Relationship memory for agent interactions
-- Persistent storage with MongoDB
+- [Session memory and task outcomes](sdk/session-memory.md)
+- [Meilisearch integration](meilisearch-integration.md) and [user memory](mxf/user-memory.md)
+- [Memory utility learning](mxf/memory-utility-learning.md), [ORPAR memory routing](mxf/orpar-memory-integration.md), and [nested learning](mxf/nested-learning.md)
+- [Task DAG tools](api/dag-tools.md) and [knowledge graph tools](api/knowledge-graph-tools.md)
+- [Workflow implementation status](mxf/workflow-system.md) and [P2P implementation status](mxf/p2p-foundation.md)
+- [Code execution](mxf/code-execution.md), [shell execution](mxf/shell-execution.md), and [LSP integration](mxf/lsp-integration.md)
+- [Database abstraction](mxf/database-abstraction.md) and [architecture](mxf/index.md)
 
-### Tool Handler Patterns
+### Context, transport, and analytics
 
-MXF uses standardized tool handler format:
+- [Compaction pipeline](mxf/compaction-pipeline.md), [prompting](mxf/prompting-enhancements.md), and [prompt auto-compaction](mxf/prompt-auto-compaction.md)
+- [Dynamic inference parameters](mxf/dynamic-inference-parameters.md) and [TOON encoding](mxf/toon-optimization.md)
+- [MXP protocol](mxf/mxp-protocol.md), [technical specification](mxf/mxp-technical-specification.md), and [configuration](sdk/mxp-config.md)
+- [Analytics documentation](analytics/index.md), [MXP monitoring](mxf/mxp-monitoring.md), and [troubleshooting](mxf/mxp-troubleshooting.md)
+- [Validation](mxf/validation-system.md), [validation API](api/proactive-validation.md), and [auto-correction API](api/auto-correction.md)
 
-```typescript
-// Modern MCP Format (Recommended)
-handler: async (input, context): Promise<McpToolHandlerResult> => {
-    return { 
-        content: { 
-            type: 'application/json', 
-            data: result 
-        } 
-    };
-}
+Analytics, workflow, and P2P links include existing design and implementation detail;
+their current runtime limits are stated above and in the review.
+
+### Operations and development
+
+- [Docker deployment](deployment.md) and [security](mxf/security.md)
+- [System overview](mxf/system-overview.md) and [key concepts](mxf/key-concepts.md)
+- [Repository examples](../examples) and [framework review](reviews/2026-09-06-framework-review.md)
+- [Report an issue](https://github.com/BradA1878/model-exchange-framework/issues)
+
+Build and run the unit/property suite without starting a server:
+
+```bash
+bun run build
+bun run test:unit
+bun run lint:changed
+bun run verify:sdk-package
 ```
 
-📖 **[Tool Architecture →](./sdk/handlers.md#mcphandler--mcptoolhandlers)**
-
-## Technology Stack
-
-- **Runtime**: Bun with TypeScript
-- **API Framework**: Express.js
-- **Real-Time**: Socket.IO
-- **Database**: MongoDB with Mongoose
-- **Search Engine**: Meilisearch with OpenAI embeddings
-- **Caching**: Redis
-- **Deployment**: Docker + Docker Compose
-- **Authentication**: JWT + API Keys
-- **Frontend**: Vue 3 + Vuetify 3
-- **AI Integration**: OpenAI, Anthropic, Google AI
-- **Machine Learning**: TensorFlow.js (opt-in) for on-device ML models
-- **Protocol**: MXP 2.0 for optimization
-- **Encryption**: AES-256-GCM
-
-## Support & Resources
-
-- **📖 Full Documentation**: Browse sections above
-- **💻 GitHub Repository**: [Create an issue](https://github.com/BradA1878/model-exchange-framework/issues)
-- **🎯 Examples**: See [Example Projects](./examples/first-contact.md) documentation
-- **📝 Getting Started**: [Complete guide](./getting-started.md)
-
-## Next Steps
-
-**For Developers:**
-1. Follow the [Getting Started Guide](./getting-started.md)
-2. Explore [SDK Documentation](./sdk/index.md)
-3. Review [Code Examples](./sdk/examples.md)
-4. Learn [MXP 2.0 Protocol](./mxf/mxp-protocol.md)
-
-**For Product Teams:**
-1. Review [System Overview](./mxf/system-overview.md)
-2. Understand [Key Concepts](./mxf/key-concepts.md)
-3. Explore [Real-World Use Cases](./use-cases.md)
-4. Review [Enterprise Features](./mxf/security.md)
+Integration tests require a server started manually. Provider and demonstration runs
+may make paid model calls. See the review for which checks were actually run; passing
+unit tests does not establish live integration or prediction accuracy.

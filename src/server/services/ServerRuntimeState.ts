@@ -1,4 +1,4 @@
-import { Application, Request, Response } from 'express';
+import { Application, Request, RequestHandler, Response } from 'express';
 
 export type ServerLifecycleState = 'starting' | 'ready' | 'stopping' | 'stopped' | 'failed';
 
@@ -31,6 +31,36 @@ export interface ServerHealthReport {
 /** Authoritative process lifecycle used by readiness and termination paths. */
 export class ServerRuntimeState {
     private lifecycle: ServerLifecycleState = 'starting';
+    private startupCompletion: Promise<void> | undefined;
+
+    /**
+     * Own initialization until its current operation settles. The caller handles
+     * initialization errors after this barrier releases, so failure cleanup can
+     * wait for startup without waiting on itself.
+     */
+    public async runStartup(initialize: () => Promise<void>): Promise<void> {
+        if (this.startupCompletion || !this.canContinueStartup()) {
+            throw new Error('Server initialization can only start once while starting');
+        }
+
+        let complete!: () => void;
+        this.startupCompletion = new Promise<void>(resolve => { complete = resolve; });
+        try {
+            await initialize();
+        } finally {
+            complete();
+        }
+    }
+
+    /** Check after each awaited startup operation before acquiring more resources. */
+    public canContinueStartup(): boolean {
+        return this.lifecycle === 'starting';
+    }
+
+    /** Cleanup must not run past resources that initialization still owns. */
+    public async waitForStartupCompletion(): Promise<void> {
+        await this.startupCompletion;
+    }
 
     public markReady(): void {
         if (this.lifecycle !== 'starting') {
@@ -101,6 +131,16 @@ export class ServerRuntimeState {
         };
     }
 }
+
+/** Stop admitting API work as soon as shutdown starts, before transport close waits. */
+export const requireServerReady = (runtime: ServerRuntimeState): RequestHandler =>
+    (_request, response, next): void => {
+        if (runtime.getLifecycle() !== 'ready') {
+            response.status(503).json({ success: false, error: 'Server is not accepting requests' });
+            return;
+        }
+        next();
+    };
 
 /** Mount unauthenticated liveness/readiness routes with an injected dependency probe. */
 export const registerServerHealthRoutes = (

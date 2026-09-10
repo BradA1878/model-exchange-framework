@@ -166,6 +166,17 @@ describe('OpenRouterMcpClient reasoning parameter', () => {
             return lastValueFrom(client.sendWithContext!(buildContext(), { ...options, stream: true }));
         }
 
+        it('preserves a per-request temperature of zero', async () => {
+            await send({ temperature: 0 });
+            expect(sentRequestBody().temperature).toBe(0);
+        });
+
+        it('preserves a configured temperature of zero', async () => {
+            await lastValueFrom(client.initialize({ apiKey: 'test-key', defaultModel: 'test-model', temperature: 0 }));
+            await send({});
+            expect(sentRequestBody().temperature).toBe(0);
+        });
+
         it('forwards effort when reasoning is enabled', async () => {
             await send({ reasoning: { enabled: true, effort: 'low' } });
             expect(sentRequestBody().reasoning).toEqual({ effort: 'low' });

@@ -2061,7 +2061,7 @@ export class SystemLlmService {
             this.assertLifecycleActive(lifecycleGeneration);
 
             const model = options.model || this.defaultModel;
-            const temperature = options.temperature || this.defaultTemperature;
+            const temperature = options.temperature ?? this.defaultTemperature;
             const maxTokens = options.maxTokens || this.defaultMaxTokens;
 
             // Hard spend gate. SystemLlmServiceManager already refuses to hand out a
@@ -2121,9 +2121,25 @@ export class SystemLlmService {
                     this.assertLifecycleActive(lifecycleGeneration);
                     const responseSubscription = client.sendMessage(messages, [], requestOptions).subscribe({
                         next: (response: McpApiResponse) => {
+                            if (settled) return;
                             if (!this.isLifecycleActive(lifecycleGeneration)) {
                                 cancel(new Error('SystemLlmService is shutting down'));
                                 return;
+                            }
+
+                            // Reported usage is billable even when the response has
+                            // no usable text. Account for it before content validation.
+                            const usage = response?.usage;
+                            if (usage && typeof usage.input_tokens === 'number' && typeof usage.output_tokens === 'number') {
+                                SystemLlmBudgetService.getInstance().recordUsage(model, {
+                                    inputTokens: usage.input_tokens,
+                                    outputTokens: usage.output_tokens
+                                });
+                            } else {
+                                this.logger.warn(
+                                    `[SystemLLM] ${model} returned no token usage — this call is not counted ` +
+                                    'against the daily budget'
+                                );
                             }
 
                             const responseText = response.content
@@ -2150,23 +2166,6 @@ export class SystemLlmService {
                             // Track successful metrics
                             const responseTime = Date.now() - startTime;
                             this.trackMetrics(operation, responseTime, model);
-
-                            // Charge the call against the daily budget using the token counts
-                            // the provider billed, not an estimate. A response without usage
-                            // means the provider told us nothing to charge — recorded as zero
-                            // and logged, rather than guessed at.
-                            const usage = response?.usage;
-                            if (usage && typeof usage.input_tokens === 'number' && typeof usage.output_tokens === 'number') {
-                                SystemLlmBudgetService.getInstance().recordUsage(model, {
-                                    inputTokens: usage.input_tokens,
-                                    outputTokens: usage.output_tokens
-                                });
-                            } else {
-                                this.logger.warn(
-                                    `[SystemLLM] ${model} returned no token usage — this call is not counted ` +
-                                    'against the daily budget'
-                                );
-                            }
 
                             this.logger.debug(`[SystemLLM:Internal] LLM call completed - model: ${model}, time: ${responseTime}ms, response: ${responseText.length} chars`);
 

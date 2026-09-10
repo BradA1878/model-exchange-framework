@@ -339,7 +339,7 @@ export class XaiMcpClient extends BaseMcpClient {
             
             // Prepare request parameters
             const model = options?.model || this.config.defaultModel || 'grok-1';
-            const temperature = options?.temperature || this.config.temperature || 0.7;
+            const temperature = options?.temperature ?? this.config.temperature ?? 0.7;
             const maxTokens = options?.maxTokens || this.config.maxTokens || 4096;
             
             // Prepare request body
@@ -438,7 +438,7 @@ export class XaiMcpClient extends BaseMcpClient {
 
         // Prepare request parameters
         const model = options?.model || this.config.defaultModel || 'grok-beta';
-        const temperature = options?.temperature || this.config.temperature || 0.7;
+        const temperature = options?.temperature ?? this.config.temperature ?? 0.7;
         const maxTokens = options?.maxTokens || this.config.maxTokens || 4096;
 
         // Prepare request body

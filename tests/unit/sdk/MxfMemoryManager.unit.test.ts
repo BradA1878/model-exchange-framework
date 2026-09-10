@@ -153,6 +153,85 @@ describe('MxfMemoryManager', () => {
         delete process.env.MXF_MEMORY_BACKFILL_TIMEOUT_MS;
     });
 
+    describe('session memory', () => {
+        it('initializes without remote memory or search credentials and reports a local empty backfill', async () => {
+            process.env.ENABLE_MEILISEARCH = 'true';
+            delete process.env.MEILISEARCH_HOST;
+            delete process.env.MEILISEARCH_MASTER_KEY;
+            getAgentMemoryMock.mockImplementation(() => { throw new Error('session must not load old memory'); });
+            const local = jest.spyOn(EventBus.client, 'emitLocal');
+            const remote = jest.spyOn(EventBus.client, 'emitOn');
+            const manager = makeManager({ memoryMode: 'session' });
+
+            await manager.initialize();
+            await manager.addConversationMessage({ role: 'user', content: 'current run only' });
+            await manager.flushPersistence();
+            await manager.flushIndexQueue();
+
+            expect(manager.isMemoryLoaded()).toBe(true);
+            expect(getAgentMemoryMock).not.toHaveBeenCalled();
+            expect(updateAgentMemoryMock).not.toHaveBeenCalled();
+            expect(indexConversationMock).not.toHaveBeenCalled();
+            expect(manager.pendingIndexCount()).toBe(0);
+            expect(remote).not.toHaveBeenCalled();
+            expect(local).toHaveBeenCalledWith(MeilisearchEvents.BACKFILL_COMPLETE, expect.objectContaining({
+                data: expect.objectContaining({ totalDocuments: 0, indexedDocuments: 0, source: 'memory' })
+            }));
+        });
+
+        it('keeps bounded working state through local mutations without queuing persistence', async () => {
+            const manager = makeManager({ memoryMode: 'session' });
+            await manager.initialize();
+            for (let i = 0; i < 30; i += 1) {
+                await manager.addConversationMessage({ role: 'user', content: `message ${i}` });
+                await manager.addObservation(makeObservation(`observation-${i}`));
+            }
+            expect(manager.getConversationHistory()).toHaveLength(5);
+            expect(manager.getObservations()).toHaveLength(3);
+            const first = manager.getConversationHistory()[0];
+            await manager.updateConversationMessage(0, { ...first, content: 'updated local message' });
+            expect(manager.getConversationHistory()[0].content).toBe('updated local message');
+
+            await manager.importMemory({
+                conversationHistory: Array.from({ length: 20 }, (_, i) => makeMessage(`import-${i}`, 'user', `import ${i}`, i))
+            });
+            await manager.compactConversation(2);
+            await manager.saveAgentMemory();
+            await manager.flushPersistence();
+
+            expect(manager.getConversationHistory().length).toBeLessThanOrEqual(5);
+            // A session cannot retain a second, unbounded history or revisions that
+            // will never be acknowledged by a persistence service.
+            expect(manager).toMatchObject({ authoritativeConversationHistory: [], pendingPersistenceRevisions: [] });
+            expect(updateAgentMemoryMock).not.toHaveBeenCalled();
+            await manager.clearConversationHistory();
+            expect(manager.getConversationHistory()).toEqual([]);
+        });
+
+        it('preserves context on reconnect but a new agent instance starts empty', async () => {
+            const manager = makeManager({ memoryMode: 'session' });
+            await manager.initialize();
+            await manager.addConversationMessage({ role: 'user', content: 'retain during transport reconnect' });
+            await manager.addObservation(makeObservation('local-observation'));
+            manager.stopPersistence('disconnect');
+            manager.stopIndexing('disconnect');
+            await manager.initialize();
+            await manager.loadAgentMemory();
+
+            expect(manager.getConversationHistory()[0].content).toBe('retain during transport reconnect');
+            expect(manager.getObservations()).toHaveLength(1);
+            const next = makeManager({ memoryMode: 'session' });
+            await next.initialize();
+            expect(next.getConversationHistory()).toEqual([]);
+            expect(next.getObservations()).toEqual([]);
+            expect(getAgentMemoryMock).not.toHaveBeenCalled();
+        });
+
+        it('rejects an unknown memory mode before constructing services', () => {
+            expect(() => makeManager({ memoryMode: 'invalid' as 'session' })).toThrow('memoryMode must be persistent or session');
+        });
+    });
+
     describe('saveAgentMemory', () => {
         it('rethrows persistence failures so callers can observe the failed revision', async () => {
             const manager = makeManager();

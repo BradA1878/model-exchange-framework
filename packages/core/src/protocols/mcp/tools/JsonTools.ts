@@ -35,6 +35,27 @@ import { resolveWorkspacePath } from '../security/McpToolPolicy.js';
 const logger = new Logger('info', 'JsonTools', 'server');
 const validator = createStrictValidator('JsonTools');
 
+const RESERVED_PROPERTIES = new Set(['__proto__', 'constructor', 'prototype']);
+
+/** JSON paths name data properties, never JavaScript's prototype chain. */
+const validateProperty = (property: string): string => {
+    if (typeof property !== 'string' || property.length === 0) {
+        throw new Error('JSON paths require non-empty property names');
+    }
+    if (RESERVED_PROPERTIES.has(property)) {
+        throw new Error(`JSON path contains reserved property "${property}"`);
+    }
+    return property;
+};
+
+const readOwnProperty = (value: unknown, property: string, jsonPath: string): unknown => {
+    if (value === null || typeof value !== 'object' ||
+        !Object.prototype.hasOwnProperty.call(value, property)) {
+        throw new Error(`Path "${jsonPath}" not found in JSON`);
+    }
+    return (value as Record<string, unknown>)[property];
+};
+
 /**
  * MCP Tool: json_append
  * Append an entry to a JSON file (array or object with array property)
@@ -134,6 +155,11 @@ export const jsonAppendTool = {
                 throw new Error('entry must be provided');
             }
 
+            // Validate the complete mutation path before reading or changing data.
+            const pathParts = input.arrayPath ? input.arrayPath.split('.').map(validateProperty) : [];
+            const lastUpdatedField = validateProperty(input.updateMetadata?.lastUpdatedField ?? 'lastUpdated');
+            const countField = validateProperty(input.updateMetadata?.countField ?? 'totalStorms');
+
             const filePath = resolveWorkspacePath(input.path, 'json_append path');
 
             let jsonData: any;
@@ -146,7 +172,7 @@ export const jsonAppendTool = {
                 if (error.code === 'ENOENT' && input.createIfMissing) {
                     // Create new structure
                     if (input.arrayPath) {
-                        jsonData = { [input.arrayPath]: [] };
+                        jsonData = {};
                     } else {
                         jsonData = [];
                     }
@@ -159,18 +185,23 @@ export const jsonAppendTool = {
             let targetArray: any[];
             if (input.arrayPath) {
                 // Navigate to nested array
-                const pathParts = input.arrayPath.split('.');
                 let current = jsonData;
 
                 for (let i = 0; i < pathParts.length - 1; i++) {
-                    if (!current[pathParts[i]]) {
+                    if (current === null || typeof current !== 'object') {
+                        throw new Error(`Parent of "${input.arrayPath}" must be an object`);
+                    }
+                    if (!Object.prototype.hasOwnProperty.call(current, pathParts[i])) {
                         current[pathParts[i]] = {};
                     }
                     current = current[pathParts[i]];
                 }
 
                 const lastPart = pathParts[pathParts.length - 1];
-                if (!current[lastPart]) {
+                if (current === null || typeof current !== 'object') {
+                    throw new Error(`Parent of "${input.arrayPath}" must be an object`);
+                }
+                if (!Object.prototype.hasOwnProperty.call(current, lastPart)) {
                     current[lastPart] = [];
                 }
 
@@ -192,9 +223,6 @@ export const jsonAppendTool = {
 
             // Update metadata if requested
             if (input.updateMetadata && input.arrayPath) {
-                const lastUpdatedField = input.updateMetadata.lastUpdatedField || 'lastUpdated';
-                const countField = input.updateMetadata.countField || 'totalStorms';
-
                 jsonData[lastUpdatedField] = new Date().toISOString();
                 jsonData[countField] = targetArray.length;
             }
@@ -321,9 +349,10 @@ export const jsonReadTool = {
                     const arrayMatch = part.match(/^(\w+)\[(\d+)\]$/);
                     if (arrayMatch) {
                         const [, key, index] = arrayMatch;
-                        jsonData = jsonData[key][parseInt(index, 10)];
+                        const array = readOwnProperty(jsonData, validateProperty(key), input.jsonPath);
+                        jsonData = readOwnProperty(array, String(parseInt(index, 10)), input.jsonPath);
                     } else {
-                        jsonData = jsonData[part];
+                        jsonData = readOwnProperty(jsonData, validateProperty(part), input.jsonPath);
                     }
 
                     if (jsonData === undefined) {

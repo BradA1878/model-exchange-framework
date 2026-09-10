@@ -43,7 +43,7 @@ import { AutoCorrectionService } from '../../../services/AutoCorrectionService.j
 import { IToolEventEmitter } from './IToolEventEmitter.js';
 import { Events } from '../../../events/EventNames.js';
 import { v4 as uuidv4 } from 'uuid';
-import { assertUnsafeStdioMcpEnabled } from '../security/ExternalMcpRegistrationPolicy.js';
+import { assertUnsafeStdioMcpEnabled, isStdioMcpTransport } from '../security/ExternalMcpRegistrationPolicy.js';
 
 // Create logger and validator instances
 const logger = new Logger('info', 'ExternalMcpServerManager', 'server');
@@ -410,6 +410,9 @@ export class ExternalMcpServerManager extends EventEmitter {
                 // The HTTP/socket entry point must also establish administrator
                 // authority; this is the defense-in-depth feature gate.
                 assertUnsafeStdioMcpEnabled(payload.data?.transport);
+                if (!isStdioMcpTransport(payload.data?.transport)) {
+                    throw new Error('HTTP transport registration is not implemented by ExternalMcpServerManager');
+                }
                 logger.info(`[CHANNEL_SERVER_REGISTER] Received registration request: ${JSON.stringify({ agentId: payload.agentId, channelId: payload.channelId, serverId: payload.data?.id })}`);
                 
 
@@ -519,7 +522,7 @@ export class ExternalMcpServerManager extends EventEmitter {
         // This manager currently speaks line-delimited MCP over child-process
         // stdio only. Never let an HTTP-labelled registration fall through to
         // spawn(config.command, ...), which would bypass the stdio feature gate.
-        if (config.transport === 'http') {
+        if (!isStdioMcpTransport(config.transport)) {
             throw new Error('HTTP transport registration is not implemented by ExternalMcpServerManager');
         }
 

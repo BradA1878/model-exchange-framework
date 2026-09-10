@@ -111,6 +111,29 @@ describe('mcpController.executeTool authenticated execution context', () => {
     });
 
     it.each([
+        { isError: true, content: { type: 'json', data: { code: 'DENIED', message: 'Task is not assigned' } } },
+        { content: { type: 'error', data: 'Legacy handler failed' } },
+        { content: { type: 'text', data: 'Legacy metadata failure' }, metadata: { error: true } }
+    ])('preserves failed result envelopes over HTTP: %j', async result => {
+        mockExecuteTool.mockReturnValue(of(result));
+        const { response, json } = makeResponse();
+
+        await executeTool(makeRequest(), response);
+
+        expect(json).toHaveBeenCalledWith(expect.objectContaining({
+            success: false,
+            isError: true,
+            data: result.content
+        }));
+    });
+
+    it('marks successful result envelopes explicitly', async () => {
+        const { response, json } = makeResponse();
+        await executeTool(makeRequest(), response);
+        expect(json).toHaveBeenCalledWith(expect.objectContaining({ success: true, isError: false }));
+    });
+
+    it.each([
         ['x-agent-id', 'spoofed-agent'],
         ['x-channel-id', 'spoofed-channel']
     ])('rejects a spoofed %s assertion', async (header, value) => {

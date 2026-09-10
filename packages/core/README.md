@@ -12,6 +12,24 @@ bun add @mxf-dev/core   # or: npm install @mxf-dev/core
 
 Requires Node.js >= 20.19 or Bun >= 1.2. ESM-only.
 
+### Upgrading to 4.0
+
+Core and SDK versions must match. Two exported contracts require consumer changes:
+
+- `QValueManager.setPersistenceCallback(write, read)` now requires both callbacks.
+  The reader returns the persisted Q-value, or `undefined` if none exists, and
+  rejects on storage failure. Persisted values must be finite and in `[0, 1]`.
+  Server startup registers `MemoryService`'s reader and writer. Cache eviction now retains
+  unpersisted rewards and refuses admission when no clean, idle entry can be evicted.
+- `SdkReconnectedEventData` and its payload helper require a nonempty
+  `sdkInstanceId`. SDK lifecycle callbacks supply it automatically, isolating
+  reconnect notifications between instances signed in as the same user.
+
+This release also fixes provider request settings and usage reporting, nested JSON
+path validation, workspace symlink checks, graph path traversal, and memory retrieval
+scoring. See the [SDK upgrade guide](../sdk/README.md#upgrading-to-40) for session
+memory and task lifecycle changes.
+
 ### Optional peer dependencies
 
 Features that need a heavy or platform-specific library declare it as an optional

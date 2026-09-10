@@ -1,4 +1,5 @@
-import { NextFunction, Request, Response } from 'express';
+import express, { NextFunction, Request, Response } from 'express';
+import request from 'supertest';
 import { Events } from '@mxf-dev/core/events/EventNames';
 import {
     DEMO_API_ENV,
@@ -60,6 +61,15 @@ describe('runtime feature policy', () => {
     });
 
     describe('caller-supplied stdio MCP', () => {
+        const controller = jest.fn((_req: Request, res: Response): void => {
+            res.status(204).end();
+        });
+        const app = express();
+        app.use(express.json());
+        app.post('/register', requireUnsafeStdioMcpEnabled, controller);
+
+        beforeEach(() => controller.mockClear());
+
         it('is disabled by default and absent transport fails closed as stdio', () => {
             delete process.env[UNSAFE_STDIO_MCP_ENV];
 
@@ -74,6 +84,47 @@ describe('runtime feature policy', () => {
 
             process.env[UNSAFE_STDIO_MCP_ENV] = 'true';
             expect(() => assertUnsafeStdioMcpEnabled('stdio')).not.toThrow();
+        });
+
+        it.each(['sse', 'STDIO', 1, {}, false])('rejects unsupported transport %j', transport => {
+            delete process.env[UNSAFE_STDIO_MCP_ENV];
+            expect(() => assertUnsafeStdioMcpEnabled(transport)).toThrow(/Unsupported MCP transport/);
+            process.env[UNSAFE_STDIO_MCP_ENV] = 'true';
+            expect(() => assertUnsafeStdioMcpEnabled(transport)).toThrow(/Unsupported MCP transport/);
+        });
+
+        describe.each(['false', 'true'])('HTTP middleware with stdio opt-in %s', enabled => {
+            it.each(['sse', 'STDIO', false, {}])('returns 400 for invalid transport %j before the controller', async transport => {
+                process.env[UNSAFE_STDIO_MCP_ENV] = enabled;
+
+                const response = await request(app).post('/register').set('Content-Type', 'application/json').send({ transport });
+
+                expect(response.status).toBe(400);
+                expect(response.body).toEqual({
+                    success: false,
+                    error: 'Unsupported MCP transport; expected stdio or http'
+                });
+                expect(controller).not.toHaveBeenCalled();
+            });
+        });
+
+        it.each([{}, { transport: 'stdio' }])('returns 403 for valid stdio %j when disabled', async body => {
+            delete process.env[UNSAFE_STDIO_MCP_ENV];
+
+            const response = await request(app).post('/register').set('Content-Type', 'application/json').send(body);
+
+            expect(response.status).toBe(403);
+            expect(response.body.error).toContain(UNSAFE_STDIO_MCP_ENV);
+            expect(controller).not.toHaveBeenCalled();
+        });
+
+        it('reaches the controller for valid stdio only when enabled', async () => {
+            process.env[UNSAFE_STDIO_MCP_ENV] = 'true';
+
+            const response = await request(app).post('/register').set('Content-Type', 'application/json').send({ transport: 'stdio' });
+
+            expect(response.status).toBe(204);
+            expect(controller).toHaveBeenCalledTimes(1);
         });
 
         it('rejects the unimplemented HTTP transport instead of falling through to spawn', () => {

@@ -66,6 +66,20 @@ describe('McpToolPolicy workspace containment', () => {
         expect(() => resolveWorkspacePath('escape/new/deep/file.json', 'test tool')).toThrow(/symlink/);
     });
 
+    it.each(['escape.json', 'escape.json/nested/file.json'])(
+        'rejects dangling symlink write target %s before creating an outside file',
+        candidate => {
+            const outsideFile = path.join(outsideRoot, 'not-created.json');
+            fs.symlinkSync(outsideFile, path.join(workspaceRoot, 'escape.json'));
+
+            expect(() => {
+                const target = resolveWorkspacePath(candidate, 'test write');
+                fs.writeFileSync(target, 'outside write');
+            }).toThrow(/symlink/);
+            expect(fs.existsSync(outsideFile)).toBe(false);
+        }
+    );
+
     it('allows a non-existent write target whose nearest ancestor is inside the workspace', () => {
         const expected = path.join(fs.realpathSync(workspaceRoot), 'new', 'deep', 'file.json');
         expect(resolveWorkspacePath('new/deep/file.json', 'test tool')).toBe(expected);

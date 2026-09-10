@@ -82,9 +82,15 @@ export class QValueManager {
     // LRU cache for hot Q-values
     private qValueCache: Map<string, QValueCacheEntry> = new Map();
     private cacheAccessOrder: string[] = [];
+    // Serialize reads and rewards for each memory so a stale hydration cannot
+    // replace a learned value, even if that value has since left the cache.
+    private pendingUpdates: Map<string, Promise<void>> = new Map();
 
-    // Persistence callback (set by MemoryService)
-    private persistenceCallback?: (memoryId: string, utility: Partial<MemoryUtilitySubdocument>) => Promise<void>;
+    // Keep reads and writes paired so eviction does not reset persisted rewards.
+    private persistenceCallbacks?: {
+        write: (memoryId: string, utility: Partial<MemoryUtilitySubdocument>) => Promise<void>;
+        read: (memoryId: string) => Promise<number | undefined>;
+    };
 
     private constructor() {
         this.logger = new Logger('info', 'QValueManager');
@@ -108,9 +114,7 @@ export class QValueManager {
      * Initialize the QValueManager with configuration
      */
     public initialize(config?: Partial<MemoryUtilityConfig>): void {
-        if (config) {
-            this.config = { ...this.config, ...config };
-        }
+        this.applyConfiguration({ ...this.config, ...config });
         this.enabled = this.config.enabled;
 
         if (this.enabled) {
@@ -129,11 +133,18 @@ export class QValueManager {
     }
 
     /**
-     * Set the persistence callback for updating memory documents
+     * Register the paired store used to update and reload memory utility.
+     * A read returns undefined only when no persisted Q-value exists; failures reject.
      */
-    public setPersistenceCallback(callback: (memoryId: string, utility: Partial<MemoryUtilitySubdocument>) => Promise<void>): void {
-        this.persistenceCallback = callback;
-        this.logger.info('[QValueManager] Persistence callback registered');
+    public setPersistenceCallback(
+        write: (memoryId: string, utility: Partial<MemoryUtilitySubdocument>) => Promise<void>,
+        read: (memoryId: string) => Promise<number | undefined>
+    ): void {
+        if (typeof write !== 'function' || typeof read !== 'function') {
+            throw new Error('Q-value persistence requires both write and read callbacks');
+        }
+        this.persistenceCallbacks = { write, read };
+        this.logger.info('[QValueManager] Persistence read and write callbacks registered');
     }
 
     /**
@@ -172,8 +183,7 @@ export class QValueManager {
     /**
      * Whether a Q-value for this memory is already in the cache.
      *
-     * Used by MemoryService.hydrateQValues so a retrieval only reads persistence for
-     * memories this process has not scored yet.
+     * Reports whether scoring can use a local value without reading persistence.
      */
     public isCached(memoryId: string): boolean {
         return this.qValueCache.has(memoryId);
@@ -185,13 +195,67 @@ export class QValueManager {
     public setQValueInCache(memoryId: string, qValue: number): void {
         if (!this.enabled) return;
 
+        // Direct cache writes must not replace dirty rewards or interfere with
+        // a queued persistence read or reward update for the same memory.
+        if (this.qValueCache.get(memoryId)?.dirty || this.pendingUpdates.has(memoryId)) return;
+        this.reserveCacheEntry(memoryId);
         this.qValueCache.set(memoryId, {
             qValue,
             lastAccessed: Date.now(),
             dirty: false
         });
         this.updateCacheAccessOrder(memoryId);
-        this.enforceCacheLimit();
+    }
+
+    /**
+     * Load missing Q-values while holding the same per-memory queue as rewards.
+     * Reserve every key before awaiting so overlapping batches cannot deadlock.
+     * Only active operations retain queue entries; eviction needs no version history.
+     */
+    public async hydrateQValues(
+        memoryIds: string[],
+        readBatch: (memoryIds: string[]) => Promise<Map<string, number>>
+    ): Promise<void> {
+        if (!this.enabled) return;
+
+        const reservations = new Map(
+            [...new Set(memoryIds)]
+                .filter(memoryId => !this.qValueCache.has(memoryId))
+                .map(memoryId => [memoryId, this.reserveMemoryOperation(memoryId)] as const)
+        );
+        if (reservations.size === 0) return;
+
+        try {
+            await Promise.all([...reservations.values()].map(reservation => reservation.previous));
+            // An earlier reward or hydration may have populated a key while this
+            // batch waited. Its queue reservation keeps that cached value current.
+            const uncached = [...reservations.keys()].filter(memoryId => !this.qValueCache.has(memoryId));
+            if (uncached.length === 0) return;
+
+            const values = await readBatch(uncached);
+            // Validate the entire requested batch before admitting any entries.
+            for (const memoryId of uncached) {
+                if (values.has(memoryId)) this.validatePersistedQValue(memoryId, values.get(memoryId)!);
+            }
+
+            for (const memoryId of uncached) {
+                if (!this.qValueCache.has(memoryId) && values.has(memoryId)) {
+                    this.reserveCacheEntry(memoryId);
+                    this.qValueCache.set(memoryId, {
+                        qValue: values.get(memoryId)!,
+                        lastAccessed: Date.now(),
+                        dirty: false
+                    });
+                    this.updateCacheAccessOrder(memoryId);
+                }
+                // Release each admitted key promptly so a batch larger than the
+                // cache can evict earlier clean entries without exceeding its limit.
+                reservations.get(memoryId)!.release();
+            }
+        } finally {
+            // Read, validation and capacity failures must also unblock later rewards.
+            for (const reservation of reservations.values()) reservation.release();
+        }
     }
 
     /**
@@ -213,8 +277,63 @@ export class QValueManager {
             return this.config.defaultQValue;
         }
 
+        const reservation = this.reserveMemoryOperation(memoryId);
+        await reservation.previous;
+
+        try {
+            return await this.applyQValueUpdate(memoryId, reward, learningRate, agentId, channelId);
+        } finally {
+            reservation.release();
+        }
+    }
+
+    /** Append one operation to a memory's queue without retaining completed keys. */
+    private reserveMemoryOperation(memoryId: string): { previous: Promise<void>; release: () => void } {
+        const previous = this.pendingUpdates.get(memoryId) ?? Promise.resolve();
+        let release!: () => void;
+        const pending = new Promise<void>(resolve => { release = resolve; });
+        this.pendingUpdates.set(memoryId, pending);
+
+        return {
+            previous,
+            release: (): void => {
+                release();
+                if (this.pendingUpdates.get(memoryId) === pending) {
+                    this.pendingUpdates.delete(memoryId);
+                }
+            }
+        };
+    }
+
+    /** Reject corrupt persisted values before they affect the cache or a reward. */
+    private validatePersistedQValue(memoryId: string, qValue: number): void {
+        if (!Number.isFinite(qValue) || qValue < 0 || qValue > 1) {
+            throw new Error(`Persisted Q-value for ${memoryId} must be a finite number in [0, 1]`);
+        }
+    }
+
+    /** Apply one serialized reward and retain failed writes as dirty cache entries. */
+    private async applyQValueUpdate(
+        memoryId: string,
+        reward: number,
+        learningRate?: number,
+        agentId?: AgentId,
+        channelId?: ChannelId
+    ): Promise<number> {
+        // A cache miss may be an evicted learned value, not a new memory. Read
+        // under this memory's update lock, preserving the same store for its write.
+        const persistence = this.persistenceCallbacks;
+        let currentQ = this.qValueCache.get(memoryId)?.qValue;
+        if (currentQ === undefined && persistence) {
+            const persistedQ = await persistence.read(memoryId);
+            if (persistedQ !== undefined) this.validatePersistedQValue(memoryId, persistedQ);
+            currentQ = persistedQ;
+        }
+        // Other memories can occupy capacity while the read is pending. Reserve
+        // only after it succeeds, immediately before the synchronous cache mutation.
+        this.reserveCacheEntry(memoryId);
         const alpha = learningRate ?? this.config.learningRate;
-        const currentQ = this.getQValue(memoryId);
+        currentQ ??= this.config.defaultQValue;
 
         // EMA update formula
         const newQ = currentQ + alpha * (reward - currentQ);
@@ -223,11 +342,12 @@ export class QValueManager {
         const clampedQ = Math.max(0, Math.min(1, newQ));
 
         // Update cache
-        this.qValueCache.set(memoryId, {
+        const updatedEntry: QValueCacheEntry = {
             qValue: clampedQ,
             lastAccessed: Date.now(),
             dirty: true
-        });
+        };
+        this.qValueCache.set(memoryId, updatedEntry);
         this.updateCacheAccessOrder(memoryId);
 
         // Create history entry
@@ -238,18 +358,17 @@ export class QValueManager {
         };
 
         // Persist if callback is available
-        if (this.persistenceCallback) {
+        if (persistence) {
             try {
-                await this.persistenceCallback(memoryId, {
+                await persistence.write(memoryId, {
                     qValue: clampedQ,
                     qValueHistory: [historyEntry],
                     lastRewardAt: new Date()
                 });
 
                 // Mark as clean after successful persistence
-                const cached = this.qValueCache.get(memoryId);
-                if (cached) {
-                    cached.dirty = false;
+                if (this.qValueCache.get(memoryId) === updatedEntry) {
+                    updatedEntry.dirty = false;
                 }
             } catch (error) {
                 this.logger.warn(`[QValueManager] Failed to persist Q-value for ${memoryId}: ${error}`);
@@ -556,25 +675,38 @@ export class QValueManager {
     }
 
     /**
-     * Enforce cache size limit using LRU eviction
+     * Reserve capacity before adding an entry. Only persisted values may be
+     * evicted; failed or in-flight writes must remain available for recovery.
+     * Refuse admission when capacity is entirely occupied by those values.
      */
-    private enforceCacheLimit(): void {
+    private reserveCacheEntry(memoryId: string): void {
+        if (this.qValueCache.has(memoryId)) return;
         const maxSize = this.config.cache?.maxSize ?? 1000;
+        this.evictPersistedEntries(this.qValueCache.size - maxSize + 1);
+    }
 
-        while (this.qValueCache.size > maxSize && this.cacheAccessOrder.length > 0) {
-            const oldestId = this.cacheAccessOrder.shift();
-            if (oldestId) {
-                const entry = this.qValueCache.get(oldestId);
-                // Only evict if not dirty, otherwise persist first
-                if (entry && !entry.dirty) {
-                    this.qValueCache.delete(oldestId);
-                } else if (entry && entry.dirty && this.persistenceCallback) {
-                    // Persist dirty entry before eviction
-                    this.persistenceCallback(oldestId, { qValue: entry.qValue })
-                        .then(() => this.qValueCache.delete(oldestId))
-                        .catch(err => this.logger.warn(`[QValueManager] Failed to persist dirty entry ${oldestId}: ${err}`));
-                }
-            }
+    /** Validate a resize before changing configuration or discarding any entries. */
+    private applyConfiguration(config: MemoryUtilityConfig): void {
+        const maxSize = config.cache?.maxSize ?? 1000;
+        if (!Number.isInteger(maxSize) || maxSize < 1) {
+            throw new Error('Q-value cache maxSize must be a positive integer');
+        }
+        this.evictPersistedEntries(this.qValueCache.size - maxSize);
+        this.config = config;
+    }
+
+    /** Remove only clean, idle entries, preserving their LRU order. */
+    private evictPersistedEntries(required: number): void {
+        if (required <= 0) return;
+
+        const removable = this.cacheAccessOrder.filter(id => (
+            !this.qValueCache.get(id)?.dirty && !this.pendingUpdates.has(id)
+        ));
+        if (removable.length < required) {
+            throw new Error('Q-value cache capacity is occupied by unpersisted or pending rewards');
+        }
+        for (const id of removable.slice(0, required)) {
+            this.clearFromCache(id);
         }
     }
 
@@ -652,7 +784,7 @@ export class QValueManager {
      * Update configuration
      */
     public updateConfig(updates: Partial<MemoryUtilityConfig>): void {
-        this.config = { ...this.config, ...updates };
+        this.applyConfiguration({ ...this.config, ...updates });
         this.enabled = this.config.enabled;
         this.logger.info('[QValueManager] Configuration updated');
     }

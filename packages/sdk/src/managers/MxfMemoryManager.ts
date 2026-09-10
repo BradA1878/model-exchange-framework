@@ -60,6 +60,8 @@ export interface MemoryManagerConfig {
     maxHistory: number;
     maxObservations: number;
     enablePersistence: boolean;
+    /** Session memory belongs to this instance and never loads, persists, or indexes automatically. */
+    memoryMode?: 'persistent' | 'session';
     enableDeduplication?: boolean;
     maxMessageSize?: number; // Max size in bytes for a single message (default: 100KB)
     /**
@@ -217,6 +219,9 @@ export class MxfMemoryManager {
     private readonly pendingIndexOperations = new Map<string, (error: Error) => void>();
 
     constructor(config: MemoryManagerConfig) {
+        if (config.memoryMode !== undefined && config.memoryMode !== 'persistent' && config.memoryMode !== 'session') {
+            throw new Error('MxfMemoryManager memoryMode must be persistent or session');
+        }
         if (typeof config.agentId !== 'string' || config.agentId.trim() === '') {
             throw new Error('MxfMemoryManager requires a non-empty agentId');
         }
@@ -234,7 +239,10 @@ export class MxfMemoryManager {
             throw new Error('MxfMemoryManager maxMessageSize must be a positive integer');
         }
 
-        this.config = config;
+        this.config = {
+            ...config,
+            enablePersistence: config.memoryMode === 'session' ? false : config.enablePersistence
+        };
         this.logger = new Logger('debug', `MemoryManager:${config.agentId}`, 'client');
         this.agentId = config.agentId;
         this.enableDeduplication = config.enableDeduplication ?? false;
@@ -242,11 +250,13 @@ export class MxfMemoryManager {
         this.memoryIdentity = {
             id: `agent-memory-${config.agentId}`,
             createdAt: new Date(),
-            persistenceLevel: MemoryPersistenceLevel.PERSISTENT
+            persistenceLevel: this.config.enablePersistence
+                ? MemoryPersistenceLevel.PERSISTENT
+                : MemoryPersistenceLevel.TEMPORARY
         };
 
         // Initialize Meilisearch service if enabled
-        if (process.env.ENABLE_MEILISEARCH === 'true') {
+        if (config.memoryMode !== 'session' && process.env.ENABLE_MEILISEARCH === 'true') {
             const host = process.env.MEILISEARCH_HOST;
             const apiKey = process.env.MEILISEARCH_MASTER_KEY;
             if (!host || host.trim() === '') {
@@ -272,15 +282,20 @@ export class MxfMemoryManager {
         this.indexingStopped = null;
         this.persistenceStopped = null;
 
-        if (this.config.enablePersistence) {
-            await this.loadAgentMemory();
-        }
+        await this.loadAgentMemory();
     }
 
     /**
      * Load agent memory from the memory system
      */
     public async loadAgentMemory(): Promise<void> {
+        if (!this.config.enablePersistence) {
+            // Reconnecting the same instance retains its local context. No remote
+            // memory is read, and the local summary does not advertise search readiness.
+            this.memoryLoaded = true;
+            this.emitMeilisearchReady();
+            return;
+        }
         try {
             // Get memory from the memory service
             const memory = await firstValueFrom(
@@ -467,6 +482,12 @@ export class MxfMemoryManager {
     }
 
     private markMemoryDirty(): number {
+        if (!this.config.enablePersistence) {
+            // Only working history is needed without persistence. Clear any snapshot
+            // assigned by import/compaction and never accumulate unsendable revisions.
+            this.authoritativeConversationHistory = [];
+            return this.nextPersistenceRevision;
+        }
         this.nextPersistenceRevision += 1;
         this.pendingPersistenceRevisions.push(this.nextPersistenceRevision);
         return this.nextPersistenceRevision;
@@ -632,7 +653,9 @@ export class MxfMemoryManager {
 
         // Add to history
         this.conversationHistory.push(conversationMessage);
-        this.authoritativeConversationHistory.push(conversationMessage);
+        if (this.config.enablePersistence) {
+            this.authoritativeConversationHistory.push(conversationMessage);
+        }
         this.markMemoryDirty();
 
         // Maintain max history length
@@ -909,17 +932,19 @@ export class MxfMemoryManager {
             throw new Error(`Invalid conversation message index: ${index}`);
         }
 
-        const previousMessage = this.conversationHistory[index];
-        const authoritativeIndex = this.authoritativeConversationHistory
-            .findIndex(candidate => candidate.id === previousMessage.id);
-        if (authoritativeIndex < 0) {
-            throw new Error(
-                `Conversation message '${previousMessage.id}' is missing from authoritative memory`
-            );
+        if (this.config.enablePersistence) {
+            const previousMessage = this.conversationHistory[index];
+            const authoritativeIndex = this.authoritativeConversationHistory
+                .findIndex(candidate => candidate.id === previousMessage.id);
+            if (authoritativeIndex < 0) {
+                throw new Error(
+                    `Conversation message '${previousMessage.id}' is missing from authoritative memory`
+                );
+            }
+            this.authoritativeConversationHistory[authoritativeIndex] = message;
         }
 
         this.conversationHistory[index] = message;
-        this.authoritativeConversationHistory[authoritativeIndex] = message;
         this.markMemoryDirty();
         await this.saveAgentMemory();
     }

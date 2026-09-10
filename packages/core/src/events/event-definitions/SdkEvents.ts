@@ -41,6 +41,8 @@ export const SdkEvents = {
  * Data carried by SdkEvents.RECONNECTED.
  */
 export interface SdkReconnectedEventData {
+    /** Identity of the SDK instance whose connection was restored. */
+    sdkInstanceId: string;
     /** Server-confirmed user id of the re-authenticated connection. */
     userId: string;
     /**

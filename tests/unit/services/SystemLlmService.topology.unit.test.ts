@@ -5,6 +5,7 @@ const mockIsChannelSystemLlmEnabled = jest.fn();
 const mockSetChannelSystemLlmStance = jest.fn();
 const mockSetChannelSystemLlmStanceCeiling = jest.fn();
 const mockGetChannelSystemLlmStance = jest.fn(() => 'supportive');
+const mockRecordUsage = jest.fn();
 
 const mockServerEventBus = {
     on: jest.fn((event: string, handler: EventHandler) => {
@@ -94,7 +95,7 @@ jest.mock('../../../src/server/socket/services/SystemLlmBudgetService', () => ({
                 exhausted: false
             }),
             assertWithinBudget: jest.fn(),
-            recordUsage: jest.fn()
+            recordUsage: mockRecordUsage
         })
     }
 }));
@@ -112,6 +113,8 @@ import { ConfigEvents } from '@mxf-dev/core/config/ConfigManager';
 import { LlmProviderType } from '@mxf-dev/core/protocols/mcp/LlmProviders';
 import { SystemLlmService } from '../../../src/server/socket/services/SystemLlmService';
 import { SystemLlmServiceManager } from '../../../src/server/socket/services/SystemLlmServiceManager';
+import { of } from 'rxjs';
+import { McpContentType } from '@mxf-dev/core/protocols/mcp/IMcpClient';
 
 interface SystemLlmServiceInternals {
     updateChannelActivity: (channelId: string, message: unknown) => Promise<void>;
@@ -596,6 +599,46 @@ describe('SystemLlmService per-channel topology and lifecycle', () => {
 
         await expect(request).rejects.toThrow('SystemLlmService is shutting down');
         expect(unsubscribe).toHaveBeenCalledTimes(1);
+    });
+
+    it.each([
+        { content: [] },
+        { content: [{ type: McpContentType.TEXT, text: '   ' }] },
+        { content: [{ type: McpContentType.TOOL_USE, id: 'call', name: 'unexpected_tool', input: {} }] }
+    ])('charges reported usage once when a response has no usable text: %j', async ({ content }) => {
+        const service = manager.getServiceForChannel(CHANNEL_A)!;
+        const internals = serviceInternals(service);
+        const sendMessage = jest.fn(() => of({
+            content, usage: { input_tokens: 123, output_tokens: 45 }
+        }));
+        jest.spyOn(internals, 'initClient').mockResolvedValue({ sendMessage });
+
+        await expect(internals.sendLlmRequestInternal('must return usable text'))
+            .rejects.toThrow('Empty or invalid LLM response');
+        expect(mockRecordUsage).toHaveBeenCalledTimes(1);
+        expect(mockRecordUsage).toHaveBeenCalledWith(TEST_MODEL, { inputTokens: 123, outputTokens: 45 });
+    });
+
+    it('charges a completed request only once if a provider emits again synchronously', async () => {
+        const internals = serviceInternals(manager.getServiceForChannel(CHANNEL_A)!);
+        const response = {
+            content: [{ type: McpContentType.TEXT, text: 'usable response' }],
+            usage: { input_tokens: 12, output_tokens: 3 }
+        };
+        jest.spyOn(internals, 'initClient').mockResolvedValue({ sendMessage: jest.fn(() => of(response, response)) });
+        await expect(internals.sendLlmRequestInternal('return one response')).resolves.toBe('usable response');
+        expect(mockRecordUsage).toHaveBeenCalledTimes(1);
+    });
+
+    it('passes an explicit temperature of zero to the provider', async () => {
+        const internals = serviceInternals(manager.getServiceForChannel(CHANNEL_A)!);
+        const sendMessage = jest.fn(() => of({
+            content: [{ type: McpContentType.TEXT, text: 'usable response' }],
+            usage: { input_tokens: 12, output_tokens: 3 }
+        }));
+        jest.spyOn(internals, 'initClient').mockResolvedValue({ sendMessage });
+        await internals.sendLlmRequestInternal('deterministic request', null, { temperature: 0 });
+        expect(sendMessage).toHaveBeenCalledWith(expect.any(Array), [], expect.objectContaining({ temperature: 0 }));
     });
 
     it('detaches every service before clearAll invokes re-entrant cleanup code', () => {

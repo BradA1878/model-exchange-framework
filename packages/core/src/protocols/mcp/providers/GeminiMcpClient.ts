@@ -39,6 +39,7 @@ import {
     McpRole
 } from '../IMcpClient.js';
 import * as genai from '@google/genai';
+import type { GenerateContentParameters } from '@google/genai';
 import { extractToolCalls, extractToolCallId, extractTextFromContent, convertContentToText } from '../utils/MessageConverters.js';
 import { Observable } from 'rxjs';
 import { AgentContext } from '../../../interfaces/AgentContext.js';
@@ -48,10 +49,9 @@ import { GeminiMessageAdapter } from '../converters/adapters/GeminiMessageAdapte
 
 const logger = new Logger('info', 'GeminiMcpClient');
 
-// Import types from Google Gen AI SDK
-// These types are dynamically imported in the initializeProvider method
+// Conversion helpers accept the existing MCP content shapes. Request envelopes
+// below use the installed SDK's GenerateContentParameters contract.
 type GoogleGenAI = any;
-type GenerateContentRequest = any;
 type Part = any;
 type Content = any;
 type FunctionDeclaration = any;
@@ -65,7 +65,7 @@ export class GeminiMcpClient extends BaseMcpClient {
     // Google GenAI client instance
     private genAiClient: any = null;
     
-    // SDK modules (dynamically imported)
+    // SDK exports used by content and tool conversion.
     private GoogleGenAI: GoogleGenAI | null = null;
     private Type: Type | null = null;
     private FunctionCallingConfigMode: FunctionCallingConfigMode | null = null;
@@ -75,10 +75,6 @@ export class GeminiMcpClient extends BaseMcpClient {
      */
     protected async initializeProvider(): Promise<void> {
         try {
-            // Dynamically import the Google Gen AI SDK
-            // This allows the SDK to be an optional dependency
-            // Use imported genai module
-            
             // Store SDK exports for later use
             this.GoogleGenAI = genai.GoogleGenAI;
             this.Type = genai.Type;
@@ -116,20 +112,7 @@ export class GeminiMcpClient extends BaseMcpClient {
         let currentRole: string | null = null;
         let currentParts: Part[] = [];
         
-        // Process system messages separately - they need to be included with the first user message
-        let systemPrompt = '';
-        
-        // First, extract all system prompts
-        messages.forEach(message => {
-            if (message.role === McpRole.SYSTEM) {
-                const text = this.extractTextFromContent(message.content);
-                if (text) {
-                    systemPrompt += (systemPrompt ? '\n\n' : '') + text;
-                }
-            }
-        });
-        
-        // Process remaining messages
+        // System messages are supplied through config.systemInstruction.
         for (const message of messages) {
             // Skip system messages as they're handled separately
             if (message.role === McpRole.SYSTEM) {
@@ -149,12 +132,6 @@ export class GeminiMcpClient extends BaseMcpClient {
             
             // Set the current role
             currentRole = role;
-            
-            // Add system prompt to the first user message
-            if (role === 'user' && systemPrompt && contents.length === 0 && currentParts.length === 0) {
-                currentParts.push({ text: systemPrompt + '\n\n' });
-                systemPrompt = ''; // Clear so it's not added again
-            }
             
             // Handle tool calls for assistant messages (using utility)
             if (message.role === McpRole.ASSISTANT) {
@@ -368,15 +345,8 @@ export class GeminiMcpClient extends BaseMcpClient {
         // Extract content from the response
         const content: McpApiResponse['content'] = [];
         
-        // Check for text response
-        if (response.text) {
-            content.push({
-                type: McpContentType.TEXT,
-                text: response.text
-            });
-        }
-        
-        // Check for parts
+        // The SDK's response.text getter concatenates these same candidate parts.
+        // Read the parts once so text is not duplicated beside images and tools.
         if (response.candidates?.[0]?.content?.parts) {
             for (const part of response.candidates[0].content.parts) {
                 if (part.text) {
@@ -409,10 +379,14 @@ export class GeminiMcpClient extends BaseMcpClient {
             }
         }
         
-        // Use metadata from the response if available, otherwise estimate
-        const promptTokens = response.promptTokenCount || 0;
-        const completionTokens = response.candidatesTokenCount || 0;
-        const totalTokens = response.totalTokenCount || (promptTokens + completionTokens);
+        // MCP requires numeric usage. Missing provider evidence is an error, not
+        // a zero-cost response. Keep the reported total, which may include tokens
+        // outside the prompt/candidate split (for example, thinking tokens).
+        const usage = response.usageMetadata;
+        if (!usage || [usage.promptTokenCount, usage.candidatesTokenCount, usage.totalTokenCount]
+            .some((count: unknown) => typeof count !== 'number' || !Number.isFinite(count) || count < 0)) {
+            throw new Error('Gemini response has missing or invalid token usage');
+        }
         
         // Create MCP response
         return {
@@ -424,9 +398,9 @@ export class GeminiMcpClient extends BaseMcpClient {
             stop_reason: response.candidates?.[0]?.finishReason || null,
             stop_sequence: null,
             usage: {
-                input_tokens: promptTokens,
-                output_tokens: completionTokens,
-                total_tokens: totalTokens
+                input_tokens: usage.promptTokenCount,
+                output_tokens: usage.candidatesTokenCount,
+                total_tokens: usage.totalTokenCount
             }
         };
     }
@@ -457,25 +431,25 @@ export class GeminiMcpClient extends BaseMcpClient {
             // Get model name
             const modelName = options?.model || this.config.defaultModel || 'gemini-2.0-flash-001';
             
-            // Get the model instance
-            const model = this.genAiClient.models.getModel(modelName);
-            
             // Convert messages to Google Gen AI format
             const contents = this.convertToGeminiContent(messages);
+            const systemPrompt = messages
+                .filter(message => message.role === McpRole.SYSTEM)
+                .map(message => this.extractTextFromContent(message.content))
+                .filter(Boolean)
+                .join('\n\n');
             
-            // Set up the request parameters
-            const requestParams: GenerateContentRequest = {
+            // The SDK serializes generation settings only from config.
+            const requestParams: GenerateContentParameters = {
                 model: modelName,
                 contents: contents,
-                // Include temperature if specified
-                ...((options?.temperature || this.config.temperature) && {
-                    generationConfig: {
-                        temperature: options?.temperature || this.config.temperature,
-                        maxOutputTokens: options?.maxTokens || this.config.maxTokens || 4096,
-                        topK: options?.topK || 40,
-                        topP: options?.topP || 0.95
-                    }
-                })
+                config: {
+                    systemInstruction: systemPrompt || undefined,
+                    temperature: options?.temperature ?? this.config.temperature ?? 0.7,
+                    maxOutputTokens: options?.maxTokens || this.config.maxTokens || 4096,
+                    topK: options?.topK || 40,
+                    topP: options?.topP || 0.95
+                }
             };
             
             // Add tools if provided
@@ -483,6 +457,7 @@ export class GeminiMcpClient extends BaseMcpClient {
                 const functionDeclarations = this.convertToFunctionDeclarations(tools);
                 
                 requestParams.config = {
+                    ...requestParams.config,
                     toolConfig: {
                         functionCallingConfig: {
                             mode: options?.requireToolUse === true
@@ -557,13 +532,13 @@ export class GeminiMcpClient extends BaseMcpClient {
         // Model name
         const modelName = options?.model || this.config.defaultModel || 'gemini-2.0-flash';
 
-        // Set up the request parameters
-        const requestParams: GenerateContentRequest = {
+        // System instructions, generation settings and tools share the SDK config.
+        const requestParams: GenerateContentParameters = {
             model: modelName,
             contents: contents,
-            systemInstruction: systemPrompt,
-            generationConfig: {
-                temperature: options?.temperature || this.config.temperature || 0.7,
+            config: {
+                systemInstruction: systemPrompt,
+                temperature: options?.temperature ?? this.config.temperature ?? 0.7,
                 maxOutputTokens: options?.maxTokens || this.config.maxTokens || 4096,
                 topK: options?.topK || 40,
                 topP: options?.topP || 0.95
@@ -575,6 +550,7 @@ export class GeminiMcpClient extends BaseMcpClient {
             const functionDeclarations = this.convertToFunctionDeclarations(context.availableTools as McpTool[]);
 
             requestParams.config = {
+                ...requestParams.config,
                 toolConfig: {
                     functionCallingConfig: {
                         mode: this.FunctionCallingConfigMode.AUTO,

@@ -22,7 +22,15 @@ export const isUnsafeStdioMcpEnabled = (): boolean => {
  * stdio, so an absent transport must remain on the dangerous side of the gate.
  */
 export const isStdioMcpTransport = (transport: unknown): boolean => {
-    return transport === undefined || transport === null || transport === '' || transport === 'stdio';
+    if (transport === undefined || transport === null || transport === '' || transport === 'stdio') {
+        return true;
+    }
+    if (transport === 'http') {
+        return false;
+    }
+    // Unknown values must not fall through a stdio feature gate and later be
+    // interpreted as a process registration by the server manager.
+    throw new Error('Unsupported MCP transport; expected stdio or http');
 };
 
 /**

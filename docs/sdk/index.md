@@ -1,5 +1,8 @@
 # MXF SDK Documentation
 
+For the session-memory option, task ownership, and authenticated reconnect contract
+in SDK 4.0, see [Agent memory lifetime and task outcomes](session-memory.md).
+
 The MXF SDK provides TypeScript/JavaScript classes for building agents that connect to the Model Exchange Framework via WebSocket communication. It enables real-time messaging, task handling, memory management, and tool execution through the Model Context Protocol (MCP).
 
 ## SDK Sections

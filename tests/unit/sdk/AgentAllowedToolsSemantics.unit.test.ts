@@ -65,8 +65,7 @@ describe('agent allowedTools semantics in the SDK', () => {
         const callbacks: TaskExecutionCallbacks = {
             generateResponse,
             getCachedTools: () => tools,
-            setCurrentTask: jest.fn(),
-            getCurrentTask: jest.fn(),
+            onTaskStarted: jest.fn(),
             updateSystemPromptForTask: jest.fn().mockResolvedValue(undefined),
             isToolGatekeepingDisabled: () => true,
             getAllowedTools: () => []

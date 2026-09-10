@@ -6,6 +6,11 @@ MXF currently provides declarative workflow **types** in
 `WorkflowExecutionEngine`. Setting `WORKFLOW_SYSTEM_ENABLED` does not create those
 missing runtime classes.
 
+The internal `src/server/services/WorkflowExecutionEngine.ts` registry stores its
+definitions and execution records in process memory and is exercised by tests.
+It is not called by the normal server task execution path. Each execution receives
+an independent copy of its initial state; this is not restart recovery.
+
 Use these interfaces when an application owns the executor or persists workflow
 definitions for another service:
 

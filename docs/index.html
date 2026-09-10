@@ -4,13 +4,13 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>MXF - Model Exchange Framework Documentation</title>
-    <meta name="description" content="Documentation for MXF (Model Exchange Framework) - A multi-agent AI orchestration framework for TypeScript. Build sophisticated AI systems with advanced agent coordination, MCP integration, and the ORPAR control loop.">
+    <meta name="description" content="MXF documentation: TypeScript agents sharing tasks, tools, messages, and memory. Core and SDK 4.0 upgrade guidance, examples, and current implementation limits.">
     <meta name="keywords" content="MXF, Model Exchange Framework, AI orchestration, multi-agent, TypeScript, MCP, ORPAR">
     <meta name="author" content="Brad Anderson">
     
     <!-- Open Graph / Social -->
     <meta property="og:title" content="MXF - Model Exchange Framework">
-    <meta property="og:description" content="Multi-agent AI orchestration framework for TypeScript. Advanced agent coordination, 100+ built-in tools, and MCP integration.">
+    <meta property="og:description" content="TypeScript agents sharing tasks, tools, messages, and memory. Core and SDK 4.0 documentation and framework review.">
     <meta property="og:type" content="website">
     <meta property="og:image" content="mxf-logo.png">
     
@@ -610,6 +610,17 @@
             margin-bottom: 28px;
         }
 
+        .welcome-status {
+            margin-top: 20px;
+            font-size: 14px;
+            line-height: 1.6;
+        }
+
+        .welcome-status a,
+        .server-banner a {
+            color: var(--accent);
+        }
+
         .welcome-github {
             display: inline-flex;
             align-items: center;
@@ -912,20 +923,26 @@
                 <div class="welcome">
                     <div class="welcome-header">
                         <img src="mxf-logo.png" alt="MXF - Model Exchange Framework" class="welcome-logo">
-                        <p class="welcome-tagline">Multi-agent AI orchestration framework for TypeScript</p>
+                        <p class="welcome-tagline">TypeScript agents sharing tasks, tools, messages, and memory</p>
                         <a href="https://github.com/BradA1878/model-exchange-framework" target="_blank" rel="noopener noreferrer" class="welcome-github">
                             <svg viewBox="0 0 24 24" fill="currentColor">
                                 <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/>
                             </svg>
                             View on GitHub
                         </a>
+                        <p class="welcome-status">
+                            Core and SDK <strong>4.0.0</strong> &middot;
+                            <a href="https://github.com/BradA1878/model-exchange-framework/blob/main/packages/sdk/README.md#upgrading-to-40" target="_blank" rel="noopener noreferrer">Upgrade from 3.x</a>
+                        </p>
                     </div>
                     
                     <div class="server-banner">
-                        <span class="server-banner-icon">💡</span>
+                        <span class="server-banner-icon">📋</span>
                         <div class="server-banner-content">
-                            <strong>Local Development:</strong> Run a server from the docs directory:<br>
-                            <code>python3 -m http.server 8000</code> or <code>npx serve</code>
+                            <strong>Current implementation limits:</strong>
+                            Workflow execution is not connected to normal task dispatch, cross-server P2P is not shipped,
+                            and predictive analytics still has broken tool-result ingestion and fabricated historical inputs.
+                            <a href="#reviews/2026-09-06-framework-review.md" onclick="loadDoc('reviews/2026-09-06-framework-review.md'); return false;">Read the review and verification record</a>.
                         </div>
                     </div>
 
@@ -933,7 +950,7 @@
                         <div class="welcome-card" onclick="loadDoc('index.md')">
                             <div class="welcome-card-icon">🏠</div>
                             <h3>Overview</h3>
-                            <p>Introduction to MXF architecture and concepts</p>
+                            <p>Implemented behavior, package boundaries, and documentation map</p>
                         </div>
                         <div class="welcome-card" onclick="loadDoc('getting-started.md')">
                             <div class="welcome-card-icon">🚀</div>
@@ -949,6 +966,21 @@
                             <div class="welcome-card-icon">📦</div>
                             <h3>SDK Reference</h3>
                             <p>TypeScript SDK documentation</p>
+                        </div>
+                        <div class="welcome-card" onclick="loadDoc('sdk/session-memory.md')">
+                            <div class="welcome-card-icon">🧠</div>
+                            <h3>Session Memory &amp; Task Outcomes</h3>
+                            <p>Memory lifetime, task identity, and reconnect behavior in 4.0</p>
+                        </div>
+                        <a class="welcome-card" href="https://github.com/BradA1878/model-exchange-framework/tree/main/examples/recurring-review" target="_blank" rel="noopener noreferrer">
+                            <div class="welcome-card-icon">📝</div>
+                            <h3>Recurring Review Example <span class="external-link-icon">↗</span></h3>
+                            <p>One input, one task, its actual terminal outcome, and cleanup</p>
+                        </a>
+                        <div class="welcome-card" onclick="loadDoc('reviews/2026-09-06-framework-review.md')">
+                            <div class="welcome-card-icon">📋</div>
+                            <h3>Framework Review</h3>
+                            <p>Implemented fixes, remaining defects, and test evidence</p>
                         </div>
                         <div class="welcome-card" onclick="loadDoc('api/index.md')">
                             <div class="welcome-card-icon">🔌</div>
@@ -1120,6 +1152,7 @@
                 icon: '🚀',
                 items: [
                     { title: 'Overview', file: 'index.md', icon: '🏠' },
+                    { title: 'Framework Review', file: 'reviews/2026-09-06-framework-review.md', icon: '📋' },
                     { title: 'Getting Started', file: 'getting-started.md', icon: '📖' },
                     { title: 'Deployment', file: 'deployment.md', icon: '🚀' },
                     { title: 'Use Cases', file: 'use-cases.md', icon: '💡' },
@@ -1147,7 +1180,8 @@
                     { title: 'Security', file: 'mxf/security.md', icon: '🔒' },
                     { title: 'Extensibility', file: 'mxf/extensibility.md', icon: '🧩' },
                     { title: 'Tool Reference', file: 'mxf/tool-reference.md', icon: '🔧' },
-                    { title: 'Task DAG & Knowledge Graph', file: 'features/dag-knowledge-graph.md', icon: '🔀' },
+                    { title: 'Task DAG Tools', file: 'api/dag-tools.md', icon: '🔀' },
+                    { title: 'Knowledge Graph Tools', file: 'api/knowledge-graph-tools.md', icon: '🕸️' },
                     { title: 'TensorFlow.js Integration', file: 'mxf/index.md', icon: '🤖' }
                 ]
             },
@@ -1166,19 +1200,21 @@
             'Advanced Features': {
                 icon: '🔬',
                 items: [
-                    { title: 'Workflow System', file: 'mxf/workflow-system.md', icon: '🔄' },
+                    { title: 'Workflow Status', file: 'mxf/workflow-system.md', icon: '🔄' },
                     { title: 'LSP Integration', file: 'mxf/lsp-integration.md', icon: '💻' },
                     { title: 'Nested Learning', file: 'mxf/nested-learning.md', icon: '🧠' },
                     { title: 'Memory Utility Learning', file: 'mxf/memory-utility-learning.md', icon: '📊' },
                     { title: 'ORPAR-Memory Integration', file: 'mxf/orpar-memory-integration.md', icon: '🔗' },
                     { title: 'User Memory', file: 'mxf/user-memory.md', icon: '🧠' },
-                    { title: 'P2P Foundation', file: 'mxf/p2p-foundation.md', icon: '🌐' }
+                    { title: 'P2P Status', file: 'mxf/p2p-foundation.md', icon: '🌐' }
                 ]
             },
             'SDK': {
                 icon: '📦',
                 items: [
                     { title: 'SDK Overview', file: 'sdk/index.md', icon: '📦' },
+                    { title: 'Upgrade to 4.0', file: 'https://github.com/BradA1878/model-exchange-framework/blob/main/packages/sdk/README.md#upgrading-to-40', icon: '📋', openInNewTab: true },
+                    { title: 'Session Memory & Task Outcomes', file: 'sdk/session-memory.md', icon: '🧠' },
                     { title: 'Authentication', file: 'sdk/authentication.md', icon: '🔐' },
                     { title: 'CLI', file: 'sdk/cli.md', icon: '💻' },
                     { title: 'Config Manager', file: 'sdk/config-manager.md', icon: '⚙️' },
@@ -1196,6 +1232,7 @@
                 icon: '📝',
                 items: [
                     { title: 'Examples Overview', file: 'sdk/examples.md', icon: '📚' },
+                    { title: 'Recurring Evidence Review', file: 'https://github.com/BradA1878/model-exchange-framework/tree/main/examples/recurring-review', icon: '📝', openInNewTab: true },
                     { title: 'Basic Examples', file: 'sdk/examples-basic.md', icon: '🌱' },
                     { title: 'Task Examples', file: 'sdk/examples-tasks.md', icon: '✅' },
                     { title: 'Events Examples', file: 'sdk/examples-events.md', icon: '📨' },
@@ -1278,6 +1315,7 @@
             'Analytics': {
                 icon: '📈',
                 items: [
+                    { title: 'Current Analytics Limits', file: 'reviews/2026-09-06-framework-review.md', icon: '📋' },
                     { title: 'Analytics Overview', file: 'analytics/index.md', icon: '📊' },
                     { title: 'Task Effectiveness', file: 'analytics/task-effectiveness.md', icon: '✅' },
                     { title: 'MCP Tools', file: 'analytics/mcp-tools.md', icon: '🔧' },
@@ -1294,7 +1332,7 @@
             'Integrations': {
                 icon: '🔗',
                 items: [
-                    { title: 'Code Execution Integration', file: 'code-execution-integration.md', icon: '⚡' },
+                    { title: 'Code Execution Integration', file: 'sdk/code-execution.md', icon: '⚡' },
                     { title: 'Meilisearch Integration', file: 'meilisearch-integration.md', icon: '🔍' },
                     { title: 'Task Prompt Best Practices', file: 'task-prompt-best-practices.md', icon: '📝' }
                 ]
@@ -1366,6 +1404,25 @@
                 sectionDiv.appendChild(itemsDiv);
                 tocElement.appendChild(sectionDiv);
             });
+        }
+
+        // Resolve links relative to the document, even when this viewer is hosted
+        // below a repository path. Files outside docs live in the public repository.
+        function resolveDocumentationLink(filePath, href) {
+            if (/^(?:[a-z][a-z0-9+.-]*:|\/)/i.test(href)) return null;
+
+            const docsRoot = new URL('https://mxf-docs.invalid/docs/');
+            const target = new URL(href, new URL(filePath, docsRoot));
+            if (!target.pathname.startsWith(docsRoot.pathname)) {
+                const view = /\/[^/]+\.[^/]+$/.test(target.pathname) ? 'blob' : 'tree';
+                return {
+                    href: `https://github.com/BradA1878/model-exchange-framework/${view}/main${target.pathname}${target.hash}`
+                };
+            }
+            if (!target.pathname.endsWith('.md')) return null;
+
+            const file = target.pathname.slice(docsRoot.pathname.length) + target.hash;
+            return { href: '#' + file, file };
         }
 
         // Load document
@@ -1458,31 +1515,33 @@
                     });
                 }
                 
-                // Fix relative links
-                content.querySelectorAll('a[href$=".md"]').forEach(link => {
-                    link.onclick = (e) => {
-                        e.preventDefault();
-                        let href = link.getAttribute('href');
-                        // Handle relative paths
-                        if (href.startsWith('./')) {
-                            href = href.substring(2);
-                        } else if (href.startsWith('../')) {
-                            const parts = file.split('/');
-                            parts.pop();
-                            while (href.startsWith('../')) {
-                                href = href.substring(3);
-                                parts.pop();
-                            }
-                            href = parts.join('/') + '/' + href;
-                        } else if (!href.startsWith('/') && file.includes('/')) {
-                            // Simple relative path (e.g., "authentication.md" from "sdk/index.md")
-                            // Prepend the directory of the current file
-                            const parts = file.split('/');
-                            parts.pop(); // Remove filename
-                            href = parts.join('/') + '/' + href;
-                        }
-                        loadDoc(href);
-                    };
+                // Marked renders headings without IDs. Give document anchors stable
+                // targets, including distinct IDs for repeated heading text.
+                const headingIds = new Set();
+                content.querySelectorAll('h1, h2, h3, h4, h5, h6').forEach(heading => {
+                    const base = heading.textContent.trim().toLowerCase()
+                        .replace(/[^\p{L}\p{N}\s_-]/gu, '').replace(/\s/g, '-');
+                    let id = base;
+                    let suffix = 0;
+                    while (headingIds.has(id)) id = `${base}-${++suffix}`;
+                    headingIds.add(id);
+                    heading.id = id;
+                });
+
+                // Route Markdown and fragment links through the viewer; repository
+                // files outside docs are ordinary GitHub links, not failed fetches.
+                content.querySelectorAll('a[href]').forEach(link => {
+                    const destination = resolveDocumentationLink(filePath, link.getAttribute('href'));
+                    if (!destination) return;
+                    link.setAttribute('href', destination.href);
+                    if (destination.file) {
+                        link.onclick = (event) => {
+                            if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey ||
+                                (link.target && link.target !== '_self') || link.hasAttribute('download')) return;
+                            event.preventDefault();
+                            loadDoc(destination.file);
+                        };
+                    }
                 });
                 
                 // Wrap diagram iframes with pop-out buttons

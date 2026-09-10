@@ -86,6 +86,7 @@ interface PendingUserInputRequest {
  */
 export class UserInputRequestManager {
     private static instance: UserInputRequestManager | null = null;
+    private static acceptingRequests = true;
 
     /** All pending and recently completed requests */
     private readonly pendingRequests: Map<string, PendingUserInputRequest> = new Map();
@@ -103,6 +104,11 @@ export class UserInputRequestManager {
     private static readonly CLEANUP_INTERVAL_MS = 60 * 1000;
 
     private constructor() {
+        // Disconnect handlers may still inspect the singleton during process
+        // teardown; they must not restart its worker after admission closes.
+        if (!UserInputRequestManager.acceptingRequests) {
+            return;
+        }
         // Start periodic cleanup of expired requests. The sweep must not be what
         // keeps the process alive: the manager is created lazily by the first
         // forwarded user-input request, and a referenced interval here kept the
@@ -138,6 +144,17 @@ export class UserInputRequestManager {
     }
 
     /**
+     * Permanently close prompt admission for process shutdown and reject pending
+     * waits before HTTP/socket close or event draining waits for their handlers.
+     * Already-admitted handlers can resume after an await, so a sweep alone is
+     * insufficient. Regular shutdownExisting remains available for reusable clients.
+     */
+    public static stopAcceptingRequests(): void {
+        UserInputRequestManager.acceptingRequests = false;
+        UserInputRequestManager.shutdownExisting();
+    }
+
+    /**
      * Create a new user input request and return a Promise that resolves when the user responds.
      *
      * @param request - The request definition (without requestId, which is generated here)
@@ -146,6 +163,9 @@ export class UserInputRequestManager {
     public createRequest(
         request: Omit<UserInputRequestData, 'requestId' | 'timestamp'>
     ): { requestData: UserInputRequestData; promise: Promise<UserInputResponseValue> } {
+        if (!UserInputRequestManager.acceptingRequests) {
+            throw new Error('UserInputRequestManager is not accepting requests during shutdown');
+        }
         const validator = createStrictValidator('UserInputRequestManager.createRequest');
         validator.assertIsNonEmptyString(request.title, 'title is required');
         validator.assertIsNonEmptyString(request.inputType, 'inputType is required');
@@ -563,7 +583,7 @@ export class UserInputRequestManager {
         }
 
         // Reject all pending requests
-        for (const [requestId, pending] of this.pendingRequests.entries()) {
+        for (const pending of this.pendingRequests.values()) {
             if (pending.status === 'pending') {
                 if (pending.timeoutTimer) {
                     clearTimeout(pending.timeoutTimer);

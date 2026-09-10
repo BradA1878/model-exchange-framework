@@ -756,6 +756,37 @@ describe('connection security', () => {
         expect(EventBus.server.emit).not.toHaveBeenCalled();
     });
 
+    it.each(['sse', 'http'])('rejects %s MCP registration on admin sockets before event forwarding', async transport => {
+        const socket = new FakeSocket();
+        const socketService = buildSocketService();
+        mockHandleSocketAuthentication.mockImplementation(async (targetSocket: FakeSocket) => {
+            targetSocket.data = {
+                userId: 'admin-1', role: UserRole.ADMIN, authType: 'jwt', authenticated: true
+            };
+            return 'admin-1';
+        });
+        handleConnection(socket as never, socketService as never);
+        await flushPromises();
+
+        const previousUnsafeSetting = process.env.MXF_UNSAFE_STDIO_MCP_ENABLED;
+        delete process.env.MXF_UNSAFE_STDIO_MCP_ENABLED;
+        try {
+            (EventBus.server.emit as jest.Mock).mockClear();
+            socket.emit(Events.Mcp.EXTERNAL_SERVER_REGISTER, {
+                eventId: 'invalid-transport', eventType: Events.Mcp.EXTERNAL_SERVER_REGISTER,
+                timestamp: 1, agentId: 'admin-1', channelId: 'system',
+                data: { id: 'must-not-start', name: 'No process', command: 'must-not-run', transport }
+            });
+            expect(EventBus.server.emit).not.toHaveBeenCalled();
+            expect(socket.emitted).toContainEqual(expect.objectContaining({
+                event: Events.Mcp.EXTERNAL_SERVER_REGISTRATION_FAILED
+            }));
+        } finally {
+            if (previousUnsafeSetting === undefined) delete process.env.MXF_UNSAFE_STDIO_MCP_ENABLED;
+            else process.env.MXF_UNSAFE_STDIO_MCP_ENABLED = previousUnsafeSetting;
+        }
+    });
+
     it('gates and rebuilds global MCP process registration on the admin socket', async () => {
         const socket = new FakeSocket();
         const socketService = buildSocketService();

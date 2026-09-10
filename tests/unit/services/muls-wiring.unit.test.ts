@@ -31,7 +31,11 @@ import {
     ChannelMemoryAtomicMutation,
     IMemoryPersistence
 } from '@mxf-dev/core/interfaces/IMemoryPersistence';
-import { MemoryUtilitySubdocument, DEFAULT_REWARD_MAPPING } from '@mxf-dev/core/types/MemoryUtilityTypes';
+import {
+    MemoryUtilitySubdocument,
+    DEFAULT_MEMORY_UTILITY_CONFIG,
+    DEFAULT_REWARD_MAPPING
+} from '@mxf-dev/core/types/MemoryUtilityTypes';
 
 const AGENT_ID = 'muls-agent';
 const CHANNEL_ID = 'muls-channel';
@@ -147,8 +151,10 @@ describe('MULS wiring — learning must reach retrieval and persistence', () => 
         persistence = new FakeMemoryPersistence();
 
         qValueManager = QValueManager.getInstance();
-        qValueManager.initialize({ enabled: true, defaultQValue: DEFAULT_Q, learningRate: 0.5 });
         qValueManager.clearCache();
+        qValueManager.initialize({
+            ...DEFAULT_MEMORY_UTILITY_CONFIG, enabled: true, defaultQValue: DEFAULT_Q, learningRate: 0.5
+        });
 
         UtilityScorerService.getInstance().initialize({ enabled: true });
 
@@ -165,7 +171,8 @@ describe('MULS wiring — learning must reach retrieval and persistence', () => 
 
         // The registration performed at server boot (src/server/index.ts, Step 0.1).
         qValueManager.setPersistenceCallback((memoryId, utility) =>
-            memoryService.updateMemoryUtility(memoryId, utility)
+            memoryService.updateMemoryUtility(memoryId, utility),
+            memoryId => memoryService.readMemoryUtilityQValue(memoryId)
         );
     });
 
@@ -229,6 +236,60 @@ describe('MULS wiring — learning must reach retrieval and persistence', () => 
         await runSearch();
 
         expect(qValueManager.getQValue('mem-persisted')).toBeCloseTo(0.9, 5);
+    });
+
+    it('reloads persisted utility through MemoryService before rewarding an uncached memory', async () => {
+        persistence.seed('mem-rewarded', 0.8);
+
+        expect(await qValueManager.updateQValue('mem-rewarded', 1)).toBeCloseTo(0.9);
+        expect(persistence.writes.at(-1)).toMatchObject({
+            memoryId: 'mem-rewarded', utility: { qValue: expect.closeTo(0.9) }
+        });
+        expect(await memoryService.readMemoryUtilityQValue('not-stored')).toBeUndefined();
+    });
+
+    it('orders an earlier hydration before rewards and retains the learned value after eviction', async () => {
+        qValueManager.updateConfig({ cache: { enabled: true, maxSize: 1, ttlMs: 60_000 } });
+        persistence.seed('mem-raced', 0.2);
+        const staleSnapshot = await persistence.getAgentMemoryUtilities(['mem-raced']);
+        let releaseSnapshot!: (value: Map<string, MemoryUtilitySubdocument>) => void;
+        const pendingSnapshot = new Promise<Map<string, MemoryUtilitySubdocument>>(resolve => { releaseSnapshot = resolve; });
+        let notifyRead!: () => void;
+        const reading = new Promise<void>(resolve => { notifyRead = resolve; });
+        jest.spyOn(persistence, 'getAgentMemoryUtilities').mockImplementationOnce(() => {
+            notifyRead();
+            return pendingSnapshot;
+        });
+
+        const hydration = memoryService.hydrateQValues(['mem-raced']);
+        await reading;
+        const reward = qValueManager.updateQValue('mem-raced', 1);
+        const completed = Promise.allSettled([hydration, reward]);
+        try {
+            // A disjoint reward can finish while this snapshot is pending. The
+            // same-memory reward must remain queued, or eviction defeats its guard.
+            await qValueManager.updateQValue('mem-other', 1);
+            expect(persistence.writes.map(write => write.memoryId)).toEqual(['mem-other']);
+        } finally {
+            releaseSnapshot(staleSnapshot);
+            await completed;
+        }
+        expect(await completed).toEqual([
+            { status: 'fulfilled', value: undefined },
+            { status: 'fulfilled', value: expect.closeTo(0.6) }
+        ]);
+        expect(qValueManager.getQValue('mem-raced')).toBeCloseTo(0.6);
+
+        await qValueManager.updateQValue('mem-other', 1);
+        expect(qValueManager.isCached('mem-raced')).toBe(false);
+        await memoryService.hydrateQValues(['mem-raced']);
+        expect(qValueManager.getQValue('mem-raced')).toBeCloseTo(0.6);
+        expect(await qValueManager.updateQValue('mem-raced', 0)).toBeCloseTo(0.3);
+    });
+
+    it('refuses reward reads without persistence instead of treating an unavailable store as empty', async () => {
+        (memoryService as unknown as { persistenceService?: IMemoryPersistence }).persistenceService = undefined;
+        await expect(memoryService.readMemoryUtilityQValue('mem-a')).rejects.toThrow('no persistence service');
     });
 
     it('leaves search untouched when MULS is disabled', async () => {

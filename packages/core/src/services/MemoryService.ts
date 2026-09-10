@@ -2068,8 +2068,8 @@ export class MemoryService {
     /**
      * Persist the utility subdocument for a memory.
      *
-     * Registered as QValueManager's persistence callback at server boot, so this runs
-     * on every Q-value change and on dirty-cache eviction. It must throw on failure:
+     * Registered as QValueManager's persistence writer at server boot, so this runs
+     * on every Q-value change. Dirty values remain cached. It must throw on failure:
      * swallowing the error here is what previously made the whole learning system look
      * like it worked while retaining nothing across a restart.
      */
@@ -2084,6 +2084,23 @@ export class MemoryService {
         await this.persistenceService.updateAgentMemoryUtility(memoryId, utilityUpdate);
     }
 
+    /** Reload a learned value before a reward updates a cache miss. */
+    public async readMemoryUtilityQValue(memoryId: string): Promise<number | undefined> {
+        if (!this.persistenceService) {
+            throw new Error(
+                `[MemoryService] Cannot read utility for memory ${memoryId}: no persistence service is configured. ` +
+                `MULS requires the server to inject a persistence service at boot.`
+            );
+        }
+        const utilities = await this.persistenceService.getAgentMemoryUtilities([memoryId]);
+        const utility = utilities.get(memoryId);
+        if (!utility) return undefined;
+        if (utility.qValue === undefined) {
+            throw new Error(`[MemoryService] Persisted utility for memory ${memoryId} has no Q-value`);
+        }
+        return utility.qValue;
+    }
+
     /**
      * Load stored Q-values for a batch of memories into the QValueManager cache.
      *
@@ -2096,20 +2113,16 @@ export class MemoryService {
             return;
         }
 
-        const qValueManager = QValueManager.getInstance();
-        const uncached = memoryIds.filter(id => !qValueManager.isCached(id));
-        if (uncached.length === 0) {
-            return;
-        }
-
-        const utilities = await this.persistenceService.getAgentMemoryUtilities(uncached);
-        for (const [memoryId, utility] of utilities) {
-            qValueManager.setQValueInCache(memoryId, utility.qValue);
-        }
-
-        this.logger.debug(
-            `[MemoryService] Hydrated ${utilities.size}/${uncached.length} Q-values from persistence`
-        );
+        // The manager owns both the read and cache admission under the same keyed
+        // queue as rewards. A post-read cache check alone loses newer values after eviction.
+        const persistence = this.persistenceService;
+        await QValueManager.getInstance().hydrateQValues(memoryIds, async uncached => {
+            const utilities = await persistence.getAgentMemoryUtilities(uncached);
+            this.logger.debug(
+                `[MemoryService] Read ${utilities.size}/${uncached.length} Q-values from persistence`
+            );
+            return new Map([...utilities].map(([memoryId, utility]) => [memoryId, utility.qValue]));
+        });
     }
 
     /**

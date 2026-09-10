@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Memory Utility Learning System (MULS) is an advanced memory retrieval system inspired by MemRL (Memory-augmented Reinforcement Learning). The core innovation: treat memory retrieval as a **decision problem** rather than pure similarity search.
+The Memory Utility Learning System (MULS) combines retrieval relevance with per-memory values updated from task rewards. It records which retrieved memories were present in successful or unsuccessful work; that association alone does not prove that a memory caused the outcome.
 
 Traditional semantic search ranks memories by similarity to the query. MULS extends this by tracking which memories actually lead to successful task outcomes using Q-values (quality values from reinforcement learning).
 
@@ -49,6 +49,21 @@ Where:
 5. **Task Execution**: Memories used during task are tracked
 6. **Task Completion**: Reward attributed to all tracked memories
 7. **Q-Value Update**: EMA formula updates Q-values
+
+### Cache and persistence contract
+
+Server startup registers paired `QValueManager.setPersistenceCallback(write, read)`
+callbacks through `MemoryService`. A reward for an uncached memory reloads its
+persisted value before updating it; eviction does not reset learning to the default.
+A read returns `undefined` only when no stored value exists. Read failures and
+nonfinite or out-of-range stored values reject before admission.
+
+Reward updates and batch hydration share a per-memory queue. A delayed hydration
+cannot overwrite a newer reward, including after that reward is evicted. Cache
+capacity is checked before insertion. Only clean, idle values can be evicted;
+failed writes remain dirty, and admission fails if no safe capacity remains.
+This is an in-process cache contract. It does not make independent server processes
+share an atomic reward-update queue.
 
 ## Two-Phase Retrieval
 

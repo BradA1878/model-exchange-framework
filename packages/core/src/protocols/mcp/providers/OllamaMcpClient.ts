@@ -390,7 +390,7 @@ export class OllamaMcpClient extends BaseMcpClient {
             messages: ollamaMessages,
             stream: false,
             options: {
-                temperature: options?.temperature || this.config.temperature || 0.7,
+                temperature: options?.temperature ?? this.config.temperature ?? 0.7,
                 max_tokens: options?.maxTokens || this.config.maxTokens || 4096
             }
         };
