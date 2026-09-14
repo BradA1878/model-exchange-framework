@@ -63,9 +63,9 @@ Existing channel history requires `bun run migrate:channel-history` with writers
 stopped. The channel-message POST endpoint now accepts owner/admin users and
 returns `{messageId, timestamp}` after persistence; agents use messaging tools.
 
-See the [5.0 upgrade guide](https://mxf-dev.github.io/mxf/#sdk/upgrade-5.md),
-[bare-agent options](https://mxf-dev.github.io/mxf/#sdk/bare-agents.md), and
-[server controls](https://mxf-dev.github.io/mxf/#server-agent-controls.md).
+See the [5.0 upgrade guide](https://mxf.dev/#sdk/upgrade-5.md),
+[bare-agent options](https://mxf.dev/#sdk/bare-agents.md), and
+[server controls](https://mxf.dev/#server-agent-controls.md).
 
 ### Upgrading to 4.0
 

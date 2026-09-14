@@ -24,8 +24,8 @@ New request, activation-limit, and history-trim events expose agent execution.
 Server controls add per-agent filesystem roots, private DM reads, and switches
 for correction, MXP, and intelligent assignment. Existing server history needs
 the explicit channel-history migration before writers resume. See the
-[5.0 upgrade guide](https://mxf-dev.github.io/mxf/#sdk/upgrade-5.md) and
-[server controls](https://mxf-dev.github.io/mxf/#server-agent-controls.md).
+[5.0 upgrade guide](https://mxf.dev/#sdk/upgrade-5.md) and
+[server controls](https://mxf.dev/#server-agent-controls.md).
 
 ### Upgrading to 4.0
 
