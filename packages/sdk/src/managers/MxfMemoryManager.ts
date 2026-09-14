@@ -37,6 +37,7 @@ import { MxfMeilisearchService } from '@mxf-dev/core/services/MxfMeilisearchServ
 import {
     BaseEventPayload,
     createAgentEventPayload,
+    createAgentHistoryTrimmedEventPayload,
     createBaseEventPayload,
     createMeilisearchIndexEventPayload,
     createMeilisearchBackfillEventPayload,
@@ -1058,6 +1059,7 @@ export class MxfMemoryManager {
         }
         
         
+        const previousHistory = this.conversationHistory;
         // Strategy: Remove complete conversation blocks while preserving tool call-result pairs
         const systemMessages = this.conversationHistory.filter(m => m.role === 'system');
         const nonSystemMessages = this.conversationHistory.filter(m => m.role !== 'system');
@@ -1085,7 +1087,23 @@ export class MxfMemoryManager {
             ...systemMessages,
             ...keepBlocks.flat()
         ].sort((a, b) => a.timestamp - b.timestamp); // Maintain chronological order
-        
+
+        // Report actual removals after the existing block-selection algorithm.
+        // Object identity also accounts for imported messages with repeated IDs.
+        const retained = new Set(this.conversationHistory);
+        const droppedMessageIds = previousHistory.filter(message => !retained.has(message)).map(message => message.id);
+        if (droppedMessageIds.length > 0) {
+            this.eventBus.client.emit(Events.Agent.HISTORY_TRIMMED, createAgentHistoryTrimmedEventPayload(
+                Events.Agent.HISTORY_TRIMMED, this.agentId, this.config.channelId,
+                {
+                    maxHistory: this.config.maxHistory,
+                    droppedCount: droppedMessageIds.length,
+                    droppedMessageIds,
+                    keptCount: this.conversationHistory.length
+                },
+                { source: 'MxfMemoryManager' }
+            ));
+        }
     }
 
     /**

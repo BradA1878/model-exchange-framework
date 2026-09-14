@@ -19,6 +19,18 @@ const mockListTools = jest.fn();
 const mockEventHandlers = new Map<string, (payload: unknown) => void>();
 const mockEventEmit = jest.fn();
 
+// These suites isolate authorization/result semantics; admitted audit ordering
+// is exercised with the real persistence service in its drain regression suite.
+jest.mock('../../../src/server/services/ToolExecutionPersistenceService', (): object => ({
+    ToolExecutionPersistenceService: {
+        getInstance: (): object => ({
+            recordToolCallStart: async (): Promise<void> => {},
+            recordToolCallComplete: async (): Promise<void> => {},
+            recordToolCallError: async (): Promise<void> => {}
+        })
+    }
+}));
+
 jest.mock('@mxf-dev/core/utils/Logger', () => ({
     Logger: class MockLogger {
         error = jest.fn();

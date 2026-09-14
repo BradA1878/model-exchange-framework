@@ -55,6 +55,7 @@ const buildBareService = (ioSockets: Map<string, unknown> = new Map()): SocketSe
         io: { sockets: { sockets: ioSockets } },
         agents: new Map(),
         socketIds: new Map(),
+        agentSocketContexts: new Map(),
         sockets: new Map(),
         heartbeats: new Map(),
         credentialExpiryTimers: new Map()
@@ -68,24 +69,55 @@ describe('SocketService channel-aware agent lookup', () => {
             id: 'socket-agent-a-channel-b',
             data: {
                 agentId: 'agent-a',
-                channelId: 'channel-b'
+                channelId: 'channel-b',
+                connectionAdmitted: true
             }
         };
-        const service = Object.create(SocketService.prototype) as SocketService;
-        (service as unknown as { agents: Map<string, unknown> }).agents = new Map([
-            ['agent-a', {
-                socket,
-                channelId: 'channel-b',
-                connected: true,
-                lastActivity: Date.now()
-            }]
-        ]);
+        const service = buildBareService();
+        service.registerSocket(socket as never, 'agent-a', 'channel-b');
 
         expect(service.getSocketByAgentId('agent-a', 'channel-a')).toBeNull();
         expect(service.getSocketByAgentId('agent-a', 'channel-b')).toBe(socket);
 
         socket.data.channelId = 'channel-c';
         expect(service.getSocketByAgentId('agent-a', 'channel-b')).toBeNull();
+    });
+
+    it('tracks an initializing connection for cleanup without routing messages to it', () => {
+        const service = buildBareService();
+        const socket = { id: 'pending', connected: true, data: { agentId: 'a', channelId: 'room', connectionAdmitted: false } };
+        service.registerSocket(socket as never, 'a', 'room');
+        expect(service.getSocketByAgentId('a', 'room')).toBeNull();
+        socket.data.connectionAdmitted = true;
+        expect(service.getSocketByAgentId('a', 'room')).toBe(socket);
+        service.unregisterSocket(socket.id, 'a');
+        expect(service.getSocketByAgentId('a', 'room')).toBeNull();
+    });
+
+    it('keeps both channel identities and does not remove a newer socket on an older disconnect', () => {
+        const service = buildBareService();
+        const oldSocket = { id: 'old', connected: true, data: { agentId: 'a', channelId: 'old-channel', connectionAdmitted: true } };
+        const newSocket = { id: 'new', connected: true, data: { agentId: 'a', channelId: 'new-channel', connectionAdmitted: true } };
+        service.registerSocket(oldSocket as never, 'a', 'old-channel');
+        service.registerSocket(newSocket as never, 'a', 'new-channel');
+        expect(service.getSocketByAgentId('a', 'old-channel')).toBe(oldSocket);
+        expect(service.getSocketByAgentId('a', 'new-channel')).toBe(newSocket);
+        service.unregisterSocket('old', 'a');
+        expect(service.getSocketByAgentId('a', 'new-channel')).toBe(newSocket);
+        expect(service.getAgentSocketInfo('a')?.socket).toBe(newSocket);
+        expect(service.getAllHeartbeats().has('a')).toBe(true);
+    });
+
+    it('restores a remaining connection when the selected socket disconnects', () => {
+        const service = buildBareService();
+        const first = { id: 'first', connected: true, data: { agentId: 'a', channelId: 'room', connectionAdmitted: true } };
+        const second = { ...first, id: 'second' };
+        service.registerSocket(first as never, 'a', 'room');
+        service.registerSocket(second as never, 'a', 'room');
+        expect(() => service.unregisterSocket('second', 'other-agent')).toThrow('ownership');
+        service.unregisterSocket('second', 'a');
+        expect(service.getAgentSocketInfo('a')?.socket).toBe(first);
+        expect(service.getSocketByAgentId('a', 'room')).toBe(first);
     });
 
     it('wires and clears the authoritative credential lifecycle bridge', async () => {

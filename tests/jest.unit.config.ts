@@ -27,7 +27,7 @@ const config: Config = {
         '^@tests/(.*)$': '<rootDir>/tests/$1'
     },
     transform: {
-        '^.+\\.tsx?$': ['ts-jest', {
+        '^.+\\.tsx?$': ['<rootDir>/tests/setup/typescript-transform.cjs', {
             tsconfig: '<rootDir>/tests/tsconfig.json'
         }]
     },

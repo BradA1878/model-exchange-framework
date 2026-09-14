@@ -2,6 +2,12 @@
 
 This guide covers deploying the complete MXF stack with Meilisearch semantic search integration.
 
+For bare/message agents, first read [server controls and channel-history migration](server-agent-controls.md).
+Existing channel writers must be stopped while running `bun run migrate:channel-history`
+before the upgraded server resumes traffic. That guide also covers the installed
+filesystem dependency, per-agent root directories, boot autostart selection, user
+message publication, and parties-only history reads.
+
 ## 🏗️ Architecture Overview
 
 ```

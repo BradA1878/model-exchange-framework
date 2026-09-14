@@ -33,7 +33,7 @@
 
 import express from 'express';
 import * as channelContextController from '../controllers/channelContextController';
-import { requireChannelAccess } from '../middleware/channelAuth';
+import { requireChannelAccess, requireChannelOwner } from '../middleware/channelAuth';
 
 const router = express.Router();
 
@@ -54,7 +54,7 @@ router.post('/channels/:channelId/metadata/:key', requireChannelAccess, channelC
 // Channel history and messages
 router.get('/channels/:channelId/history', requireChannelAccess, channelContextController.getChannelHistory);
 router.get('/channels/:channelId/messages', requireChannelAccess, channelContextController.getChannelMessages);
-router.post('/channels/:channelId/messages', requireChannelAccess, channelContextController.addChannelMessage);
+router.post('/channels/:channelId/messages', requireChannelOwner, channelContextController.addChannelMessage);
 
 // LLM-powered features
 router.post('/channels/:channelId/topics', requireChannelAccess, channelContextController.extractChannelTopics);

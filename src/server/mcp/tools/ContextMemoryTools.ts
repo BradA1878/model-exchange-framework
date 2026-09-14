@@ -35,6 +35,9 @@ import { IChannelMemory, IAgentMemory } from '@mxf-dev/core/types/MemoryTypes';
 import { CONTEXT_MEMORY_TOOLS } from '@mxf-dev/core/constants/ToolNames';
 import { McpToolHandlerContext, McpToolHandlerResult, McpToolResultContent } from '@mxf-dev/core/protocols/mcp/McpServerTypes';
 import { QValueManager } from '@mxf-dev/core/services/QValueManager';
+import {
+    projectChannelContext, projectChannelMemory, projectChannelMessages, readChannelHistoryDmVisibility
+} from '@mxf-dev/core/utils/ChannelHistoryVisibility';
 
 const logger = new Logger('info', 'ContextMemoryTools', 'server');
 const validator = createStrictValidator('ContextMemoryTools');
@@ -99,7 +102,9 @@ export const channelMemoryReadTool = {
 
             // Get channel memory from MemoryService
             const memoryService = MemoryService.getInstance();
-            const channelMemory = await firstValueFrom(memoryService.getChannelMemory(context.channelId!));
+            const channelMemory = projectChannelMemory(
+                await firstValueFrom(memoryService.getChannelMemory(context.channelId!)), context.agentId!
+            );
 
             let resultData: unknown = channelMemory;
 
@@ -304,9 +309,11 @@ export const channelContextReadTool = {
             ChannelContextService.setClientContext(false);
             
             const contextService = ChannelContextService.getInstance();
-            const channelContext = await firstValueFrom(
+            const storedContext = await firstValueFrom(
                 contextService.getContext(channelId)
             );
+            const visibility = readChannelHistoryDmVisibility();
+            const channelContext = storedContext ? projectChannelContext(storedContext, visibility) : null;
 
             const result: Record<string, unknown> = {
                 channelId: context.channelId,
@@ -326,7 +333,7 @@ export const channelContextReadTool = {
             }
 
             // Add history if requested
-            if (input.includeHistory) {
+            if (input.includeHistory && visibility === 'all') {
                 result.history = await firstValueFrom(
                     contextService.getContextHistory(
                         channelId,
@@ -413,19 +420,22 @@ export const channelMessagesReadTool = {
             const limit = input.limit || 50;
             const offset = input.offset || 0;
 
-            // Get messages (ChannelContextService has getMessages method)
-            let messages = await firstValueFrom(contextService.getMessages(context.channelId!, limit + offset));
+            // Visibility and other filters precede pagination and totalCount. Work
+            // on copies so includeMetadata=false cannot edit the shared cache.
+            let messages = projectChannelMessages(
+                await firstValueFrom(contextService.getMessages(context.channelId!)), context.agentId!
+            );
 
             // Apply filtering
             if (input.fromSenderId) {
                 messages = messages.filter(msg => msg.senderId === input.fromSenderId);
             }
 
-            if (input.afterTimestamp) {
+            if (input.afterTimestamp !== undefined) {
                 messages = messages.filter(msg => msg.timestamp > input.afterTimestamp!);
             }
 
-            if (input.beforeTimestamp) {
+            if (input.beforeTimestamp !== undefined) {
                 messages = messages.filter(msg => msg.timestamp < input.beforeTimestamp!);
             }
 

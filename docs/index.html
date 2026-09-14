@@ -4,13 +4,13 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>MXF - Model Exchange Framework Documentation</title>
-    <meta name="description" content="MXF documentation: TypeScript agents sharing tasks, tools, messages, and memory. Core and SDK 4.0 upgrade guidance, examples, and current implementation limits.">
+    <meta name="description" content="MXF documentation: TypeScript agents sharing tasks, tools, messages, and memory. Bare prompts, message activation, server controls, migration, and implementation limits.">
     <meta name="keywords" content="MXF, Model Exchange Framework, AI orchestration, multi-agent, TypeScript, MCP, ORPAR">
     <meta name="author" content="Brad Anderson">
     
     <!-- Open Graph / Social -->
     <meta property="og:title" content="MXF - Model Exchange Framework">
-    <meta property="og:description" content="TypeScript agents sharing tasks, tools, messages, and memory. Core and SDK 4.0 documentation and framework review.">
+    <meta property="og:description" content="TypeScript agents sharing tasks, tools, messages, and memory. Bare prompts, message activation, private history, and per-agent filesystem configuration.">
     <meta property="og:type" content="website">
     <meta property="og:image" content="mxf-logo.png">
     
@@ -931,8 +931,8 @@
                             View on GitHub
                         </a>
                         <p class="welcome-status">
-                            Core and SDK <strong>4.0.0</strong> &middot;
-                            <a href="https://github.com/BradA1878/model-exchange-framework/blob/main/packages/sdk/README.md#upgrading-to-40" target="_blank" rel="noopener noreferrer">Upgrade from 3.x</a>
+                            Core and SDK <strong>5.0</strong> &middot;
+                            <a href="#sdk/upgrade-5.md" onclick="loadDoc('sdk/upgrade-5.md'); return false;">Upgrade guide</a>
                         </p>
                     </div>
                     
@@ -971,6 +971,21 @@
                             <div class="welcome-card-icon">🧠</div>
                             <h3>Session Memory &amp; Task Outcomes</h3>
                             <p>Memory lifetime, task identity, and reconnect behavior in 4.0</p>
+                        </div>
+                        <div class="welcome-card" onclick="loadDoc('sdk/bare-agents.md')">
+                            <div class="welcome-card-icon">💬</div>
+                            <h3>Bare Prompts &amp; Message Activation</h3>
+                            <p>Operator prompts, turns without tasks, request capture, and provider routing</p>
+                        </div>
+                        <div class="welcome-card" onclick="loadDoc('server-agent-controls.md')">
+                            <div class="welcome-card-icon">⚙️</div>
+                            <h3>Server Controls &amp; Migration</h3>
+                            <p>Canonical history, private DM reads, user messages, and per-agent filesystems</p>
+                        </div>
+                        <div class="welcome-card" onclick="loadDoc('sdk/openrouter-streaming.md')">
+                            <div class="welcome-card-icon">📡</div>
+                            <h3>Streaming Request Bounds</h3>
+                            <p>Keepalives, first model output, attempt IDs, and retry budgets</p>
                         </div>
                         <a class="welcome-card" href="https://github.com/BradA1878/model-exchange-framework/tree/main/examples/recurring-review" target="_blank" rel="noopener noreferrer">
                             <div class="welcome-card-icon">📝</div>
@@ -1155,6 +1170,7 @@
                     { title: 'Framework Review', file: 'reviews/2026-09-06-framework-review.md', icon: '📋' },
                     { title: 'Getting Started', file: 'getting-started.md', icon: '📖' },
                     { title: 'Deployment', file: 'deployment.md', icon: '🚀' },
+                    { title: 'Server Controls & Migration', file: 'server-agent-controls.md', icon: '⚙️' },
                     { title: 'Use Cases', file: 'use-cases.md', icon: '💡' },
                     { title: 'Troubleshooting', file: 'troubleshooting.md', icon: '🔍' },
                     { title: 'Debug Mode & Logging', file: 'troubleshooting.md#debug-mode--logging', icon: '📋' },
@@ -1213,6 +1229,9 @@
                 icon: '📦',
                 items: [
                     { title: 'SDK Overview', file: 'sdk/index.md', icon: '📦' },
+                    { title: 'Upgrade to Core & SDK 5.0', file: 'sdk/upgrade-5.md', icon: '📖' },
+                    { title: 'Bare Prompts & Message Activation', file: 'sdk/bare-agents.md', icon: '💬' },
+                    { title: 'OpenRouter Streaming Bounds', file: 'sdk/openrouter-streaming.md', icon: '📡' },
                     { title: 'Upgrade to 4.0', file: 'https://github.com/BradA1878/model-exchange-framework/blob/main/packages/sdk/README.md#upgrading-to-40', icon: '📋', openInNewTab: true },
                     { title: 'Session Memory & Task Outcomes', file: 'sdk/session-memory.md', icon: '🧠' },
                     { title: 'Authentication', file: 'sdk/authentication.md', icon: '🔐' },

@@ -21,6 +21,7 @@
 // Load environment configuration before any imported route module evaluates
 // its mount-time feature gates.
 import 'dotenv/config';
+import { isServerMxpEnabled, isTaskIntelligentAssignmentEnabled } from '@mxf-dev/core/config/AgentExperimentConfig';
 import cors from 'cors';
 import express from 'express';
 import http from 'http';
@@ -98,6 +99,8 @@ import {
     getSocketMaxHttpBufferSize
 } from './config/TransportSecurityConfig';
 import { getServerPort } from './config/ServerStartupConfig';
+import { readChannelHistoryDmVisibility } from '@mxf-dev/core/utils/ChannelHistoryVisibility';
+import { getAutoStartConfigs } from '@mxf-dev/core/protocols/mcp/services/ExternalServerConfigs';
 
 /**
  * Initialize logger with appropriate context
@@ -115,6 +118,10 @@ requireEnv('MONGODB_URI', 'Set the MongoDB connection string in .env.');
 // SystemLLM has no built-in model: when it is on, its provider credentials and
 // SYSTEMLLM_DEFAULT_MODEL must be set, or the server does not start.
 assertSystemLlmConfigured();
+readChannelHistoryDmVisibility();
+isServerMxpEnabled();
+isTaskIntelligentAssignmentEnabled();
+getAutoStartConfigs();
 const allowedCorsOrigins = getAllowedCorsOrigins();
 const socketMaxHttpBufferSize = getSocketMaxHttpBufferSize();
 const serverPort = getServerPort();
@@ -271,7 +278,10 @@ const shutdownCoordinator = new ServerShutdownCoordinator([
     { name: 'system-llm', run: (): void => { systemLlmServiceManager?.shutdown(); } },
     {
         name: 'hybrid-mcp',
-        run: async (): Promise<void> => { await hybridMcpService?.shutdown(); }
+        run: async (): Promise<void> => {
+            mcpToolRegistry?.clearChannelToolPolicyReader();
+            await hybridMcpService?.shutdown();
+        }
     },
     {
         name: 'code-execution',
@@ -624,7 +634,9 @@ const initializeServer = async (): Promise<void> => {
         // Step 5: Initialize McpService for socket-based tool communication
         // NOTE: Must happen AFTER tool registration so McpService loads the new tools
         try {
-            await McpService.getInstance().initialize();
+            const socketMcpService = McpService.getInstance();
+            mcpToolRegistry.registerChannelToolPolicyReader(channelId => socketMcpService.getChannelAllowedTools(channelId));
+            await socketMcpService.initialize();
             if (!runtimeState.canContinueStartup()) return;
         } catch (error) {
             logger.error(`❌ Failed to initialize McpService: ${error}`);

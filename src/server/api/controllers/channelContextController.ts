@@ -26,16 +26,18 @@
  */
 
 import { Request, Response } from 'express';
-import { v4 as uuidv4 } from 'uuid';
-import * as validation from '@mxf-dev/core/utils/validation';
+import { firstValueFrom } from 'rxjs';
 import { Logger } from '@mxf-dev/core/utils/Logger';
 import { EventBus } from '@mxf-dev/core/events/EventBus';
-import { Events, ChannelEvents, ChannelActionTypes } from '@mxf-dev/core/events/EventNames';
-import { ConversationTopic } from '@mxf-dev/core/types/ChannelContext';
-import { Channel } from '@mxf-dev/core/models/channel';
+import { Events, ChannelEvents } from '@mxf-dev/core/events/EventNames';
+import { ConversationTopic, ChannelContextType } from '@mxf-dev/core/types/ChannelContext';
+import { projectChannelContext, projectChannelMessages, readChannelHistoryDmVisibility } from '@mxf-dev/core/utils/ChannelHistoryVisibility';
+import { User } from '@mxf-dev/core/models/user';
+import { normalizeChannelHistoryMessage } from '@mxf-dev/core/utils/ChannelHistoryMessages';
+import { authorizationService } from '../services/AuthorizationService';
 import { ChannelContextService } from '../../services/ChannelContextService';
 import { createStrictValidator } from '@mxf-dev/core/utils/validation';
-import { ContentFormat, createChannelMessage } from '@mxf-dev/core/schemas/MessageSchemas';
+import { createChannelMessage } from '@mxf-dev/core/schemas/MessageSchemas';
 import { createChannelMessageEventPayload, createChannelEventPayload } from '@mxf-dev/core/schemas/EventPayloadSchema';
 
 // Create validator for this controller
@@ -43,6 +45,19 @@ const validate = createStrictValidator('ChannelContextController');
 
 // Create logger for the controller
 const logger = new Logger('debug','ChannelContextController', 'server');
+
+const contextForRequest = (req: Request, context: ChannelContextType | null | undefined): Partial<ChannelContextType> | null | undefined => {
+    return context && authorizationService.readPrincipal(req).kind === 'agent' ? projectChannelContext(context) : context;
+};
+
+/** Stored derived context cannot be partitioned by DM recipient after the fact. */
+const denyPrivateDerivedContext = (req: Request, res: Response): boolean => {
+    if (authorizationService.readPrincipal(req).kind === 'agent' && readChannelHistoryDmVisibility() === 'parties') {
+        res.status(403).json({ success: false, message: 'Derived channel context is unavailable to agents with parties-only DM visibility' });
+        return true;
+    }
+    return false;
+};
 
 /**
  * Who is making this request.
@@ -95,7 +110,7 @@ export const createContext = async (req: Request, res: Response): Promise<void> 
         ).toPromise();
         
         // Return success with the created context
-        res.status(201).json(context);
+        res.status(201).json(contextForRequest(req, context));
     } catch (error) {
         logger.error('Error creating channel context:', error);
         const errorMessage = error instanceof Error ? error.message : String(error);
@@ -134,7 +149,7 @@ export const getContext = async (req: Request, res: Response): Promise<void> => 
         }
         
         // Return the context
-        res.status(200).json(context);
+        res.status(200).json(contextForRequest(req, context));
     } catch (error) {
         logger.error('Error getting channel context:', error);
         const errorMessage = error instanceof Error ? error.message : String(error);
@@ -179,7 +194,7 @@ export const updateContext = async (req: Request, res: Response): Promise<void> 
         }
         
         // Return the updated context
-        res.status(200).json(updatedContext);
+        res.status(200).json(contextForRequest(req, updatedContext));
     } catch (error) {
         logger.error('Error updating channel context:', error);
         const errorMessage = error instanceof Error ? error.message : String(error);
@@ -306,6 +321,7 @@ export const removeAgentFromChannel = async (req: Request, res: Response): Promi
  * @param res - Express response object
  */
 export const getChannelMetadata = async (req: Request, res: Response): Promise<void> => {
+    if (denyPrivateDerivedContext(req, res)) return;
     try {
         const channelContextService = ChannelContextService.getInstance();
         const { channelId } = req.params;
@@ -411,6 +427,7 @@ export const setChannelMetadata = async (req: Request, res: Response): Promise<v
  * @param res - Express response object
  */
 export const getChannelHistory = async (req: Request, res: Response): Promise<void> => {
+    if (denyPrivateDerivedContext(req, res)) return;
     try {
         const channelContextService = ChannelContextService.getInstance();
         const { channelId } = req.params;
@@ -449,67 +466,60 @@ export const getChannelHistory = async (req: Request, res: Response): Promise<vo
 };
 
 /**
- * Add a message to the channel with improved timeout handling
+ * Publish an owner/admin user message after canonical history acknowledges it
  * @param req - Express request object
  * @param res - Express response object
  */
 export const addChannelMessage = async (req: Request, res: Response): Promise<void> => {
+    const principal = authorizationService.readPrincipal(req);
+    if (principal.kind !== 'user') {
+        res.status(principal.kind === 'unauthenticated' ? 401 : 403).json({
+            success: false, message: 'A user account is required to publish a channel message'
+        });
+        return;
+    }
+    const { channelId } = req.params;
+    const body: unknown = req.body;
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+        res.status(400).json({ success: false, message: 'Message body must be an object' });
+        return;
+    }
+    const { content, messageType } = body as { content?: unknown; messageType?: unknown };
+    if (typeof content !== 'string' && (content === null || typeof content !== 'object' || Array.isArray(content))) {
+        res.status(400).json({ success: false, message: 'Message content must be a string or non-null object, not an array' });
+        return;
+    }
+    if (messageType !== undefined && (typeof messageType !== 'string' || messageType.trim().length === 0)) {
+        res.status(400).json({ success: false, message: 'messageType must be a non-empty string' });
+        return;
+    }
     try {
-        const channelContextService = ChannelContextService.getInstance();
-        const { channelId } = req.params;
-        const message: any = req.body; // Type as any to reflect current dynamic property assignment
-
-        // Validate required fields with fail-fast behavior
         validate.assertIsNonEmptyString(channelId, 'Channel ID is required');
-        validate.assertIsObject(message, 'Message must be an object');
-        validate.assertIsNonEmptyString(message.content, 'Message content is required');
-
-        // The sender is the authenticated caller. A client-supplied senderId would
-        // let anyone with access to a channel post as anyone else in it.
-        message.senderId = actorFor(req);
-
-        // Ensure message has all required fields (defaults)
-        if (!message.messageId) {
-            message.messageId = uuidv4();
+        const authenticatedUsername = (req as Request & { user?: { username?: unknown } }).user?.username;
+        const username: unknown = typeof authenticatedUsername === 'string' && authenticatedUsername.trim().length > 0
+            ? authenticatedUsername
+            : (await User.findById(principal.userId).select('username').lean())?.username;
+        if (typeof username !== 'string' || username.trim().length === 0) {
+            throw new Error('Authenticated user has no username');
         }
-        if (!message.timestamp) {
-            message.timestamp = Date.now();
-        }
-        if (!message.metadata) {
-            message.metadata = {};
-        }
-
-        // Convert toPromise to a Promise with timeout
-        const timeoutMs = 10000; // 10 second timeout
-        
-        // Create a promise that resolves when the service completes
-        const servicePromise = channelContextService.addMessage(channelId, message).toPromise();
-        
-        // Create a timeout promise
-        const timeoutPromise = new Promise<boolean>((_resolve, reject) => {
-            setTimeout(() => {
-                reject(new Error(`Operation timed out after ${timeoutMs}ms`));
-            }, timeoutMs);
+        // Only the authenticated identity supplies attribution. Request IDs and
+        // timestamps are generated here, never accepted from the HTTP body.
+        const message = createChannelMessage(channelId, username, content, {
+            context: { messageType: messageType ?? 'user', userId: principal.userId }
         });
-        
-        // Race the service promise against the timeout
-        await Promise.race([servicePromise, timeoutPromise]);
-        
-        // Return success
-        res.status(200).json({
-            success: true,
-            messageId: message.messageId
-        });
+        await firstValueFrom(ChannelContextService.getInstance().addMessage(
+            channelId, normalizeChannelHistoryMessage(message, channelId)
+        ));
+        // Persist first. The ordinary listener's second append is an ID-based
+        // no-op, while this single event follows normal channel delivery.
+        EventBus.server.emit(Events.Message.CHANNEL_MESSAGE, createChannelMessageEventPayload(
+            Events.Message.CHANNEL_MESSAGE, username, message
+        ));
+        res.status(200).json({ messageId: message.metadata.messageId, timestamp: message.metadata.timestamp });
     } catch (error) {
-        const isTimeout = error instanceof Error && error.message.includes('timed out');
-        const logLevel = isTimeout ? 'warn' : 'error';
-        const statusCode = isTimeout ? 408 : 400; // 408 Request Timeout
-        
-        logger[logLevel](`Error adding channel message: ${error instanceof Error ? error.message : String(error)}`);
-        
-        res.status(statusCode).json({
-            success: false,
-            message: error instanceof Error ? error.message : String(error)
+        logger.error(`Error publishing channel message: ${error instanceof Error ? error.message : String(error)}`);
+        res.status(500).json({
+            success: false, message: error instanceof Error ? error.message : String(error)
         });
     }
 };
@@ -521,60 +531,21 @@ export const addChannelMessage = async (req: Request, res: Response): Promise<vo
  */
 export const getChannelMessages = async (req: Request, res: Response): Promise<void> => {
     try {
-        const channelContextService = ChannelContextService.getInstance();
         const { channelId } = req.params;
-        const limit = req.query.limit ? parseInt(req.query.limit as string) : undefined;
-        
-        // Validate channel ID
         validate.assertIsNonEmptyString(channelId, 'Channel ID is required');
-        
-        // If limit is provided, validate it's a positive number
-        if (limit !== undefined) {
-            validate.assertIsNumber(limit, 'Limit must be a number');
-            if (limit <= 0) {
-                throw new Error('Limit must be a positive number');
-            }
+        const limit = req.query.limit === undefined ? undefined : Number(req.query.limit);
+        if (limit !== undefined && (!Number.isSafeInteger(limit) || limit <= 0)) {
+            throw new Error('Limit must be a positive integer');
         }
-        
-        
-        // Convert toPromise to a Promise with timeout
-        const timeoutMs = 10000; // 10 second timeout
-        
-        // Create a promise that resolves when the service completes
-        const servicePromise = channelContextService.getMessages(channelId, limit).toPromise();
-        
-        // Create a timeout promise
-        const timeoutPromise = new Promise<any[]>((_resolve, reject) => {
-            setTimeout(() => {
-                reject(new Error(`Operation timed out after ${timeoutMs}ms`));
-            }, timeoutMs);
-        });
-        
-        try {
-            // Race the service promise against the timeout
-            const messages = await Promise.race([servicePromise, timeoutPromise]);
-            
-            // Return the messages
-            res.status(200).json({
-                success: true,
-                messages: messages || []
-            });
-            
-        } catch (timeoutError) {
-            // Handle timeout specifically
-            logger.warn(`Timeout occurred while retrieving messages for channel ${channelId}`);
-            res.status(408).json({
-                success: false,
-                message: 'Request timeout while retrieving messages'
-            });
-        }
+        // Read the canonical history before applying recipient visibility and
+        // the recent-message limit. The memory bridge owns request cancellation.
+        const messages = await firstValueFrom(ChannelContextService.getInstance().getMessages(channelId));
+        const principal = authorizationService.readPrincipal(req);
+        const visible = principal.kind === 'agent' ? projectChannelMessages(messages, principal.agentId) : messages;
+        res.status(200).json({ success: true, messages: limit === undefined ? visible : visible.slice(-limit) });
     } catch (error) {
         logger.error('Error getting channel messages:', error);
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        res.status(400).json({
-            success: false,
-            message: errorMessage
-        });
+        res.status(400).json({ success: false, message: error instanceof Error ? error.message : String(error) });
     }
 };
 
@@ -584,6 +555,7 @@ export const getChannelMessages = async (req: Request, res: Response): Promise<v
  * @param res - Express response object
  */
 export const extractChannelTopics = async (req: Request, res: Response): Promise<void> => {
+    if (denyPrivateDerivedContext(req, res)) return;
     try {
         const channelContextService = ChannelContextService.getInstance();
         const { channelId } = req.params;
@@ -641,6 +613,7 @@ export const extractChannelTopics = async (req: Request, res: Response): Promise
  * @param res - Express response object
  */
 export const generateChannelSummary = async (req: Request, res: Response): Promise<void> => {
+    if (denyPrivateDerivedContext(req, res)) return;
     try {
         const channelContextService = ChannelContextService.getInstance();
         const { channelId } = req.params;

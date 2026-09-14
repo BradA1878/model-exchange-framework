@@ -40,6 +40,7 @@ import { MxpConfigManager } from '@mxf-dev/core/mxp/MxpConfigManager';
 import { ContextCompressionEngine } from '@mxf-dev/core/mxp/ContextCompressionEngine';
 import { DynamicContextRegistry, DynamicContextInput } from '@mxf-dev/core/prompts/DynamicContextProvider';
 import { loadPromptCompactionConfig } from '@mxf-dev/core/config/PromptCompactionConfig';
+import { validateAgentExecutionConfig } from '@mxf-dev/core/config/AgentExecutionConfig';
 
 export interface PromptManagerCallbacks {
     getConversationHistory: () => ConversationMessage[];
@@ -64,6 +65,7 @@ export class MxfSystemPromptManager {
 
 
     constructor(agentId: string, agentConfig: AgentConfig, callbacks: PromptManagerCallbacks) {
+        validateAgentExecutionConfig(agentConfig);
         this.agentId = agentId;
         this.agentConfig = agentConfig;
         this.callbacks = callbacks;
@@ -115,6 +117,7 @@ export class MxfSystemPromptManager {
      * Generate minimal system prompt for initial agent setup
      */
     public generateMinimalPrompt(): string {
+        if (this.agentConfig.promptMode === 'bare') return this.agentConfig.agentConfigPrompt;
         return MxfAgentSystemPrompt.buildMinimalPrompt(this.agentConfig);
     }
 
@@ -123,6 +126,10 @@ export class MxfSystemPromptManager {
      * Called after agent initialization when tools are available
      */
     public async loadCompleteSystemPrompt(): Promise<void> {
+        if (this.agentConfig.promptMode === 'bare') {
+            await this.updateSystemMessage(this.agentConfig.agentConfigPrompt);
+            return;
+        }
         try {
             
             // Always use the sophisticated tool-aware system
@@ -219,6 +226,10 @@ export class MxfSystemPromptManager {
      * Update system prompt for task context
      */
     public async updatePromptForTask(task: any): Promise<void> {
+        if (this.agentConfig.promptMode === 'bare') {
+            await this.updateSystemMessage(this.agentConfig.agentConfigPrompt);
+            return;
+        }
         try {
             // Only add task guidance if we have a valid task
             if (!task || !task.id) {
@@ -268,6 +279,7 @@ export class MxfSystemPromptManager {
      * Set a new agent config prompt, replacing any existing one
      */
     public async setAgentConfigPrompt(agentConfigPrompt: string): Promise<void> {
+        validateAgentExecutionConfig({ ...this.agentConfig, agentConfigPrompt });
         await this.updateSystemMessage(agentConfigPrompt);
         // Update agent config
         this.agentConfig.agentConfigPrompt = agentConfigPrompt;
@@ -378,6 +390,8 @@ export class MxfSystemPromptManager {
      * Generate contextual prompt based on conversation state
      */
     public generateContextualPrompt(conversationHistory: ConversationMessage[], context?: any): string {
+        // Bare prompts have no supplementary framework sections.
+        if (this.agentConfig.promptMode === 'bare') return '';
         try {
             // Analyze conversation for context clues
             const conversationText = conversationHistory
@@ -534,6 +548,7 @@ export class MxfSystemPromptManager {
      * Build collaborative context for multi-agent scenarios
      */
     public buildCollaborativeContext(otherAgents: string[]): string {
+        if (this.agentConfig.promptMode === 'bare') return '';
         if (!this.callbacks.getChannelContext) {
             return '';
         }
@@ -611,6 +626,7 @@ ${toolDiscoveryNote}`;
      * This keeps the prompt system clean when MXP is disabled
      */
     private async buildMxpContextPrompt(): Promise<string | null> {
+        if (this.agentConfig.promptMode === 'bare') return null;
         try {
             // Get channel context to determine scope
             const channelContext = this.callbacks.getChannelContext?.();

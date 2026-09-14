@@ -41,164 +41,52 @@ graph TB
 
 ## REST Endpoints
 
-### Get Memory
+The canonical REST routes use the same `MemoryService` as socket operations, keeping
+cache and persistence consistent. They return `{success: true, data: memory}`.
 
-**GET** `/api/memory/:scope/:targetId`
+| Scope | GET and PATCH route | Writable PATCH fields |
+| --- | --- | --- |
+| Agent | `/api/agents/memory/:keyId` | `notes`, `conversationHistory`, `customData` |
+| Channel | `/api/channels/memory/:channelId` | `notes`, `sharedState`, `customData` |
+| Relationship | `/api/relationships/memory/:channelId/:agentId1/:agentId2` | `notes`, `interactionHistory`, `customData` |
 
-Retrieve memory entries for a specific scope and target.
+A PATCH body must be a nonempty object with supported fields. Notes, shared state,
+and custom data must be objects; history fields must be arrays. Unsupported fields
+fail validation. The agent route identifies the agent through its key ID. Channel
+and relationship routes enforce channel access; relationship access also checks the
+recorded parties or authorized user ownership.
 
-**Parameters:**
-- `scope` - Memory scope: `agent`, `channel`, or `relationship`
-- `targetId` - ID of the target (agentId, channelId, or relationship pair)
+Channel history cannot be replaced by PATCH. Publish a message with the
+[user message endpoint](channels.md#publish-a-channel-message), or send through
+agent messaging tools. Query recent visible messages through
+`GET /api/channels/:channelId/messages?limit=50`.
 
-**Query Parameters:**
-- `key` - Specific key to retrieve (optional)
-- `keys` - Comma-separated list of keys
-- `tags` - Filter by tags
-- `since` - Entries modified since date (ISO format)
-- `limit` - Maximum entries to return
+### Canonical Channel History and Visibility
 
-**Response:**
-```json
-{
-    "success": true,
-    "data": {
-        "scope": "agent",
-        "targetId": "agent-123",
-        "entries": {
-            "preferences": {
-                "value": {
-                    "theme": "dark",
-                    "language": "en",
-                    "notifications": true
-                },
-                "metadata": {
-                    "createdAt": "2024-01-20T10:00:00Z",
-                    "updatedAt": "2024-01-20T15:30:00Z",
-                    "version": 3,
-                    "tags": ["user-settings"]
-                }
-            },
-            "conversation_history": {
-                "value": [/* ... */],
-                "metadata": {
-                    "persistent": true,
-                    "maxSize": 1000
-                }
-            }
-        }
-    }
-}
-```
+New channel-history writes append to `ChannelMemory.conversationHistory`. Duplicate
+IDs retain the first stored record. Existing history in
+`Channel.sharedMemory.conversationHistory` requires the explicit
+[channel-history migration](../server-agent-controls.md#canonical-channel-history-and-migration)
+with all writers stopped. The source is retained; there is no runtime fallback or
+second history write. Lost historical DM metadata cannot be reconstructed.
 
-### Create/Update Memory
+`MXF_CHANNEL_HISTORY_DM_VISIBILITY` defaults to `all`. With `parties`, agent-readable
+MCP history/memory, memory socket results, channel-message REST, and channel-memory
+GET/PATCH responses filter DMs to the original sender and recipient. Filtering runs
+before counts, text filters, and pagination. Authorized owner/admin user REST reads
+retain full history. Projections copy records without removing anything from cached
+or persisted canonical memory.
 
-**PUT** `/api/memory/:scope/:targetId/:key`
+Derived context may contain other agents' DMs. Parties-mode channel memory omits
+stored cognitive insights, context history, top-level summary/topics/messageCount/
+lastActivity, and updatedAt. Nested context retains channel identity/configuration
+only. Explicitly shared notes, other shared state, and unrelated custom data remain
+shared. Selecting an individual key does not bypass projection. Derived context REST
+reads are [restricted separately](channels.md#derived-context).
 
-Create or update a memory entry.
-
-**Request:**
-```json
-{
-    "value": {
-        "lastActivity": "research",
-        "expertise": ["NLP", "computer vision"],
-        "projectContext": {
-            "name": "AI Assistant",
-            "stage": "development"
-        }
-    },
-    "metadata": {
-        "persistent": true,
-        "expiresAt": "2024-12-31T23:59:59Z",
-        "tags": ["profile", "context"],
-        "importance": "high"
-    }
-}
-```
-
-**Response:**
-```json
-{
-    "success": true,
-    "data": {
-        "key": "agent_profile",
-        "version": 1,
-        "createdAt": "2024-01-20T10:00:00Z"
-    }
-}
-```
-
-### Delete Memory
-
-**DELETE** `/api/memory/:scope/:targetId/:key`
-
-Delete a specific memory entry.
-
-**Response:**
-```json
-{
-    "success": true,
-    "data": {
-        "deleted": true,
-        "key": "temporary_data"
-    }
-}
-```
-
-### Bulk Operations
-
-**POST** `/api/memory/bulk`
-
-Perform multiple memory operations in a single request.
-
-**Request:**
-```json
-{
-    "operations": [
-        {
-            "action": "upsert",
-            "scope": "agent",
-            "targetId": "agent-123",
-            "key": "skills",
-            "value": ["python", "typescript"]
-        },
-        {
-            "action": "delete",
-            "scope": "channel",
-            "targetId": "channel-456",
-            "key": "old_context"
-        },
-        {
-            "action": "upsert",
-            "scope": "relationship",
-            "targetId": "agent-123:agent-456",
-            "key": "trust_level",
-            "value": 0.85
-        }
-    ]
-}
-```
-
-### Search Memory
-
-**POST** `/api/memory/search`
-
-Search across memory entries.
-
-**Request:**
-```json
-{
-    "query": "project deadline",
-    "scopes": ["agent", "channel"],
-    "filters": {
-        "tags": ["project", "important"],
-        "since": "2024-01-01T00:00:00Z",
-        "importance": ["high", "critical"]
-    },
-    "limit": 20
-}
-```
+New public SystemLLM topic/summary inputs exclude tagged DMs, as does shared
+coordination activity. A tagged historical DM with no recipient is sender-only;
+an untagged historical record cannot be recognized as a DM.
 
 ## WebSocket Events
 

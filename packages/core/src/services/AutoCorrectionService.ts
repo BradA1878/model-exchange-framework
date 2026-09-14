@@ -109,7 +109,12 @@ export interface CorrectionStrategy {
 export class AutoCorrectionService {
     private readonly logger: Logger;
     private readonly validationService: ValidationPerformanceService;
-    private readonly patternService: PatternLearningService;
+    // Resolve the statically imported singleton only when a strategy needs it.
+    // Disabled correction must not start PatternLearningService timers.
+    private get patternService(): PatternLearningService {
+        return PatternLearningService.getInstance();
+    }
+    private readonly environmentEnabled: boolean;
     
     // Correction tracking
     private readonly correctionAttempts = new Map<string, CorrectionAttempt[]>();
@@ -132,9 +137,8 @@ export class AutoCorrectionService {
     private constructor(isClient: boolean = false) {
         const context = isClient ? 'client' : 'server';
         this.logger = new Logger('info', 'AutoCorrectionService', context);
+        this.environmentEnabled = this.readEnvironmentEnabled();
         this.validationService = ValidationPerformanceService.getInstance();
-        this.patternService = PatternLearningService.getInstance();
-        
         this.config = this.getDefaultConfig();
         this.initializeStrategies();
         this.setupEventListeners();
@@ -987,12 +991,18 @@ export class AutoCorrectionService {
 
     }
 
-    /**
-     * Get default configuration
-     */
+    /** Read the operator policy before initializing correction dependencies. */
+    private readEnvironmentEnabled(): boolean {
+        const value = process.env.AUTO_CORRECTION_ENABLED;
+        if (value === undefined || value === 'true') return true;
+        if (value === 'false') return false;
+        throw new Error('AUTO_CORRECTION_ENABLED must be true or false');
+    }
+
+    /** Defaults retain correction unless the operator explicitly disables it. */
     private getDefaultConfig(): AutoCorrectionConfig {
         return {
-            enabled: true,
+            enabled: this.environmentEnabled,
             maxRetryAttempts: 3,
             confidenceThreshold: 0.7,
             retryDelayBase: 1000, // 1 second
@@ -1025,7 +1035,17 @@ export class AutoCorrectionService {
      * Update configuration
      */
     public updateConfig(newConfig: Partial<AutoCorrectionConfig>): void {
-        this.config = { ...this.config, ...newConfig };
+        if (newConfig.enabled !== undefined && typeof newConfig.enabled !== 'boolean') {
+            throw new Error('Auto-correction enabled must be a boolean');
+        }
+        if (!this.environmentEnabled && newConfig.enabled === true) {
+            throw new Error('AUTO_CORRECTION_ENABLED=false prevents enabling auto-correction');
+        }
+        this.config = {
+            ...this.config,
+            ...newConfig,
+            enabled: newConfig.enabled ?? this.config.enabled
+        };
     }
 
     /**

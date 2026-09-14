@@ -10,6 +10,7 @@ const mockFindOne = jest.fn();
 const mockIsChannelSystemLlmEnabled = jest.fn();
 const mockGetChannelSystemLlmStance = jest.fn();
 const mockGetActiveAgentsInChannel = jest.fn();
+const mockValidateKey = jest.fn();
 
 jest.mock('@mxf-dev/core/utils/Logger', () => {
     const child = (): Record<string, unknown> => ({
@@ -33,7 +34,10 @@ jest.mock('@mxf-dev/core/models/channel', () => ({
 
 jest.mock('@mxf-dev/core/models/user', () => ({ User: { findOne: jest.fn() } }));
 jest.mock('bcrypt', () => ({ compare: jest.fn() }));
-jest.mock('../../../src/server/utils/keyAuthHelper', () => ({ __esModule: true, default: {} }));
+jest.mock('../../../src/server/utils/keyAuthHelper', () => ({
+    __esModule: true,
+    default: { getInstance: (): object => ({ validateKey: mockValidateKey }) }
+}));
 jest.mock('../../../src/server/api/services/PersonalAccessTokenService', () => ({
     PersonalAccessTokenService: { getInstance: jest.fn() }
 }));
@@ -66,7 +70,7 @@ jest.mock('../../../src/server/socket/services/AgentService', () => ({
 }));
 
 import { AuthEvents } from '@mxf-dev/core/events/EventNames';
-import { sendAuthResponse } from '../../../src/server/socket/handlers/authenticationHandlers';
+import { handleSocketAuthentication, sendAuthResponse } from '../../../src/server/socket/handlers/authenticationHandlers';
 
 interface EmittedAuthSuccess {
     channelConfig: {
@@ -87,6 +91,7 @@ describe('authenticationHandlers key-auth channel config', () => {
         mockIsChannelSystemLlmEnabled.mockReset();
         mockGetChannelSystemLlmStance.mockReset();
         mockGetActiveAgentsInChannel.mockReset();
+        mockValidateKey.mockReset();
         mockGetActiveAgentsInChannel.mockResolvedValue([]);
         mockFindOne.mockReturnValue({
             exec: (): Promise<Record<string, unknown>> => Promise.resolve({
@@ -96,6 +101,27 @@ describe('authenticationHandlers key-auth channel config', () => {
                 showActiveAgents: false
             })
         });
+    });
+
+    it('validates a channel key without admitting the socket or joining its room', async () => {
+        mockValidateKey.mockResolvedValue({
+            valid: true, agentId: 'key-agent', channelId: 'key-channel', allowedTools: ['memory_get']
+        });
+        const socket = {
+            id: 'key-socket', data: {} as Record<string, unknown>, join: jest.fn(), emit: jest.fn()
+        };
+        const agentId = await handleSocketAuthentication(socket as never, {
+            keyId: 'key-1', secretKey: 'secret-1', agentId: 'claimed-agent', channelId: 'claimed-channel'
+        });
+
+        expect(agentId).toBe('key-agent');
+        expect(mockValidateKey).toHaveBeenCalledWith('key-1', 'secret-1');
+        expect(socket.data).toEqual(expect.objectContaining({
+            agentId: 'key-agent', channelId: 'key-channel', authenticated: true,
+            connectionAdmitted: false, credentialAllowedTools: ['memory_get']
+        }));
+        expect(socket.join).not.toHaveBeenCalled();
+        expect(socket.emit).not.toHaveBeenCalled();
     });
 
     it('sends the effective SystemLLM stance alongside the enabled flag', async () => {

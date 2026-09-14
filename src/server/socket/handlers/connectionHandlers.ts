@@ -25,6 +25,8 @@
  * It handles connection, disconnection, and error events.
  */
 
+import { AgentFilesystemService } from '../services/AgentFilesystemService';
+import { AgentChannelMembershipService } from '../services/AgentChannelMembershipService';
 import { Server as SocketServer, Socket } from 'socket.io';
 import { EventBus } from '@mxf-dev/core/events/EventBus';
 import {
@@ -64,6 +66,23 @@ import {
 import { authorizationService } from '../../api/services/AuthorizationService';
 import { resolveCredentialBoundAgentPolicy } from '../services/ToolAuthorizationPolicy';
 import { userSessionLifecycle } from '../services/UserSessionLifecycle';
+
+/** Re-read transport state after each asynchronous admission step. */
+const assertSocketConnected = (socket: Socket): void => {
+    if (socket.connected === false) throw new Error('Socket disconnected during agent admission');
+};
+
+/** Start both releases immediately and drain both even if either fails. */
+const releaseAgentConnection = async (agentId: string, socketId: string): Promise<void> => {
+    const results = await Promise.allSettled([
+        AgentFilesystemService.getInstance().release(agentId, socketId),
+        AgentChannelMembershipService.getInstance().release(socketId)
+    ]);
+    const errors = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected');
+    if (errors.length) throw Object.assign(new Error(`Agent connection cleanup failed for ${agentId}`), {
+        causes: errors.map(result => result.reason)
+    });
+};
 
 // Global Services - lazy initialization to avoid early singleton creation
 let agentService: AgentService;
@@ -817,7 +836,10 @@ export const completeSocketConnection = async (
             ? undefined
             : [...allowedTools];
 
-        // Register only after authentication options have passed validation.
+        assertSocketConnected(socket);
+
+        // Track ownership for disconnect cleanup without allowing delivery yet.
+        socket.data.connectionAdmitted = false;
         socketService.registerSocket(socket, agentId, channelId);
         
         // Register agent in agent service if not already registered
@@ -857,20 +879,16 @@ export const completeSocketConnection = async (
         // Add socket to channel if a channelId was provided
         if (channelId) {
             try {
-                // Format channel name correctly
-                const roomName = getNormalizedChannelName(channelId);
-                
-                // Join socket to room
-                socket.join(roomName);
-                //;
-                
-                // Add participant to ChannelService for proper tracking
-                // Note: addParticipant internally emits AGENT_JOINED event via notifyChannelEvent
-                const channelService = ChannelService.getInstance();
-                const participantAdded = await channelService.addParticipant(channelId, agentId, agentId);
-                if (!participantAdded) {
-                    throw new Error(`Authenticated channel ${channelId} is unavailable`);
-                }
+                // Filesystem tools must be discoverable before membership or auth
+                // success reaches the SDK. Disconnect cancels this exact lease.
+                await AgentFilesystemService.getInstance().acquire(agentId, socket.id);
+                assertSocketConnected(socket);
+
+                await AgentChannelMembershipService.getInstance().acquire(agentId, channelId, socket.id);
+                assertSocketConnected(socket);
+                await socket.join(getNormalizedChannelName(channelId));
+                assertSocketConnected(socket);
+                socket.data.connectionAdmitted = true;
                 
                 // Emit the channel:joined event needed by the SDK
                 const channelJoinedPayload = createBaseEventPayload(
@@ -901,18 +919,21 @@ export const completeSocketConnection = async (
                 // deleted or became inactive after key issuance, authentication
                 // must fail closed before any request handlers are installed.
                 try {
+                    socket.data.connectionAdmitted = false;
+                    const cleanup = releaseAgentConnection(agentId, socket.id);
                     socketService.unregisterSocket(socket.id, agentId);
                     const agentSvc = getAgentService();
                     agentSvc.removeSocketFromAgent(agentId, socket.id);
                     if (!agentSvc.hasActiveSockets(agentId)) {
                         agentSvc.updateAgentStatus(agentId, AgentConnectionStatus.DISCONNECTED);
                     }
+                    await cleanup;
                 } catch (cleanupError) {
                     moduleLogger.error(`Failed to roll back rejected socket ${socket.id}: ${cleanupError}`);
                 }
 
                 socket.emit(AuthEvents.ERROR, {
-                    error: 'Authenticated channel is unavailable',
+                    error: error instanceof Error ? error.message : 'Agent admission failed',
                     channelId
                 });
                 socket.data.agentId = undefined;
@@ -1079,49 +1100,45 @@ export const handleSocketDisconnect = async (
         validator.assertIsNonEmptyString(agentId);
         
         
-        // Create properly structured disconnection event payload using the helper function
-        const disconnectPayload = createBaseEventPayload(
-            Events.Agent.DISCONNECTED,
-            agentId,
-            channelId,
-            {
-                status: 'disconnected',
-                reason: reason,
-                socketId: socketId,
-                timestamp: Date.now()
-            }
-        );
-        
-        // Use a direct event emission without going through our forwarders
-        // This prevents potential recursion and "Socket not found" warnings
-        // when the socket is already gone
-        EventBus.server.emit(Events.Agent.DISCONNECTED, disconnectPayload);
-        
-        // Unregister the socket - this will also clear associated data
-        socketService.unregisterSocket(socketId, agentId);
-        
-        // Update agent status in AgentService for proper tracking
-        // Use AgentService.getInstance() directly — the old (socketService as any).agentService
-        // pattern was always null because SocketService's lazy getter was never called
-        const agentSvc = getAgentService();
-        agentSvc.removeSocketFromAgent(agentId, socketId);
+        // Release immediately, before awaiting any membership or persistence work.
+        const cleanup = releaseAgentConnection(agentId, socketId);
+        try {
 
-        // Check if the agent has any remaining sockets before updating status
-        if (!agentSvc.hasActiveSockets(agentId)) {
-            agentSvc.updateAgentStatus(agentId, AgentConnectionStatus.DISCONNECTED);
-        }
+            // Create properly structured disconnection event payload using the helper function
+            const disconnectPayload = createBaseEventPayload(
+                Events.Agent.DISCONNECTED,
+                agentId,
+                channelId,
+                {
+                    status: 'disconnected',
+                    reason: reason,
+                    socketId: socketId,
+                    timestamp: Date.now()
+                }
+            );
         
-        // Remove agent from channel to trigger SystemLLM cleanup
-        // This is required for proper cleanup of SystemLlmService when all agents disconnect
-        if (channelId) {
-            try {
-                const channelService = ChannelService.getInstance();
-                await channelService.removeParticipant(channelId, agentId, agentId);
-            } catch (error) {
-                logger.error(`Failed to remove agent ${agentId} from channel ${channelId}: ${error}`);
+            // Use a direct event emission without going through our forwarders
+            // This prevents potential recursion and "Socket not found" warnings
+            // when the socket is already gone
+            EventBus.server.emit(Events.Agent.DISCONNECTED, disconnectPayload);
+        
+            // Unregister the socket - this will also clear associated data
+            socketService.unregisterSocket(socketId, agentId);
+        
+            // Update agent status in AgentService for proper tracking
+            // Use AgentService.getInstance() directly — the old (socketService as any).agentService
+            // pattern was always null because SocketService's lazy getter was never called
+            const agentSvc = getAgentService();
+            agentSvc.removeSocketFromAgent(agentId, socketId);
+
+            // Check if the agent has any remaining sockets before updating status
+            if (!agentSvc.hasActiveSockets(agentId)) {
+                agentSvc.updateAgentStatus(agentId, AgentConnectionStatus.DISCONNECTED);
             }
-        }
         
+        } finally {
+            await cleanup;
+        }
     } catch (error) {
         logger.error(`Error handling socket disconnect: ${error}`);
     }

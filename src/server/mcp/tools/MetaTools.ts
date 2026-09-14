@@ -110,8 +110,9 @@ interface MetaToolAuthorizationContext {
 
 /** Build the exact same fail-closed tool view used by final execution. */
 const getAuthorizedAgentVisibleTools = (context: MetaToolAuthorizationContext): HybridMcpTool[] => {
-    if (typeof context.agentId !== 'string' || context.agentId.trim().length === 0 ||
-        typeof context.channelId !== 'string' || context.channelId.trim().length === 0) {
+    const { agentId, channelId } = context;
+    if (typeof agentId !== 'string' || agentId.trim().length === 0 ||
+        typeof channelId !== 'string' || channelId.trim().length === 0) {
         throw new Error('Meta-tool discovery requires exact authenticated agent and channel identity');
     }
     if (!context.authorization ||
@@ -127,12 +128,12 @@ const getAuthorizedAgentVisibleTools = (context: MetaToolAuthorizationContext): 
         throw new Error('Hybrid MCP registry is unavailable');
     }
 
-    const channelAllowedTools = McpService.getInstance().getChannelAllowedTools(context.channelId);
+    const channelAllowedTools = McpService.getInstance().getChannelAllowedTools(channelId);
     if (channelAllowedTools === undefined) {
-        throw new Error(`Tool policy for channel '${context.channelId}' has not been loaded`);
+        throw new Error(`Tool policy for channel '${channelId}' has not been loaded`);
     }
 
-    return hybridRegistry.getAgentFacingToolsForChannel(context.channelId, context.agentId)
+    return hybridRegistry.getAgentFacingToolsForChannel(channelId, agentId)
         .filter(tool => {
             const names = getToolAuthorizationNames(tool);
             return isAllowedByAgentPolicy(
@@ -140,7 +141,7 @@ const getAuthorizedAgentVisibleTools = (context: MetaToolAuthorizationContext): 
                 context.authorization?.allowedTools as string[] | undefined
             ) &&
                 isAllowedByChannelPolicy(names, channelAllowedTools) &&
-                isPrivilegedHostToolEnabled(names) &&
+                isPrivilegedHostToolEnabled(names, tool, agentId) &&
                 isPrivilegedNetworkToolEnabled(names);
         });
 };

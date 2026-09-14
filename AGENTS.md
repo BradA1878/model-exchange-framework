@@ -4,6 +4,7 @@
 
 - **No tech-bro speak.** Write plainly. No marketing hype, buzzwords, or hype adjectives ("blazing-fast", "game-changer", "supercharge", "leverage", "10x", "seamless", "robust") — in code comments, docs, commit messages, UI copy, or responses. Say what something does, not how impressive it is.
 - **Brad is the sole developer on MXF.** Do not warn about pushing, force-pushing, or running scripts like `sync-to-public.sh`. Just do it when asked.
+- **Write detailed commit messages.** Use a clear subject and a body explaining the changes, reason, compatibility impact, and validation. Public sync commits must describe the full release so the mirror history is useful on its own.
 - **Verify existing behavior in the code.** Read the relevant implementation before changing it. State assumptions about unspecified requirements, use judgment for routine choices, and ask only when a missing decision materially affects correctness or scope.
 - **No TODOs! Do the work**
 - **Add comments and update them**
@@ -217,8 +218,14 @@ ORPAR_MEMORY_INTEGRATION_ENABLED, MEMORY_UTILITY_LEARNING_ENABLED, MEMORY_STRATA
 
 **Tool sandboxing (required for the tools that touch the machine):**
 ```
-MXF_WORKSPACE_ROOT          REQUIRED for filesystem tools. No default — it used to be $HOME,
-                            which let any agent read ~/.ssh, ~/.aws and ~/.mxf/config.json.
+MXF_WORKSPACE_ROOT          Global workspace for host tools/global filesystem. No default.
+                            Leave unset when using MXF_AGENT_FILESYSTEM_ROOTS.
+MXF_AGENT_FILESYSTEM_ROOTS  Unset disables per-agent filesystems; empty is invalid. Comma-separated
+                            absolute templates such as /srv/mxf-work/{agentId},/srv/mxf-work/shared.
+                            Expanded roots must exist; a configured global root conflicts.
+MXF_EXTERNAL_MCP_AUTOSTART Unset retains predefined boot selection; empty starts none.
+                            Unknown IDs fail. Per-agent filesystems are independent of this and
+                            the legacy DISABLE_EXTERNAL_MCP_SERVERS variable.
 MXF_SHELL_ALLOWED_COMMANDS  Optional shell allowlist (e.g. git,npm,node). Config-driven —
                             it used to be a tool argument, i.e. chosen by the model it restricts.
 MXF_SHELL_ENV_PASSTHROUGH   Extra env vars to pass to shell children. Children otherwise get a
@@ -228,6 +235,45 @@ MXF_HTTP_ALLOW_PRIVATE_HOSTS  Default false. api_fetch refuses loopback/RFC1918/
 MONGODB_LENS_URI            Deliberately NOT MONGODB_URI — give it a read-only user on a
                             separate database, so agents can't query users/PATs/API keys.
 ```
+
+Per-agent filesystems run the installed `@modelcontextprotocol/server-filesystem`
+dependency pinned to `2026.8.31`, never an `npx` download. Authentication waits for
+root validation, initialization, and tool discovery. Exact socket leases share one
+process per agent; the last socket release awaits its termination. Credential and
+channel allowlists still apply. Native external MCP results require a `content`
+array and preserve all blocks, `isError`, `structuredContent`, and `_meta`; do not
+invent MIME types or replace results with their first text item.
+
+**Agent execution and channel history:**
+```
+AUTO_CORRECTION_ENABLED              Exactly true/false, default true. false disables correction
+                                     and correction-pattern learning, retaining schema coercion.
+MXP_ENABLED                          Exactly true/false, default true. false removes messaging
+                                     MXP options and skips server MXP processing/encryption.
+TASK_INTELLIGENT_ASSIGNMENT_ENABLED   Exactly true/false, default true. false prevents intelligent
+                                     assignment, including runtime attempts to enable it.
+MXF_CHANNEL_HISTORY_DM_VISIBILITY     all (default) or parties. Agent reads filter recorded DMs
+                                     before limits/counts and omit derived context. Owner/admin
+                                     user reads retain full canonical history.
+```
+
+SDK options are separate: `promptMode: 'framework' | 'bare'` (default framework),
+`activation: 'task' | 'message'` (default task), `circuitBreakerEnabled` (default true),
+and `captureLlmRequests` (default false). Bare mode preserves a required nonblank
+operator prompt and rejects MXP/aggregation. Message mode rejects aggregation,
+coalesces pending arrivals, and emits its iteration limit without extra history text.
+`providerOptions` forwards native routing; capture/usage carry actual request and
+activation IDs. History trimming emits dropped IDs via `HISTORY_TRIMMED`.
+
+Channel history writes use `ChannelMemory.conversationHistory`, with immutable
+first-ID-wins appends. Existing deployments must run `bun run migrate:channel-history`
+with channel writers stopped; the migration preflights conflicting IDs, is idempotent,
+and retains legacy source history. Lost historical DM tags cannot be inferred.
+Owner/admin users publish through `POST /api/channels/:channelId/messages`; persistence
+is acknowledged before one ordinary channel event, attributed to the user's username.
+Authorization/validation failures create no execution document; admitted tools await
+start and terminal audit writes. See [server controls](docs/server-agent-controls.md),
+[bare agents](docs/sdk/bare-agents.md), and [streaming bounds](docs/sdk/openrouter-streaming.md).
 
 **Spend and auth:**
 ```
@@ -251,14 +297,17 @@ AUTH_RATE_LIMIT_MAX / WEBHOOK_RATE_LIMIT_MAX   Per-IP rate limits on auth and we
 
 **LLM request bounds (OpenRouter):**
 ```
-OPENROUTER_REQUEST_TIMEOUT_MS      Hard cap per completion request (default 300000). Enforced as an
+OPENROUTER_REQUEST_TIMEOUT_MS      Hard cap per non-streaming completion request (default 300000). Enforced as an
                                    AbortSignal on the fetch and again inside NetworkRecovery. A timeout
                                    is a non-retryable error surfaced to the caller — before this, a hung
                                    request was pure silence until a consumer-side backstop killed the task.
 OPENROUTER_STREAM_IDLE_TIMEOUT_MS  Max silence between SSE chunks on the streaming path (default 120000).
-                                   OpenRouter sends keepalive comments while a model thinks, so silence
-                                   past this means a dead connection, not a slow model. No total-time cap:
-                                   an actively producing stream is healthy no matter how long it runs.
+                                   Every transport read resets this bound, including keepalive comments.
+OPENROUTER_FIRST_TOKEN_TIMEOUT_MS  Max wait per stream attempt before actual model data (default 180000).
+                                   Content, reasoning, or native tool fragments clear it; keepalives and
+                                   role/usage-only frames do not. Expiry aborts and logs an error, with one
+                                   retry at most (respecting a lower OPENROUTER_MAX_RETRIES setting).
+                                   After model data arrives there is no total cap, only the idle bound.
 OPENROUTER_SLOW_REQUEST_WARN_MS    WARN when a request is still in flight past this (default 60000), with
                                    model, agent, and request size — makes slow-vs-hung visible in logs.
 ```

@@ -97,6 +97,8 @@ export interface AgentContext {
      * This defines how the agent should behave within MXF
      */
     systemPrompt: string;
+    /** Provider formatting follows the same prompt mode as the SDK; framework is the default. */
+    promptMode?: AgentConfig['promptMode'];
     
     /**
      * Agent configuration - who the agent is and what they can do

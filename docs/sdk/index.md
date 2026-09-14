@@ -1,7 +1,15 @@
 # MXF SDK Documentation
 
+Read [Upgrade to core and SDK 5.0](upgrade-5.md) for native external tool-result
+types, user-message API changes, and the channel-history migration.
+
 For the session-memory option, task ownership, and authenticated reconnect contract
 in SDK 4.0, see [Agent memory lifetime and task outcomes](session-memory.md).
+
+For operator-only prompts, task-free message turns, circuit control, request capture,
+history-trim events, and provider routing, see [Bare prompts and message activation](bare-agents.md).
+Pair those SDK options with [server controls and migration](../server-agent-controls.md).
+See [OpenRouter streaming bounds](openrouter-streaming.md) before choosing request budgets.
 
 The MXF SDK provides TypeScript/JavaScript classes for building agents that connect to the Model Exchange Framework via WebSocket communication. It enables real-time messaging, task handling, memory management, and tool execution through the Model Context Protocol (MCP).
 

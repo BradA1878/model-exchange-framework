@@ -2,6 +2,11 @@
 
 ## Overview
 
+This pipeline describes the default `promptMode: 'framework'`. With
+`promptMode: 'bare'`, the SDK sends the operator's `agentConfigPrompt` unchanged
+and bypasses template expansion, framework context, and automatic compaction.
+See [bare prompts and message activation](../sdk/bare-agents.md).
+
 The MXF Prompt Assembly Pipeline is a multi-layered system that constructs context-aware prompts for LLM agents. It enables dynamic template replacement, ORPAR phase awareness, and provider-specific formatting.
 
 ## Architecture

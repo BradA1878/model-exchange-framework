@@ -138,6 +138,16 @@ import {
     type TaskConfig
 } from '@mxf-dev/sdk';
 
+import { Events } from '@mxf-dev/core/events/EventNames';
+import { getMcpToolResultData, type McpToolHandlerResult } from '@mxf-dev/core/protocols/mcp/McpServerTypes';
+
+const nativeResult: McpToolHandlerResult = {
+    content: [{ type: 'text', text: '' }, { type: 'resource_link', name: 'record', uri: 'mxf://record' }],
+    isError: false, structuredContent: { retained: true }, _meta: { requestId: 'actual-request' }
+};
+void getMcpToolResultData(nativeResult);
+void [Events.Agent.LLM_REQUEST, Events.Agent.ITERATION_LIMIT, Events.Agent.HISTORY_TRIMMED];
+
 const task: TaskConfig = {
     title: 'Verify declarations',
     description: 'Compile an external consumer against the packed SDK',
@@ -151,8 +161,12 @@ const agentOptions: AgentCreationConfig = {
     agentId: 'reviewer', name: 'Reviewer', channelId: 'reviews',
     keyId: 'key', secretKey: 'secret', llmProvider: LlmProviderType.OPENROUTER,
     defaultModel: 'configured-by-consumer', memoryMode: 'session',
+    agentConfigPrompt: 'Preserve this exact operator prompt.',
+    promptMode: 'bare', activation: 'message', disableTaskHandling: true,
+    circuitBreakerEnabled: false, captureLlmRequests: true,
+    maxIterations: 3, maxHistory: 20,
     backfillSearchIndexOnLoad: false,
-    providerOptions: { endpoint: 'https://provider.example' }
+    providerOptions: { provider: { order: ['operator-selected-provider'], allow_fallbacks: false } }
 };
 declare const sdk: MxfSDK;
 void sdk.createAgent(agentOptions);

@@ -16,6 +16,7 @@
  * environment it needs.
  */
 
+import crypto from 'crypto';
 import { MxpMessageType, MxpEncryptionAlgorithm } from '@mxf-dev/core/schemas/MxpProtocolSchemas';
 import type { MxpPayload, EncryptedPayload } from '@mxf-dev/core/schemas/MxpProtocolSchemas';
 
@@ -33,12 +34,21 @@ const samplePayload = (): MxpPayload => ({
  * jest.isolateModules gives each case its own module registry, so the singleton
  * and its env-derived key are rebuilt from scratch.
  */
-const loadEncryption = (env: { key?: string; salt?: string; enabled?: string }) => {
+const loadEncryption = (env: {
+    key?: string;
+    salt?: string;
+    enabled?: string;
+    mxpEnabled?: string;
+}): typeof import('@mxf-dev/core/utils/MxpEncryption') => {
     const previous = {
+        MXP_ENABLED: process.env.MXP_ENABLED,
         MXP_ENCRYPTION_KEY: process.env.MXP_ENCRYPTION_KEY,
         MXP_ENCRYPTION_SALT: process.env.MXP_ENCRYPTION_SALT,
         MXP_ENCRYPTION_ENABLED: process.env.MXP_ENCRYPTION_ENABLED
     };
+
+    if (env.mxpEnabled === undefined) delete process.env.MXP_ENABLED;
+    else process.env.MXP_ENABLED = env.mxpEnabled;
 
     if (env.key === undefined) delete process.env.MXP_ENCRYPTION_KEY;
     else process.env.MXP_ENCRYPTION_KEY = env.key;
@@ -49,18 +59,19 @@ const loadEncryption = (env: { key?: string; salt?: string; enabled?: string }) 
     if (env.enabled === undefined) delete process.env.MXP_ENCRYPTION_ENABLED;
     else process.env.MXP_ENCRYPTION_ENABLED = env.enabled;
 
-    let mod!: typeof import('@mxf-dev/core/utils/MxpEncryption');
-    jest.isolateModules(() => {
-        mod = require('@mxf-dev/core/utils/MxpEncryption');
-    });
-
-    // Restore the ambient environment for the next case.
-    Object.entries(previous).forEach(([name, value]) => {
-        if (value === undefined) delete process.env[name];
-        else process.env[name] = value;
-    });
-
-    return mod;
+    try {
+        let mod!: typeof import('@mxf-dev/core/utils/MxpEncryption');
+        jest.isolateModules(() => {
+            mod = require('@mxf-dev/core/utils/MxpEncryption');
+        });
+        return mod;
+    } finally {
+        // A rejected eager import must restore the environment too.
+        Object.entries(previous).forEach(([name, value]) => {
+            if (value === undefined) delete process.env[name];
+            else process.env[name] = value;
+        });
+    }
 };
 
 describe('MxpEncryption', () => {
@@ -76,6 +87,45 @@ describe('MxpEncryption', () => {
     afterEach(() => {
         consoleErrorSpy.mockRestore();
         consoleWarnSpy.mockRestore();
+    });
+
+    describe('global MXP configuration at eager import', () => {
+        it.each([
+            { key: KEY },
+            { key: KEY, salt: '' },
+            { key: KEY, salt: ' \t', enabled: 'not-a-boolean' },
+            {},
+            { key: KEY, salt: SALT, enabled: 'true' }
+        ])('skips encryption initialization when MXP is disabled: %j', (env) => {
+            const deriveKey = jest.spyOn(crypto, 'pbkdf2Sync');
+            try {
+                // Import the real module: its exported singleton initializes eagerly.
+                const { mxpEncryption } = loadEncryption({ ...env, mxpEnabled: 'false' });
+
+                expect(mxpEncryption.isEncryptionEnabled()).toBe(false);
+                expect(mxpEncryption.encrypt(samplePayload())).toBeNull();
+                expect(deriveKey).not.toHaveBeenCalled();
+            } finally {
+                deriveKey.mockRestore();
+            }
+        });
+
+        it.each([undefined, 'true'])('preserves encryption with MXP_ENABLED=%s', (mxpEnabled) => {
+            const { mxpEncryption } = loadEncryption({ key: KEY, salt: SALT, mxpEnabled });
+            const original = samplePayload();
+            const encrypted = mxpEncryption.encrypt(original);
+
+            expect(mxpEncryption.isEncryptionEnabled()).toBe(true);
+            expect(encrypted).not.toBeNull();
+            expect(encrypted!.algorithm).toBe(MxpEncryptionAlgorithm.AES_256_GCM);
+            expect(mxpEncryption.decrypt(encrypted!)).toEqual(original);
+        });
+
+        it.each(['', 'yes', 'TRUE', '0'])('rejects unknown MXP_ENABLED=%j at import', (mxpEnabled) => {
+            expect(() => loadEncryption({ mxpEnabled })).toThrow(
+                'MXP_ENABLED must be exactly "true" or "false"'
+            );
+        });
     });
 
     describe('with a configured key', () => {
@@ -205,10 +255,16 @@ describe('MxpEncryption', () => {
     });
 
     describe('salt requirement', () => {
-        it('fails fast when a key is set without a salt', () => {
+        it.each([undefined, 'true'])('requires a salt with MXP_ENABLED=%s', (mxpEnabled) => {
             // Opting into encryption with a predictable salt would let an attacker
             // precompute the key derivation.
-            expect(() => loadEncryption({ key: KEY })).toThrow(/MXP_ENCRYPTION_SALT/);
+            expect(() => loadEncryption({ key: KEY, mxpEnabled })).toThrow(/MXP_ENCRYPTION_SALT/);
+        });
+
+        it('still rejects a blank salt when only encryption is disabled', () => {
+            expect(() => loadEncryption({ key: KEY, salt: ' \t', enabled: 'false' })).toThrow(
+                /MXP_ENCRYPTION_SALT/
+            );
         });
     });
 

@@ -25,6 +25,8 @@
  * in the Model Exchange Framework.
  */
 
+import type { AgentActivationMode, AgentPromptMode } from '../config/AgentExecutionConfig.js';
+
 /**
  * LLM Reasoning configuration interface
  * Supports both OpenAI/ChatGPT style (effort) and Anthropic/Claude style (max_tokens)
@@ -70,6 +72,14 @@ export interface AgentConfig {
     sdkDomainKey?: string;
     
     // Behavioral properties
+    /** Prompt construction mode; framework is the default. Bare preserves the operator prompt. */
+    promptMode?: AgentPromptMode;
+    /** Start turns from assigned tasks (default) or incoming messages. */
+    activation?: AgentActivationMode;
+    /** Detect and block repeated tool calls (default true). */
+    circuitBreakerEnabled?: boolean;
+    /** Emit exact provider request bodies for observation (default false). */
+    captureLlmRequests?: boolean;
     autoRegister?: boolean;
     autoReconnect?: boolean;
     reconnectAttempts?: number;

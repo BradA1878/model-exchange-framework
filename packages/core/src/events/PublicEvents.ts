@@ -40,11 +40,14 @@ export const PUBLIC_AGENT_EVENTS = [
     Events.Agent.JOIN_CHANNEL,
     Events.Agent.LEAVE_CHANNEL,
     Events.Agent.LLM_RESPONSE,
+    Events.Agent.LLM_REQUEST,
     Events.Agent.LLM_REASONING,
     Events.Agent.LLM_REASONING_PARSED,
     Events.Agent.LLM_REASONING_TOOLS_SYNTHESIZED,
     Events.Agent.LLM_USAGE,
     Events.Agent.TASK_ASSIGNED,
+    Events.Agent.ITERATION_LIMIT,
+    Events.Agent.HISTORY_TRIMMED,
 ] as const;
 
 /**

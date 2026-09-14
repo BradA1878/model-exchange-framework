@@ -26,6 +26,7 @@
  */
 
 import { Observable } from 'rxjs';
+import type { ContentBlock } from '@modelcontextprotocol/sdk/types.js';
 import { McpContentType, McpToolInput } from './IMcpClient.js';
 import { McpToolExample } from './McpToolSchema.js';
 
@@ -47,8 +48,12 @@ export interface McpServerConfig {
  * MCP Tool Handler Context
  */
 export interface McpToolHandlerContext {
-    /** Request ID */
+    /** MCP tool call ID, independent of any LLM request that produced the call. */
     requestId: string;
+    /** The LLM HTTP attempt that produced this tool call, when available. */
+    llmRequestId?: string;
+    /** The SDK activation that produced this tool call, when available. */
+    activationId?: string;
     /** Agent ID that initiated the request */
     agentId?: string;
     /** Channel ID where the request originated */
@@ -71,10 +76,18 @@ export interface McpToolHandlerContext {
  */
 export interface McpToolHandlerResult {
     /** Result content */
-    content: McpToolResultContent;
+    content: McpToolResultContent | ContentBlock[];
+    /** Native MCP failure and structured output are preserved without conversion. */
+    isError?: boolean;
+    structuredContent?: Record<string, unknown>;
+    _meta?: Record<string, unknown>;
     /** Optional metadata */
     metadata?: Record<string, any>;
 }
+
+/** Keep native MCP envelopes intact; legacy MXF tools expose their content value. */
+export const getMcpToolResultData = (result: McpToolHandlerResult): McpToolHandlerResult | McpToolResultContent =>
+    Array.isArray(result.content) ? result : result.content;
 
 /**
  * MCP Tool Result Content

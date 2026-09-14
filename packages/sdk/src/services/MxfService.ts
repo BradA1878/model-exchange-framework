@@ -347,8 +347,17 @@ export class MxfService implements IInternalChannelService {
                 
                 // Initialize socket.io connection if not already connected
                 if (!this.socket || !this.socket.connected) {
-                    
-                    if (this.connectionConfig.sdkDomainKey) {
+
+                    if (this.socket) {
+                        // A remote disconnect leaves the service's local subscriptions
+                        // alive. Retire only the old transport before replacing it;
+                        // its setup guards and handlers cannot belong to the new socket.
+                        this.detachSocketHandlers();
+                        EventBus.client.unregisterSocket(this.agentId!);
+                        // Stop the old Socket.IO manager from reconnecting after it
+                        // has lost ownership of this service's event forwarding.
+                        this.socket.disconnect();
+                        this.socket = null;
                     }
                     
                     // Create socket.io instance with authentication
@@ -456,6 +465,18 @@ export class MxfService implements IInternalChannelService {
         }
         this.socket.on(event, handler);
         this.socketHandlers.push({ event, handler });
+    }
+
+    /** Remove only transport listeners; local subscriptions survive socket replacement. */
+    private detachSocketHandlers(): void {
+        if (this.socket) {
+            for (const { event, handler } of this.socketHandlers) {
+                this.socket.off(event, handler);
+            }
+        }
+        this.socketHandlers = [];
+        this.socketHandlersSetup = false;
+        this.controlLoopListenersSetup = false;
     }
 
     /**
@@ -971,18 +992,11 @@ export class MxfService implements IInternalChannelService {
             this.busSubscriptions.forEach(sub => sub.unsubscribe());
             this.busSubscriptions = [];
 
-            // Remove socket.io handlers from the socket before we drop it
-            if (this.socket) {
-                for (const { event, handler } of this.socketHandlers) {
-                    this.socket.off(event, handler);
-                }
-            }
-            this.socketHandlers = [];
+            // Remove socket.io handlers from the socket before we drop it.
+            this.detachSocketHandlers();
 
-            // Reset the setup guards so the next connect() re-registers everything
+            // Explicit disconnect also ends the local subscription lifecycle.
             this.eventListenersSetup = false;
-            this.socketHandlersSetup = false;
-            this.controlLoopListenersSetup = false;
 
             // Unregister this agent's socket from the EventBus registry
             if (this.agentId) {

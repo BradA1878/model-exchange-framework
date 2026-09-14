@@ -50,6 +50,8 @@ export interface SecuritySettings {
  * Metadata that applies to all message types
  */
 export interface MessageMetadata {
+    /** Application metadata is retained alongside validated canonical identity fields. */
+    [key: string]: unknown;
     messageId: string;              // Unique identifier for this message
     timestamp: number;              // Unix timestamp when message was created
     correlationId?: string;         // Optional ID to track related messages
@@ -177,18 +179,17 @@ const assertValidContentFormat: (value: unknown, paramName: string) => asserts v
  * @returns A MessageMetadata object with defaults and any overrides
  */
 export const createMessageMetadata = (overrides: Partial<MessageMetadata> = {}): MessageMetadata => {
-    // Generate a random message ID if not provided
-    const randomId = (): string => {
-        return uuidv4() + 
-               uuidv4();
-    };
-    
+    if (overrides.messageId !== undefined) assertNonEmptyString(overrides.messageId, 'messageId');
+    if (overrides.timestamp !== undefined && (
+        typeof overrides.timestamp !== 'number' || !Number.isFinite(overrides.timestamp) || overrides.timestamp < 0
+    )) {
+        throw new Error('timestamp must be a finite non-negative number');
+    }
+    // Zero is a valid original timestamp. Only absent fields receive defaults.
     return {
-        messageId: overrides.messageId || randomId(),
-        timestamp: overrides.timestamp || Date.now(),
-        correlationId: overrides.correlationId,
-        priority: overrides.priority,
-        ttl: overrides.ttl
+        ...overrides,
+        messageId: overrides.messageId ?? uuidv4() + uuidv4(),
+        timestamp: overrides.timestamp ?? Date.now()
     };
 };
 

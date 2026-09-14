@@ -26,7 +26,7 @@
  */
 
 import type { IAgentMemory, IChannelMemory, IRelationshipMemory } from '../types/MemoryTypes.js';
-import type { ChannelTask } from '../types/TaskTypes.js';
+import type { TaskOrchestrationConfig } from '../types/TaskTypes.js';
 import type { Observation, Reasoning, Plan, PlanAction } from '../types/ControlLoopTypes.js';
 import { v4 as uuidv4 } from 'uuid';
 import type { ChannelActionType, EventName, Events, PlanStepCompletedEventData } from '../events/EventNames.js';
@@ -96,11 +96,26 @@ export const SYSTEM_AGENT_ID: AgentId = 'system' as AgentId;
 /** Channel ID for system-level events not tied to a specific channel */
 export const SYSTEM_CHANNEL_ID: ChannelId = 'system' as ChannelId;
 
-/**
- * Base interface for all event payloads.
- * Enforces mandatory fields for all events in the system.
- */
+/** Optional execution ownership carried across provider and tool event boundaries. */
+export interface EventCorrelation {
+    /** SDK request attempt ID, distinct from provider response IDs and MCP call IDs. */
+    requestId?: string;
+    /** Immutable identity of the task or message activation that produced the event. */
+    activationId?: string;
+}
+
+/** Shared envelope options used by event builders. Correlation never changes event data. */
+export interface BaseEventPayloadOptions extends EventCorrelation {
+    source?: string;
+    isRecursionProtection?: boolean;
+    eventId?: string;
+    timestamp?: number;
+}
+
+/** Mandatory event envelope; data may remain a primitive for existing event contracts. */
 export interface BaseEventPayload<TData = any> {
+    requestId?: string;       // SDK request attempt ID, separate from the provider's response ID
+    activationId?: string;    // Task or message activation that produced the event
     eventId: string;          // Unique identifier for this specific event instance (auto-generated UUID)
     eventType: EventName | string; // The specific type of event (e.g., Events.ControlLoop.INITIALIZE)
     timestamp: number;        // Unix timestamp (milliseconds) when the event was created (auto-generated)
@@ -211,6 +226,16 @@ export type LlmStreamChunkEventPayload = BaseEventPayload<LlmStreamChunkEventDat
  * Emitted after each LLM response alongside LLM_RESPONSE.
  */
 export interface LlmUsageEventData {
+    requestId?: string;
+    activationId?: string;
+    /** Actual provider route reported by the provider, when supplied. */
+    providerRoute?: string;
+    /** Actual provider-reported cost; absent when the provider does not report it. */
+    costUsd?: number;
+    /** Measured request duration in milliseconds. */
+    latencyMs?: number;
+    finishReason?: string;
+    nativeFinishReason?: string;
     /** Model that generated the response */
     model: string;
     /** Number of input (prompt) tokens consumed */
@@ -223,6 +248,34 @@ export interface LlmUsageEventData {
     timestamp: number;
 }
 export type LlmUsageEventPayload = BaseEventPayload<LlmUsageEventData>;
+
+/** Exact serialized JSON body observed immediately before a provider HTTP attempt. */
+export interface LlmRequestEventData {
+    requestId: string;
+    activationId: string;
+    provider: string;
+    model: string;
+    body: Record<string, unknown>;
+}
+export type LlmRequestEventPayload = BaseEventPayload<LlmRequestEventData>;
+
+/** Message-driven turns stop at this limit without creating a task outcome. */
+export interface AgentIterationLimitEventData {
+    activationId: string;
+    maxIterations: number;
+    trigger: 'channel_message' | 'agent_message';
+    messageId: string;
+}
+export type AgentIterationLimitEventPayload = BaseEventPayload<AgentIterationLimitEventData>;
+
+/** Actual working-history removals; persisted authoritative history is independent. */
+export interface AgentHistoryTrimmedEventData {
+    maxHistory: number;
+    droppedCount: number;
+    droppedMessageIds: string[];
+    keptCount: number;
+}
+export type AgentHistoryTrimmedEventPayload = BaseEventPayload<AgentHistoryTrimmedEventData>;
 
 /**
  * Interface for agent registration events
@@ -339,6 +392,12 @@ export interface TaskEventData {
 }
 export type TaskEventPayload = BaseEventPayload<TaskEventData>;
 
+/** Server orchestration settings are configuration data, not a task record. */
+export interface TaskOrchestrationConfigEventData {
+    config: TaskOrchestrationConfig;
+}
+export type TaskOrchestrationConfigEventPayload = BaseEventPayload<TaskOrchestrationConfigEventData>;
+
 /**
  * Data for task response events.
  */
@@ -408,7 +467,7 @@ export type MemoryGetEventPayload = BaseEventPayload<MemoryGetEventData>;
  */
 export interface MemoryGetResultEventData extends BaseMemoryOperationData {
     key?: string;
-    memory: IAgentMemory | IChannelMemory | IRelationshipMemory | Record<string, unknown> | null;     // The retrieved memory data. Could be null or undefined if not found.
+    memory: IAgentMemory | IChannelMemory | IRelationshipMemory | Record<string, unknown> | unknown[] | null; // Keyed channel history returns arrays; missing data is null.
     error?: string;  // Error message if the GET operation failed
 }
 export type MemoryGetResultEventPayload = BaseEventPayload<MemoryGetResultEventData>;
@@ -426,7 +485,7 @@ export type MemoryUpdateEventPayload = BaseEventPayload<MemoryUpdateEventData>;
  * Data for memory UPDATE result events.
  */
 export interface MemoryUpdateResultEventData extends BaseMemoryOperationData {
-    memory: IAgentMemory | IChannelMemory | IRelationshipMemory | Record<string, unknown> | null;     // The state of the memory after the update. Can be the updated object or a success indicator.
+    memory: IAgentMemory | IChannelMemory | IRelationshipMemory | Record<string, unknown> | unknown[] | null; // Includes the authoritative array after a keyed channel append.
     error?: string;  // Error message if the UPDATE operation failed
 }
 export type MemoryUpdateResultEventPayload = BaseEventPayload<MemoryUpdateResultEventData>;
@@ -578,7 +637,7 @@ export interface ExternalMcpServerEventData {
     error?: string;
     message?: string;
     toolsDiscovered?: string[];
-    status?: 'stopped' | 'starting' | 'running' | 'error';
+    status?: 'stopped' | 'starting' | 'running' | 'error' | 'restarting' | 'stopping';
     connectedAgents?: number;
     [key: string]: any;
 }
@@ -663,17 +722,14 @@ export function createBaseEventPayload<TData>(
     agentId: AgentId,
     channelId: ChannelId,
     data: TData,
-    options: {
-        source?: string;
-        isRecursionProtection?: boolean;
-        eventId?: string; 
-        timestamp?: number;
-    } = {}
+    options: BaseEventPayloadOptions = {}
 ): BaseEventPayload<TData> {
     const validator = createStrictValidator('createBaseEventPayload');
     validator.assertIsNonEmptyString(eventType, 'eventType');
     validator.assertIsNonEmptyString(agentId, 'agentId');
     validator.assertIsNonEmptyString(channelId, 'channelId'); // Enforcing channelId as per requirement
+    if (options.requestId !== undefined) validator.assertIsNonEmptyString(options.requestId, 'requestId');
+    if (options.activationId !== undefined) validator.assertIsNonEmptyString(options.activationId, 'activationId');
     // data can be anything, so no generic validation here, specific helpers can validate their data.
 
     return {
@@ -684,6 +740,8 @@ export function createBaseEventPayload<TData>(
         channelId,
         source: options.source,
         isRecursionProtection: options.isRecursionProtection,
+        ...(options.requestId !== undefined ? { requestId: options.requestId } : {}),
+        ...(options.activationId !== undefined ? { activationId: options.activationId } : {}),
         data,
     };
 }
@@ -801,7 +859,7 @@ export function createLlmReasoningEventPayload(
     agentId: AgentId,
     channelId: ChannelId,
     reasoningData: LlmReasoningEventData,
-    options: { source?: string; eventId?: string; timestamp?: number; } = {}
+    options: BaseEventPayloadOptions = {}
 ): LlmReasoningEventPayload {
     // Add validation for reasoning data
     const validator = createStrictValidator('LlmReasoningEventPayload');
@@ -826,7 +884,7 @@ export function createLlmReasoningParsedEventPayload(
     agentId: AgentId,
     channelId: ChannelId,
     parsedData: LlmReasoningParsedEventData,
-    options: { source?: string; eventId?: string; timestamp?: number; } = {}
+    options: BaseEventPayloadOptions = {}
 ): LlmReasoningParsedEventPayload {
     // Add validation for parsed data
     const validator = createStrictValidator('LlmReasoningParsedEventPayload');
@@ -852,7 +910,7 @@ export function createLlmReasoningToolsSynthesizedEventPayload(
     agentId: AgentId,
     channelId: ChannelId,
     synthesizedData: LlmReasoningToolsSynthesizedEventData,
-    options: { source?: string; eventId?: string; timestamp?: number; } = {}
+    options: BaseEventPayloadOptions = {}
 ): LlmReasoningToolsSynthesizedEventPayload {
     // Add validation for synthesized data
     const validator = createStrictValidator('LlmReasoningToolsSynthesizedEventPayload');
@@ -878,7 +936,7 @@ export function createLlmStreamChunkEventPayload(
     agentId: AgentId,
     channelId: ChannelId,
     chunkData: LlmStreamChunkEventData,
-    options: { source?: string; eventId?: string; timestamp?: number; } = {}
+    options: BaseEventPayloadOptions = {}
 ): LlmStreamChunkEventPayload {
     return createBaseEventPayload<LlmStreamChunkEventData>(eventType, agentId, channelId, chunkData, options);
 }
@@ -899,13 +957,100 @@ export function createLlmUsageEventPayload(
     agentId: AgentId,
     channelId: ChannelId,
     usageData: LlmUsageEventData,
-    options: { source?: string; eventId?: string; timestamp?: number; } = {}
+    options: BaseEventPayloadOptions = {}
 ): LlmUsageEventPayload {
     const validator = createStrictValidator('createLlmUsageEventPayload');
     validator.assertIsObject(usageData, 'usageData');
     validator.assertIsNonEmptyString(usageData.model, 'usageData.model');
 
-    return createBaseEventPayload<LlmUsageEventData>(eventType, agentId, channelId, usageData, options);
+    for (const field of ['costUsd', 'latencyMs'] as const) {
+        const value = usageData[field];
+        if (value !== undefined && (typeof value !== 'number' || !Number.isFinite(value) || value < 0)) {
+            throw new Error(`usageData.${field} must be a finite nonnegative number`);
+        }
+    }
+
+    return createBaseEventPayload<LlmUsageEventData>(eventType, agentId, channelId, usageData,
+        withEventCorrelation(options, usageData));
+}
+
+/** Merge correlation recorded in event data without permitting contradictory ownership. */
+function withEventCorrelation(options: BaseEventPayloadOptions, correlation: EventCorrelation): BaseEventPayloadOptions {
+    const merged = { ...options };
+    for (const field of ['requestId', 'activationId'] as const) {
+        const value = correlation[field];
+        if (value !== undefined) {
+            if (options[field] !== undefined && options[field] !== value) {
+                throw new Error(`${field} must match event data`);
+            }
+            merged[field] = value;
+        }
+    }
+    return merged;
+}
+
+/** Build an exact request observation; request capture remains opt-in at the provider boundary. */
+export function createLlmRequestEventPayload(
+    eventType: EventName | string,
+    agentId: AgentId,
+    channelId: ChannelId,
+    data: LlmRequestEventData,
+    options: BaseEventPayloadOptions = {}
+): LlmRequestEventPayload {
+    const validator = createStrictValidator('createLlmRequestEventPayload');
+    validator.assertIsObject(data, 'Request observation data must be an object');
+    for (const field of ['requestId', 'activationId', 'provider', 'model'] as const) {
+        validator.assertIsNonEmptyString(data[field], `Request observation ${field} is required`);
+    }
+    validator.assertIsObject(data.body, 'Request observation body must be a JSON object');
+    if (Array.isArray(data.body)) throw new Error('Request observation body must be a JSON object');
+    return createBaseEventPayload(eventType, agentId, channelId, data, withEventCorrelation(options, data));
+}
+
+/** Build the terminal limit notification for one message activation, without a task outcome. */
+export function createAgentIterationLimitEventPayload(
+    eventType: EventName | string,
+    agentId: AgentId,
+    channelId: ChannelId,
+    data: AgentIterationLimitEventData,
+    options: BaseEventPayloadOptions = {}
+): AgentIterationLimitEventPayload {
+    const validator = createStrictValidator('createAgentIterationLimitEventPayload');
+    validator.assertIsObject(data, 'Iteration limit data must be an object');
+    validator.assertIsNonEmptyString(data.activationId, 'Iteration limit activationId is required');
+    validator.assertIsNonEmptyString(data.messageId, 'Iteration limit messageId is required');
+    if (!Number.isInteger(data.maxIterations) || data.maxIterations <= 0) {
+        throw new Error('Iteration limit maxIterations must be a positive integer');
+    }
+    if (data.trigger !== 'channel_message' && data.trigger !== 'agent_message') {
+        throw new Error('Iteration limit trigger must be channel_message or agent_message');
+    }
+    return createBaseEventPayload(eventType, agentId, channelId, data, withEventCorrelation(options, data));
+}
+
+/** Report only actual automatic history removals; manual compaction uses its own event. */
+export function createAgentHistoryTrimmedEventPayload(
+    eventType: EventName | string,
+    agentId: AgentId,
+    channelId: ChannelId,
+    data: AgentHistoryTrimmedEventData,
+    options: BaseEventPayloadOptions = {}
+): AgentHistoryTrimmedEventPayload {
+    const validator = createStrictValidator('createAgentHistoryTrimmedEventPayload');
+    validator.assertIsObject(data, 'History trim data must be an object');
+    for (const field of ['maxHistory', 'droppedCount', 'keptCount'] as const) {
+        if (!Number.isInteger(data[field]) || data[field] < 0) {
+            throw new Error(`History trim ${field} must be a nonnegative integer`);
+        }
+    }
+    validator.assertIsArray(data.droppedMessageIds, 'History trim droppedMessageIds must be an array');
+    if (data.droppedCount === 0 || data.droppedCount !== data.droppedMessageIds.length) {
+        throw new Error('History trim droppedCount must match a nonempty list of droppedMessageIds');
+    }
+    for (const id of data.droppedMessageIds) {
+        validator.assertIsNonEmptyString(id, 'History trim dropped message IDs must be nonempty strings');
+    }
+    return createBaseEventPayload(eventType, agentId, channelId, data, options);
 }
 
 /**
@@ -944,6 +1089,19 @@ export function createSubscriptionEventPayload(
     options: { source?: string; eventId?: string; timestamp?: number; } = {}
 ): SubscriptionEventPayload {
     return createBaseEventPayload<SubscriptionEventData>(eventType, agentId, channelId, subscriptionData, options);
+}
+
+/** Publish orchestration configuration without inventing a task record. */
+export function createTaskOrchestrationConfigEventPayload(
+    eventType: EventName | string,
+    agentId: AgentId,
+    channelId: ChannelId,
+    config: TaskOrchestrationConfig,
+    options: BaseEventPayloadOptions = {}
+): TaskOrchestrationConfigEventPayload {
+    const validator = createStrictValidator('TaskOrchestrationConfigEventPayload');
+    validator.assertIsObject(config, 'Task orchestration configuration is required');
+    return createBaseEventPayload(eventType, agentId, channelId, { config: { ...config } }, options);
 }
 
 /**
@@ -1685,15 +1843,11 @@ export const createMcpToolCallPayload = (
     eventType: string,
     agentId: AgentId,
     channelId: ChannelId,
-    data: McpToolEventData & { callId: string; arguments: any }
-): McpToolCallEventPayload => ({
-    eventId: uuidv4(),
-    eventType,
-    timestamp: Date.now(),
-    agentId,
-    channelId,
+    data: McpToolCallEventPayload['data'],
+    options: BaseEventPayloadOptions = {}
+): McpToolCallEventPayload => createBaseEventPayload(eventType, agentId, channelId, data, {
     source: 'SYSTEM',
-    data,
+    ...options,
 });
 
 /**
@@ -1708,15 +1862,11 @@ export const createMcpToolResultPayload = (
     eventType: string,
     agentId: AgentId,
     channelId: ChannelId,
-    data: McpToolEventData & { callId: string; result: any }
-): McpToolResultEventPayload => ({
-    eventId: uuidv4(),
-    eventType,
-    timestamp: Date.now(),
-    agentId,
-    channelId,
+    data: McpToolResultEventPayload['data'],
+    options: BaseEventPayloadOptions = {}
+): McpToolResultEventPayload => createBaseEventPayload(eventType, agentId, channelId, data, {
     source: 'SYSTEM',
-    data,
+    ...options,
 });
 
 /**
@@ -1731,15 +1881,11 @@ export const createMcpToolErrorPayload = (
     eventType: string,
     agentId: AgentId,
     channelId: ChannelId,
-    data: McpToolEventData & { callId: string; error: any }
-): McpToolErrorEventPayload => ({
-    eventId: uuidv4(),
-    eventType,
-    timestamp: Date.now(),
-    agentId,
-    channelId,
+    data: McpToolErrorEventPayload['data'],
+    options: BaseEventPayloadOptions = {}
+): McpToolErrorEventPayload => createBaseEventPayload(eventType, agentId, channelId, data, {
     source: 'SYSTEM',
-    data,
+    ...options,
 });
 
 /**
@@ -1749,15 +1895,11 @@ export const createMcpToolCallLocalPayload = (
     eventType: string,
     agentId: AgentId,
     channelId: ChannelId,
-    data: McpToolEventData & { callId: string; arguments: any }
-): McpToolCallEventPayload => ({
-    eventId: uuidv4(),
-    eventType,
-    timestamp: Date.now(),
-    agentId,
-    channelId,
+    data: McpToolCallEventPayload['data'],
+    options: BaseEventPayloadOptions = {}
+): McpToolCallEventPayload => createBaseEventPayload(eventType, agentId, channelId, data, {
     source: 'SYSTEM',
-    data,
+    ...options,
 });
 
 /**
@@ -1767,15 +1909,11 @@ export const createMcpToolResultLocalPayload = (
     eventType: string,
     agentId: AgentId,
     channelId: ChannelId,
-    data: McpToolEventData & { callId: string; result: any; durationMs: number }
-): McpToolResultEventPayload => ({
-    eventId: uuidv4(),
-    eventType,
-    timestamp: Date.now(),
-    agentId,
-    channelId,
+    data: McpToolResultEventPayload['data'] & { durationMs: number },
+    options: BaseEventPayloadOptions = {}
+): McpToolResultEventPayload => createBaseEventPayload(eventType, agentId, channelId, data, {
     source: 'SYSTEM',
-    data,
+    ...options,
 });
 
 /**
@@ -1785,15 +1923,11 @@ export const createMcpToolErrorLocalPayload = (
     eventType: string,
     agentId: AgentId,
     channelId: ChannelId,
-    data: McpToolEventData & { callId: string; error: any }
-): McpToolErrorEventPayload => ({
-    eventId: uuidv4(),
-    eventType,
-    timestamp: Date.now(),
-    agentId,
-    channelId,
+    data: McpToolErrorEventPayload['data'],
+    options: BaseEventPayloadOptions = {}
+): McpToolErrorEventPayload => createBaseEventPayload(eventType, agentId, channelId, data, {
     source: 'SYSTEM',
-    data,
+    ...options,
 });
 
 /**
@@ -1804,15 +1938,11 @@ export const createMcpToolCallCompletedLocalPayload = (
     eventType: string,
     agentId: AgentId,
     channelId: ChannelId,
-    data: McpToolCallCompletedLocalData
-): McpToolCallCompletedLocalEventPayload => ({
-    eventId: uuidv4(),
-    eventType,
-    timestamp: Date.now(),
-    agentId,
-    channelId,
+    data: McpToolCallCompletedLocalData,
+    options: BaseEventPayloadOptions = {}
+): McpToolCallCompletedLocalEventPayload => createBaseEventPayload(eventType, agentId, channelId, data, {
     source: 'SYSTEM',
-    data,
+    ...options,
 });
 
 /**

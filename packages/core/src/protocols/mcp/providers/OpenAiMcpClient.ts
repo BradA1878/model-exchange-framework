@@ -22,6 +22,9 @@ import { v4 as uuidv4 } from 'uuid';
 import OpenAI from 'openai';
 import { Observable, of, throwError } from 'rxjs';
 import { BaseMcpClient } from './BaseMcpClient.js';
+import { ObservedSdkTransport } from './ObservedSdkTransport.js';
+import { buildBareContextMessages, parseNativeToolArguments } from './BareContextMessages.js';
+import { reportedTokenUsage } from './ProviderUsage.js';
 import { Logger } from '../../../utils/Logger.js';
 import { 
     McpMessage, 
@@ -71,6 +74,7 @@ function isToolResultContent(content: McpContent): content is McpToolResultConte
  * OpenAI implementation of the MCP client
  */
 export class OpenAiMcpClient extends BaseMcpClient {
+    private readonly observedTransport = new ObservedSdkTransport('openai');
     // OpenAI API client
     private apiClient: OpenAI | null = null;
     // Logger
@@ -81,6 +85,7 @@ export class OpenAiMcpClient extends BaseMcpClient {
      */
     protected async initializeProvider(): Promise<void> {
         this.apiClient = new OpenAI({
+            fetch: this.observedTransport.fetch,
             apiKey: this.config.apiKey,
             maxRetries: 3,
             timeout: 60000, // 60 seconds
@@ -312,7 +317,7 @@ export class OpenAiMcpClient extends BaseMcpClient {
      * @param response OpenAI response
      * @returns MCP response
      */
-    private convertToMcpResponse(response: OpenAI.ChatCompletion): McpApiResponse {
+    private convertToMcpResponse(response: OpenAI.ChatCompletion, strictToolArguments = false): McpApiResponse {
         const content: McpContent[] = [];
         
         // Process message content
@@ -332,7 +337,7 @@ export class OpenAiMcpClient extends BaseMcpClient {
                 message.tool_calls.forEach(toolCall => {
                     if (toolCall.type === 'function') {
                         try {
-                            const args = JSON.parse(toolCall.function.arguments);
+                            const args = strictToolArguments ? parseNativeToolArguments(toolCall.function.arguments) : JSON.parse(toolCall.function.arguments);
                             content.push({
                                 type: McpContentType.TOOL_USE,
                                 id: toolCall.id,
@@ -340,6 +345,7 @@ export class OpenAiMcpClient extends BaseMcpClient {
                                 input: args
                             });
                         } catch (error) {
+                            if (strictToolArguments) throw error;
                             this.logger.error(`Error parsing tool arguments: ${error}`);
                             // Still include the tool call even if parsing fails
                             content.push({
@@ -371,11 +377,7 @@ export class OpenAiMcpClient extends BaseMcpClient {
             content,
             stop_reason: response.choices[0]?.finish_reason || null,
             stop_sequence: null,
-            usage: {
-                input_tokens: response.usage?.prompt_tokens || 0,
-                output_tokens: response.usage?.completion_tokens || 0,
-                total_tokens: response.usage?.total_tokens || 0
-            }
+            usage: reportedTokenUsage('OpenAi', response.usage?.prompt_tokens, response.usage?.completion_tokens, response.usage?.total_tokens)
         };
     }
 
@@ -403,11 +405,7 @@ export class OpenAiMcpClient extends BaseMcpClient {
             content,
             stop_reason: response.stop_reason || null,
             stop_sequence: null,
-            usage: {
-                input_tokens: response.usage?.input_tokens || 0,
-                output_tokens: response.usage?.output_tokens || 0,
-                total_tokens: response.usage?.total_tokens || 0
-            }
+            usage: reportedTokenUsage('OpenAi', response.usage?.input_tokens, response.usage?.output_tokens, response.usage?.total_tokens)
         };
     }
 
@@ -492,10 +490,9 @@ export class OpenAiMcpClient extends BaseMcpClient {
             }
             
             // Make the API request using the OpenAI SDK
-            const response = await this.apiClient.chat.completions.create(params);
-            
-            // Convert the response to MCP format
-            return this.convertToMcpResponse(response);
+            return await this.observedTransport.run(options?.requestTrace, async () =>
+                this.convertToMcpResponse(await this.apiClient!.chat.completions.create(params))
+            );
         } catch (error) {
             // Handle OpenAI-specific errors
             if (error instanceof OpenAI.APIError) {
@@ -554,13 +551,14 @@ export class OpenAiMcpClient extends BaseMcpClient {
         if (options?.maxTokens) {
             params.max_tokens = options.maxTokens;
         }
+
+        if (options?.providerOptions) Object.assign(params, options.providerOptions);
         
         try {
             // Make the API request using the OpenAI SDK
-            const response = await this.apiClient.responses.create(params);
-            
-            // Convert to MCP response
-            return this.convertResponseToMcpResponse(response);
+            return await this.observedTransport.run(options?.requestTrace, async () =>
+                this.convertResponseToMcpResponse(await this.apiClient!.responses.create(params))
+            );
         } catch (error) {
             // Handle OpenAI-specific errors
             if (error instanceof OpenAI.APIError) {
@@ -637,8 +635,10 @@ export class OpenAiMcpClient extends BaseMcpClient {
         }
 
         // Make the API request
-        const response = await this.apiClient.chat.completions.create(params);
-        return this.convertToMcpResponse(response);
+        if (options?.providerOptions) Object.assign(params, options.providerOptions);
+        return this.observedTransport.run(options?.requestTrace, async () =>
+            this.convertToMcpResponse(await this.apiClient!.chat.completions.create(params), context.promptMode === 'bare')
+        );
     }
 
     /**
@@ -651,6 +651,7 @@ export class OpenAiMcpClient extends BaseMcpClient {
      * 4. Recent actions (if needed)
      */
     private structureMessagesFromContext(context: AgentContext): any[] {
+        if (context.promptMode === 'bare') return buildBareContextMessages(context);
         const messages: any[] = [];
 
         // 1. System message: Combine framework rules + agent identity

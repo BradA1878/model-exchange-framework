@@ -49,6 +49,7 @@ import { ChannelContextMessageOperations } from '@mxf-dev/core/services/ChannelC
 import { SystemLlmServiceManager } from '../socket/services/SystemLlmServiceManager';
 
 import { Logger } from '@mxf-dev/core/utils/Logger';
+import { publicChannelMessages } from '@mxf-dev/core/utils/ChannelHistoryVisibility';
 import { EventBus } from '@mxf-dev/core/events/EventBus';
 import { Events, ChannelActionTypes } from '@mxf-dev/core/events/EventNames';
 import { 
@@ -635,6 +636,7 @@ export class ChannelContextService implements IChannelContextService {
     ): Observable<ConversationTopic[]> => {
         // Get messages for the channel and extract topics using SystemLlmService
         return this.getMessages(channelId).pipe(
+            map(messages => publicChannelMessages(messages)),
             mergeMap(messages => {
                 if (messages.length === 0) {
                     return of([]);
@@ -703,7 +705,8 @@ export class ChannelContextService implements IChannelContextService {
         context: ChannelContextType, 
         messageCount: number
     ): Observable<string> {
-        return this.getMessages(channelId, messageCount).pipe(
+        return this.getMessages(channelId).pipe(
+            map(messages => publicChannelMessages(messages).slice(-messageCount)),
             mergeMap(messages => {
                 if (messages.length === 0) {
                     return of('No messages to summarize');

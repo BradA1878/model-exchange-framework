@@ -463,7 +463,7 @@ describe('MemoryService authoritative event bridge', () => {
                 label: "another channel's memory document",
                 scope: MemoryScope.CHANNEL,
                 id: OTHER_CHANNEL_ID,
-                error: /limited to the request channel/
+                error: /must match the request channel/
             },
             {
                 label: 'a relationship the requester is not part of',

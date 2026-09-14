@@ -162,6 +162,8 @@ describe('McpToolRegistry composition', () => {
 
         await coreTool.handler({}, {
             requestId: 'trusted-request',
+            llmRequestId: 'trusted-llm-request',
+            activationId: 'trusted-activation',
             agentId: 'trusted-agent',
             channelId: 'trusted-channel',
             authorization: {
@@ -170,6 +172,8 @@ describe('McpToolRegistry composition', () => {
             },
             data: {
                 requestId: 'forged-request',
+                llmRequestId: 'forged-llm-request',
+                activationId: 'forged-activation',
                 agentId: 'forged-agent',
                 channelId: 'forged-channel',
                 authorization: { keyId: 'forged-key', allowedTools: [] }
@@ -178,6 +182,8 @@ describe('McpToolRegistry composition', () => {
 
         expect(mockCoreHandler).toHaveBeenCalledWith({}, expect.objectContaining({
             requestId: 'trusted-request',
+            llmRequestId: 'trusted-llm-request',
+            activationId: 'trusted-activation',
             agentId: 'trusted-agent',
             channelId: 'trusted-channel',
             authorization: {
@@ -340,6 +346,7 @@ describe('McpToolRegistry composition', () => {
                 handler
             }
         ]));
+        registry.registerChannelToolPolicyReader(channelId => channelId === 'chan-alpha' ? ['alpha_provider_tool'] : undefined);
         const listHandler = mockEventHandlers.get(Events.Mcp.TOOL_LIST);
         expect(listHandler).toBeDefined();
 

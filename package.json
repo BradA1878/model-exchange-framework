@@ -1,6 +1,6 @@
 {
   "name": "model-exchange-framework",
-  "version": "3.2.4",
+  "version": "3.2.5",
   "description": "Model Exchange Framework (MXF): Multi-agent AI orchestration framework with advanced optimization",
   "private": true,
   "workspaces": [
@@ -88,7 +88,8 @@
     "sync-public": "bash sync-to-public.sh",
     "migrate:muls": "bun run src/migrations/2026.01.MULS.ts",
     "migrate:channel-key-hashing": "bun run src/migrations/2026.07.channel-key-hashing.ts",
-    "migrate:task-effectiveness-tenant-index": "bun run src/migrations/2026.08.task-effectiveness-tenant-index.ts"
+    "migrate:task-effectiveness-tenant-index": "bun run src/migrations/2026.08.task-effectiveness-tenant-index.ts",
+    "migrate:channel-history": "bun run src/migrations/2026.09.channel-history.ts"
   },
   "keywords": [
     "ai",
@@ -187,8 +188,5 @@
     "typescript": "^5.2.2",
     "vite": "^5.0.0",
     "wait-on": "^9.0.3"
-  },
-  "overrides": {
-    "mime": "1.6.0"
   }
 }

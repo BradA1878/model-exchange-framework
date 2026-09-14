@@ -7,6 +7,7 @@
 import { Subscription } from 'rxjs';
 import { EventBus } from '@mxf-dev/core/events/EventBus';
 import { Events } from '@mxf-dev/core/events/EventNames';
+import type { McpToolHandlerContext } from '@mxf-dev/core/protocols/mcp/McpServerTypes';
 
 // ── Mock: EventBus.client ──
 // Follow the pattern from MxfChannelMonitor.unit.test.ts — track emitted events
@@ -178,6 +179,88 @@ describe('ClientToolExecutor Unit Tests', () => {
                     channelId: CHANNEL_ID,
                 })
             );
+        });
+
+        it('preserves correlation on local call, result, handler context and completion audit', async () => {
+            executor = new ClientToolExecutor(AGENT_ID, CHANNEL_ID, mockMxfService, true);
+            const handler = jest.fn().mockResolvedValue({ answer: 42 });
+            executor.registerExternalTool('trace_tool', handler, {}, 'Trace test');
+            const trace = { requestId: 'provider-attempt', activationId: 'activation-a' };
+            await expect(executor.executeLocally('trace_tool', { input: 1 }, CHANNEL_ID, trace))
+                .resolves.toEqual({ answer: 42 });
+
+            expect(emittedEvents.map(event => event.event)).toEqual([
+                Events.Mcp.TOOL_CALL_LOCAL, Events.Mcp.TOOL_RESULT_LOCAL
+            ]);
+            const callId = emittedEvents[0].payload.data.callId;
+            expect(callId).not.toBe(trace.requestId);
+            expect(handler).toHaveBeenCalledWith({ input: 1 }, expect.objectContaining({
+                requestId: callId, llmRequestId: trace.requestId, activationId: trace.activationId
+            }));
+            for (const { payload } of emittedEvents) {
+                expect(payload).toMatchObject({ ...trace, data: { callId } });
+            }
+            expect(mockMxfService.socketEmit).toHaveBeenCalledTimes(1);
+            const [event, payload] = mockMxfService.socketEmit.mock.calls[0];
+            expect(event).toBe(Events.Mcp.TOOL_CALL_COMPLETED_LOCAL);
+            expect(payload).toMatchObject(trace);
+            // Audit data retains its existing contract; trace belongs on the envelope.
+            expect(payload.data).toEqual({
+                callId, toolName: 'trace_tool', input: { input: 1 }, result: { answer: 42 },
+                durationMs: expect.any(Number), source: 'external-mcp', executedOn: 'client'
+            });
+        });
+
+        it('preserves the original failure and correlation without emitting completion', async () => {
+            executor = new ClientToolExecutor(AGENT_ID, CHANNEL_ID, mockMxfService, true);
+            const failure = new Error('local failure verbatim');
+            const handler = jest.fn().mockRejectedValue(failure);
+            executor.registerExternalTool('trace_tool', handler, {}, 'Trace test');
+            const trace = { requestId: 'provider-attempt', activationId: 'activation-a' };
+            await expect(executor.executeLocally('trace_tool', {}, CHANNEL_ID, trace)).rejects.toBe(failure);
+            expect(emittedEvents.map(event => event.event)).toEqual([
+                Events.Mcp.TOOL_CALL_LOCAL, Events.Mcp.TOOL_ERROR_LOCAL
+            ]);
+            const callId = emittedEvents[0].payload.data.callId;
+            expect(emittedEvents[1].payload).toMatchObject({
+                ...trace, data: { callId, error: 'local failure verbatim' }
+            });
+            expect(mockMxfService.socketEmit).not.toHaveBeenCalled();
+        });
+
+        it('keeps accepted correlation when the caller or tool changes its objects', async () => {
+            executor = new ClientToolExecutor(AGENT_ID, CHANNEL_ID, mockMxfService, true);
+            const trace = { requestId: 'provider-attempt', activationId: 'activation-a' };
+            executor.registerExternalTool('trace_tool', async (_input: unknown, context: McpToolHandlerContext): Promise<string> => {
+                trace.requestId = 'changed-by-caller';
+                trace.activationId = 'changed-by-caller';
+                context.requestId = 'changed-call-id';
+                context.llmRequestId = 'changed-by-handler';
+                context.activationId = 'changed-by-handler';
+                return 'ok';
+            }, {}, 'Trace test');
+            await executor.executeLocally('trace_tool', {}, CHANNEL_ID, trace);
+            const callId = emittedEvents[0].payload.data.callId;
+            for (const { payload } of emittedEvents) {
+                expect(payload).toMatchObject({
+                    requestId: 'provider-attempt', activationId: 'activation-a', data: { callId }
+                });
+            }
+            expect(mockMxfService.socketEmit.mock.calls[0][1]).toMatchObject({
+                requestId: 'provider-attempt', activationId: 'activation-a', data: { callId }
+            });
+        });
+
+        it('omits optional trace fields for existing three-argument callers', async () => {
+            executor = new ClientToolExecutor(AGENT_ID, CHANNEL_ID, mockMxfService, true);
+            executor.registerExternalTool('trace_tool', jest.fn().mockResolvedValue('ok'), {}, 'Trace test');
+            await executor.executeLocally('trace_tool', {}, CHANNEL_ID);
+            const payloads = [...emittedEvents.map(event => event.payload), mockMxfService.socketEmit.mock.calls[0][1]];
+            for (const payload of payloads) {
+                expect(payload).not.toHaveProperty('requestId');
+                expect(payload).not.toHaveProperty('activationId');
+                expect(payload.data.callId).toMatch(/^tool-local-/);
+            }
         });
 
         it('should emit TOOL_CALL_LOCAL event before execution', async () => {

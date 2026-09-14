@@ -34,7 +34,6 @@
 import { Socket } from 'socket.io';
 import logger from '@mxf-dev/core/utils/Logger';
 import { AuthEvents } from '@mxf-dev/core/events/EventNames';
-import { getNormalizedChannelName } from './utilityHandlers';
 import KeyAuthHelper from '../../utils/keyAuthHelper';
 import { Channel } from '@mxf-dev/core/models/channel';
 import { User } from '@mxf-dev/core/models/user';
@@ -403,9 +402,6 @@ const tryKeySocketAuthentication = async (socket: Socket, keyId: string, secretK
             return null;
         }
 
-        // Generate normalized room name if channel provided
-        const room = validation.channelId ? getNormalizedChannelName(validation.channelId) : null;
-
         // Store agent auth data
         socket.data = {
             agentId: agentId,
@@ -416,13 +412,12 @@ const tryKeySocketAuthentication = async (socket: Socket, keyId: string, secretK
                 : [...validation.allowedTools],
             credentialExpiresAt: validation.expiresAt?.getTime(),
             authType: 'key',
-            authenticated: true
+            authenticated: true,
+            connectionAdmitted: false
         };
 
-        // Add socket to room if channel provided
-        if (room) {
-            socket.join(room);
-        }
+        // Room admission belongs to completeSocketConnection, after channel
+        // membership and the operator filesystem have both been validated.
 
         return agentId;
 

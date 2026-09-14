@@ -1,6 +1,20 @@
 # Auto-Correction API Documentation
 
-The Auto-Correction API provides comprehensive functionality for automatic parameter correction, error recovery, and intelligent learning from validation failures. This system operates transparently during tool execution and can be managed through dedicated REST endpoints.
+Auto-correction can attempt parameter repairs after schema validation fails.
+
+## Operator control and execution audit
+
+`AUTO_CORRECTION_ENABLED` accepts exactly `true` or `false` and defaults to `true`.
+When `false`, tool validation returns its error without attempting correction or
+reading/writing correction patterns. The correction tools report it disabled and
+cannot re-enable it at runtime. Deterministic schema-driven type coercion remains
+enabled; disabling correction does not disable validation.
+
+Authorization and validation rejections create no `McpToolExecution` document.
+Accepted executor calls await the audit start and first terminal write; storage
+failures propagate instead of claiming an unaudited success. Cancellation records
+its terminal outcome but cannot undo an already-issued external side effect.
+See [server controls](../server-agent-controls.md) for deployment settings.
 
 ## Overview
 

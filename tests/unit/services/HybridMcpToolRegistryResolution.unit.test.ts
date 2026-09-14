@@ -34,7 +34,7 @@ jest.mock('@mxf-dev/core/utils/Logger', () => ({
     }
 }));
 
-import { of } from 'rxjs';
+import { firstValueFrom, isObservable, of } from 'rxjs';
 import {
     HybridMcpToolRegistry,
     namespaceExternalTool
@@ -82,6 +82,8 @@ interface StubExternalTool {
 
 interface ManagerStubState {
     tools: StubExternalTool[];
+    result: unknown;
+    executeToolOnServer: jest.Mock;
 }
 
 interface ManagerStubResult {
@@ -95,11 +97,17 @@ const okHandler = async (): Promise<McpToolHandlerResult> => ({
 
 /** Mutable stub standing in for ExternalMcpServerManager. */
 function makeManagerStub(initial: StubExternalTool[] = []): ManagerStubResult {
-    const state = { tools: initial };
+    const state: ManagerStubState = {
+        tools: initial,
+        result: { content: [{ type: 'text', text: 'ok' }] },
+        executeToolOnServer: jest.fn()
+    };
+    state.executeToolOnServer.mockImplementation(async (): Promise<unknown> => state.result);
     return {
         state,
         manager: {
-            getAllExternalTools: () => [...state.tools] as ExternalMcpTool[]
+            getAllExternalTools: () => [...state.tools] as ExternalMcpTool[],
+            executeToolOnServer: state.executeToolOnServer
         } as unknown as ExternalMcpServerManager
     };
 }
@@ -157,6 +165,76 @@ describe('HybridMcpToolRegistry external tool resolution', () => {
             await registries.pop()!.shutdown();
         }
         jest.clearAllMocks();
+    });
+
+    describe('native external result envelopes', () => {
+        const context = { requestId: 'call-1', agentId: 'agent-a', channelId: CHANNEL_ID };
+
+        const invoke = async (registry: HybridMcpToolRegistry): Promise<McpToolHandlerResult> => {
+            const tool = registry.resolveToolForChannel('read_file', CHANNEL_ID, context.agentId)!;
+            const handled = await tool.handler!({ path: '/shared/a.txt' }, context);
+            return isObservable(handled) ? firstValueFrom(handled) : handled;
+        };
+
+        it('preserves every block, error status, structured output, and extension without normalization', async () => {
+            const { registry, state } = makeRegistry([externalTool('read_file')]);
+            const native = {
+                content: [
+                    { type: 'text', text: 'Access denied: /private/a.txt', extension: 'untouched' },
+                    { type: 'text', text: 'Allowed roots: /shared', annotations: { audience: ['assistant'] } },
+                    { type: 'resource_link', name: 'roots', uri: 'file:///shared' }
+                ],
+                isError: true,
+                structuredContent: { denied: '/private/a.txt', roots: ['/shared'] },
+                _meta: { origin: 'filesystem' },
+                extension: { keep: true }
+            };
+            state.result = native;
+            const result = await invoke(registry);
+            expect(result).toBe(native);
+            expect(result).toEqual(native);
+            expect(state.executeToolOnServer).toHaveBeenCalledWith(
+                SERVER_ID, 'read_file', { path: '/shared/a.txt' }, 'agent-a', CHANNEL_ID
+            );
+        });
+
+        it('keeps multiple successful blocks and MIME values without inventing absent fields', async () => {
+            const { registry, state } = makeRegistry([externalTool('read_file')]);
+            const native = {
+                content: [
+                    { type: 'text', text: 'first' },
+                    { type: 'image', data: 'YWJj', mimeType: 'image/webp' },
+                    { type: 'audio', data: 'YWJj', mimeType: 'audio/wav' },
+                    { type: 'resource', resource: { uri: 'file:///shared/a.txt', text: 'last' } }
+                ],
+                isError: false
+            };
+            state.result = native;
+            expect(await invoke(registry)).toBe(native);
+            expect(native.content[3].resource).not.toHaveProperty('mimeType');
+        });
+
+        it('keeps a valid empty content array without manufacturing content or error status', async () => {
+            const { registry, state } = makeRegistry([externalTool('read_file')]);
+            const native = { content: [], structuredContent: { count: 0 } };
+            state.result = native;
+            const result = await invoke(registry);
+            expect(result).toBe(native);
+            expect(result).not.toHaveProperty('isError');
+        });
+
+        it.each([
+            null, 'text', {}, { structuredContent: { count: 0 } },
+            { content: { type: 'text', data: 'legacy object' } },
+            { content: [null] }, { content: [{ type: 'text', text: 5 }] },
+            { content: [{ type: 'image', data: 'YWJj' }] },
+            { content: [], isError: 'true' }, { content: [], structuredContent: [] }
+        ])('rejects malformed native result %# without wrapping or repairing it', async native => {
+            const { registry, state } = makeRegistry([externalTool('read_file')]);
+            state.result = native;
+            await expect(invoke(registry)).rejects.toThrow(/External tool read_file.*MCP result/);
+            expect(state.result).toBe(native);
+        });
     });
 
     describe('canonical names', () => {
@@ -546,7 +624,7 @@ describe('HybridMcpToolRegistry external tool resolution', () => {
     });
 
     describe('eviction logging', () => {
-        it('logs when a server\'s tools disappear from the registry', () => {
+        it.each([McpEvents.EXTERNAL_SERVER_STOP, McpEvents.EXTERNAL_SERVER_STOPPED])('removes unavailable tools immediately on %s', event => {
             const { registry, state } = makeRegistry([
                 externalTool('fetch_news'),
                 externalTool('submit_post')
@@ -558,7 +636,7 @@ describe('HybridMcpToolRegistry external tool resolution', () => {
 
             // The manager stops reporting the server's tools (production: record deleted)
             state.tools = [];
-            EventBus.server.emit(McpEvents.EXTERNAL_SERVER_STOPPED, serverEventPayload(McpEvents.EXTERNAL_SERVER_STOPPED));
+            EventBus.server.emit(event, serverEventPayload(event));
 
             const warned = logSpies.warn.mock.calls.map(c => String(c[0])).join('\n');
             expect(warned).toContain(SERVER_ID);

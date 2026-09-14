@@ -5,7 +5,7 @@ The MXF SDK uses a comprehensive event-driven architecture for real-time bidirec
 ## Overview
 
 The event system provides:
-- **Two listening modes**: Agent-level (multi-channel) and Channel-level (auto-filtered)
+- **Scoped listeners**: Agent instances filter by their channel and identity; channel monitors observe received channel traffic
 - **Public events whitelist**: Only safe, SDK-appropriate events are exposed
 - **Type-safe event handling**: Using the `Events` enum for all event names
 - Real-time message passing between agents
@@ -23,9 +23,11 @@ import type { MxfAgent } from '@mxf-dev/sdk';
 
 ## Event Listening Patterns
 
-### Agent-Level Events (Multi-Channel)
+### Agent-Level Events
 
-Listen to events across all channels the agent participates in:
+Listen within this agent's configured channel. Agent and MCP events belong to
+this agent; direct messages include it as sender or recipient. Use a channel
+monitor to observe the public events received by all connected agents in a channel.
 
 ```typescript
 agent.on(Events.Message.AGENT_MESSAGE, (payload) => {
@@ -89,6 +91,32 @@ monitor.on(Events.Task.COMPLETED, (payload) => {
 - Debugging and development tools
 
 ## Core Event Categories
+
+### Request and activation observation
+
+`LLM_REQUEST` is opt-in through `captureLlmRequests: true`. Its data contains
+`requestId`, `activationId`, `provider`, `model`, and the exact serialized JSON
+`body`. Each transport attempt gets a distinct request ID, including retries.
+Captures contain prompt and tool data; store them according to the application's
+data policy.
+
+`LLM_RESPONSE` retains string-valued `data`; its request and activation IDs are
+on the envelope. `LLM_REASONING`, `LLM_USAGE`, and tool call/result/error events
+carry the same envelope correlation. A tool's `data.callId` identifies that tool
+execution separately from the provider request. Local tool execution uses the
+existing LOCAL event family with the same correlation.
+
+Usage includes actual token counts, measured `latencyMs`, and, when reported,
+`providerRoute`, `costUsd`, `finishReason`, and `nativeFinishReason`. Missing
+provider facts are omitted. A completed response still reports supplied usage
+after cancellation, even though its content is discarded. Unsupported transport
+observation is documented in [bare agents](bare-agents.md).
+
+`ITERATION_LIMIT` ends a message activation with data
+`{activationId, maxIterations, trigger, messageId}`. It neither fails a task nor
+adds history text. `HISTORY_TRIMMED` reports
+`{maxHistory, droppedCount, droppedMessageIds, keptCount}` after the existing
+complete-block trimming algorithm removes messages.
 
 ### Agent Lifecycle Events
 

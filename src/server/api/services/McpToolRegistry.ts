@@ -32,8 +32,10 @@ import { Logger } from '@mxf-dev/core/utils/Logger';
 import {
     getToolAuthorizationNames,
     isAllowedByAgentPolicy,
+    isAllowedByChannelPolicy,
     isPrivilegedHostToolEnabled,
-    isPrivilegedNetworkToolEnabled
+    isPrivilegedNetworkToolEnabled,
+    type PrivilegedHostToolDescriptor
 } from '../../socket/services/ToolAuthorizationPolicy';
 import { McpToolDefinition, McpToolHandlerContext, McpToolHandlerResult } from '@mxf-dev/core/protocols/mcp/McpServerTypes';
 import { Events } from '@mxf-dev/core/events/EventNames';
@@ -50,7 +52,7 @@ const validate = createStrictValidator('McpToolRegistry');
  * Extended MCP Tool Definition for internal use
  * Includes additional fields not in the base interface
  */
-export interface ExtendedMcpToolDefinition extends McpToolDefinition {
+export interface ExtendedMcpToolDefinition extends McpToolDefinition, PrivilegedHostToolDescriptor {
     /** Provider ID that owns this tool */
     providerId?: string;
     /** Channel ID where the tool is available */
@@ -73,6 +75,7 @@ export interface ExternalToolProviderEntry extends Pick<
     scopeId?: string;
     canonicalName?: string;
     externalToolName?: string;
+    operatorAgentFilesystem?: boolean;
 }
 
 /**
@@ -95,6 +98,17 @@ export class McpToolRegistry {
     /** Detach the hybrid provider during service shutdown. */
     public clearExternalToolsProvider(): void {
         this.externalToolsProvider = null;
+    }
+
+    // Wired to the running socket service at bootstrap, without a singleton cycle.
+    private channelToolPolicyReader: ((channelId: string) => readonly string[] | undefined) | null = null;
+
+    public registerChannelToolPolicyReader(reader: (channelId: string) => readonly string[] | undefined): void {
+        this.channelToolPolicyReader = reader;
+    }
+
+    public clearChannelToolPolicyReader(): void {
+        this.channelToolPolicyReader = null;
     }
 
     private static instance: McpToolRegistry | null = null;
@@ -213,6 +227,8 @@ export class McpToolRegistry {
                                 agentId: context.agentId,
                                 channelId: context.channelId,
                                 requestId: context.requestId,
+                                llmRequestId: context.llmRequestId,
+                                activationId: context.activationId,
                                 authorization: context.authorization
                             };
                             
@@ -450,14 +466,22 @@ export class McpToolRegistry {
                     return;
                 }
 
-                this.listToolsForChannel(payload.channelId, filter, payload.agentId).subscribe({
-                    next: (tools) => {
-                        const authorizedTools = tools.filter(tool => {
+                this.listToolsForChannel(payload.channelId, filter, payload.agentId).pipe(
+                    map(tools => {
+                        const channelPolicy = this.channelToolPolicyReader?.(payload.channelId);
+                        if (channelPolicy === undefined) {
+                            throw new Error(`Tool policy for channel '${payload.channelId}' has not been loaded`);
+                        }
+                        return tools.filter(tool => {
                             const names = getToolAuthorizationNames(tool);
                             return isAllowedByAgentPolicy(names, authorization.allowedTools) &&
-                                isPrivilegedHostToolEnabled(names) &&
+                                isAllowedByChannelPolicy(names, channelPolicy) &&
+                                isPrivilegedHostToolEnabled(names, tool, payload.agentId) &&
                                 isPrivilegedNetworkToolEnabled(names);
                         });
+                    })
+                ).subscribe({
+                    next: (authorizedTools) => {
                         EventBus.server.emit(Events.Mcp.TOOL_LIST_RESULT, createBaseEventPayload(
                             Events.Mcp.TOOL_LIST_RESULT,
                             payload.agentId, // Use actual agentId from request
@@ -899,6 +923,11 @@ export class McpToolRegistry {
                     externalScope: tool.scope,
                     externalScopeId: tool.scopeId
                 },
+                isExternal: true,
+                operatorAgentFilesystem: tool.operatorAgentFilesystem === true,
+                source: tool.source,
+                scope: tool.scope,
+                scopeId: tool.scopeId,
                 providerId: `external-mcp:${tool.source}`,
                 channelId: tool.scope === 'global' ? 'global' : tool.scopeId
             });

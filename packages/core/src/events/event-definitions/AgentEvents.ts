@@ -25,7 +25,13 @@ import type {
     AgentRegistrationEventData as AgentRegistrationEventBase,
     AgentConnectionEventData as AgentConnectionEventBase,
     AgentJoinEventData as AgentJoinEventBase,
-    AgentLeaveEventData as AgentLeaveEventBase
+    AgentLeaveEventData as AgentLeaveEventBase,
+    AgentHistoryTrimmedEventData,
+    AgentIterationLimitEventData,
+    LlmRequestEventData,
+    LlmReasoningEventData,
+    LlmStreamChunkEventData,
+    LlmUsageEventData
 } from '../../schemas/EventPayloadSchema.js';
 
 /**
@@ -88,12 +94,13 @@ export const AgentEvents = {
     CONTEXT_UPDATE: 'agent:context_update', // Agent context update
     
     // LLM response events
-    LLM_RESPONSE: 'agent:llm_response', // Agent LLM response for monitoring
-    LLM_REASONING: 'agent:llm_reasoning', // Agent LLM reasoning tokens for transparency
+    LLM_RESPONSE: 'agent:llm_response' as const, // Agent LLM response for monitoring
+    LLM_REQUEST: 'agent:llm_request' as const, // Exact provider HTTP request observation (opt-in)
+    LLM_REASONING: 'agent:llm_reasoning' as const, // Agent LLM reasoning tokens for transparency
     LLM_REASONING_PARSED: 'agent:llm_reasoning:parsed', // Reasoning text parsed for tool intentions
     LLM_REASONING_TOOLS_SYNTHESIZED: 'agent:llm_reasoning:tools_synthesized', // Tool calls synthesized from reasoning
-    LLM_USAGE: 'agent:llm_usage', // Agent LLM token usage for cost tracking
-    LLM_STREAM_CHUNK: 'agent:llm_stream_chunk', // Partial streaming token chunk from LLM for live TUI preview
+    LLM_USAGE: 'agent:llm_usage' as const, // Agent LLM token usage for cost tracking
+    LLM_STREAM_CHUNK: 'agent:llm_stream_chunk' as const, // Partial streaming token chunk from LLM for live TUI preview
     
     // Task management events
     TASK_ASSIGNED: 'agent:task_assigned', // Agent has been assigned a task
@@ -129,6 +136,8 @@ export const AgentEvents = {
     // Context window management events
     CONTEXT_COMPACT_NEEDED: 'agent:context_compact:needed', // Agent approaching context window limit — trigger compaction
     CONTEXT_COMPACTED: 'agent:context_compacted', // Agent conversation history was compacted
+    ITERATION_LIMIT: 'agent:iteration_limit' as const, // Message activation reached its configured limit
+    HISTORY_TRIMMED: 'agent:history_trimmed' as const, // Working history dropped complete conversation blocks
 };
 
 /**
@@ -147,9 +156,13 @@ export interface AgentPayloads {
     'agent:status:change': { agentId: string, status: string };
     'agent:error': { agentId: string, error: string };
     'agent:message': AgentMessageEvent;
-    'agent:llm_response': { agentId: string, response: string, timestamp: number };
-    'agent:llm_stream_chunk': { agentId: string, chunk: string, timestamp: number };
-    'agent:llm_usage': { agentId: string, model: string, inputTokens: number, outputTokens: number, totalTokens: number, timestamp: number };
+    'agent:llm_response': string;
+    'agent:llm_request': LlmRequestEventData;
+    'agent:iteration_limit': AgentIterationLimitEventData;
+    'agent:history_trimmed': AgentHistoryTrimmedEventData;
+    'agent:llm_reasoning': LlmReasoningEventData;
+    'agent:llm_stream_chunk': LlmStreamChunkEventData;
+    'agent:llm_usage': LlmUsageEventData;
     'agent:llm_reasoning:parsed': { agentId: string, toolIntentions: any[], parseMethod: string, timestamp: number };
     'agent:llm_reasoning:tools_synthesized': { agentId: string, toolCalls: any[], timestamp: number };
     

@@ -49,7 +49,8 @@ import {
     isAllowedByAgentPolicy,
     isAllowedByChannelPolicy,
     isPrivilegedHostToolEnabled,
-    isPrivilegedNetworkToolEnabled
+    isPrivilegedNetworkToolEnabled,
+    type PrivilegedHostToolDescriptor
 } from './ToolAuthorizationPolicy';
 
 /**
@@ -244,6 +245,7 @@ export class McpService {
         // Check if hybrid registry is available for external tools
         const hybridRegistry = getHybridMcpToolRegistry();
         let allTools: SocketMcpTool[] = [];
+        const hostDescriptors = new Map<string, PrivilegedHostToolDescriptor>();
 
         if (hybridRegistry) {
             // When channelId is provided, use getAgentFacingToolsForChannel() to
@@ -257,6 +259,10 @@ export class McpService {
             const hybridTools = filter?.channelId
                 ? hybridRegistry.getAgentFacingToolsForChannel(filter.channelId, filter.agentId)
                 : hybridRegistry.getAllToolsSnapshot();
+
+            for (const tool of hybridTools) {
+                hostDescriptors.set(tool.name, tool);
+            }
 
             // Convert hybrid tools to socket format, preserving scope metadata
             allTools = hybridTools.map((tool: any) => ({
@@ -391,7 +397,9 @@ export class McpService {
         }
 
         allTools = allTools.filter(tool =>
-            isPrivilegedHostToolEnabled(getToolAuthorizationNames(tool)) &&
+            isPrivilegedHostToolEnabled(
+                getToolAuthorizationNames(tool), hostDescriptors.get(tool.name), filter?.agentId
+            ) &&
             isPrivilegedNetworkToolEnabled(getToolAuthorizationNames(tool))
         );
 

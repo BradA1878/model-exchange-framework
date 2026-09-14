@@ -84,6 +84,7 @@ const buildBareService = (ioSockets: Map<string, TestSocket> = new Map()): Socke
         io: { sockets: { sockets: ioSockets } },
         agents: new Map(),
         socketIds: new Map(),
+        agentSocketContexts: new Map(),
         sockets: new Map(),
         heartbeats: new Map(),
         credentialExpiryTimers: new Map()

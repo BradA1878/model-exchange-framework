@@ -13,8 +13,9 @@ import { MemoryService } from '@mxf-dev/core/services/MemoryService';
 import { Logger } from '@mxf-dev/core/utils/Logger';
 import {
     agentMemoryWriteTool,
-    channelMemoryWriteTool
+    channelMemoryWriteTool, channelMemoryReadTool, channelMessagesReadTool, channelContextReadTool
 } from '../../../src/server/mcp/tools/ContextMemoryTools';
+import { ChannelContextService } from '../../../src/server/services/ChannelContextService';
 
 const CHANNEL_ID = 'tool-atomic-channel';
 const context: McpToolHandlerContext = {
@@ -93,5 +94,54 @@ describe('ContextMemoryTools atomic field boundary', () => {
             MemoryService.getInstance().getChannelMemory(CHANNEL_ID)
         );
         expect(memory.sharedState).toEqual({ theme: 'dark' });
+    });
+
+    it('filters every history read before pagination and keeps cached metadata intact', async () => {
+        const previous = process.env.MXF_CHANNEL_HISTORY_DM_VISIBILITY;
+        process.env.MXF_CHANNEL_HISTORY_DM_VISIBILITY = 'parties';
+        const messages = [
+            { messageId: 'dm', senderId: 'a', timestamp: 1, content: 'private', metadata: { originalMessageType: 'agent-to-agent', targetAgentId: 'b' } },
+            { messageId: 'public-1', senderId: 'a', timestamp: 2, content: 'public', metadata: { tag: 'keep' } },
+            { messageId: 'public-2', senderId: 'b', timestamp: 3, content: 'public', metadata: { tag: 'keep' } }
+        ];
+        const getMessages = jest.fn(() => of(messages));
+        const getContextHistory = jest.fn(() => of([{ data: { secret: 'private' } }]));
+        (ChannelContextService.getInstance as jest.Mock).mockReturnValue({
+            getMessages, getContextHistory,
+            getContext: jest.fn(() => of({ name: 'Room', conversationSummary: 'private', metadata: { secret: 'private' }, messageCount: 3 }))
+        });
+        try {
+            const result = await channelMessagesReadTool.handler({ limit: 1, offset: 1, includeMetadata: false }, context);
+            expect(result.content).toEqual(expect.objectContaining({ data: expect.objectContaining({
+                totalCount: 2, messages: [{ messageId: 'public-2', senderId: 'b', timestamp: 3, content: 'public' }]
+            }) }));
+            expect(getMessages).toHaveBeenCalledWith(CHANNEL_ID);
+            expect(messages[2].metadata).toEqual({ tag: 'keep' });
+            const own = await channelMessagesReadTool.handler({}, { ...context, agentId: 'a' });
+            expect(own.content).toEqual(expect.objectContaining({ data: expect.objectContaining({ totalCount: 3 }) }));
+            const channelContext = await channelContextReadTool.handler({ includeHistory: true }, context);
+            expect(channelContext.content).toEqual(expect.objectContaining({ data: {
+                channelId: CHANNEL_ID, context: { name: 'Room' }, retrievedAt: expect.any(Number)
+            } }));
+            expect(getContextHistory).not.toHaveBeenCalled();
+
+            const service = MemoryService.getInstance();
+            const stored = await firstValueFrom(service.getChannelMemory(CHANNEL_ID));
+            jest.spyOn(service, 'getChannelMemory').mockReturnValue(of({
+                ...stored, conversationHistory: messages,
+                sharedState: { context: { name: 'Room', conversationSummary: 'private' } },
+                customData: { contextHistory: [{ data: 'private' }] }
+            }));
+            const whole = await channelMemoryReadTool.handler({}, context);
+            expect(JSON.stringify(whole)).not.toContain('private');
+            expect(whole.content).toEqual(expect.objectContaining({ data: expect.objectContaining({
+                memory: expect.objectContaining({ conversationHistory: [messages[1], messages[2]] })
+            }) }));
+            const keyed = await channelMemoryReadTool.handler({ key: 'context' }, context);
+            expect(keyed.content).toEqual(expect.objectContaining({ data: expect.objectContaining({ memory: { name: 'Room' } }) }));
+        } finally {
+            if (previous === undefined) delete process.env.MXF_CHANNEL_HISTORY_DM_VISIBILITY;
+            else process.env.MXF_CHANNEL_HISTORY_DM_VISIBILITY = previous;
+        }
     });
 });

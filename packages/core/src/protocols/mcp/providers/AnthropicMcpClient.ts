@@ -31,6 +31,9 @@
 import { Logger } from '../../../utils/Logger.js';
 import { v4 as uuidv4 } from 'uuid';
 import { BaseMcpClient } from './BaseMcpClient.js';
+import { observeMcpRequest } from '../RequestObservation.js';
+import { buildBareContextMessages, parseNativeToolArguments, validateNativeToolInput } from './BareContextMessages.js';
+import { reportedTokenUsage } from './ProviderUsage.js';
 import { 
     McpMessage, 
     McpTool, 
@@ -86,7 +89,7 @@ interface AnthropicResponse {
     model: string;
     stop_reason: string | null;
     stop_sequence: string | null;
-    usage: {
+    usage?: {
         input_tokens: number;
         output_tokens: number;
     };
@@ -273,7 +276,7 @@ export class AnthropicMcpClient extends BaseMcpClient {
      * @param response Anthropic response
      * @returns MCP response
      */
-    private convertToMcpResponse(response: AnthropicResponse): McpApiResponse {
+    private convertToMcpResponse(response: AnthropicResponse, strictToolArguments = false): McpApiResponse {
         // Convert Anthropic content blocks to MCP content
         const content: McpContent[] = response.content.map(item => {
             switch (item.type) {
@@ -296,7 +299,7 @@ export class AnthropicMcpClient extends BaseMcpClient {
                         type: McpContentType.TOOL_USE,
                         id: item.id || uuidv4(),
                         name: item.name || '',
-                        input: item.input || {}
+                        input: strictToolArguments ? validateNativeToolInput(item.input) : item.input || {}
                     };
                 case 'tool_result':
                     // Convert nested content to only include text and image content types
@@ -341,7 +344,7 @@ export class AnthropicMcpClient extends BaseMcpClient {
         });
         
         // Ensure total_tokens is calculated
-        const totalTokens = (response.usage.input_tokens || 0) + (response.usage.output_tokens || 0);
+        const totalTokens = response.usage ? response.usage.input_tokens + response.usage.output_tokens : undefined;
         
         // Create MCP response
         return {
@@ -352,11 +355,7 @@ export class AnthropicMcpClient extends BaseMcpClient {
             model: response.model,
             stop_reason: response.stop_reason || null,
             stop_sequence: response.stop_sequence || null,
-            usage: {
-                input_tokens: response.usage.input_tokens || 0,
-                output_tokens: response.usage.output_tokens || 0,
-                total_tokens: totalTokens
-            }
+            usage: reportedTokenUsage('Anthropic', response.usage?.input_tokens, response.usage?.output_tokens, totalTokens)
         };
     }
     
@@ -406,7 +405,9 @@ export class AnthropicMcpClient extends BaseMcpClient {
                 Object.assign(requestBody, options.providerOptions);
             }
             
-            // Make the API request
+            const serializedBody = JSON.stringify(requestBody);
+            const observation = observeMcpRequest('anthropic', requestBody.model, serializedBody, options?.requestTrace);
+            // The capture receives a copy; send the serialized string unchanged.
             const response = await fetch(`${this.baseUrl}/messages`, {
                 method: 'POST',
                 headers: {
@@ -414,7 +415,7 @@ export class AnthropicMcpClient extends BaseMcpClient {
                     'x-api-key': this.config.apiKey,
                     'anthropic-version': this.apiVersion
                 },
-                body: JSON.stringify(requestBody)
+                body: serializedBody
             });
             
             // Check for errors
@@ -431,7 +432,7 @@ export class AnthropicMcpClient extends BaseMcpClient {
             
             // Parse and convert response
             const anthropicResponse = await response.json() as AnthropicResponse;
-            return this.convertToMcpResponse(anthropicResponse);
+            return { ...this.convertToMcpResponse(anthropicResponse), request: observation.complete({ finishReason: anthropicResponse.stop_reason }) };
         } catch (error) {
             throw new Error(`Error sending message to Anthropic: ${error instanceof Error ? error.message : String(error)}`);
         }
@@ -497,7 +498,10 @@ export class AnthropicMcpClient extends BaseMcpClient {
             requestBody.tools = anthropicTools;
         }
 
-        // Make the API request
+        if (options?.providerOptions) Object.assign(requestBody, options.providerOptions);
+        const serializedBody = JSON.stringify(requestBody);
+        const observation = observeMcpRequest('anthropic', requestBody.model, serializedBody, options?.requestTrace);
+        // The capture receives a copy; send the serialized string unchanged.
         const response = await fetch(`${this.baseUrl}/messages`, {
             method: 'POST',
             headers: {
@@ -505,7 +509,7 @@ export class AnthropicMcpClient extends BaseMcpClient {
                 'x-api-key': this.config.apiKey,
                 'anthropic-version': this.apiVersion
             },
-            body: JSON.stringify(requestBody)
+            body: serializedBody
         });
 
         // Check for errors
@@ -522,7 +526,7 @@ export class AnthropicMcpClient extends BaseMcpClient {
 
         // Parse and convert response
         const anthropicResponse = await response.json() as AnthropicResponse;
-        return this.convertToMcpResponse(anthropicResponse);
+        return { ...this.convertToMcpResponse(anthropicResponse, context.promptMode === 'bare'), request: observation.complete({ finishReason: anthropicResponse.stop_reason }) };
     }
 
     /**
@@ -535,6 +539,29 @@ export class AnthropicMcpClient extends BaseMcpClient {
      * 3. Recent actions (if needed)
      */
     private structureMessagesFromContext(context: AgentContext): { systemPrompt: string; messages: AnthropicMessage[] } {
+        if (context.promptMode === 'bare') {
+            const messages: AnthropicMessage[] = [];
+            for (const message of buildBareContextMessages(context).slice(1)) {
+                const content: AnthropicContentBlock[] = [];
+                if (message.role === 'tool') {
+                    if (!message.tool_call_id) throw new Error('Anthropic tool results require a tool call ID');
+                    content.push({ type: 'tool_result', tool_use_id: message.tool_call_id, content: [{ type: 'text', text: message.content }] });
+                } else {
+                    if (message.content || !message.tool_calls?.length) content.push({ type: 'text', text: message.content });
+                    for (const call of message.tool_calls ?? []) {
+                        content.push({ type: 'tool_use', id: call.id, name: call.function.name, input: parseNativeToolArguments(call.function.arguments) });
+                    }
+                }
+                // Parallel calls require their results in the same following user message.
+                const previous = messages[messages.length - 1];
+                if (message.role === 'tool' && previous?.role === 'user' && previous.content.every(block => block.type === 'tool_result')) {
+                    previous.content.push(...content);
+                } else {
+                    messages.push({ role: message.role === 'assistant' ? 'assistant' : 'user', content });
+                }
+            }
+            return { systemPrompt: context.systemPrompt, messages };
+        }
         // Build system prompt
         const systemContent = [
             context.systemPrompt,

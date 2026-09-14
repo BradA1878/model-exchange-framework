@@ -39,6 +39,26 @@ import { v4 as uuidv4 } from 'uuid';
 import { MxpMiddleware } from '@mxf-dev/core/middleware/MxpMiddleware';
 import { isMxpMessage } from '@mxf-dev/core/schemas/MxpProtocolSchemas';
 import { SYSTEMLLM_CHALLENGE_MESSAGE_TYPE } from '@mxf-dev/core/types/SystemLlmStanceTypes';
+import type { AgentConfig } from '@mxf-dev/core/interfaces/AgentInterfaces';
+
+export interface MessageActivationTrigger {
+    trigger: 'channel_message' | 'agent_message';
+    messageId: string;
+}
+
+/** Deferred decoding begins only after the activation owner reserves the turn. */
+export type MessageActivationInput = ConversationMessageInput | (() => Promise<ConversationMessageInput>);
+
+type EventHandlerConfig = Partial<Pick<AgentConfig, 'channelId' | 'promptMode' | 'activation'>>;
+
+interface IncomingMessageData {
+    senderId: string;
+    receiverId?: string;
+    messageId?: string;
+    content: unknown;
+    metadata?: Record<string, unknown>;
+    context?: Record<string, unknown>;
+}
 
 /** The parts of a CHANNEL_MESSAGE carrying a SystemLLM challenge that the handler reads. */
 interface SystemLlmChallengeEventData {
@@ -56,6 +76,8 @@ interface SystemLlmChallengeEventData {
 // to maintain proper client/server architectural boundaries
 
 export interface EventHandlerCallbacks {
+    /** Reserve message activation synchronously; the owner then stores the message and drains turns. */
+    acceptMessage?: (trigger: MessageActivationTrigger, message: MessageActivationInput) => Promise<void>;
     addConversationMessage: (message: ConversationMessageInput) => Promise<void>;
     provideImmediateToolFeedback: (fromAgentId: string, toolName: string, toolData: any, toolType: string) => Promise<string>;
     generateResponse: (prompt: string, tools?: any[], taskPrompt?: string) => Promise<string>;
@@ -83,7 +105,10 @@ export class MxfEventHandlerService {
     private readonly MAX_CONCURRENT_EVENTS = 10; // Max concurrent events to consider a race condition (increased from 3)
     private readonly RACE_DETECTION_WINDOW_MS = 1000; // Detect race conditions within 500ms (reduced from 1000ms)
 
-    constructor(agentId: string, callbacks: EventHandlerCallbacks) {
+    constructor(agentId: string, callbacks: EventHandlerCallbacks, private readonly executionConfig: EventHandlerConfig = {}) {
+        if (executionConfig.activation === 'message' && typeof callbacks.acceptMessage !== 'function') {
+            throw new Error('Message activation requires an acceptMessage callback');
+        }
         this.agentId = agentId;
         this.callbacks = callbacks;
         this.logger = new Logger('debug', `EventHandler:${agentId}`, 'client');
@@ -95,6 +120,7 @@ export class MxfEventHandlerService {
      * Initialize all event handlers for the agent
      */
     public initializeEventHandlers(): void {
+        if (this.eventSubscriptions.length > 0) return;
 
         // Handle control loop events
         this.subscribeToEvent(ControlLoopEvents.OBSERVATION, this.handleObservationEvent.bind(this));
@@ -139,8 +165,88 @@ export class MxfEventHandlerService {
      * Subscribe to an event and track the subscription for cleanup
      */
     private subscribeToEvent(eventName: string, handler: (payload: any) => void): void {
-        const subscription = EventBus.client.on(eventName, handler);
+        const subscription = EventBus.client.on(eventName, (payload): void => {
+            if (this.ownsChannel(payload)) return handler(payload);
+        });
         this.eventSubscriptions.push(subscription);
+    }
+
+    /** Shared EventBus traffic can contain messages from other connected channels. */
+    private ownsChannel(payload: BaseEventPayload<unknown>): boolean {
+        return this.executionConfig.channelId === undefined || payload?.channelId === this.executionConfig.channelId;
+    }
+
+    private isFrameworkMessage(data: IncomingMessageData): boolean {
+        const sources = ['SystemLlmService', 'TaskService', 'MemoryService'];
+        return data.senderId === 'system' || data.context?.systemGenerated === true ||
+            !!data.metadata?.taskEvent ||
+            (typeof data.context?.source === 'string' && sources.includes(data.context.source)) ||
+            (typeof data.metadata?.source === 'string' && sources.includes(data.metadata.source)) ||
+            data.context?.messageType === SYSTEMLLM_CHALLENGE_MESSAGE_TYPE;
+    }
+
+    /** Different delivery envelopes may still carry the same canonical message. */
+    private rememberIncomingMessage(data: IncomingMessageData, payload: BaseEventPayload<unknown>): string | null {
+        const canonicalId = data.metadata?.messageId ?? data.messageId;
+        const validCanonicalId = typeof canonicalId === 'string' && canonicalId.trim().length > 0;
+        if (!validCanonicalId && this.executionConfig.activation === 'message') {
+            throw new Error('Message activation requires a canonical messageId');
+        }
+        // Legacy task-mode events may only have their delivery envelope ID.
+        const messageId = validCanonicalId ? canonicalId : payload.eventId;
+        if (messageId && this.processedMessages.has(messageId)) return null;
+        if (messageId) {
+            this.processedMessages.add(messageId);
+            if (this.processedMessages.size > 100) {
+                this.processedMessages.delete(this.processedMessages.values().next().value!);
+            }
+        }
+        return messageId;
+    }
+
+    /** Unwrap the standard content envelope, preserving application objects verbatim. */
+    private rawMessageContent(data: IncomingMessageData): string {
+        const content = data.content;
+        const raw = content !== null && typeof content === 'object' && 'format' in content && 'data' in content
+            ? content.data : content;
+        if (typeof raw === 'string') return raw;
+        const serialized = JSON.stringify(raw);
+        if (serialized === undefined) throw new Error('Incoming message content must be serializable');
+        return serialized;
+    }
+
+    /** No await precedes this callback: MxfAgent reserves ownership before persistence yields. */
+    private acceptMessageActivation(data: IncomingMessageData, payload: BaseEventPayload<unknown>, trigger: MessageActivationTrigger): Promise<void> {
+        if (this.executionConfig.promptMode !== 'bare' && isMxpMessage(data.content)) {
+            const prepare = async (): Promise<ConversationMessageInput> => {
+                // A rejected decode remains a failed preparation; encrypted data
+                // must not be stored as though it were readable conversation.
+                const processed = await MxpMiddleware.processIncoming(data.content);
+                const capabilities = this.callbacks.getAgentCapabilities?.() ?? [];
+                const mxpCapable = capabilities.includes('mxp-protocol') || capabilities.includes('calculation');
+                const processedData = {
+                    ...data,
+                    content: isMxpMessage(processed) && !mxpCapable
+                        ? MxpMiddleware.mxpToNaturalLanguage(processed) : processed
+                };
+                return this.createActivationMessage(processedData, payload, trigger);
+            };
+            return this.callbacks.acceptMessage!(trigger, prepare);
+        }
+        return this.callbacks.acceptMessage!(trigger, this.createActivationMessage(data, payload, trigger));
+    }
+
+    private createActivationMessage(data: IncomingMessageData, payload: BaseEventPayload<unknown>, trigger: MessageActivationTrigger): ConversationMessageInput {
+        const raw = this.rawMessageContent(data);
+        const bare = this.executionConfig.promptMode === 'bare';
+        const toolName = typeof data.metadata?.toolName === 'string' ? data.metadata.toolName :
+            trigger.trigger === 'agent_message' ? 'messaging_send' : 'messaging_broadcast';
+        const content = bare || trigger.trigger === 'agent_message' ? raw :
+            `🎯 CHANNEL NOTIFICATION: Agent "${data.senderId}" sent a message to channel "${payload.channelId}" using "${toolName}": "${raw}". Please review this channel message and decide how to respond or proceed.`;
+        return {
+            role: 'user', content,
+            metadata: { fromAgentId: data.senderId, originalMessageId: trigger.messageId }
+        };
     }
 
     /**
@@ -195,6 +301,11 @@ export class MxfEventHandlerService {
 
             const eventData = payload.data;
             const eventType = payload.eventType || 'unknown';
+            if (this.executionConfig.promptMode === 'bare' &&
+                eventType !== Events.Message.AGENT_MESSAGE && eventType !== Events.Message.CHANNEL_MESSAGE) {
+                this.logger.debug(`Bare prompt mode ignores framework event ${eventType}`);
+                return;
+            }
             
             // Validate event ordering for race condition detection
             const sourceAgentId = payload.agentId || 'unknown';
@@ -251,6 +362,7 @@ export class MxfEventHandlerService {
      * Handle agent message events with immediate feedback
      */
     private async handleAgentMessage(eventData: any, payload: BaseEventPayload<any>): Promise<void> {
+        if (!this.ownsChannel(payload)) return;
         // The manager owns this exact task object. Decoding or persistence can
         // outlast it; the resumed event must not start work for its replacement.
         const acceptedTask = this.callbacks.getCurrentTask();
@@ -259,22 +371,13 @@ export class MxfEventHandlerService {
             return; // Not targeted to this agent
         }
         
-        // Create a unique message ID for deduplication
-        const messageId = eventData.messageId || `${eventData.senderId}-${eventData.timestamp}-${JSON.stringify(eventData.content).substring(0, 50)}`;
-        
-        // Check if we've already processed this message
-        if (this.processedMessages.has(messageId)) {
-            //;
-            return;
-        }
-        
-        // Mark this message as processed
-        this.processedMessages.add(messageId);
-        
-        // Clean up old processed messages (keep only last 100)
-        if (this.processedMessages.size > 100) {
-            const messagesToDelete = Array.from(this.processedMessages).slice(0, this.processedMessages.size - 100);
-            messagesToDelete.forEach(id => this.processedMessages.delete(id));
+        const messageActivation = this.executionConfig.activation === 'message';
+        const bare = this.executionConfig.promptMode === 'bare';
+        if ((messageActivation || bare) && (eventData.senderId === this.agentId || this.isFrameworkMessage(eventData))) return;
+        const messageId = this.rememberIncomingMessage(eventData, payload);
+        if (messageId === null) return;
+        if (messageActivation) {
+            return this.acceptMessageActivation(eventData, payload, { trigger: 'agent_message', messageId });
         }
         
         // Check if there's an active task - if not, skip immediate feedback to prevent post-completion loops
@@ -294,7 +397,7 @@ export class MxfEventHandlerService {
         
         // Process MXP messages if applicable
         let processedEventData = eventData;
-        if (isMxpMessage(eventData.content)) {
+        if (!bare && isMxpMessage(eventData.content)) {
             try {
                 // Process incoming MXP message
                 const processed = await MxpMiddleware.processIncoming(eventData.content);
@@ -340,14 +443,14 @@ export class MxfEventHandlerService {
         // Create immediate feedback prompt
         const toolUsedForMessage = processedEventData.metadata?.toolName || 'messaging_send';
         const senderAgentId = processedEventData.senderId;
-        const messageData = typeof processedEventData.content?.data === 'string' 
+        const messageData = bare ? this.rawMessageContent(processedEventData) : typeof processedEventData.content?.data === 'string'
             ? processedEventData.content.data 
             : typeof processedEventData.content === 'string'
             ? processedEventData.content
             : JSON.stringify(processedEventData.content?.data || processedEventData.content);
         
         // Detect message source type for proper role assignment
-        const messageSource = this.detectMessageSource(processedEventData, senderAgentId);
+        const messageSource = bare ? { sourceType: 'agent' as const } : this.detectMessageSource(processedEventData, senderAgentId);
         
         // Use structured message creation
         const dialogueMessage = MxfStructuredPromptBuilder.createDialogueMessage(
@@ -431,10 +534,24 @@ export class MxfEventHandlerService {
      * Handle channel message events with immediate feedback
      */
     private async handleChannelMessage(eventData: any, payload: BaseEventPayload<any>): Promise<void> {
+        if (!this.ownsChannel(payload)) return;
         const acceptedTask = this.callbacks.getCurrentTask();
         // Process channel messages from other agents (not from self)
         if (eventData.senderId === this.agentId) {
             return; // Don't respond to our own messages
+        }
+
+        const messageActivation = this.executionConfig.activation === 'message';
+        const bare = this.executionConfig.promptMode === 'bare';
+        if ((messageActivation || bare) && eventData.receiverId && eventData.receiverId !== this.agentId) return;
+        if ((messageActivation || bare) && this.isFrameworkMessage(eventData)) {
+            this.logger.debug('Ignoring framework-authored channel message');
+            return;
+        }
+        const messageId = this.rememberIncomingMessage(eventData, payload);
+        if (messageId === null) return;
+        if (messageActivation) {
+            return this.acceptMessageActivation(eventData, payload, { trigger: 'channel_message', messageId });
         }
         
         // A SystemLLM challenge (critical or hostile stance) is the one system
@@ -476,7 +593,7 @@ export class MxfEventHandlerService {
         
         // Process MXP messages if applicable
         let processedEventData = eventData;
-        if (isMxpMessage(eventData.content)) {
+        if (!bare && isMxpMessage(eventData.content)) {
             try {
                 // Process incoming MXP message
                 const processed = await MxpMiddleware.processIncoming(eventData.content);
@@ -523,7 +640,7 @@ export class MxfEventHandlerService {
         const toolUsedForMessage = processedEventData.metadata?.toolName || 'messaging_broadcast';
         const senderAgentId = processedEventData.senderId;
         const channelId = payload.channelId || 'unknown-channel';
-        const messageData = typeof processedEventData.content?.data === 'string' 
+        const messageData = bare ? this.rawMessageContent(processedEventData) : typeof processedEventData.content?.data === 'string'
             ? processedEventData.content.data 
             : typeof processedEventData.content === 'string'
             ? processedEventData.content
@@ -551,7 +668,7 @@ export class MxfEventHandlerService {
         // Add detailed context to conversation
         await this.callbacks.addConversationMessage({
             role: 'user',
-            content: immediatePrompt,
+            content: bare ? messageData : immediatePrompt,
             metadata: messageMetadata
         });
         if (this.callbacks.getCurrentTask() !== acceptedTask) return;
@@ -585,6 +702,10 @@ export class MxfEventHandlerService {
         eventData: SystemLlmChallengeEventData,
         payload: BaseEventPayload<unknown>
     ): Promise<void> {
+        if (this.executionConfig.promptMode === 'bare') {
+            this.logger.debug('Bare prompt mode ignores SystemLLM challenges');
+            return;
+        }
         const acceptedTask = this.callbacks.getCurrentTask();
         const context = eventData.context ?? {};
         const content = eventData.content;
@@ -1038,6 +1159,7 @@ export class MxfEventHandlerService {
      * @private
      */
     private async handleTaskEvent(eventData: any, payload: BaseEventPayload<any>, eventType: string): Promise<void> {
+        if (this.executionConfig.promptMode === 'bare') return;
         const acceptedTask = this.callbacks.getCurrentTask();
         // Create message content from task event
         let taskContent = '';
@@ -1099,6 +1221,10 @@ export class MxfEventHandlerService {
      * Handle message error events - provides feedback to agents for validation failures
      */
     private async handleMessageError(payload: BaseEventPayload): Promise<void> {
+        if (this.executionConfig.promptMode === 'bare') {
+            this.logger.debug('Bare prompt mode ignores message-error prompt feedback');
+            return;
+        }
         const acceptedTask = this.callbacks.getCurrentTask();
         try {
             // Check if this error is for this agent

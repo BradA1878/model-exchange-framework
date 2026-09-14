@@ -30,11 +30,15 @@
 import { Observable } from 'rxjs';
 import { v4 as uuidv4 } from 'uuid';
 import { BaseMcpClient } from './BaseMcpClient.js';
+import { observeMcpRequest } from '../RequestObservation.js';
+import { buildBareChatTools, buildBareContextMessages, parseNativeToolArguments } from './BareContextMessages.js';
+import { reportedTokenUsage } from './ProviderUsage.js';
 import { readPositiveIntEnv } from '../../../utils/env.js';
 import {
     McpMessage,
     McpTool,
     McpApiResponse,
+    McpRequestOptions,
     McpContentType,
     McpRole,
     McpContent,
@@ -103,15 +107,18 @@ interface OpenRouterResponse {
     model: string;
     created: number;
     object: string;
+    provider?: string;
     choices: Array<{
         index: number;
         message: OpenRouterMessage;
-        finish_reason: string;
+        finish_reason: string | null;
+        native_finish_reason?: string | null;
     }>;
-    usage: {
+    usage?: {
         prompt_tokens: number;
         completion_tokens: number;
         total_tokens: number;
+        cost?: number;
     };
 }
 
@@ -125,6 +132,14 @@ const isAbortOrTimeoutError = (error: unknown): boolean => {
     const name = (error as any)?.name;
     return name === 'TimeoutError' || name === 'AbortError';
 };
+
+/** Only a stream that has produced no model data is safe to retry. */
+class FirstTokenTimeoutError extends Error {
+    constructor(message: string) {
+        super(message);
+        this.name = 'FirstTokenTimeoutError';
+    }
+}
 
 /**
  * OpenRouter implementation of the MCP client with network recovery
@@ -273,6 +288,9 @@ export class OpenRouterMcpClient extends BaseMcpClient {
     // long quiet gap means a dead connection, not a slow model.
     private streamIdleTimeoutMs = 120000;
 
+    // Keepalive traffic must not hold a turn indefinitely before any model output.
+    private firstTokenTimeoutMs = 180000;
+
     // Threshold for the slow-request WARN that makes slow-vs-hung visible in
     // production logs before any timeout fires.
     private slowRequestWarnMs = 60000;
@@ -404,7 +422,7 @@ export class OpenRouterMcpClient extends BaseMcpClient {
      * Initialize the OpenRouter provider
      */
     protected async initializeProvider(): Promise<void> {
-        // Per-request bounds. All three must be positive and finite — a missing or
+        // Per-request bounds. All must be positive and finite — a missing or
         // disabled bound is how a hung connection becomes permanent silence that
         // only a consumer-side backstop can end.
         //
@@ -414,6 +432,14 @@ export class OpenRouterMcpClient extends BaseMcpClient {
         // as an operation bound inside NetworkRecoveryManager.executeWithRetry.
         this.requestTimeoutMs = readPositiveIntEnv('OPENROUTER_REQUEST_TIMEOUT_MS', 300000);
         this.streamIdleTimeoutMs = readPositiveIntEnv('OPENROUTER_STREAM_IDLE_TIMEOUT_MS', 120000);
+        // Validate the whole value; parseInt would silently truncate fractions or suffixes.
+        const firstTokenTimeout = process.env.OPENROUTER_FIRST_TOKEN_TIMEOUT_MS;
+        const firstTokenTimeoutMs = firstTokenTimeout === undefined ? 180000 : Number(firstTokenTimeout);
+        if ((firstTokenTimeout !== undefined && !/^\d+$/.test(firstTokenTimeout.trim())) ||
+            !Number.isSafeInteger(firstTokenTimeoutMs) || firstTokenTimeoutMs <= 0 || firstTokenTimeoutMs > 2147483647) {
+            throw new Error(`OPENROUTER_FIRST_TOKEN_TIMEOUT_MS must be a positive integer within the timer range, got "${firstTokenTimeout}"`);
+        }
+        this.firstTokenTimeoutMs = firstTokenTimeoutMs;
         this.slowRequestWarnMs = readPositiveIntEnv('OPENROUTER_SLOW_REQUEST_WARN_MS', 60000);
 
         // Initialize network recovery configuration from environment or defaults
@@ -491,7 +517,7 @@ export class OpenRouterMcpClient extends BaseMcpClient {
      * @param response OpenRouter response
      * @returns MCP response
      */
-    private convertToMcpResponse(response: OpenRouterResponse): McpApiResponse {
+    private convertToMcpResponse(response: OpenRouterResponse, strictToolArguments = false): McpApiResponse {
         // Get the choice with the assistant message
         const choice = response.choices[0];
         
@@ -542,17 +568,21 @@ export class OpenRouterMcpClient extends BaseMcpClient {
                 if (toolCall.type === 'function') {
                     // Parse tool call arguments from OpenRouter response
                     let parsedInput = {};
-                    try {
-                        const args = toolCall.function.arguments?.trim();
-                        if (args && args.length > 0) {
-                            parsedInput = JSON.parse(args);
-                        } else {
-                            this.logger.warn(`⚠️ Tool call ${toolCall.function.name} (${toolCall.id}) has empty arguments string`);
+                    if (strictToolArguments) {
+                        parsedInput = parseNativeToolArguments(toolCall.function.arguments);
+                    } else {
+                        try {
+                            const args = toolCall.function.arguments?.trim();
+                            if (args && args.length > 0) {
+                                parsedInput = JSON.parse(args);
+                            } else {
+                                this.logger.warn(`⚠️ Tool call ${toolCall.function.name} (${toolCall.id}) has empty arguments string`);
+                            }
+                        } catch (error) {
+                            // Keep the framework-mode parsing behavior separate from strict bare input.
+                            this.logger.error(`❌ JSON parse failed for tool ${toolCall.function.name} (${toolCall.id}) arguments: ${(error as Error).message}. Raw args: "${toolCall.function.arguments?.substring(0, 200)}"`);
+                            parsedInput = {};
                         }
-                    } catch (error) {
-                        // Log the parse failure — silent {} fallback masks real bugs
-                        this.logger.error(`❌ JSON parse failed for tool ${toolCall.function.name} (${toolCall.id}) arguments: ${(error as Error).message}. Raw args: "${toolCall.function.arguments?.substring(0, 200)}"`);
-                        parsedInput = {};
                     }
                     
                     content.push({
@@ -574,11 +604,7 @@ export class OpenRouterMcpClient extends BaseMcpClient {
             model: response.model,
             stop_reason: choice.finish_reason || null,
             stop_sequence: null,
-            usage: {
-                input_tokens: response.usage.prompt_tokens,
-                output_tokens: response.usage.completion_tokens,
-                total_tokens: response.usage.total_tokens
-            }
+            usage: reportedTokenUsage('OpenRouter', response.usage?.prompt_tokens, response.usage?.completion_tokens, response.usage?.total_tokens)
         };
         
         // Include reasoning if present (for reasoning models like o1, gpt-5, deepseek-reasoner)
@@ -677,7 +703,7 @@ export class OpenRouterMcpClient extends BaseMcpClient {
                     transformedMessages,
                     context.availableTools as any,
                     // agentId rides along for the slow-request WARN and timeout logs
-                    { ...options, agentId: context.agentId }
+                    { ...options, agentId: context.agentId, promptMode: context.promptMode }
                 ),
                 extractStatusCodeFromError
             );
@@ -698,11 +724,9 @@ export class OpenRouterMcpClient extends BaseMcpClient {
      * Makes the same request but with `stream: true`, parses SSE chunks,
      * calls onChunk for each partial token, and returns the accumulated final response.
      *
-     * Deliberately NOT wrapped in networkRecovery.executeWithRetry: by the time a
-     * streaming request fails, chunks may already have been delivered to the
-     * consumer via onChunk, and a retry would replay them. Failures — including
-     * the idle-watchdog timeout inside executeStreamingRequest — propagate to the
-     * caller instead.
+     * Only first-data expiry can retry, with at most two total attempts. Once any
+     * model data arrives, a retry could replay output or tool calls. The stream
+     * owns its idle/first-data bounds; recovery must not impose a total-time cap.
      *
      * @param context - Complete agent context from SDK
      * @param options - Additional options (must include stream: true)
@@ -722,13 +746,23 @@ export class OpenRouterMcpClient extends BaseMcpClient {
         const transformedMessages = converter.transform(openRouterMessages, MessageFormat.OPENROUTER);
 
         return await this.queueRequest(async () => {
-            return this.executeStreamingRequest(
-                transformedMessages,
-                context.availableTools as any,
-                // agentId rides along for the slow-request WARN and timeout logs
-                { ...options, agentId: context.agentId },
-                onChunk
+            if (!this.networkRecovery) throw new Error('Network recovery not initialized');
+            const result = await this.networkRecovery.executeWithRetry(
+                () => this.executeStreamingRequest(
+                    transformedMessages,
+                    context.availableTools as McpTool[],
+                    { ...options, agentId: context.agentId, promptMode: context.promptMode },
+                    onChunk
+                ),
+                extractStatusCodeFromError,
+                {
+                    operationOwnsTimeout: true,
+                    maxAttempts: 2,
+                    shouldRetry: error => error instanceof FirstTokenTimeoutError
+                }
             );
+            if (!result.success) throw result.error?.originalError || new Error(result.error!.message);
+            return result.data!;
         });
     }
 
@@ -763,7 +797,7 @@ export class OpenRouterMcpClient extends BaseMcpClient {
         this.applyReasoningParam(requestBody, options);
 
         // Add tools if provided
-        const openRouterTools = tools ? this.convertToOpenRouterTools(tools) : undefined;
+        const openRouterTools = tools ? (options?.promptMode === 'bare' ? buildBareChatTools(tools) : this.convertToOpenRouterTools(tools)) : undefined;
         if (openRouterTools && openRouterTools.length > 0) {
             requestBody.tools = openRouterTools;
             requestBody.tool_choice = 'auto';
@@ -773,6 +807,7 @@ export class OpenRouterMcpClient extends BaseMcpClient {
         if (options?.providerOptions) {
             Object.assign(requestBody, options.providerOptions);
         }
+        requestBody.usage = { include: true };
 
         const headers = this.buildOpenRouterHeaders(options);
 
@@ -783,12 +818,10 @@ export class OpenRouterMcpClient extends BaseMcpClient {
         const requestStartedAt = Date.now();
         const slowWatch = this.startSlowRequestWatch('streaming', model, agentId, requestBytes);
 
-        // Idle watchdog for the SSE stream. A healthy stream is never silent for
-        // long — OpenRouter emits keepalive comment lines every few seconds while a
-        // model is thinking — so silence past streamIdleTimeoutMs means the
-        // connection is dead, not that the model is slow. The watchdog is re-armed
-        // on every read; there is deliberately NO total-time cap here, because an
-        // actively producing stream is healthy no matter how long it runs.
+        // Transport activity resets idle expiry, including keepalive comments.
+        // The separate first-data bound catches providers that keep the connection
+        // alive without producing model output. After actual data arrives there
+        // is no total-time cap; the idle bound remains active.
         //
         // Each read (and the initial fetch) races against abortPromise as well as
         // carrying the AbortController signal: the signal cancels the real network
@@ -797,6 +830,12 @@ export class OpenRouterMcpClient extends BaseMcpClient {
         const controller = new AbortController();
         let headersReceived = false;
         let idleTimer: ReturnType<typeof setTimeout> | undefined;
+        let firstTokenTimer: ReturnType<typeof setTimeout> | undefined;
+        let firstTokenError: FirstTokenTimeoutError | undefined;
+        const noteModelData = (): void => {
+            clearTimeout(firstTokenTimer);
+            firstTokenTimer = undefined;
+        };
         const armIdleWatchdog = () => {
             clearTimeout(idleTimer);
             idleTimer = setTimeout(() => controller.abort(), this.streamIdleTimeoutMs);
@@ -808,13 +847,14 @@ export class OpenRouterMcpClient extends BaseMcpClient {
             controller.signal.addEventListener('abort', () => {
                 const sentinel = new Error('OpenRouter streaming request aborted by idle watchdog');
                 sentinel.name = 'AbortError';
-                reject(sentinel);
+                reject(firstTokenError ?? sentinel);
             }, { once: true });
         });
 
         // Converts an abort/timeout rejection into the logged, non-retryable
         // request-timeout error; returns any other error unchanged.
         const normalizeStreamError = (error: unknown): unknown => {
+            if (firstTokenError) return firstTokenError;
             if ((error as any)?.isRequestTimeout || !isAbortOrTimeoutError(error)) {
                 return error;
             }
@@ -833,8 +873,20 @@ export class OpenRouterMcpClient extends BaseMcpClient {
         };
 
         armIdleWatchdog();
+        firstTokenTimer = setTimeout(() => {
+            firstTokenError = new FirstTokenTimeoutError(
+                `OpenRouter streaming first-data timeout after ${Date.now() - requestStartedAt}ms ` +
+                `(limit ${this.firstTokenTimeoutMs}ms): model=${model}, agent=${agentId}, ` +
+                `request=${requestBytes}bytes, messages=${openRouterMessages.length}`
+            );
+            this.logger.error(firstTokenError.message);
+            controller.abort();
+        }, this.firstTokenTimeoutMs);
         let response: Response;
+        let reader: ReadableStreamDefaultReader<Uint8Array>;
+        let observation: ReturnType<typeof observeMcpRequest>;
         try {
+            observation = observeMcpRequest('openrouter', requestBody.model, requestBodyJson, options?.requestTrace);
             response = await Promise.race([
                 fetch(`${this.baseUrl}/chat/completions`, {
                     method: 'POST',
@@ -848,18 +900,40 @@ export class OpenRouterMcpClient extends BaseMcpClient {
             armIdleWatchdog();
 
             if (!response.ok) {
-                const errorText = await response.text();
-                const error = new Error(`OpenRouter API error [${response.status}]: ${errorText}`);
-                (error as any).status = response.status;
-                (error as any).statusCode = response.status;
+                // A known HTTP rejection is not a model waiting to produce data.
+                // Keep its body read bounded by idle expiry without retrying it.
+                clearTimeout(firstTokenTimer);
+                let errorText = '';
+                const errorReader = response.body?.getReader();
+                if (errorReader) {
+                    const errorDecoder = new TextDecoder();
+                    try {
+                        for (;;) {
+                            const part = await Promise.race([errorReader.read(), abortPromise]);
+                            if (part.done) break;
+                            errorText += errorDecoder.decode(part.value, { stream: true });
+                        }
+                        errorText += errorDecoder.decode();
+                    } finally {
+                        // Own this reader instead of leaving response.text() pending
+                        // after an implementation that ignores AbortSignal wins the race.
+                        void errorReader.cancel().catch(() => undefined);
+                        errorReader.releaseLock();
+                    }
+                }
+                const error = Object.assign(new Error(`OpenRouter API error [${response.status}]: ${errorText}`), {
+                    status: response.status, statusCode: response.status
+                });
                 throw error;
             }
 
             if (!response.body) {
                 throw new Error('No response body for streaming request');
             }
+            reader = response.body.getReader();
         } catch (error) {
             clearTimeout(idleTimer);
+            clearTimeout(firstTokenTimer);
             slowWatch.finish(false);
             throw normalizeStreamError(error);
         }
@@ -867,7 +941,6 @@ export class OpenRouterMcpClient extends BaseMcpClient {
         this.logger.debug(`📡 OpenRouter SSE: Response received, status=${response.status}, starting stream parse`);
 
         // Parse SSE stream and accumulate the full response
-        const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let buffer = '';
         let accumulatedContent = '';
@@ -875,14 +948,14 @@ export class OpenRouterMcpClient extends BaseMcpClient {
         let responseId = '';
         let responseModel = model;
         let finishReason: string | null = null;
-        let promptTokens = 0;
-        let completionTokens = 0;
-        let totalTokens = 0;
+        let reportedUsage: OpenRouterResponse['usage'];
+        let providerRoute: string | undefined;
+        let nativeFinishReason: string | null | undefined;
         // Accumulated tool_calls built from streaming deltas
         const toolCallAccumulators: Map<number, { id: string; type: string; functionName: string; functionArgs: string }> = new Map();
 
         try {
-            while (true) {
+            streamRead: for (;;) {
                 // Race against the idle watchdog: reader.read() on a dead
                 // connection can otherwise pend forever with nothing logged.
                 const { done, value } = await Promise.race([reader.read(), abortPromise]);
@@ -902,12 +975,14 @@ export class OpenRouterMcpClient extends BaseMcpClient {
                     // Skip empty lines and SSE comments
                     if (!trimmed || trimmed.startsWith(':')) continue;
 
-                    // Handle the [DONE] signal
-                    if (trimmed === 'data: [DONE]') continue;
-
                     // Parse data lines
-                    if (trimmed.startsWith('data: ')) {
-                        const jsonStr = trimmed.slice(6);
+                    if (trimmed.startsWith('data:')) {
+                        const jsonStr = trimmed.slice(5).trimStart();
+                        // [DONE] terminates SSE even when the transport stays open.
+                        if (jsonStr === '[DONE]') {
+                            void reader.cancel().catch(() => undefined);
+                            break streamRead;
+                        }
                         try {
                             const chunk = JSON.parse(jsonStr);
 
@@ -917,6 +992,10 @@ export class OpenRouterMcpClient extends BaseMcpClient {
                             }
                             if (chunk.model) {
                                 responseModel = chunk.model;
+                            }
+                            if (typeof chunk.provider === 'string') providerRoute = chunk.provider;
+                            if (chunk.choices?.[0]?.native_finish_reason !== undefined) {
+                                nativeFinishReason = chunk.choices[0].native_finish_reason;
                             }
 
                             // Extract content delta
@@ -930,6 +1009,21 @@ export class OpenRouterMcpClient extends BaseMcpClient {
                             if (delta) {
                                 const contentDelta = delta.content || '';
 
+                                // Role/usage/ID-only frames and keepalives are not model
+                                // output. A name or argument fragment is native tool data.
+                                const hasText = (value: unknown): boolean => typeof value === 'string' && value.length > 0;
+                                const hasReasoningDetails = Array.isArray(delta.reasoning_details) && delta.reasoning_details.some(
+                                    (detail: { text?: unknown; data?: unknown; summary?: unknown }) =>
+                                        hasText(detail.text) || hasText(detail.data) || hasText(detail.summary)
+                                );
+                                const hasToolData = Array.isArray(delta.tool_calls) && delta.tool_calls.some(
+                                    (call: { function?: { name?: unknown; arguments?: unknown } }) =>
+                                        hasText(call.function?.name) || hasText(call.function?.arguments)
+                                );
+                                if (hasText(delta.content) || hasText(delta.reasoning) || hasText(delta.reasoning_content) || hasReasoningDetails || hasToolData) {
+                                    noteModelData();
+                                }
+
                                 // OpenRouter reasoning can arrive as:
                                 // 1. delta.reasoning (string) — some providers
                                 // 2. delta.reasoning_content (string) — Anthropic alias
@@ -937,8 +1031,8 @@ export class OpenRouterMcpClient extends BaseMcpClient {
                                 let reasoningDelta = delta.reasoning || delta.reasoning_content || '';
                                 if (!reasoningDelta && delta.reasoning_details && Array.isArray(delta.reasoning_details)) {
                                     reasoningDelta = delta.reasoning_details
-                                        .filter((d: any) => d.text)
-                                        .map((d: any) => d.text)
+                                        .filter((detail: { text?: string }) => detail.text)
+                                        .map((detail: { text?: string }) => detail.text)
                                         .join('');
                                 }
 
@@ -974,9 +1068,7 @@ export class OpenRouterMcpClient extends BaseMcpClient {
 
                             // Extract usage from final chunk (OpenRouter includes it in the last SSE event)
                             if (chunk.usage) {
-                                promptTokens = chunk.usage.prompt_tokens || 0;
-                                completionTokens = chunk.usage.completion_tokens || 0;
-                                totalTokens = chunk.usage.total_tokens || 0;
+                                reportedUsage = chunk.usage;
                             }
                         } catch {
                             // Skip malformed JSON lines — they occasionally happen in SSE streams
@@ -994,6 +1086,7 @@ export class OpenRouterMcpClient extends BaseMcpClient {
             throw normalizeStreamError(error);
         } finally {
             clearTimeout(idleTimer);
+            clearTimeout(firstTokenTimer);
             slowWatch.finish();
             reader.releaseLock();
         }
@@ -1023,16 +1116,18 @@ export class OpenRouterMcpClient extends BaseMcpClient {
                     content: accumulatedContent,
                     ...(accumulatedToolCalls.length > 0 ? { tool_calls: accumulatedToolCalls } : {}),
                 },
-                finish_reason: finishReason || 'stop',
+                finish_reason: finishReason,
             }],
-            usage: {
-                prompt_tokens: promptTokens,
-                completion_tokens: completionTokens,
-                total_tokens: totalTokens,
-            },
+            ...(reportedUsage === undefined ? {} : { usage: reportedUsage }),
         };
 
-        const mcpResponse = this.convertToMcpResponse(syntheticResponse);
+        const mcpResponse = this.convertToMcpResponse(syntheticResponse, options?.promptMode === 'bare');
+        mcpResponse.request = observation.complete({
+            finishReason,
+            ...(providerRoute === undefined ? {} : { providerRoute }),
+            ...(reportedUsage?.cost === undefined ? {} : { costUsd: reportedUsage.cost }),
+            ...(nativeFinishReason === undefined ? {} : { nativeFinishReason })
+        });
 
         // Attach accumulated reasoning if present
         if (accumulatedReasoning) {
@@ -1048,6 +1143,7 @@ export class OpenRouterMcpClient extends BaseMcpClient {
      * Similar to Azure but applies OpenRouter-specific requirements
      */
     private structureMessagesFromContext(context: AgentContext): any[] {
+        if (context.promptMode === 'bare') return buildBareContextMessages(context);
         const messages: any[] = [];
         
         // 1. System message: Combine framework rules + agent identity
@@ -1199,7 +1295,7 @@ export class OpenRouterMcpClient extends BaseMcpClient {
     private async executeOpenRouterRequestDirect(
         openRouterMessages: any[],
         tools?: McpTool[],
-        options?: Record<string, any>
+        options?: McpRequestOptions
     ): Promise<McpApiResponse> {
         try {
             // Validate inputs
@@ -1208,7 +1304,7 @@ export class OpenRouterMcpClient extends BaseMcpClient {
             }
 
             // Messages are already in OpenRouter format - just convert tools
-            const openRouterTools = tools ? this.convertToOpenRouterTools(tools) : undefined;
+            const openRouterTools = tools ? (options?.promptMode === 'bare' ? buildBareChatTools(tools) : this.convertToOpenRouterTools(tools)) : undefined;
 
             return await this.executeOpenRouterRequestCore(openRouterMessages, openRouterTools, options);
         } catch (error) {
@@ -1282,6 +1378,7 @@ export class OpenRouterMcpClient extends BaseMcpClient {
             if (options?.providerOptions) {
                 Object.assign(requestBody, options.providerOptions);
             }
+            requestBody.usage = { include: true };
             
             // Add HTTP referer and title for OpenRouter tracking/attribution
             // HTTP-Referer is the primary identifier for app attribution
@@ -1311,7 +1408,9 @@ export class OpenRouterMcpClient extends BaseMcpClient {
             const slowWatch = this.startSlowRequestWatch('completion', model, agentId, requestBytes);
 
             let responseText: string;
+            let observation: ReturnType<typeof observeMcpRequest>;
             try {
+                observation = observeMcpRequest('openrouter', requestBody.model, requestBodyJson, options?.requestTrace);
                 // AbortSignal.timeout bounds the entire request — connect, headers,
                 // and body read — so a hung connection surfaces as an error instead
                 // of indefinite silence. Reasoning models can legitimately take
@@ -1325,7 +1424,7 @@ export class OpenRouterMcpClient extends BaseMcpClient {
 
                 // Check for errors with enhanced error information
                 if (!response.ok) {
-                    let errorText = await response.text();
+                    const errorText = await response.text();
                     this.logger.error(`🔧 DEBUG: Error response text: ${errorText}`);
 
                     let errorMessage = errorText;
@@ -1349,10 +1448,9 @@ export class OpenRouterMcpClient extends BaseMcpClient {
                     }
 
                     // Create detailed error with status code
-                    const error = new Error(`OpenRouter API error [${response.status}]: ${errorMessage}`);
-                    (error as any).status = response.status;
-                    (error as any).statusCode = response.status;
-                    (error as any).rateLimitInfo = rateLimitInfo;
+                    const error = Object.assign(new Error(`OpenRouter API error [${response.status}]: ${errorMessage}`), {
+                        status: response.status, statusCode: response.status, rateLimitInfo
+                    });
 
                     throw error;
                 }
@@ -1398,7 +1496,17 @@ export class OpenRouterMcpClient extends BaseMcpClient {
             
             const openRouterResponse = parseResult.data;
             
-            return this.convertToMcpResponse(openRouterResponse);
+            return {
+                ...this.convertToMcpResponse(openRouterResponse, options?.promptMode === 'bare'),
+                request: observation.complete({
+                    finishReason: openRouterResponse.choices[0]?.finish_reason,
+                    ...(openRouterResponse.provider === undefined ? {} : { providerRoute: openRouterResponse.provider }),
+                    ...(openRouterResponse.usage?.cost === undefined ? {} : { costUsd: openRouterResponse.usage.cost }),
+                    ...(openRouterResponse.choices[0]?.native_finish_reason === undefined ? {} : {
+                        nativeFinishReason: openRouterResponse.choices[0].native_finish_reason
+                    })
+                })
+            };
         } catch (error) {
             // Request timeouts are already logged with full context and must keep
             // their name/flags so NetworkRecovery classifies them as non-retryable.

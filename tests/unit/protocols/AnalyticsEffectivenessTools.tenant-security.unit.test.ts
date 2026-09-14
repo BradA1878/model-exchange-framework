@@ -1,7 +1,9 @@
+import { firstValueFrom, isObservable } from 'rxjs';
 import {
     McpToolDefinition,
     McpToolHandlerContext,
-    McpToolHandlerResult
+    McpToolHandlerResult,
+    McpToolResultContent
 } from '../../../packages/core/src/protocols/mcp/McpServerTypes';
 import {
     analytics_agent_performance,
@@ -33,10 +35,12 @@ const invoke = async (
     tool: McpToolDefinition,
     input: Record<string, unknown>,
     toolContext: McpToolHandlerContext
-): Promise<McpToolHandlerResult> => await tool.handler(
-    input,
-    toolContext
-) as McpToolHandlerResult;
+): Promise<McpToolHandlerResult & { content: McpToolResultContent }> => {
+    const handled = await tool.handler(input, toolContext);
+    const result = isObservable(handled) ? await firstValueFrom(handled) : handled;
+    if (Array.isArray(result.content)) throw new Error('Expected framework tool object content');
+    return { ...result, content: result.content };
+};
 
 const emptyAnalytics = {
     period: { start: 0, end: 1 },

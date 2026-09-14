@@ -40,6 +40,16 @@ import {
 } from '../../../types/NetworkRecoveryTypes.js';
 import { Logger } from '../../../utils/Logger.js';
 
+/** Overrides for operations, such as streams, that enforce their own progress bounds. */
+export interface NetworkOperationOptions {
+    /** The operation must abort and settle itself when its progress bound expires. */
+    operationOwnsTimeout?: boolean;
+    /** Restrict retries using evidence unavailable to the generic classifier. */
+    shouldRetry?: (error: unknown) => boolean;
+    /** Maximum total attempts, capped by the manager's configured maximum. */
+    maxAttempts?: number;
+}
+
 /**
  * Network Recovery Manager
  * Handles retry logic, circuit breaker, and error classification
@@ -199,12 +209,18 @@ export class NetworkRecoveryManager {
      */
     async executeWithRetry<T>(
         operation: () => Promise<T>,
-        extractStatusCode?: (error: any) => number | undefined
+        extractStatusCode?: (error: unknown) => number | undefined,
+        options: NetworkOperationOptions = {}
     ): Promise<NetworkOperationResult<T>> {
+        if (options.maxAttempts !== undefined &&
+            (!Number.isInteger(options.maxAttempts) || options.maxAttempts < 1)) {
+            throw new Error('Network operation maxAttempts must be a positive integer');
+        }
+        const maxAttempts = Math.min(options.maxAttempts ?? this.config.maxRetries, this.config.maxRetries);
         const retryAttempts: RetryAttempt[] = [];
         let lastError: NetworkErrorInfo | undefined;
         
-        for (let attempt = 1; attempt <= this.config.maxRetries; attempt++) {
+        for (let attempt = 1; attempt <= maxAttempts; attempt++) {
             // Check circuit breaker
             if (!this.checkCircuitBreaker()) {
                 const errorInfo: NetworkErrorInfo = {
@@ -225,9 +241,11 @@ export class NetworkRecoveryManager {
             }
             
             try {
-                // Execute the operation, bounded by requestTimeoutMs — a request
-                // that never settles must surface as an error, not silence.
-                const result = await this.withRequestTimeout(operation);
+                // Streaming operations enforce first-data and idle bounds rather
+                // than a total duration cap; ordinary requests keep the net.
+                const result = options.operationOwnsTimeout
+                    ? await operation()
+                    : await this.withRequestTimeout(operation);
 
                 // Success! Record it and return
                 this.recordSuccess();
@@ -253,7 +271,7 @@ export class NetworkRecoveryManager {
                     originalError: error instanceof Error ? error : undefined,
                     timestamp: new Date(),
                     retryCount: attempt,
-                    maxRetries: this.config.maxRetries
+                    maxRetries: maxAttempts
                 };
                 
                 // Record failure for circuit breaker
@@ -265,7 +283,8 @@ export class NetworkRecoveryManager {
                 }
                 
                 // Check if error is retryable
-                if (!isRetryableError(errorType) || attempt >= this.config.maxRetries) {
+                const retryable = options.shouldRetry ? options.shouldRetry(error) : isRetryableError(errorType);
+                if (!retryable || attempt >= maxAttempts) {
                     // Non-retryable error or max retries reached
                     return {
                         success: false,

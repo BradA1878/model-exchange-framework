@@ -36,7 +36,7 @@ import {
     isPrivilegedNetworkToolEnabled,
     ToolAuthorizationError
 } from '../../socket/services/ToolAuthorizationPolicy';
-import { McpToolDefinition, McpToolHandlerContext, McpToolHandlerResult } from '@mxf-dev/core/protocols/mcp/McpServerTypes';
+import { McpToolDefinition, McpToolHandlerContext, McpToolHandlerResult, getMcpToolResultData } from '@mxf-dev/core/protocols/mcp/McpServerTypes';
 import { UserRole } from '@mxf-dev/core/models/user';
 import { v4 as uuidv4 } from 'uuid';
 import { loadActiveChannelRuntimePolicy } from '../security/ChannelRuntimePolicy';
@@ -326,12 +326,13 @@ export const executeTool = async (req: Request, res: Response): Promise<void> =>
                 // the same result semantics the socket executor exposes instead
                 // of turning its error envelope into an HTTP success.
                 const isError = result.isError === true ||
-                    result.content?.type === 'error' || result.metadata?.error === true;
+                    (!Array.isArray(result.content) &&
+                        (result.content?.type === 'error' || result.metadata?.error === true));
                 res.status(200).json({
                     success: !isError,
                     isError,
                     requestId: context.requestId,
-                    data: result.content,
+                    data: getMcpToolResultData(result),
                     metadata: result.metadata
                 });
             },

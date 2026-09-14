@@ -21,12 +21,10 @@
 /**
  * Tool Execution Persistence Service
  *
- * Listens to MCP tool execution events and persists them to the database
- * for auditing, analytics, and dashboard display.
+ * Persists admitted executor operations for auditing, analytics, and dashboard
+ * display. Attempt events are not execution admission and never create records.
  */
 
-import { EventBus } from '@mxf-dev/core/events/EventBus';
-import { McpEvents } from '@mxf-dev/core/events/event-definitions/McpEvents';
 import { McpToolExecution, IMcpToolExecution, McpToolExecutionStatus, McpToolSource } from '@mxf-dev/core/models/mcpToolExecution';
 import { Logger } from '@mxf-dev/core/utils/Logger';
 import { v4 as uuidv4 } from 'uuid';
@@ -47,6 +45,7 @@ interface PendingExecution {
     parameters: Record<string, any>;
     startedAt: Date;
     category?: string;
+    metadata?: Record<string, unknown>;
 }
 
 /**
@@ -72,7 +71,7 @@ export class ToolExecutionPersistenceService {
     }
 
     /**
-     * Initialize the service and set up event listeners
+     * Initialize the audit service; execution is recorded directly by the executor
      */
     public async initialize(): Promise<void> {
         if (this.initialized) {
@@ -82,33 +81,14 @@ export class ToolExecutionPersistenceService {
 
         logger.info('Initializing ToolExecutionPersistenceService...');
 
-        // Listen to tool call events
-        EventBus.server.on(McpEvents.TOOL_CALL, (payload): Promise<void> =>
-            this.handleToolCall(payload).catch(error => {
-                logger.error('Error handling tool call event:', error);
-            })
-        );
-
-        // Listen to tool result events
-        EventBus.server.on(McpEvents.TOOL_RESULT, (payload): Promise<void> =>
-            this.handleToolResult(payload).catch(error => {
-                logger.error('Error handling tool result event:', error);
-            })
-        );
-
-        // Listen to tool error events
-        EventBus.server.on(McpEvents.TOOL_ERROR, (payload): Promise<void> =>
-            this.handleToolError(payload).catch(error => {
-                logger.error('Error handling tool error event:', error);
-            })
-        );
-
+        // The executor owns admission and awaits every write. Subscribing to
+        // TOOL_CALL here would create records for unauthorized or invalid calls.
         this.initialized = true;
         logger.info('ToolExecutionPersistenceService initialized successfully');
     }
 
     /**
-     * Record a tool call start (called directly from HybridMcpToolRegistry)
+     * Record an admitted tool call before its handler starts
      */
     public async recordToolCallStart(
         requestId: string,
@@ -120,8 +100,12 @@ export class ToolExecutionPersistenceService {
             agentId?: string;
             channelId?: string;
             category?: string;
+            metadata?: Record<string, unknown>;
         } = {}
     ): Promise<void> {
+        if (this.pendingExecutions.has(requestId)) {
+            throw new Error(`Tool execution ${requestId} is already being recorded`);
+        }
         const startedAt = new Date();
 
         // Store in pending executions cache
@@ -134,7 +118,8 @@ export class ToolExecutionPersistenceService {
             channelId: options.channelId,
             parameters,
             startedAt,
-            category: options.category
+            category: options.category,
+            metadata: options.metadata
         });
 
         // Create initial database record with 'running' status
@@ -149,17 +134,20 @@ export class ToolExecutionPersistenceService {
                 parameters,
                 status: 'running' as McpToolExecutionStatus,
                 startedAt,
-                category: options.category
+                category: options.category,
+                metadata: options.metadata
             });
 
             logger.debug(`Recorded tool call start: ${toolName} (${requestId})`);
         } catch (error) {
+            this.pendingExecutions.delete(requestId);
             logger.error(`Failed to record tool call start: ${error}`);
+            throw new Error(`Failed to record tool call start: ${error instanceof Error ? error.message : String(error)}`);
         }
     }
 
     /**
-     * Record a tool call completion (called directly from HybridMcpToolRegistry)
+     * Record the first terminal outcome of an admitted tool call
      */
     public async recordToolCallComplete(
         requestId: string,
@@ -168,36 +156,38 @@ export class ToolExecutionPersistenceService {
     ): Promise<void> {
         const completedAt = new Date();
         const pending = this.pendingExecutions.get(requestId);
+        // Unknown and duplicate terminal calls never update an older record.
+        if (!pending) return;
 
-        const durationMs = pending
-            ? completedAt.getTime() - pending.startedAt.getTime()
-            : undefined;
+        const durationMs = completedAt.getTime() - pending.startedAt.getTime();
 
         // Remove from pending cache
         this.pendingExecutions.delete(requestId);
 
         // Update database record
         try {
-            await McpToolExecution.findOneAndUpdate(
-                { requestId },
+            const record = await McpToolExecution.findOneAndUpdate(
+                { requestId, status: 'running', agentId: pending.agentId, channelId: pending.channelId },
                 {
                     status: 'completed' as McpToolExecutionStatus,
                     result,
                     completedAt,
                     durationMs,
-                    metadata
+                    metadata: { ...metadata, ...pending.metadata }
                 },
                 { upsert: false }
             );
 
+            if (!record) throw new Error(`Running tool execution ${requestId} was not found`);
             logger.debug(`Recorded tool call complete: ${requestId} (${durationMs}ms)`);
         } catch (error) {
             logger.error(`Failed to record tool call complete: ${error}`);
+            throw new Error(`Failed to record tool call complete: ${error instanceof Error ? error.message : String(error)}`);
         }
     }
 
     /**
-     * Record a tool call failure (called directly from HybridMcpToolRegistry)
+     * Record the first failure of an admitted tool call
      */
     public async recordToolCallError(
         requestId: string,
@@ -207,127 +197,35 @@ export class ToolExecutionPersistenceService {
     ): Promise<void> {
         const completedAt = new Date();
         const pending = this.pendingExecutions.get(requestId);
+        // Unknown and duplicate terminal calls never update an older record.
+        if (!pending) return;
 
-        const durationMs = pending
-            ? completedAt.getTime() - pending.startedAt.getTime()
-            : undefined;
+        const durationMs = completedAt.getTime() - pending.startedAt.getTime();
 
         // Remove from pending cache
         this.pendingExecutions.delete(requestId);
 
         // Update database record
         try {
-            await McpToolExecution.findOneAndUpdate(
-                { requestId },
+            const record = await McpToolExecution.findOneAndUpdate(
+                { requestId, status: 'running', agentId: pending.agentId, channelId: pending.channelId },
                 {
                     status: 'failed' as McpToolExecutionStatus,
                     errorMessage,
                     errorCode,
                     completedAt,
                     durationMs,
-                    metadata: details
+                    metadata: { ...details, ...pending.metadata }
                 },
                 { upsert: false }
             );
 
+            if (!record) throw new Error(`Running tool execution ${requestId} was not found`);
             logger.debug(`Recorded tool call error: ${requestId} - ${errorMessage}`);
         } catch (error) {
             logger.error(`Failed to record tool call error: ${error}`);
+            throw new Error(`Failed to record tool call error: ${error instanceof Error ? error.message : String(error)}`);
         }
-    }
-
-    /**
-     * Handle tool call event from EventBus
-     * Supports both flat format (from HybridMcpToolRegistry) and wrapped format (from EventPayloadSchema helpers)
-     *
-     * Flat format: { requestId, name, input, agentId, channelId, source }
-     * Wrapped format: { agentId, channelId, source: 'SYSTEM', data: { callId, toolName, arguments } }
-     *
-     * Note: The event's top-level `source` field (e.g., 'SYSTEM') is different from the tool source type
-     * which should be 'internal' or 'external'. We only use tool source from flat format payloads.
-     */
-    private async handleToolCall(payload: any): Promise<void> {
-        // Extract fields supporting both formats
-        // Flat format uses: requestId, name, input
-        // Wrapped format uses: data.callId, data.toolName, data.arguments
-        const requestId = payload.requestId || payload.data?.callId;
-        const name = payload.name || payload.data?.toolName;
-        const input = payload.input || payload.data?.arguments;
-        const agentId = payload.agentId || payload.data?.agentId;
-        const channelId = payload.channelId || payload.data?.channelId;
-
-        // Tool source type: 'internal' or 'external'
-        // Only use flat format's source field (which will be 'internal' or 'external')
-        // Do NOT use payload.source which is the event source (e.g., 'SYSTEM')
-        const isValidToolSource = (s: any) => s === 'internal' || s === 'external';
-        const toolSource = isValidToolSource(payload.source) ? payload.source : 'internal';
-
-        if (!requestId || !name) {
-            logger.warn('Invalid tool call payload - missing requestId or name', {
-                hasRequestId: !!requestId,
-                hasName: !!name,
-                payloadKeys: Object.keys(payload),
-                dataKeys: payload.data ? Object.keys(payload.data) : []
-            });
-            return;
-        }
-
-        await this.recordToolCallStart(
-            requestId,
-            name,
-            toolSource,
-            input || {},
-            { agentId, channelId }
-        );
-    }
-
-    /**
-     * Handle tool result event from EventBus
-     * Supports both flat format and wrapped format
-     *
-     * Flat format: { requestId, result, metadata }
-     * Wrapped format: { data: { callId, result } }
-     */
-    private async handleToolResult(payload: any): Promise<void> {
-        // Extract fields supporting both formats
-        const requestId = payload.requestId || payload.data?.callId || payload.data?.requestId;
-        const result = payload.result !== undefined ? payload.result : payload.data?.result;
-        const metadata = payload.metadata || payload.data?.metadata;
-
-        if (!requestId) {
-            logger.warn('Invalid tool result payload - missing requestId', {
-                payloadKeys: Object.keys(payload),
-                dataKeys: payload.data ? Object.keys(payload.data) : []
-            });
-            return;
-        }
-
-        await this.recordToolCallComplete(requestId, result, metadata);
-    }
-
-    /**
-     * Handle tool error event from EventBus
-     * Supports both flat format and wrapped format
-     *
-     * Flat format: { requestId, error, code, details }
-     * Wrapped format: { data: { callId, error } }
-     */
-    private async handleToolError(payload: any): Promise<void> {
-        // Extract fields supporting both formats
-        const requestId = payload.requestId || payload.data?.callId || payload.data?.requestId;
-        const error = payload.error || payload.data?.error;
-        const code = payload.code || payload.data?.code;
-        const details = payload.details || payload.data?.details;
-
-        if (!requestId) {
-            logger.warn('Invalid tool error payload - missing requestId', {
-                payloadKeys: Object.keys(payload),
-                dataKeys: payload.data ? Object.keys(payload.data) : []
-            });
-            return;
-        }
-
-        await this.recordToolCallError(requestId, error, code, details);
     }
 
     /**

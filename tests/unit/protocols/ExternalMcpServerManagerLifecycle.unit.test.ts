@@ -44,6 +44,7 @@ jest.mock('@mxf-dev/core/events/EventBus', () => ({
 jest.mock('@mxf-dev/core/services/AutoCorrectionService', () => ({
     AutoCorrectionService: {
         getInstance: () => ({
+            getConfig: (): object => ({ enabled: true }),
             attemptCorrection: jest.fn().mockResolvedValue({ corrected: false })
         })
     }

@@ -18,7 +18,7 @@
  * @documentation https://mxf-dev.github.io/mxf/
  */
 
-import { v4 as uuidv4 } from 'uuid';
+import { firstValueFrom } from 'rxjs';
 import { EventEmitter } from 'events';
 import { Logger } from '@mxf-dev/core/utils/Logger';
 import { createStrictValidator } from '@mxf-dev/core/utils/validation';
@@ -26,9 +26,9 @@ import { EventBus } from '@mxf-dev/core/events/EventBus';
 import { Events } from '@mxf-dev/core/events/EventNames';
 import { ServerEventBus } from '@mxf-dev/core/events/ServerEventBus';
 import { EventName, ChannelActionTypes, ChannelActionType } from '@mxf-dev/core/events/EventNames';
-import { MessagePersistFailedPayload, MessageSendFailedPayload } from '@mxf-dev/core/events/event-definitions/MessageEvents';
+import { MessagePersistFailedPayload } from '@mxf-dev/core/events/event-definitions/MessageEvents';
 import { ChannelEventData, MessageEventData, BaseEventPayload, createMessageEventPayload, createMessagePersistFailedEventPayload, createMessageSendFailedEventPayload, createChannelEventPayload, createChannelMessageEventPayload } from '@mxf-dev/core/schemas/EventPayloadSchema'; 
-import { ChannelMessage, ContentFormat, MessageMetadata, ContentWrapper, createChannelMessage } from '@mxf-dev/core/schemas/MessageSchemas'; 
+import { ChannelMessage, ContentFormat, MessageMetadata, createChannelMessage } from '@mxf-dev/core/schemas/MessageSchemas';
 import { ChannelId, AgentId } from '@mxf-dev/core/types/ChannelContext';
 import { ChannelContextMessageOperations } from '@mxf-dev/core/services/ChannelContextMessageOperations';
 import { Server } from 'socket.io'; 
@@ -45,6 +45,7 @@ import { ConfigManager } from '@mxf-dev/core/config/ConfigManager';
 import { hydrateChannelSystemLlmStance } from '../../api/security/ChannelRuntimePolicy';
 import { isSystemLlmStance, SYSTEMLLM_STANCES } from '@mxf-dev/core/types/SystemLlmStanceTypes';
 import { isReservedChannelId } from '@mxf-dev/core/constants/ReservedIdentities';
+import { normalizeChannelHistoryMessage } from '@mxf-dev/core/utils/ChannelHistoryMessages';
 
 /** A terminal channel tombstone exists, but one or more required cleanups need retry. */
 export class ChannelDeletionCleanupError extends Error {
@@ -159,8 +160,11 @@ export class ChannelService extends EventEmitter {
                 const channelMessage = createChannelMessage(
                     payload.channelId,               // channelId (1st parameter)
                     agentMessage.senderId,           // senderId (2nd parameter)
-                    agentMessage.content,            // content (3rd parameter)
+                    agentMessage.content.data,       // unwrap the wire content exactly once
                     {
+                        receiverId: agentMessage.receiverId,
+                        format: agentMessage.content.format,
+                        context: { ...agentMessage.context, channelId: payload.channelId },
                         metadata: {
                             ...agentMessage.metadata,
                             originalMessageType: 'agent-to-agent',
@@ -228,16 +232,7 @@ export class ChannelService extends EventEmitter {
 
             try {
                 // Call the persistChannelMessage method
-                await this.persistChannelMessage(
-                    channelId,                                  // channelId
-                    messageId,                                  // messageId
-                    channelMessage.senderId,                    // fromAgentId (sender)
-                    channelMessage.content.data,                // content
-                    channelMessage.senderId,                    // agentId (assuming sender persists their own message here)
-                    channelMessage.metadata,                    // metadata
-                    payload.timestamp,                          // clientTimestamp
-                    'text'                                      // messageType (channel messages are 'text' type)
-                );
+                await this.persistChannelMessage(channelMessage);
             } catch (error: any) {
                 this.logger.error(`Error persisting message from event listener: ${error.message}`);
                 
@@ -286,9 +281,7 @@ export class ChannelService extends EventEmitter {
                 const channelId = payload.channelId;
 
                 // Notify ExternalMcpServerManager via ServerHybridMcpService
-                const { ServerHybridMcpService } = require('../../api/services/ServerHybridMcpService');
-                const hybridService = ServerHybridMcpService.getInstance();
-                const manager = hybridService.getExternalServerManager();
+                const manager = ServerHybridMcpService.getExistingInstance()?.getExternalServerManager();
                 if (manager) {
                     await manager.onAgentJoinChannel(agentId, channelId);
                 }
@@ -303,9 +296,7 @@ export class ChannelService extends EventEmitter {
                 const channelId = payload.channelId;
 
                 // Notify ExternalMcpServerManager via ServerHybridMcpService
-                const { ServerHybridMcpService } = require('../../api/services/ServerHybridMcpService');
-                const hybridService = ServerHybridMcpService.getInstance();
-                const manager = hybridService.getExternalServerManager();
+                const manager = ServerHybridMcpService.getExistingInstance()?.getExternalServerManager();
                 if (manager) {
                     await manager.onAgentLeaveChannel(agentId, channelId);
                 }
@@ -1361,332 +1352,75 @@ export class ChannelService extends EventEmitter {
         return true;
     }
 
-    /**
-     * Persists a single channel message
-     * @param channelId Channel ID
-     * @param messageId Message ID
-     * @param fromAgentId Agent ID of the sender
-     * @param content Message content
-     * @param agentId Agent ID performing the operation
-     * @param metadata Optional message metadata
-     * @param clientTimestamp Optional client timestamp
-     * @param messageType Optional message type
-     */
-    private async persistChannelMessage(
-        channelId: ChannelId,
-        messageId: string,
-        fromAgentId: AgentId, 
-        content: any, 
-        agentId: AgentId, 
-        metadata?: Partial<MessageMetadata>, 
-        clientTimestamp?: number, 
-        messageType: string = 'text'
-    ): Promise<ChannelMessage> { 
-        this.validator.assertIsNonEmptyString(channelId, 'channelId for persistChannelMessage');
-        this.validator.assertIsNonEmptyString(messageId, 'messageId for persistChannelMessage');
-        this.validator.assertIsNonEmptyString(fromAgentId, 'fromAgentId for persistChannelMessage');
-        this.validator.assert(content !== undefined, 'content for persistChannelMessage cannot be undefined');
-        this.validator.assertIsNonEmptyString(agentId, 'agentId for persistChannelMessage');
-
-        const serverTimestamp = Date.now();
-
-        // Construct the ContentWrapper
-        const messageContent: ContentWrapper = {
-            format: ContentFormat.TEXT, // Defaulting to TEXT, adjust as necessary
-            data: content,
-        };
-
-        // Construct the full MessageMetadata
-        const messageFullMetadata: MessageMetadata = {
-            messageId: messageId,
-            timestamp: serverTimestamp,
-            ...(metadata || {}), // Spread provided metadata, messageId and timestamp take precedence
-            // clientTimestamp is not a direct field of MessageMetadata. If needed, it goes into the general metadata obj.
-        };
-
-        // Create the ChannelMessage object
-        const channelMessageToPersist: ChannelMessage = {
-            toolType: 'channelMessage', // Or determine dynamically
-            senderId: fromAgentId,
-            content: messageContent,
-            metadata: messageFullMetadata,
-            context: {
-                channelId: channelId,
-                // Add other relevant context if needed
-                // 'messageType' could be stored here or in metadata if not part of a stricter schema
-                // For example: messageType: messageType
-            },
-            // 'type' field for ChannelMessage (text, command, etc.) could be set here from messageType
-        } as ChannelMessage; // Casting, ensure all required fields are present
-
-        try {
-            // Persist message to MongoDB using atomic operation
-            await Channel.findOneAndUpdate(
-                { channelId, active: true },
-                {
-                    $push: {
-                        'sharedMemory.conversationHistory': {
-                            messageId,
-                            content,
-                            senderId: fromAgentId,
-                            timestamp: serverTimestamp,
-                            type: messageType,
-                            metadata
-                        }
-                    },
-                    $set: {
-                        'sharedMemory.updatedAt': new Date(),
-                        lastActive: new Date()
-                    }
-                },
-                { new: true }
-            );
-
-            return channelMessageToPersist; // Return the persisted message
-
-        } catch (error: any) {
-            this.logger.error(`Failed to persist message ${messageId} in channel ${channelId}: ${error.message}`);
-            // Parameters of persistChannelMessage are in scope here:
-            // channelId, messageId, fromAgentId, content, agentId, metadata, clientTimestamp, messageType
-
-            const errorData: MessagePersistFailedPayload = {
-                error: error.message, // Use the actual error message
-                originalMessage: { // Construct a partial message for the payload
-                    senderId: fromAgentId,
-                    content: { data: content, format: ContentFormat.TEXT } as ContentWrapper,
-                    metadata: { 
-                        messageId: messageId, // from parameter
-                        timestamp: clientTimestamp || serverTimestamp, // Use client or server timestamp
-                        // Spread original partial metadata if available
-                        ...(metadata || {}),
-                    },
-                    context: { 
-                        channelId: channelId, // from parameter
-                        // If messageType was part of context, include it here
-                        // channelContextType: 'CONVERSATION_HISTORY' as any // Example, adjust as needed
-                    }
-                    // type: messageType // If 'type' is a direct field
-                },
-                timestamp: Date.now(), // Timestamp of the error event
-                fromAgentId: fromAgentId, // Sender of the original message
-                channelId: channelId, // Channel ID
-                messageId: messageId // Original message ID
-            };
-
-            const errorPayload = createMessagePersistFailedEventPayload(
-                Events.Message.MESSAGE_PERSIST_FAILED,
-                agentId, // Agent attempting the operation
-                channelId,
-                errorData
-            );
-            
-            this.eventBus.emit(Events.Message.MESSAGE_PERSIST_FAILED, errorPayload);
-            throw error; // Re-throw the error to be caught by sendMessage if called from there
-        }
+    /** Persist one canonical history record before reporting success to the caller. */
+    private async persistChannelMessage(message: ChannelMessage): Promise<ChannelMessage> {
+        const channelId = message.context.channelId;
+        const historyMessage = normalizeChannelHistoryMessage(message, channelId);
+        await firstValueFrom(this.channelMessageOperations.addMessage(channelId, historyMessage));
+        // Channel activity remains channel metadata; history lives only in ChannelMemory.
+        await Channel.updateOne({ channelId, active: true }, { $set: { lastActive: new Date() } });
+        return message;
     }
 
-    /**
-     * Sends a message to a channel.
-     * This involves persisting it and then broadcasting it.
-     * @param channelId The ID of the channel.
-     * @param messageId Unique ID for the message.
-     * @param fromAgentId The ID of the agent sending the message.
-     * @param content The content of the message.
-     * @param messageType The type of message (e.g., 'text', 'command').
-     * @param clientTimestamp Optional client-side timestamp.
-     * @param metadata Optional additional metadata for the message.
-     * @returns A promise that resolves with the persisted ChannelMessage.
-     */
+    /** Persist a channel message, then publish it through the ordinary EventBus route. */
     public async sendMessage(
         channelId: ChannelId,
         messageId: string,
         fromAgentId: AgentId,
-        content: any, // Should ideally be typed, e.g., string | Record<string, any>
+        content: ChannelMessage['content']['data'],
         messageType: string = 'text',
-        clientTimestamp?: number, 
-        metadata?: Partial<MessageMetadata> // Allow partial metadata override
+        clientTimestamp?: number,
+        metadata?: Partial<MessageMetadata>
     ): Promise<ChannelMessage> {
-        this.validator.assertIsNonEmptyString(channelId, 'channelId for sendMessage');
-        this.validator.assertIsNonEmptyString(messageId, 'messageId for sendMessage');
-        this.validator.assertIsNonEmptyString(fromAgentId, 'fromAgentId for sendMessage');
-        this.validator.assert(content !== undefined, 'content for sendMessage cannot be undefined');
-
-        const serverTimestamp = Date.now();
-
-        // Determine content format dynamically based on content type and messageType
-        // ContentFormat supports: JSON, BINARY, BASE64, TEXT
-        let detectedFormat = ContentFormat.TEXT;
-        if (messageType === 'json' || (typeof content === 'object' && content !== null)) {
-            detectedFormat = ContentFormat.JSON;
-        } else if (messageType === 'binary' || Buffer.isBuffer(content)) {
-            detectedFormat = ContentFormat.BINARY;
-        } else if (messageType === 'base64') {
-            detectedFormat = ContentFormat.BASE64;
-        }
-        // Markdown and HTML content is stored as TEXT format
-
-        // Prepare the message content for persistence and event emission
-        const channelMessageContent: ContentWrapper = {
-            format: detectedFormat,
-            data: content,
-        };
-
-        // Construct metadata, ensuring messageId is present
-        const messageFullMetadata: MessageMetadata = {
-            messageId: messageId,
-            timestamp: serverTimestamp,
-            // clientTimestamp is not a direct field of MessageMetadata, so it's omitted here
-            // If it needs to be stored, it should be part of a custom field within the broader metadata object if ChannelMessage allows
-            ...(metadata || {}),
-        };
-
-        // Create the ChannelMessage object for persistence
-        // Note: The persistChannelMessage method will handle the actual DB interaction
-        const messageToPersist: ChannelMessage = {
-            toolType: 'channelMessage',
-            senderId: fromAgentId,
-            content: channelMessageContent,
-            metadata: messageFullMetadata,
-            context: {
-                channelId: channelId,
-                // Add other relevant context if needed, e.g., fromAgentId, messageType
+        const message = createChannelMessage(channelId, fromAgentId, content, {
+            format: messageType === 'json' ? ContentFormat.JSON
+                : messageType === 'binary' || Buffer.isBuffer(content) ? ContentFormat.BINARY
+                    : messageType === 'base64' ? ContentFormat.BASE64 : undefined,
+            metadata: {
+                ...metadata,
+                messageId,
+                timestamp: metadata?.timestamp ?? clientTimestamp ?? Date.now()
             },
-        } as ChannelMessage; // Cast to ensure type compatibility, review if ChannelMessage structure has more specific context requirements
-
-
+            context: { messageType }
+        });
         try {
-            // Log before attempting to persist and broadcast
-
-            // Persist the message first
-            // The persistChannelMessage method in ChannelContextMessageOperations expects a specific structure.
-            // We will call our own persistChannelMessage which should correctly adapt the message.
-            const persistedMessage = await this.persistChannelMessage(
-                channelId, 
-                messageId, 
-                fromAgentId, 
-                content, 
-                fromAgentId, // agentId for persistence context, typically sender
-                metadata,    // Pass existing metadata
-                clientTimestamp, 
-                messageType
-            );
-
-            // Broadcast the message to the channel using Socket.IO
-            // The payload for Socket.IO emission should be what clients expect, typically MessageEventData
-            const messageEventPayload: MessageEventData = {
-                message: persistedMessage, // Use the message returned by persistChannelMessage
-                timestamp: serverTimestamp, 
-                // clientTimestamp can be part of the payload if your MessageEventData schema includes it
-            };
-
-            this.io.to(channelId).emit(Events.Message.CHANNEL_MESSAGE, messageEventPayload);
-
-            // Notify via event bus for internal listeners (e.g., logging, metrics)
-            // Use proper EventBus payload structure with createChannelMessageEventPayload
-            const eventBusPayload = createChannelMessageEventPayload(
-                Events.Message.CHANNEL_MESSAGE_DELIVERED,
-                fromAgentId,
-                persistedMessage // This is the ChannelMessage with proper structure
-            );
-            this.eventBus.emit(Events.Message.CHANNEL_MESSAGE_DELIVERED, eventBusPayload);
-
-            // Return the persisted message (or the messageToPersist object, as persist returns void now)
-            // For consistency, if persistChannelMessage were to return the persisted object, that would be ideal.
-            // For now, returning the constructed message.
-            return persistedMessage;
-
-        } catch (error: any) {
-            this.logger.error(`Error sending message in channel ${channelId}: ${error.message}`);
-            // Use the new specific event for send failure
-            const errorData: MessageSendFailedPayload = {
-                error: error.message, 
-                originalMessage: { // Construct a partial message for the payload
-                    senderId: fromAgentId,
-                    content: { data: content, format: ContentFormat.TEXT } as ContentWrapper, 
-                    metadata: { 
-                        messageId: messageId,
-                        timestamp: serverTimestamp, // Use serverTimestamp for error metadata
-                        ...(metadata || {}), 
-                        // clientTimestamp removed
-                    },
-                    context: { channelId, channelContextType: 'CONVERSATION_HISTORY' as any }
-                },
-                timestamp: Date.now(),
-                fromAgentId: fromAgentId,
-                channelId: channelId,
-                messageId: messageId
-            };
-            const errorPayload = createMessageSendFailedEventPayload(
-                Events.Message.MESSAGE_SEND_FAILED,
-                fromAgentId, // Agent attempting the operation
-                channelId,
-                errorData
-            );
-            
-            this.eventBus.emit(Events.Message.MESSAGE_SEND_FAILED, errorPayload);
-            throw error; 
+            await this.persistChannelMessage(message);
+            // The normal listener may append again. Canonical message-ID dedupe
+            // makes that persistence attempt idempotent; only this event is sent.
+            this.eventBus.emit(Events.Message.CHANNEL_MESSAGE, createChannelMessageEventPayload(
+                Events.Message.CHANNEL_MESSAGE, fromAgentId, message
+            ));
+            return message;
+        } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            this.logger.error(`Error sending message in channel ${channelId}: ${errorMessage}`);
+            this.eventBus.emit(Events.Message.MESSAGE_SEND_FAILED, createMessageSendFailedEventPayload(
+                Events.Message.MESSAGE_SEND_FAILED, fromAgentId, channelId,
+                { error: errorMessage, originalMessage: message, timestamp: Date.now(), fromAgentId, channelId, messageId }
+            ));
+            throw error;
         }
     }
 
-    /**
-     * Persists multiple channel messages efficiently in bulk
-     * @param channelId - Channel ID to persist messages to  
-     * @param messages - Array of channel messages to persist
-     */
+    /** Append a validated batch to canonical history without changing its raw content. */
     public persistChannelMessagesBulk = async (channelId: ChannelId, messages: ChannelMessage[]): Promise<void> => {
         try {
-            // Validate inputs
             this.validator.assertIsNonEmptyString(channelId, 'Channel ID is required');
             if (!Array.isArray(messages) || messages.length === 0) {
                 throw new Error('Messages array is required and must not be empty');
             }
-
-            
-            // Convert ChannelMessage (from schemas) to ChannelMessage (from types) for operations
-            const convertedMessages = messages.map(msg => ({
-                messageId: msg.metadata?.messageId || `msg_${uuidv4()}`,
-                content: typeof msg.content?.data === 'string' ? msg.content.data : JSON.stringify(msg.content?.data || ''),
-                senderId: msg.senderId,
-                timestamp: msg.metadata?.timestamp || Date.now(),
-                type: 'text' as const,
-                metadata: msg.metadata || {}
-            }));
-
-            // Persist messages to MongoDB using bulkWrite for efficiency
-            const bulkOps = convertedMessages.map(msg => ({
-                updateOne: {
-                    filter: { channelId },
-                    update: {
-                        $push: {
-                            'sharedMemory.conversationHistory': {
-                                messageId: msg.messageId,
-                                content: msg.content,
-                                senderId: msg.senderId,
-                                timestamp: msg.timestamp,
-                                type: msg.type,
-                                metadata: msg.metadata
-                            }
-                        },
-                        $set: {
-                            'sharedMemory.updatedAt': new Date(),
-                            lastActive: new Date()
-                        }
-                    }
+            const convertedMessages = messages.map(message => normalizeChannelHistoryMessage(message, channelId));
+            await firstValueFrom(this.channelMessageOperations.addMessages(channelId, convertedMessages));
+            await Channel.updateOne({ channelId, active: true }, { $set: { lastActive: new Date() } });
+            this.eventBus.emit(Events.Channel.BULK_MESSAGES_PERSISTED, createChannelEventPayload(
+                Events.Channel.BULK_MESSAGES_PERSISTED, convertedMessages[0].senderId, channelId,
+                {
+                    action: 'updated', channelId, messageCount: messages.length,
+                    messageIds: convertedMessages.map(message => message.messageId)
                 }
-            }));
-
-            await Channel.bulkWrite(bulkOps);
-
-            // Emit bulk persistence success event
-            this.eventBus.emit(Events.Channel.BULK_MESSAGES_PERSISTED, {
-                channelId: channelId,
-                messageCount: messages.length,
-                messageIds: convertedMessages.map(m => m.messageId),
-                timestamp: Date.now()
-            });
-            
+            ));
         } catch (error) {
-            this.logger.error(`Failed to persist ${messages.length} messages to channel ${channelId} in bulk:`, error instanceof Error ? error.message : String(error));
+            this.logger.error(`Failed to persist message batch to channel ${channelId}: ${error instanceof Error ? error.message : String(error)}`);
             throw error;
         }
     };

@@ -85,6 +85,22 @@ export class MxfContextBuilder {
         activeAgents?: string[],
         currentOrparPhase?: 'Observe' | 'Reason' | 'Plan' | 'Act' | 'Reflect' | null
     ): Promise<AgentContext> {
+        // Bare requests contain operator text and recorded dialogue only. Return
+        // before template expansion, action lookup, or optional context transforms.
+        if (agentConfig.promptMode === 'bare') {
+            return {
+                systemPrompt,
+                promptMode: 'bare',
+                agentConfig,
+                currentTask: null,
+                conversationHistory,
+                recentActions: [],
+                availableTools,
+                agentId: agentConfig.agentId,
+                channelId,
+                timestamp: Date.now()
+            };
+        }
         
         // Replace dynamic templates in system prompt (date/time, agent/channel context)
         // This happens fresh on every request without modifying the cached system prompt
@@ -219,6 +235,7 @@ export class MxfContextBuilder {
         const context: AgentContext = {
             // Core context - use enhanced system prompt with templates replaced
             systemPrompt: enhancedSystemPrompt,
+            promptMode: agentConfig.promptMode,
             agentConfig,
             currentTask: taskContext,
 

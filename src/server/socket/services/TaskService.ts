@@ -32,6 +32,7 @@ import { Events } from '@mxf-dev/core/events/EventNames';
 import { SystemLlmService } from './SystemLlmService';
 import { SystemLlmServiceManager } from './SystemLlmServiceManager';
 import { AgentService } from './AgentService';
+import { isTaskIntelligentAssignmentEnabled } from '@mxf-dev/core/config/AgentExperimentConfig';
 import { ConfigManager } from '@mxf-dev/core/config/ConfigManager';
 import { EphemeralEventPatternService } from './EphemeralEventPatternService';
 import {
@@ -47,7 +48,7 @@ import {
     AssignmentStrategy,
     TaskCompletionOutput
 } from '@mxf-dev/core/types/TaskTypes';
-import { TaskEventData, createTaskEventPayload } from '@mxf-dev/core/schemas/EventPayloadSchema';
+import { createTaskEventPayload, createTaskOrchestrationConfigEventPayload } from '@mxf-dev/core/schemas/EventPayloadSchema';
 import { AgentId } from '@mxf-dev/core/types/Agent';
 import { ChannelId } from '@mxf-dev/core/types/ChannelContext';
 import { v4 as uuidv4 } from 'uuid';
@@ -115,9 +116,12 @@ export class TaskService {
     private orchestrationSubscriptions: Subscription[] = [];
     private agentService: AgentService | null = null;
     
+    // Runtime orchestration settings cannot exceed the policy captured at startup.
+    private readonly intelligentAssignmentEnabledByServer = isTaskIntelligentAssignmentEnabled();
+
     // Configuration for task orchestration
     private config: TaskOrchestrationConfig = {
-        enableIntelligentAssignment: true,
+        enableIntelligentAssignment: this.intelligentAssignmentEnabledByServer,
         enableWorkloadBalancing: true,
         enableExpertiseMatching: true,
         maxTasksPerAgent: 5,
@@ -769,6 +773,12 @@ export class TaskService {
      * Assign task using SystemLLM intelligence with multi-agent support
      */
     public async assignTaskIntelligently(taskId: string): Promise<TaskAssignmentResult> {
+        if (!this.intelligentAssignmentEnabledByServer) {
+            throw new Error(
+                'Intelligent task assignment is disabled by TASK_INTELLIGENT_ASSIGNMENT_ENABLED=false'
+            );
+        }
+
         const task = await Task.findById(taskId);
         if (!task) {
             throw new Error(`Task ${taskId} not found`);
@@ -2048,7 +2058,7 @@ Respond with JSON:
             await this.analyzeChannelWorkload(task.channelId);
 
             // Skip assignment if intelligent assignment is disabled
-            if (!this.config.enableIntelligentAssignment) {
+            if (!this.intelligentAssignmentEnabledByServer || !this.config.enableIntelligentAssignment) {
                 return;
             }
 
@@ -2222,7 +2232,7 @@ Respond with JSON:
                 }
             }
             
-        } catch (error: any) {
+        } catch (error: unknown) {
             this.logger.error(`❌ Failed to optimize task assignments: ${error}`);
         }
     }
@@ -2231,20 +2241,21 @@ Respond with JSON:
      * Update orchestration configuration
      */
     public updateOrchestrationConfig(newConfig: Partial<TaskOrchestrationConfig>): void {
-        this.config = { ...this.config, ...newConfig };
-        
-        // Emit configuration update event
-        const eventPayload = createTaskEventPayload(
+        if (!this.intelligentAssignmentEnabledByServer && newConfig.enableIntelligentAssignment === true) {
+            throw new Error(
+                'Cannot enable intelligent task assignment while TASK_INTELLIGENT_ASSIGNMENT_ENABLED=false'
+            );
+        }
+
+        const nextConfig = { ...this.config, ...newConfig };
+        // Configuration changes have their own payload; they are not synthetic tasks.
+        const eventPayload = createTaskOrchestrationConfigEventPayload(
             Events.Task.ORCHESTRATION_CONFIG_UPDATED,
-            'system', // emittingAgentId - orchestrator is system-level
-            'global', // channelId - config is global
-            {
-                taskId: `config-update-${Date.now()}`,
-                fromAgentId: 'system',
-                toAgentId: 'system',
-                task: { config: this.config } as any
-            }
+            'system',
+            'global',
+            nextConfig
         );
+        this.config = nextConfig;
         EventBus.server.emit(Events.Task.ORCHESTRATION_CONFIG_UPDATED, eventPayload);
     }
 

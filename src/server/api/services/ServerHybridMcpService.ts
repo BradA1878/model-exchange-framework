@@ -47,7 +47,6 @@ import { McpToolRegistry } from './McpToolRegistry';
 import { firstValueFrom } from 'rxjs';
 import { EventBus } from '@mxf-dev/core/events/EventBus';
 import { McpEvents } from '@mxf-dev/core/events/event-definitions/McpEvents';
-import fs from 'fs';
 import path from 'path';
 import { createExternalMcpServerToolsDiscoveredEventPayload } from '@mxf-dev/core/schemas/EventPayloadSchema';
 import type { AgentId, ChannelId } from '@mxf-dev/core/types/ChannelContext';
@@ -165,31 +164,6 @@ export class ServerHybridMcpService {
     }
 
     /**
-     * Ensure required directories exist for external MCP servers
-     */
-    private async ensureRequiredDirectories(): Promise<void> {
-        const requiredDirectories = [
-            '/tmp/mcp-workspace'  // Required by Filesystem MCP server
-        ];
-
-        for (const dir of requiredDirectories) {
-            try {
-                // Check if directory exists
-                await fs.promises.access(dir, fs.constants.F_OK);
-            } catch (error) {
-                // Directory doesn't exist, create it
-                try {
-                    await fs.promises.mkdir(dir, { recursive: true });
-                } catch (createError) {
-                    const errorMessage = createError instanceof Error ? createError.message : String(createError);
-                    logger.error(`❌ Failed to create directory ${dir}: ${errorMessage}`);
-                    throw new Error(`Failed to create required directory ${dir}: ${errorMessage}`);
-                }
-            }
-        }
-    }
-
-    /**
      * Initialize the hybrid MCP service
      */
     public async initialize(): Promise<void> {
@@ -200,9 +174,6 @@ export class ServerHybridMcpService {
 
 
         try {
-            // Ensure required directories exist before starting servers
-            await this.ensureRequiredDirectories();
-
             // Start priority external servers (clean startup - no stopping needed)
             if (this.config.autoStartPriorityServers) {
                 await this.startPriorityExternalServers();

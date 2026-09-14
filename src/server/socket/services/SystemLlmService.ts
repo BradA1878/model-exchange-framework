@@ -37,6 +37,7 @@ import { Observable, Subscription, catchError, map, of, lastValueFrom } from 'rx
 import { EventBus } from '@mxf-dev/core/events/EventBus';
 import { Events } from '@mxf-dev/core/events/EventNames';
 import { Logger } from '@mxf-dev/core/utils/Logger';
+import { publicChannelMessages, readChannelHistoryDmVisibility, isPrivateChannelMessage } from '@mxf-dev/core/utils/ChannelHistoryVisibility';
 import { Observation, Reasoning, PlanAction, Plan, Reflection } from '@mxf-dev/core/types/ControlLoopTypes';
 import { LlmProviderType } from '@mxf-dev/core/protocols/mcp/LlmProviders';
 import { COMMUNICATION_TOOLS, CONTEXT_MEMORY_TOOLS, META_TOOLS } from '@mxf-dev/core/constants/ToolNames';
@@ -2659,7 +2660,7 @@ Return the interpreted action with confidence score (0-1).`;
             try {
                 // Convert channel messages to the expected format
                 const extractionInput: TopicsExtractionInput = {
-                    messages: messages.map(msg => ({
+                    messages: publicChannelMessages(messages).map(msg => ({
                         content: this.extractConversationContent(msg.content),
                         messageId: msg.messageId,
                         timestamp: msg.timestamp
@@ -2727,7 +2728,7 @@ Return the interpreted action with confidence score (0-1).`;
             try {
                 // Convert channel messages to the expected format
                 const summaryInput: ConversationSummaryInput = {
-                    messages: messages.map(msg => ({
+                    messages: publicChannelMessages(messages).map(msg => ({
                         content: this.extractConversationContent(msg.content),
                         messageId: msg.messageId,
                         senderId: msg.senderId,
@@ -4055,6 +4056,13 @@ Create a helpful, contextual hint that provides value without being intrusive. K
             }
             
             if (!message) {
+                return;
+            }
+
+            // Coordination is shared with the channel. A private DM cannot
+            // become input to a globally visible suggestion or activity summary.
+            if (readChannelHistoryDmVisibility() === 'parties' &&
+                (message.toolType === 'agentMessage' || message.receiverId || isPrivateChannelMessage(message))) {
                 return;
             }
 

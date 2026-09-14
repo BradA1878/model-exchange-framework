@@ -32,6 +32,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { awaitEventResponse, EventRequestError } from '../services/internal/EventRequest.js';
 import {
     BaseEventPayload,
+    EventCorrelation,
     McpToolRegisteredEventPayload,
     McpToolUnregisteredEventPayload,
     McpToolCallEventPayload,
@@ -189,7 +190,9 @@ export class McpToolHandlers extends McpHandler {
      * @param channelId Channel ID where to call the tool
      * @returns Promise resolving to the tool result
      */
-    public callTool = (name: string, input: any, channelId: string): Promise<any> => {
+    public callTool = (
+        name: string, input: McpToolCallEventPayload['data']['arguments'], channelId: string, correlation: EventCorrelation = {}
+    ): Promise<McpToolResultEventPayload['data']['result']> => {
         return new Promise((resolve, reject) => {
             try {
                 // Generate request ID
@@ -274,7 +277,8 @@ export class McpToolHandlers extends McpHandler {
                     Events.Mcp.TOOL_CALL,
                     this.agentId,
                     channelId, // Use the method parameter channelId
-                    mcpDataForCall
+                    mcpDataForCall,
+                    correlation
                 );
                 this.mxfService.socketEmit(Events.Mcp.TOOL_CALL, callPayload); // Revert previous change and use mxfService.socketEmit for proper server routing
             } catch (error) {

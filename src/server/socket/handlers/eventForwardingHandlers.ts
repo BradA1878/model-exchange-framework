@@ -24,10 +24,12 @@
  * Handles forwarding events between EventBus and Socket.IO with priority queue system
  */
 
+import { isServerMxpEnabled } from '@mxf-dev/core/config/AgentExperimentConfig';
 import { Socket } from 'socket.io';
 import { ISocketService } from '@mxf-dev/core/interfaces/SocketServiceInterface';
 import {
     Events,
+    ChannelActionTypes,
     CoreSocketEvents,
     ControlLoopEvents,
     OrparEvents,
@@ -38,6 +40,7 @@ import { TaskEvents } from '@mxf-dev/core/events/event-definitions/TaskEvents';
 import { UserInputEvents } from '@mxf-dev/core/events/event-definitions/UserInputEvents';
 import { UserInputRequestManager } from '@mxf-dev/core/services/UserInputRequestManager';
 import { createStrictValidator } from '@mxf-dev/core/utils/validation';
+import { projectChannelMemoryResource } from '@mxf-dev/core/utils/ChannelHistoryVisibility';
 import { isAgentSocketMcpEventAllowed } from '../../api/middleware/runtimeFeaturePolicy';
 import { logger , Logger } from '@mxf-dev/core/utils/Logger';
 import { EventBus } from '@mxf-dev/core/events/EventBus';
@@ -622,7 +625,7 @@ export const setupEventBusToSocketForwarding = (socketService: ISocketService): 
                 
                 // Process MXP messages on the server side
                 let processedPayload = payload;
-                if (payload.data && isMxpMessage(payload.data.content)) {
+                if (isServerMxpEnabled() && payload.data && isMxpMessage(payload.data.content)) {
                     try {
                         // Server-side MXP processing
                         // 1. Decrypt the incoming message
@@ -693,7 +696,7 @@ export const setupEventBusToSocketForwarding = (socketService: ISocketService): 
                 
                 // Process MXP messages on the server side
                 let processedPayload = payload;
-                if (payload.data && isMxpMessage(payload.data.content)) {
+                if (isServerMxpEnabled() && payload.data && isMxpMessage(payload.data.content)) {
                     try {
                         // Server-side MXP processing for direct messages
                         // 1. Decrypt the incoming message
@@ -1263,6 +1266,20 @@ export const setupSocketToEventBusForwarding = (
         validator.assertIsNonEmptyString(agentId);
         // channelId can be undefined or empty if not in a channel context, so no assertion here
 
+
+        // An authenticated agent socket is bound to one channel. Leaving closes
+        // that connection and uses the same owned cleanup path as disconnect.
+        socket.on(Events.Agent.LEAVE_CHANNEL, (payload: unknown) => {
+            if (!isRecord(payload) || !assertMatchesSocketIdentity(Events.Agent.LEAVE_CHANNEL, payload, agentId, channelId)) return;
+            const data = isRecord(payload.data) ? payload.data : {};
+            if ((data.agentId !== undefined && data.agentId !== agentId) ||
+                (data.channelId !== undefined && data.channelId !== channelId)) return;
+            EventBus.server.emit(Events.Agent.LEAVE_CHANNEL, createBaseEventPayload(
+                Events.Agent.LEAVE_CHANNEL, agentId, channelId,
+                { action: ChannelActionTypes.LEAVE, agentId, channelId }
+            ));
+            socket.disconnect(true);
+        });
 
         // Forward core socket events like subscribe/unsubscribe
         // Note: We exclude Socket.IO's built-in reserved events (connect, disconnect, etc.) 
@@ -1857,6 +1874,25 @@ export const forwardEventToAgent = (
             'Agent-targeted event payload.channelId is required'
         );
         
+        // Apply privacy before either delivery path. Internal memory listeners
+        // still receive the complete canonical record, while queued socket data
+        // contains only this authenticated recipient's view.
+        if ((eventName === Events.Memory.GET_RESULT || eventName === Events.Memory.UPDATE_RESULT) &&
+            payload.data?.scope === 'channel' && !payload.data.error) {
+            let data: Record<string, unknown>;
+            try {
+                data = {
+                    ...payload.data,
+                    memory: projectChannelMemoryResource(payload.data.memory, payload.data.id, payload.channelId, agentId)
+                };
+            } catch (error) {
+                // Settle rejected reads instead of dropping the response and
+                // leaving the SDK waiting for a request it cannot complete.
+                data = { ...payload.data, memory: null, error: error instanceof Error ? error.message : String(error) };
+            }
+            payload = createBaseEventPayload(eventName, payload.agentId, payload.channelId, data, payload);
+        }
+
         // Check if queuing is enabled
         if (eventQueue.isEnabled()) {
             // Queue the event with appropriate priority

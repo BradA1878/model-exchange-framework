@@ -30,6 +30,9 @@
 
 import { v4 as uuidv4 } from 'uuid';
 import { BaseMcpClient } from './BaseMcpClient.js';
+import { observeMcpRequest } from '../RequestObservation.js';
+import { buildBareChatTools, buildBareContextMessages, parseNativeToolArguments, validateNativeToolInput, type BareChatMessage } from './BareContextMessages.js';
+import { reportedTokenUsage } from './ProviderUsage.js';
 import { 
     McpMessage, 
     McpTool, 
@@ -67,7 +70,7 @@ interface XaiMessage {
         args?: Record<string, any>;
     }>;
     tool_call_id?: string;
-    tool_calls?: Array<{
+    tool_calls?: BareChatMessage['tool_calls'] | Array<{
         id: string;
         name: string;
         args: Record<string, any>;
@@ -90,7 +93,7 @@ interface XaiResponse {
         message: XaiMessage;
         finish_reason: string;
     }>;
-    usage: {
+    usage?: {
         prompt_tokens: number;
         completion_tokens: number;
         total_tokens: number;
@@ -243,7 +246,7 @@ export class XaiMcpClient extends BaseMcpClient {
      * @param response - X.ai response to convert
      * @returns MCP formatted response
      */
-    private convertToMcpResponse(response: XaiResponse): McpApiResponse {
+    private convertToMcpResponse(response: XaiResponse, strictToolArguments = false): McpApiResponse {
         // Get first choice from response
         if (!response.choices || response.choices.length === 0) {
             throw new Error('X.ai response does not contain any choices');
@@ -291,8 +294,10 @@ export class XaiMcpClient extends BaseMcpClient {
                 const toolUseContent: McpToolUseContent = {
                     type: McpContentType.TOOL_USE,
                     id: toolCall.id,
-                    name: toolCall.name,
-                    input: toolCall.args
+                    name: 'function' in toolCall ? toolCall.function.name : toolCall.name,
+                    input: strictToolArguments
+                        ? ('function' in toolCall ? parseNativeToolArguments(toolCall.function.arguments) : validateNativeToolInput(toolCall.args))
+                        : ('function' in toolCall ? JSON.parse(toolCall.function.arguments) : toolCall.args)
                 };
                 content.push(toolUseContent);
             });
@@ -307,11 +312,7 @@ export class XaiMcpClient extends BaseMcpClient {
             model: response.model,
             stop_reason: choice.finish_reason || null,
             stop_sequence: null,
-            usage: {
-                input_tokens: response.usage.prompt_tokens,
-                output_tokens: response.usage.completion_tokens,
-                total_tokens: response.usage.total_tokens
-            }
+            usage: reportedTokenUsage('Xai', response.usage?.prompt_tokens, response.usage?.completion_tokens, response.usage?.total_tokens)
         };
     }
     
@@ -365,14 +366,16 @@ export class XaiMcpClient extends BaseMcpClient {
                 Object.assign(requestBody, options.providerOptions);
             }
             
-            // Make the API request
+            const serializedBody = JSON.stringify(requestBody);
+            const observation = observeMcpRequest('xai', requestBody.model, serializedBody, options?.requestTrace);
+            // The capture receives a copy; send the serialized string unchanged.
             const response = await fetch(`${this.baseUrl}/chat/completions`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                     'Authorization': `Bearer ${this.config.apiKey}`
                 },
-                body: JSON.stringify(requestBody)
+                body: serializedBody
             });
             
             // Check for errors
@@ -389,7 +392,7 @@ export class XaiMcpClient extends BaseMcpClient {
             
             // Parse and convert response
             const xaiResponse = await response.json() as XaiResponse;
-            return this.convertToMcpResponse(xaiResponse);
+            return { ...this.convertToMcpResponse(xaiResponse), request: observation.complete({ finishReason: xaiResponse.choices[0]?.finish_reason }) };
         } catch (error) {
             throw new Error(`Error sending message to X.ai: ${error instanceof Error ? error.message : String(error)}`);
         }
@@ -433,7 +436,7 @@ export class XaiMcpClient extends BaseMcpClient {
 
         // Convert tools - X.ai uses OpenAI-compatible format
         const xaiTools = context.availableTools && context.availableTools.length > 0
-            ? convertToolsToProviderFormat(context.availableTools as McpTool[], 'xai')
+            ? (context.promptMode === 'bare' ? buildBareChatTools(context.availableTools as McpTool[]) : convertToolsToProviderFormat(context.availableTools as McpTool[], 'xai'))
             : undefined;
 
         // Prepare request parameters
@@ -455,14 +458,17 @@ export class XaiMcpClient extends BaseMcpClient {
             requestBody.tool_choice = 'auto';
         }
 
-        // Make the API request
+        if (options?.providerOptions) Object.assign(requestBody, options.providerOptions);
+        const serializedBody = JSON.stringify(requestBody);
+        const observation = observeMcpRequest('xai', requestBody.model, serializedBody, options?.requestTrace);
+        // The capture receives a copy; send the serialized string unchanged.
         const response = await fetch(`${this.baseUrl}/chat/completions`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
                 'Authorization': `Bearer ${this.config.apiKey}`
             },
-            body: JSON.stringify(requestBody)
+            body: serializedBody
         });
 
         // Check for errors
@@ -479,7 +485,7 @@ export class XaiMcpClient extends BaseMcpClient {
 
         // Parse and convert response
         const xaiResponse = await response.json() as XaiResponse;
-        return this.convertToMcpResponse(xaiResponse);
+        return { ...this.convertToMcpResponse(xaiResponse, context.promptMode === 'bare'), request: observation.complete({ finishReason: xaiResponse.choices[0]?.finish_reason }) };
     }
 
     /**
@@ -492,6 +498,7 @@ export class XaiMcpClient extends BaseMcpClient {
      * 4. Recent actions (if needed)
      */
     private structureMessagesFromContext(context: AgentContext): XaiMessage[] {
+        if (context.promptMode === 'bare') return buildBareContextMessages(context);
         const messages: XaiMessage[] = [];
 
         // 1. System message: Combine framework rules + agent identity

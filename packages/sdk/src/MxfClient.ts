@@ -41,6 +41,7 @@ import {
     AgentEventPayload,
     createAgentEventPayload,
     createBaseEventPayload,
+    EventCorrelation,
 } from '@mxf-dev/core/schemas/EventPayloadSchema';
 import { SimpleTaskResponse, TaskRequestHandler, TaskEndedHandler } from '@mxf-dev/core/interfaces/TaskInterfaces';
 import { AgentConfig, InternalAgentConfig } from '@mxf-dev/core/interfaces/AgentInterfaces';
@@ -1497,7 +1498,9 @@ export class MxfClient {
      * @returns Promise resolving to the tool execution result
      * @public
      */
-    public async executeTool(toolName: string, input: any, channelId?: string): Promise<any> {
+    public async executeTool(
+        toolName: string, input: Parameters<McpToolHandlers['callTool']>[1], channelId?: string, correlation: EventCorrelation = {}
+    ): ReturnType<McpToolHandlers['callTool']> {
         // Ensure we're connected before executing tools
         await this.ensureConnected();
         
@@ -1510,7 +1513,7 @@ export class MxfClient {
 
         // Route eligible tools to client-side executor (avoids Socket.IO round-trip)
         if (this.clientToolExecutor?.canExecuteLocally(toolName)) {
-            return this.clientToolExecutor.executeLocally(toolName, input, targetChannelId);
+            return this.clientToolExecutor.executeLocally(toolName, input, targetChannelId, correlation);
         }
 
         // Server-side execution path (existing behavior)
@@ -1518,7 +1521,7 @@ export class MxfClient {
             throw new Error('MCP tool handlers not initialized');
         }
 
-        return this.mcpToolHandlers.callTool(toolName, input, targetChannelId);
+        return this.mcpToolHandlers.callTool(toolName, input, targetChannelId, correlation);
     }
     
     /**
@@ -1790,7 +1793,26 @@ export class MxfClient {
             );
         }
 
-        const subscription = EventBus.client.on(eventName, handler);
+        // The EventBus is shared by all SDK agents in this process. An instance
+        // listener observes its own agent events and its own channel's traffic.
+        const subscription = EventBus.client.on(eventName, payload => {
+            const envelope = payload as {
+                agentId?: string; channelId?: string;
+                data?: { senderId?: string; receiverId?: string };
+            };
+            if (envelope.channelId !== this.channelId) return;
+            if (eventName === Events.Message.AGENT_MESSAGE ||
+                (eventName === Events.Message.CHANNEL_MESSAGE && envelope.data?.receiverId)) {
+                if (envelope.data?.senderId !== this.agentId && envelope.data?.receiverId !== this.agentId) return;
+            } else if (
+                (Object.values(Events.Agent).includes(eventName) || Object.values(Events.Mcp).includes(eventName)) &&
+                envelope.agentId !== this.agentId
+            ) {
+                return;
+            }
+            // Preserve async listener settlement for EventBus error handling and drain().
+            return handler(payload);
+        });
 
         // Keep the handler next to its subscription so off(event, handler) can find it.
         if (!this.eventListeners.has(eventName)) {

@@ -164,10 +164,19 @@ describe('MemoryPersistenceService atomic channel mutations', () => {
         expect(update).toHaveBeenCalledTimes(1);
         expect(update).toHaveBeenCalledWith(
             { channelId: CHANNEL_ID },
-            expect.objectContaining({
-                $push: { conversationHistory: { $each: [second] } }
-            }),
-            { upsert: true, new: true, setDefaultsOnInsert: true }
+            [expect.objectContaining({
+                $set: expect.objectContaining({
+                    conversationHistory: expect.objectContaining({
+                        $let: expect.objectContaining({
+                            in: { $concatArrays: ['$$existing', { $filter: {
+                                input: { $literal: [second] }, as: 'incoming',
+                                cond: { $not: [{ $in: ['$$incoming.messageId', { $map: { input: '$$existing', as: 'record', in: '$$record.messageId' } }] }] }
+                            } }] }
+                        })
+                    })
+                })
+            })],
+            { upsert: true, new: true, setDefaultsOnInsert: false }
         );
         expect(result).toEqual({ found: true, memory: stored, value: [first, second] });
     });

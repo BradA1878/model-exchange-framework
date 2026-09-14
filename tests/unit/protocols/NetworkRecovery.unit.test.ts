@@ -74,6 +74,60 @@ describe('NetworkRecoveryManager constructor validation', () => {
     });
 });
 
+describe('operation-owned progress bounds', () => {
+    beforeEach(() => { jest.useFakeTimers(); });
+    afterEach(() => { jest.useRealTimers(); });
+
+    it('does not impose a total-duration cap on an operation with its own progress bounds', async () => {
+        const manager = new NetworkRecoveryManager(buildConfig({ requestTimeoutMs: 10 }), 'test');
+        let finish!: (result: string) => void;
+        let settled = false;
+        const operation = manager.executeWithRetry(
+            () => new Promise<string>(resolve => { finish = resolve; }), undefined,
+            { operationOwnsTimeout: true }
+        ).then(result => { settled = true; return result; });
+        await jest.advanceTimersByTimeAsync(100000);
+        expect(settled).toBe(false);
+        finish('real result');
+        expect((await operation).data).toBe('real result');
+        expect(jest.getTimerCount()).toBe(0);
+    });
+
+    it('retries only the specifically allowed pre-data failure and caps total attempts', async () => {
+        const manager = new NetworkRecoveryManager(buildConfig({ maxRetries: 5 }), 'test');
+        const failure = new Error('First model data never arrived');
+        const call = jest.fn().mockRejectedValue(failure);
+        const operation = manager.executeWithRetry(call, undefined, {
+            operationOwnsTimeout: true, maxAttempts: 2, shouldRetry: error => error === failure
+        });
+        await jest.advanceTimersByTimeAsync(100);
+        const result = await operation;
+        expect(call).toHaveBeenCalledTimes(2);
+        expect(result.success).toBe(false);
+        expect(result.error?.originalError).toBe(failure);
+        expect(result.retryAttempts).toHaveLength(1);
+        expect(result.error?.maxRetries).toBe(2);
+    });
+
+    it('respects a lower operator attempt limit and never retries an excluded network error', async () => {
+        for (const maxRetries of [1, 5]) {
+            const manager = new NetworkRecoveryManager(buildConfig({ maxRetries }), 'test');
+            const call = jest.fn().mockRejectedValue(new Error('connection reset'));
+            await manager.executeWithRetry(call, undefined, {
+                operationOwnsTimeout: true, maxAttempts: 2, shouldRetry: () => maxRetries === 1
+            });
+            expect(call).toHaveBeenCalledTimes(1);
+        }
+    });
+
+    it.each([0, -1, 1.5, NaN, Infinity])('rejects invalid maxAttempts %s before starting', async maxAttempts => {
+        const manager = new NetworkRecoveryManager(buildConfig({}), 'test');
+        const call = jest.fn();
+        await expect(manager.executeWithRetry(call, undefined, { maxAttempts })).rejects.toThrow('positive integer');
+        expect(call).not.toHaveBeenCalled();
+    });
+});
+
 describe('executeWithRetry request bounding', () => {
     it('fails a never-settling operation after requestTimeoutMs plus the net grace instead of hanging', async () => {
         const manager = new NetworkRecoveryManager(buildConfig({ requestTimeoutMs: 60, maxRetries: 3 }), 'test');

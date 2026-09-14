@@ -99,6 +99,7 @@ import {
     MxfClient
 } from '@mxf-dev/sdk/MxfClient';
 import { Events } from '@mxf-dev/core/events/EventNames';
+import { createBaseEventPayload } from '@mxf-dev/core/schemas/EventPayloadSchema';
 import { UserInputEvents } from '@mxf-dev/core/events/event-definitions/UserInputEvents';
 import {
     IAgentMemory,
@@ -322,6 +323,54 @@ describe('MxfClient public event whitelist', () => {
         const client = newClient();
         expect(client.on(Events.Task.ASSIGNED, () => { /* noop */ })).toBe(client);
     });
+
+    it('isolates LLM and tool observers by agent and messages by channel and DM parties', () => {
+        const deliver = (event: string, agentId: string, channelId: string, data: unknown): void => {
+            bus._deliver(event, createBaseEventPayload(event, agentId, channelId, data));
+        };
+        const first = newClient();
+        const second = new MxfClient({ ...CONFIG, agentId: 'second' });
+        const firstResponse = jest.fn();
+        const secondResponse = jest.fn();
+        const firstTool = jest.fn();
+        const firstMessage = jest.fn();
+        const firstDm = jest.fn();
+        first.on(Events.Agent.LLM_RESPONSE, firstResponse);
+        second.on(Events.Agent.LLM_RESPONSE, secondResponse);
+        first.on(Events.Mcp.TOOL_RESULT, firstTool);
+        first.on(Events.Message.CHANNEL_MESSAGE, firstMessage);
+        first.on(Events.Message.AGENT_MESSAGE, firstDm);
+        deliver(Events.Agent.LLM_RESPONSE, 'second', CONFIG.channelId, 'Hello');
+        deliver(Events.Mcp.TOOL_RESULT, 'second', CONFIG.channelId, { callId: 'call' });
+        deliver(Events.Message.CHANNEL_MESSAGE, 'second', 'elsewhere', { senderId: 'second' });
+        deliver(Events.Message.AGENT_MESSAGE, 'second', CONFIG.channelId, { senderId: 'second', receiverId: 'third' });
+        deliver(Events.Message.CHANNEL_MESSAGE, 'second', CONFIG.channelId, { senderId: 'second', receiverId: 'third' });
+        expect(firstResponse).not.toHaveBeenCalled();
+        expect(secondResponse).toHaveBeenCalledTimes(1);
+        expect(firstTool).not.toHaveBeenCalled();
+        expect(firstMessage).not.toHaveBeenCalled();
+        expect(firstDm).not.toHaveBeenCalled();
+        deliver(Events.Message.AGENT_MESSAGE, 'second', CONFIG.channelId, { senderId: 'second', receiverId: CONFIG.agentId });
+        deliver(Events.Message.CHANNEL_MESSAGE, 'second', CONFIG.channelId, { senderId: 'second' });
+        expect(firstDm).toHaveBeenCalledTimes(1);
+        expect(firstMessage).toHaveBeenCalledTimes(1);
+    });
+
+    it('returns an async public listener promise to the EventBus for rejection handling and draining', async () => {
+        const client = newClient();
+        let reject!: (error: Error) => void;
+        const work = new Promise<void>((_resolve, fail) => { reject = fail; });
+        client.on(Events.Agent.LLM_RESPONSE, () => work);
+        const busOn = EventBus.client.on as jest.Mock;
+        const wrapper = busOn.mock.calls.filter(([event]) => event === Events.Agent.LLM_RESPONSE).pop()![1];
+        const returned = wrapper(createBaseEventPayload(
+            Events.Agent.LLM_RESPONSE, CONFIG.agentId, CONFIG.channelId, 'answer'
+        ));
+        expect(returned).toBe(work);
+        const observed = expect(returned).rejects.toThrow('listener failed');
+        reject(new Error('listener failed'));
+        await observed;
+    });
 });
 
 describe('MxfClient MCP process-management boundary', () => {
@@ -455,7 +504,7 @@ describe('MxfClient.off()', () => {
 
         client.off(Events.Task.ASSIGNED, drop);
 
-        bus._deliver(Events.Task.ASSIGNED, { data: { taskId: 't1' } });
+        bus._deliver(Events.Task.ASSIGNED, { channelId: CONFIG.channelId, data: { taskId: 't1' } });
 
         expect(keep).toHaveBeenCalledTimes(1);
         expect(drop).not.toHaveBeenCalled();

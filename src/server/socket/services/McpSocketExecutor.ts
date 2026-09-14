@@ -26,11 +26,11 @@
  */
 
 import { Observable, from, of, throwError, firstValueFrom } from 'rxjs';
-import { map, mergeMap, catchError, tap } from 'rxjs/operators';
+import { map, mergeMap, catchError } from 'rxjs/operators';
 import { createStrictValidator } from '@mxf-dev/core/utils/validation';
 import { Logger } from '@mxf-dev/core/utils/Logger';
 import { checkResultSize } from '@mxf-dev/core/utils/ToolPaginationUtils';
-import { McpToolHandlerContext, McpToolHandlerResult } from '@mxf-dev/core/protocols/mcp/McpServerTypes';
+import { McpToolHandlerContext, McpToolHandlerResult, getMcpToolResultData } from '@mxf-dev/core/protocols/mcp/McpServerTypes';
 import { McpToolInput } from '@mxf-dev/core/protocols/mcp/IMcpClient';
 import { Events } from '@mxf-dev/core/events/EventNames';
 import { EventBus } from '@mxf-dev/core/events/EventBus';
@@ -41,6 +41,7 @@ import { getHybridMcpToolRegistry } from '../../mcp/services/HybridMcpRegistryAc
 import { AutoCorrectionService } from '@mxf-dev/core/services/AutoCorrectionService';
 import { normalizeOrparParameters } from '@mxf-dev/core/utils/ParameterNormalizer';
 import { McpService } from './McpService';
+import { ToolExecutionPersistenceService } from '../../services/ToolExecutionPersistenceService';
 import {
     isAllowedByAgentPolicy,
     isAllowedByChannelPolicy,
@@ -50,6 +51,22 @@ import {
     UNSAFE_NETWORK_TOOLS_ENV,
     ToolAuthorizationError
 } from './ToolAuthorizationPolicy';
+
+/** Cancellation settles the request; tool handlers may still have side effects. */
+class ToolExecutionCancelledError extends Error {}
+
+interface AdmittedExecution {
+    toolName: string;
+    startTime: number;
+    channelId: string;
+    agentId: string;
+    context: McpToolHandlerContext;
+    start: Promise<void>;
+    resolve: (result: McpToolHandlerResult) => void;
+    reject: (error: Error) => void;
+    cancelled: boolean;
+    terminal?: Promise<Error | undefined>;
+}
 
 // Create validator for socket executor
 const validator = createStrictValidator('McpSocketExecutor');
@@ -62,6 +79,11 @@ const validator = createStrictValidator('McpSocketExecutor');
  * thrown error into content of type 'error' whose data is the message.
  */
 const describeToolResultFailure = (result: McpToolHandlerResult & { isError?: boolean }): string | null => {
+    if (Array.isArray(result.content)) {
+        if (result.isError !== true) return null;
+        const text = result.content.filter(block => block.type === 'text').map(block => block.text).join('\n');
+        return text || JSON.stringify(result.content);
+    }
     const content = result.content as { type?: unknown; data?: unknown } | undefined;
     const data = content?.data;
     const asText = (): string => (typeof data === 'string' ? data : JSON.stringify(data));
@@ -120,13 +142,8 @@ export class McpSocketExecutor {
     }> = new Map();
     
     // Map of ongoing tool executions by request ID
-    private executions: Map<string, { 
-        toolName: string; 
-        startTime: number;
-        channelId: string;
-        agentId: string;
-    }> = new Map();
-    
+    private executions = new Map<string, AdmittedExecution>();
+
     // Logger for socket executor
     private logger: Logger;
     
@@ -194,6 +211,8 @@ export class McpSocketExecutor {
                 // Create context
                 const context: McpToolHandlerContext = {
                     requestId: payload.data.callId,
+                    llmRequestId: payload.requestId,
+                    activationId: payload.activationId,
                     agentId: payload.agentId,
                     channelId: payload.channelId,
                     authorization: payload.authorization,
@@ -223,7 +242,8 @@ export class McpSocketExecutor {
                                 toolName: payload.data.toolName,
                                 callId: payload.data.callId,
                                 error: failure
-                            }
+                            },
+                            { requestId: context.llmRequestId, activationId: context.activationId }
                         ));
                         return;
                     }
@@ -234,10 +254,14 @@ export class McpSocketExecutor {
                         {
                             toolName: payload.data.toolName,
                             callId: payload.data.callId,
-                            result: result.content
-                        }
+                            result: getMcpToolResultData(result)
+                        },
+                        { requestId: context.llmRequestId, activationId: context.activationId }
                     ));
                 } catch (error) {
+                    // cancelExecution owns the cancellation event. Its terminal
+                    // write and the original request share the same outcome.
+                    if (error instanceof ToolExecutionCancelledError) return;
                     const errorMessage = error instanceof Error ? error.message : String(error);
                     this.logger.error(`Tool execution error for ${payload.data.toolName}: ${errorMessage}`);
 
@@ -249,7 +273,8 @@ export class McpSocketExecutor {
                             toolName: payload.data.toolName,
                             callId: payload.data.callId,
                             error: errorMessage
-                        }
+                        },
+                        { requestId: context.llmRequestId, activationId: context.activationId }
                     ));
                 }
             }
@@ -405,7 +430,7 @@ export class McpSocketExecutor {
                 ));
             }
 
-            if (!isPrivilegedHostToolEnabled(acceptedNames)) {
+            if (!isPrivilegedHostToolEnabled(acceptedNames, resolvedExternal, context.agentId)) {
                 return throwError(() => new ToolAuthorizationError(
                     `Tool '${toolName}' is a privileged host capability and requires ` +
                     `${UNSAFE_HOST_TOOLS_ENV}=true`
@@ -473,6 +498,12 @@ export class McpSocketExecutor {
                         const errorMessage = formatValidationError(validationResult, toolName, tool.inputSchema, normalizedInput);
                         this.logger.error(`Tool validation failed:\n${errorMessage}`);
 
+                        // Operator-disabled correction returns the original schema
+                        // error without invoking correction or pattern learning.
+                        if (!this.autoCorrectionService.getConfig().enabled) {
+                            return throwError(() => new Error(errorMessage));
+                        }
+
                         // Attempt auto-correction before failing
                         return from(this.autoCorrectionService.attemptCorrection(
                             context.agentId as string,  // Already validated above
@@ -489,10 +520,10 @@ export class McpSocketExecutor {
                                     const correctedValidationResult = validateToolInput(tool.inputSchema, correctionResult.correctedParameters);
                                     if (correctedValidationResult.valid) {
                                         // Use the corrected parameters
-                                        input = correctionResult.correctedParameters;
-                                        
-                                        // Continue with the corrected input by returning an observable that continues the flow
-                                        return of({ tool, correctedInput: correctionResult.correctedParameters });
+                                        return of({
+                                            tool,
+                                            correctedInput: correctedValidationResult.coercedInput ?? correctionResult.correctedParameters
+                                        });
                                     } else {
                                         // Corrected parameters still invalid
                                         const correctedErrorMessage = formatValidationError(correctedValidationResult, toolName, tool.inputSchema, correctionResult.correctedParameters);
@@ -515,100 +546,166 @@ export class McpSocketExecutor {
                     return of({ tool, correctedInput: validationResult.coercedInput || normalizedInput });
                     
                 }),
-                mergeMap(({ tool, correctedInput }) => {
-                    // Track execution - agentId and channelId are guaranteed to exist after validation
-                    this.executions.set(context.requestId, {
-                        toolName,
-                        startTime: Date.now(),
-                        channelId: context.channelId as string,
-                        agentId: context.agentId as string
-                    });
-
-                    // Log execution
-                    this.logger.info(`🔧 Tool called: "${toolName}" by Agent: ${context.agentId}`);
-
-                    // Execute the tool handler with the potentially corrected input
-                    return from(tool.handler(correctedInput, context)).pipe(
-                        map(result => {
-                            // Apply size checking to the result content for LLM feedback
-                            // This adds pagination hints for large results
-                            if (result.content && typeof result.content === 'object') {
-                                const checkedContent = checkResultSize(result.content, toolName, this.logger);
-                                return { ...result, content: checkedContent };
-                            }
-                            return result;
-                        }),
-                        tap(result => {
-                            // Log successful result
-                            // Remove from tracking on success
-                            this.executions.delete(context.requestId);
-                        }),
-                        catchError(error => {
-                            // Log error
-                            this.logger.error(`[MCP EXECUTOR ERROR] Tool ${toolName} failed, requestId: ${context.requestId}, error: ${error}`);
-                            // Remove from tracking on error
-                            this.executions.delete(context.requestId);
-                            return throwError(() => error);
-                        })
-                    );
-                })
+                mergeMap(({ tool, correctedInput }) => from(this.executeAdmittedTool(
+                    toolName,
+                    correctedInput,
+                    context,
+                    tool.handler,
+                    resolvedExternal?.isExternal ? resolvedExternal.source : undefined
+                )))
             );
         } catch (error) {
-            // Clean up on validation error
-            if (context && context.requestId) {
-                this.executions.delete(context.requestId);
-            }
+            // A rejected call never owns another execution's tracking entry.
             return throwError(() => error);
         }
     }
     
     /**
-     * Cancel a tool execution
-     * @param requestId Request ID to cancel
-     * @returns Observable that emits true if the execution was canceled
+     * Own one admitted operation through its audit writes and terminal outcome.
+     * Rejections above this boundary never create an execution record.
+     */
+    private async executeAdmittedTool(
+        toolName: string,
+        input: Record<string, unknown>,
+        context: McpToolHandlerContext,
+        handler: (input: McpToolInput, context: McpToolHandlerContext) => Promise<McpToolHandlerResult> | Observable<McpToolHandlerResult>,
+        serverId?: string
+    ): Promise<McpToolHandlerResult> {
+        if (this.executions.has(context.requestId)) {
+            throw new Error(`An execution already exists with requestId ${context.requestId}`);
+        }
+        // Keep terminal ownership separate from the context handed to a tool.
+        // A handler may annotate its copy, but cannot retarget audit/cancellation.
+        const executionContext = { ...context };
+        let resolve!: AdmittedExecution['resolve'];
+        let reject!: AdmittedExecution['reject'];
+        const result = new Promise<McpToolHandlerResult>((accept, fail) => {
+            resolve = accept;
+            reject = fail;
+        });
+        const execution: AdmittedExecution = {
+            toolName,
+            startTime: Date.now(),
+            agentId: executionContext.agentId!,
+            channelId: executionContext.channelId!,
+            context: executionContext,
+            // Defer the write until this operation owns its tracking entry.
+            start: Promise.resolve().then(() => ToolExecutionPersistenceService.getInstance().recordToolCallStart(
+                executionContext.requestId,
+                toolName,
+                serverId ? 'external' : 'internal',
+                input,
+                {
+                    agentId: executionContext.agentId,
+                    channelId: executionContext.channelId,
+                    serverId,
+                    metadata: {
+                        requestId: executionContext.llmRequestId,
+                        activationId: executionContext.activationId
+                    }
+                }
+            )),
+            resolve,
+            reject,
+            cancelled: false
+        };
+        this.executions.set(executionContext.requestId, execution);
+
+        // The request waits for the worker unless cancellation settles it first.
+        // Terminal ownership prevents a late handler from changing that outcome.
+        const run = async (): Promise<void> => {
+            try {
+                await execution.start;
+                if (execution.terminal) return;
+                this.logger.info(`Tool called: "${toolName}" by Agent: ${executionContext.agentId}`);
+                const handled = await firstValueFrom(from(handler(input, { ...executionContext })));
+                if (execution.terminal) return;
+                const checked = handled.content && typeof handled.content === 'object' && !Array.isArray(handled.content)
+                    ? { ...handled, content: checkResultSize(handled.content, toolName, this.logger) }
+                    : handled;
+                await this.finishExecution(execution, checked);
+            } catch (error) {
+                await this.finishExecution(execution, undefined, error instanceof Error ? error : new Error(String(error)));
+            }
+        };
+        void run();
+        return result;
+    }
+
+    /** Claim exactly one terminal write before any asynchronous persistence. */
+    private finishExecution(
+        execution: AdmittedExecution,
+        result?: McpToolHandlerResult,
+        error?: Error
+    ): Promise<Error | undefined> {
+        if (execution.terminal) return execution.terminal;
+        execution.terminal = (async (): Promise<Error | undefined> => {
+            let failure = error;
+            try {
+                await execution.start;
+                const persistence = ToolExecutionPersistenceService.getInstance();
+                const reportedFailure = error?.message ?? (result ? describeToolResultFailure(result) : null);
+                if (reportedFailure !== null) {
+                    await persistence.recordToolCallError(execution.context.requestId, reportedFailure);
+                } else {
+                    await persistence.recordToolCallComplete(execution.context.requestId, result ? getMcpToolResultData(result) : undefined, result?.metadata);
+                }
+            } catch (auditError) {
+                failure = new Error(`Tool execution audit failed: ${auditError instanceof Error ? auditError.message : String(auditError)}`);
+                this.logger.error(failure.message);
+            }
+            if (this.executions.get(execution.context.requestId) === execution) {
+                this.executions.delete(execution.context.requestId);
+            }
+            if (execution.cancelled) {
+                execution.reject(new ToolExecutionCancelledError(failure?.message ?? 'Execution canceled'));
+            } else if (failure) {
+                execution.reject(failure);
+            } else {
+                execution.resolve(result!);
+            }
+            return failure;
+        })();
+        return execution.terminal;
+    }
+
+    /**
+     * Settle a request as cancelled and retain that terminal audit outcome.
+     * Handlers do not accept an abort signal, so their side effects may continue;
+     * any late result or failure is observed but cannot publish another outcome.
      */
     public cancelExecution(requestId: string): Observable<boolean> {
         try {
-            // Validate input
             validator.assertIsNonEmptyString(requestId);
-            
-            // Check if execution exists
-            const executionDetails = this.executions.get(requestId);
-            if (!executionDetails) {
+            const execution = this.executions.get(requestId);
+            if (!execution || execution.terminal) {
                 return throwError(() => new Error(`No execution found with requestId ${requestId}`));
             }
-            
-            // Validate agentId and channelId
-            if (!executionDetails.agentId || !executionDetails.channelId) {
-                return throwError(() => new Error(`Invalid execution details for requestId ${requestId}`));
-            }
-            
-            // Remove from tracking
-            this.executions.delete(requestId);
-            
-            // Log cancellation
-            
-            // Emit cancellation event
-            EventBus.server.emit(
-                Events.Mcp.TOOL_ERROR, 
-                createMcpToolErrorPayload(
+            execution.cancelled = true;
+            const cancellation = new ToolExecutionCancelledError('Execution canceled');
+            return from(this.finishExecution(execution, undefined, cancellation).then((failure): boolean => {
+                EventBus.server.emit(
                     Events.Mcp.TOOL_ERROR,
-                    executionDetails.agentId,
-                    executionDetails.channelId,
-                    {
-                        toolName: executionDetails.toolName,
-                        callId: requestId,
-                        error: 'Execution canceled'
-                    }
-                )
-            );
-            
-            return of(true);
+                    createMcpToolErrorPayload(
+                        Events.Mcp.TOOL_ERROR,
+                        execution.agentId,
+                        execution.channelId,
+                        {
+                            toolName: execution.toolName,
+                            callId: requestId,
+                            error: failure?.message ?? cancellation.message
+                        },
+                        { requestId: execution.context.llmRequestId, activationId: execution.context.activationId }
+                    )
+                );
+                if (failure && failure !== cancellation) throw failure;
+                return true;
+            }));
         } catch (error) {
             return throwError(() => error);
         }
     }
-    
+
     /**
      * List MCP tools visible to an authenticated agent/channel context.
      * @param channelId Channel in which the tools will be used

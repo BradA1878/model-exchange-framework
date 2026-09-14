@@ -56,6 +56,8 @@ import {
 } from '../models/controlLoop.js';
 
 import { Logger } from '../utils/Logger.js';
+import { classifyChannelMemoryId } from '../utils/ChannelMemoryResourceIds.js';
+import { appendUniqueChannelMessages } from '../utils/ChannelHistoryMessages.js';
 import { EventBus } from '../events/EventBus.js';
 import { Events } from '../events/EventNames.js';
 import { createBaseEventPayload, createMemoryUpdateResultEventPayload,
@@ -193,6 +195,8 @@ export class MemoryService {
     private channelMemory: Map<string, IEnhancedChannelMemory> = new Map();
     private relationshipMemory: Map<string, IRelationshipMemory> = new Map();
     private generalData: Map<string, unknown> = new Map();
+    // Internal channel projections must never share the caller-controlled tool KV map.
+    private channelKeyData: Map<string, unknown> = new Map();
     private cognitiveMemory: Map<string, CognitiveMemoryEntry<unknown>> = new Map();
     private agentMutationTails: Map<string, Promise<void>> = new Map();
     private channelMutationTails: Map<string, Promise<void>> = new Map();
@@ -282,9 +286,7 @@ export class MemoryService {
      */
     private requireOwnChannelMemoryId(id: string | string[], requestChannelId: ChannelId): string {
         const channelMemoryId = this.requireScalarMemoryId(id, MemoryScope.CHANNEL);
-        if (!channelMemoryId.startsWith('channel:') && channelMemoryId !== requestChannelId) {
-            throw new Error('Channel memory requests are limited to the request channel');
-        }
+        classifyChannelMemoryId(channelMemoryId, requestChannelId);
         return channelMemoryId;
     }
 
@@ -323,32 +325,20 @@ export class MemoryService {
 
     private getChannelMemoryKey(
         key: string,
-        expectedChannelId?: ChannelId
-    ): { channelId: string; kind: 'messages' | 'context' | 'history' } {
-        const prefixes = [
-            { prefix: 'channel:context:history:', kind: 'history' as const },
-            { prefix: 'channel:messages:', kind: 'messages' as const },
-            { prefix: 'channel:context:', kind: 'context' as const }
-        ];
-        const matched = prefixes.find(({ prefix }) => key.startsWith(prefix));
-        if (!matched) {
-            throw new Error(`Unsupported channel memory key: ${key}`);
-        }
-        const channelId = key.slice(matched.prefix.length);
-        this.validator.assertIsNonEmptyString(channelId, 'Channel memory key channelId is required');
-        if (expectedChannelId && channelId !== expectedChannelId) {
-            throw new Error('Channel memory key must match the request channel');
-        }
-        return { channelId, kind: matched.kind };
+        expectedChannelId: ChannelId
+    ): { channelId: string; kind: 'messages' | 'context' | 'history'; cacheKey: string } {
+        const kind = classifyChannelMemoryId(key, expectedChannelId);
+        if (kind === 'whole') throw new Error(`Expected a channel sub-resource key: ${key}`);
+        return { channelId: expectedChannelId, kind, cacheKey: JSON.stringify([expectedChannelId, kind]) };
     }
 
     private async getKeyedChannelMemory(
         key: string,
         requestChannelId: ChannelId
     ): Promise<MemoryGetResultEventData['memory']> {
-        const { channelId, kind } = this.getChannelMemoryKey(key, requestChannelId);
-        if (!this.persistenceService && this.generalData.has(key)) {
-            return this.generalData.get(key) as MemoryGetResultEventData['memory'];
+        const { channelId, kind, cacheKey } = this.getChannelMemoryKey(key, requestChannelId);
+        if (!this.persistenceService && this.channelKeyData.has(cacheKey)) {
+            return this.channelKeyData.get(cacheKey) as MemoryGetResultEventData['memory'];
         }
 
         const channelMemory = this.persistenceService
@@ -369,9 +359,9 @@ export class MemoryService {
             }
         });
         if (value !== undefined) {
-            this.generalData.set(key, value);
+            this.channelKeyData.set(cacheKey, value);
         } else {
-            this.generalData.delete(key);
+            this.channelKeyData.delete(cacheKey);
         }
         return (value as MemoryGetResultEventData['memory']) ?? null;
     }
@@ -508,7 +498,7 @@ export class MemoryService {
 
         switch (mutation.kind) {
             case 'append_messages':
-                value = [...(originalMemory.conversationHistory ?? []), ...mutation.messages];
+                value = appendUniqueChannelMessages(originalMemory.conversationHistory ?? [], mutation.messages);
                 updatedMemory = { ...originalMemory, conversationHistory: value as unknown[] };
                 break;
             case 'replace_context':
@@ -555,10 +545,10 @@ export class MemoryService {
 
     private async executeKeyedChannelMutation(
         key: string,
-        requestChannelId: ChannelId | undefined,
+        requestChannelId: ChannelId,
         mutation: ChannelMemoryAtomicMutation
     ): Promise<ChannelMemoryAtomicMutationResult> {
-        const { channelId } = this.getChannelMemoryKey(key, requestChannelId);
+        const { channelId, cacheKey } = this.getChannelMemoryKey(key, requestChannelId);
         return this.serializeChannelMutation(channelId, async () => {
             const result = this.persistenceService
                 ? await firstValueFrom(
@@ -578,9 +568,9 @@ export class MemoryService {
                 });
             }
             if (result.found) {
-                this.generalData.set(key, result.value);
+                this.channelKeyData.set(cacheKey, result.value);
             } else {
-                this.generalData.delete(key);
+                this.channelKeyData.delete(cacheKey);
             }
             return result;
         });
@@ -604,15 +594,15 @@ export class MemoryService {
         return result.value as MemoryUpdateResultEventData['memory'];
     }
 
-    private async deleteKeyedChannelMemory(key: string): Promise<boolean> {
-        const { kind } = this.getChannelMemoryKey(key);
+    private async deleteKeyedChannelMemory(key: string, channelId: ChannelId): Promise<boolean> {
+        const { kind, cacheKey } = this.getChannelMemoryKey(key, channelId);
         const result = await this.executeKeyedChannelMutation(
             key,
-            undefined,
+            channelId,
             this.getDeleteMutation(kind)
         );
         if (result.found) {
-            this.generalData.delete(key);
+            this.channelKeyData.delete(cacheKey);
         }
         return result.found;
     }
@@ -636,7 +626,7 @@ export class MemoryService {
                         event.channelId
                     );
                     responseId = channelMemoryId;
-                    memory = channelMemoryId.startsWith('channel:')
+                    memory = channelMemoryId !== event.channelId
                         ? await this.getKeyedChannelMemory(channelMemoryId, event.channelId)
                         : await firstValueFrom(this.getChannelMemory(channelMemoryId));
                     break;
@@ -696,7 +686,7 @@ export class MemoryService {
                     responseId = channelMemoryId;
                     const embeddedMemoryKeys = Object.keys(event.data.data)
                         .filter(key => key.startsWith('channel:'));
-                    const keyedMemoryId = channelMemoryId.startsWith('channel:')
+                    const keyedMemoryId = channelMemoryId !== event.channelId
                         ? channelMemoryId
                         : embeddedMemoryKeys.length === 1
                             ? embeddedMemoryKeys[0]
@@ -779,14 +769,14 @@ export class MemoryService {
                 responseId = this.requireOwnAgentMemoryId(event.data.id, event.agentId);
             } else {
                 responseId = this.requireOwnChannelMemoryId(event.data.id, event.channelId);
-                if (responseId.startsWith('channel:')) {
+                if (responseId !== event.channelId) {
                     this.getChannelMemoryKey(responseId, event.channelId);
                 }
             }
 
-            const success = await firstValueFrom(
-                this.deleteMemory(event.data.scope, responseId)
-            );
+            const success = event.data.scope === MemoryScope.CHANNEL && responseId !== event.channelId
+                ? await this.deleteKeyedChannelMemory(responseId as string, event.channelId)
+                : await firstValueFrom(this.deleteMemory(event.data.scope, responseId));
             EventBus.server.emit(
                 Events.Memory.DELETE_RESULT,
                 createMemoryDeleteResultEventPayload(
@@ -1728,18 +1718,6 @@ export class MemoryService {
             let cancelled = false;
             void (async (): Promise<void> => {
                 try {
-                    if (
-                        scope === MemoryScope.CHANNEL &&
-                        typeof id === 'string' &&
-                        id.startsWith('channel:')
-                    ) {
-                        const success = await this.deleteKeyedChannelMemory(id);
-                        if (!cancelled) {
-                            observer.next(success);
-                            observer.complete();
-                        }
-                        return;
-                    }
                     const deleteAuthoritatively = async (): Promise<boolean> => {
                         const deletePersistentMemory = this.persistenceService?.deleteMemory;
                         if (this.persistenceService && !deletePersistentMemory) {
@@ -1777,10 +1755,8 @@ export class MemoryService {
                                 const channelId = id as string;
                                 cached = this.channelMemory.has(channelId);
                                 cached = this.channelMemory.delete(channelId) || cached;
-                                for (const key of this.generalData.keys()) {
-                                    if (key.endsWith(`:${channelId}`)) {
-                                        cached = this.generalData.delete(key) || cached;
-                                    }
+                                for (const kind of ['messages', 'context', 'history']) {
+                                    cached = this.channelKeyData.delete(JSON.stringify([channelId, kind])) || cached;
                                 }
                                 break;
                             }
@@ -1852,6 +1828,7 @@ export class MemoryService {
                 break;
             case MemoryScope.CHANNEL:
                 this.channelMemory.clear();
+                this.channelKeyData.clear();
                 break;
             case MemoryScope.RELATIONSHIP:
                 this.relationshipMemory.clear();
@@ -1876,6 +1853,7 @@ export class MemoryService {
         this.channelMemory.clear();
         this.relationshipMemory.clear();
         this.generalData.clear();
+        this.channelKeyData.clear();
         this.cognitiveMemory.clear();
 
         // Emit clear all event through EventBus

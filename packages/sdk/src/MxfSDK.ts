@@ -80,6 +80,7 @@ import { createBaseEventPayload, createSdkReconnectedEventPayload } from '@mxf-d
 import type { SdkReconnectedEventData } from '@mxf-dev/core/events/event-definitions/SdkEvents';
 import { LlmProviderType } from '@mxf-dev/core/protocols/mcp/LlmProviders';
 import { AgentConfig, LlmReasoningConfig } from '@mxf-dev/core/interfaces/AgentInterfaces';
+import { validateAgentExecutionConfig } from '@mxf-dev/core/config/AgentExecutionConfig';
 import { ChannelConfig } from '@mxf-dev/core/interfaces/ChannelConfig';
 import { awaitEventResponse, EventRequestError } from './services/internal/EventRequest.js';
 import type { McpServerRegistrationResult } from './MxfClient.js';
@@ -163,7 +164,7 @@ export interface AgentCreationConfig {
     apiKey?: string;
     temperature?: number;
     maxTokens?: number;
-    maxHistory?: number;  // Max conversation history entries (default: 50) - keep low for long-running agents
+    maxHistory?: number;  // Maximum conversation history entries (default: 500)
     /** Local session memory or the default persistent agent memory. */
     memoryMode?: AgentConfig['memoryMode'];
     /** Whether to index persisted history when the agent connects (default true). */
@@ -177,6 +178,14 @@ export interface AgentCreationConfig {
     maxIterations?: number;  // Max LLM iterations per task (default: 10, increase for game scenarios)
     
     // Optional behavioral settings
+    /** Framework prompt assembly by default; bare requires an explicit operator prompt. */
+    promptMode?: AgentConfig['promptMode'];
+    /** Assigned tasks by default; message mode also permits turns without a task. */
+    activation?: AgentConfig['activation'];
+    /** Repeated-tool-call protection (default true). */
+    circuitBreakerEnabled?: boolean;
+    /** Exact provider request observation (default false). */
+    captureLlmRequests?: boolean;
     disableTaskHandling?: boolean;  // Disable automatic task handling (for utility agents that only register MCP servers)
     
     // Optional MXP settings
@@ -603,6 +612,8 @@ export class MxfSDK {
      * @returns Configured MxfAgent instance (not yet connected)
      */
     async createAgent(config: AgentCreationConfig): Promise<MxfAgent> {
+        // Validate before the framework prompt default can hide a missing bare prompt.
+        validateAgentExecutionConfig(config);
         if (!this.authenticated) {
             throw new Error('SDK must be connected before creating agents. Call sdk.connect() first.');
         }
@@ -643,6 +654,10 @@ export class MxfSDK {
             useMessageAggregate: config.useMessageAggregate,
             maxIterations: config.maxIterations,
             // Pass through behavioral settings
+            promptMode: config.promptMode,
+            activation: config.activation,
+            circuitBreakerEnabled: config.circuitBreakerEnabled,
+            captureLlmRequests: config.captureLlmRequests,
             disableTaskHandling: config.disableTaskHandling,
             // Pass through MXP settings
             mxpEnabled: config.mxpEnabled,

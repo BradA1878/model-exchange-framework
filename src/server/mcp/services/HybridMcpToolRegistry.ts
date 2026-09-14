@@ -33,9 +33,26 @@ import { Logger } from '@mxf-dev/core/utils/Logger';
 import { getExternalServerCategory } from '@mxf-dev/core/protocols/mcp/services/ExternalServerConfigs';
 import { EventBus } from '@mxf-dev/core/events/EventBus';
 import { McpEvents } from '@mxf-dev/core/events/event-definitions/McpEvents';
+import { CallToolResultSchema, type CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
 // Create logger instance
 const logger = new Logger('info', 'HybridMcpToolRegistry', 'server');
+
+/**
+ * Validate the wire envelope without replacing it with the parser's normalized
+ * output. Parsing can remove extension fields or default a missing content list;
+ * external tools must keep the content they actually returned.
+ */
+function assertNativeToolResult(result: unknown, toolName: string): asserts result is CallToolResult {
+    if (typeof result !== 'object' || result === null ||
+        !('content' in result) || !Array.isArray(result.content)) {
+        throw new Error(`External tool ${toolName} must return an MCP result with a content array`);
+    }
+    const validation = CallToolResultSchema.safeParse(result);
+    if (!validation.success) {
+        throw new Error(`External tool ${toolName} returned an invalid MCP result: ${validation.error.message}`);
+    }
+}
 
 /**
  * Separator between a server id and a tool name in a namespaced external tool.
@@ -159,6 +176,10 @@ export class HybridMcpToolRegistry {
         // Monitor external server events for tool updates via EventBus
         this.eventSubscriptions.push(
             EventBus.server.on(McpEvents.EXTERNAL_SERVER_STARTED, () => {
+                this.refreshExternalTools();
+            }),
+            EventBus.server.on(McpEvents.EXTERNAL_SERVER_STOP, () => {
+                // Stop removes tools immediately; STOPPED waits for child exit.
                 this.refreshExternalTools();
             }),
             EventBus.server.on(McpEvents.EXTERNAL_SERVER_STOPPED, () => {
@@ -374,6 +395,7 @@ export class HybridMcpToolRegistry {
                 source: 'internal',
                 category: this.getInternalToolCategory(tool.name),
                 isExternal: false,
+                operatorAgentFilesystem: false,
                 scope,
                 scopeId,
                 availableToChannels: scopeId ? [scopeId] : undefined
@@ -393,6 +415,7 @@ export class HybridMcpToolRegistry {
                 source: tool.serverId,
                 category: getExternalServerCategory(tool.serverId),
                 isExternal: true,
+                operatorAgentFilesystem: tool.operatorAgentFilesystem === true,
                 enabled: true,
                 scope: tool.scope,
                 scopeId: tool.scopeId,
@@ -403,52 +426,11 @@ export class HybridMcpToolRegistry {
                     // Execute tool on external MCP server using the sendMcpToolCall method.
                     // The origin server knows the tool by its unqualified name.
                     try {
-                        const result = await this.sendMcpToolCall(tool.serverId, tool.name, input, context);
-
-                        // Transform MCP protocol result format to MXF format
-                        // MCP returns: { content: [{ type: "text", text: "..." }] }
-                        // MXF expects: { content: { type: "text", data: "..." } }
-                        if (result && result.content && Array.isArray(result.content) && result.content.length > 0) {
-                            const firstContent = result.content[0];
-                            // Transform text content
-                            if (firstContent.type === 'text' && 'text' in firstContent) {
-                                return {
-                                    content: {
-                                        type: 'text',
-                                        data: firstContent.text
-                                    }
-                                };
-                            }
-                            // Transform image content
-                            if (firstContent.type === 'image' && 'data' in firstContent) {
-                                return {
-                                    content: {
-                                        type: 'binary',
-                                        data: firstContent.data,
-                                        mimeType: firstContent.mimeType || 'image/png'
-                                    }
-                                };
-                            }
-                            // If we have multiple content items, combine text items
-                            const textItems = result.content.filter((c: any) => c.type === 'text' && 'text' in c);
-                            if (textItems.length > 0) {
-                                return {
-                                    content: {
-                                        type: 'text',
-                                        data: textItems.map((c: any) => c.text).join('\n')
-                                    }
-                                };
-                            }
-                        }
-                        
-                        // Fallback: if result doesn't match expected format, wrap it
-                        logger.warn(`⚠️ External tool ${tool.name} returned unexpected format, wrapping result`);
-                        return {
-                            content: {
-                                type: 'application/json',
-                                data: result
-                            }
-                        };
+                        const result: unknown = await this.sendMcpToolCall(tool.serverId, tool.name, input, context);
+                        assertNativeToolResult(result, tool.name);
+                        // Preserve every native block, explicit error status, structured
+                        // output, and extension field. The executor owns terminal events.
+                        return result;
                     } catch (error) {
                         const errorMessage = error instanceof Error ? error.message : String(error);
                         logger.error(`❌ Failed to execute external tool ${tool.name} on server ${tool.serverId}: ${errorMessage}`);
@@ -487,9 +469,12 @@ export class HybridMcpToolRegistry {
         return this.hybridToolsSubject.asObservable();
     }
 
-    /**
-     * Get current snapshot of all tools
-     */
+    /** Verify ownership against this registry's actual manager, never another instance. */
+    public isOperatorAgentFilesystem(serverId: string, agentId: string): boolean {
+        return this.externalServerManager.isOperatorAgentFilesystem(serverId, agentId);
+    }
+
+    /** Get the current snapshot of internal and external tools. */
     public getAllToolsSnapshot(): HybridMcpTool[] {
         return [...this.hybridToolsSubject.value];
     }

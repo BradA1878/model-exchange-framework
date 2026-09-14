@@ -8,6 +8,18 @@ const mockEventHandlers = new Map<string, (payload: unknown) => void>();
 const mockEventEmit = jest.fn();
 let mockHybridRegistry: { resolveToolForChannel: jest.Mock } | null = null;
 
+// These suites isolate authorization/result semantics; admitted audit ordering
+// is exercised with the real persistence service in its drain regression suite.
+jest.mock('../../../src/server/services/ToolExecutionPersistenceService', (): object => ({
+    ToolExecutionPersistenceService: {
+        getInstance: (): object => ({
+            recordToolCallStart: async (): Promise<void> => {},
+            recordToolCallComplete: async (): Promise<void> => {},
+            recordToolCallError: async (): Promise<void> => {}
+        })
+    }
+}));
+
 jest.mock('@mxf-dev/core/utils/Logger', () => ({
     Logger: class MockLogger {
         error = jest.fn();
@@ -241,7 +253,7 @@ describe('McpSocketExecutor execution authorization', () => {
         const callHandler = mockEventHandlers.get(Events.Mcp.TOOL_CALL);
         expect(callHandler).toBeDefined();
 
-        callHandler!({
+        await callHandler!({
             agentId: context.agentId,
             channelId: context.channelId,
             authorization: context.authorization,
@@ -251,9 +263,6 @@ describe('McpSocketExecutor execution authorization', () => {
                 arguments: {}
             }
         });
-        await Promise.resolve();
-        await Promise.resolve();
-
         expect(mockHandler).toHaveBeenCalledTimes(1);
         const results = mockEventEmit.mock.calls.filter(
             ([event, payload]) => event === Events.Mcp.TOOL_RESULT && payload.data.callId === 'call-one'

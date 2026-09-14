@@ -29,6 +29,10 @@
 
 import { v4 as uuidv4 } from 'uuid';
 import { BaseMcpClient } from './BaseMcpClient.js';
+import { observeMcpRequest } from '../RequestObservation.js';
+import type { McpRequestTrace, McpResponseMetadata } from '../IMcpClient.js';
+import { buildBareChatTools, buildBareContextMessages, parseNativeToolArguments, validateNativeToolInput } from './BareContextMessages.js';
+import { reportedTokenUsage } from './ProviderUsage.js';
 import { 
     McpMessage, 
     McpTool, 
@@ -48,12 +52,13 @@ interface OllamaMessage {
     role: 'system' | 'user' | 'assistant' | 'tool';
     content: string;
     tool_call_id?: string;
+    tool_name?: string;
     tool_calls?: Array<{
         id: string;
         type: 'function';
         function: {
             name: string;
-            arguments: string;
+            arguments: string | Record<string, unknown>;
         };
     }>;
 }
@@ -90,11 +95,12 @@ interface OllamaResponse {
             type: 'function';
             function: {
                 name: string;
-                arguments: string;
+                arguments: string | Record<string, unknown>;
             };
         }>;
     };
     done: boolean;
+    done_reason?: string;
     total_duration?: number;
     load_duration?: number;
     prompt_eval_count?: number;
@@ -168,17 +174,19 @@ export class OllamaMcpClient extends BaseMcpClient {
     /**
      * Make API request to Ollama
      */
-    private async makeRequest(request: OllamaRequest): Promise<OllamaResponse> {
+    private async makeRequest(request: OllamaRequest, trace?: McpRequestTrace): Promise<{ response: OllamaResponse; metadata: McpResponseMetadata }> {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), this.timeout);
 
         try {
+            const serializedBody = JSON.stringify(request);
+            const observation = observeMcpRequest('ollama', request.model, serializedBody, trace);
             const response = await fetch(`${this.baseUrl}/api/chat`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                 },
-                body: JSON.stringify(request),
+                body: serializedBody,
                 signal: controller.signal
             });
 
@@ -190,7 +198,7 @@ export class OllamaMcpClient extends BaseMcpClient {
             }
 
             const data = await response.json() as OllamaResponse;
-            return data;
+            return { response: data, metadata: observation.complete(data.done_reason === undefined ? {} : { finishReason: data.done_reason }) };
         } catch (error) {
             clearTimeout(timeoutId);
             if (error instanceof Error && error.name === 'AbortError') {
@@ -253,7 +261,8 @@ export class OllamaMcpClient extends BaseMcpClient {
                 }
             };
 
-            const response = await this.makeRequest(request);
+            if (opts.providerOptions) Object.assign(request, opts.providerOptions);
+            const { response, metadata } = await this.makeRequest(request, opts.requestTrace);
 
             const content: McpApiResponse['content'] = [];
             
@@ -270,7 +279,7 @@ export class OllamaMcpClient extends BaseMcpClient {
                 response.message.tool_calls.forEach(toolCall => {
                     if (toolCall.type === 'function') {
                         const args = toolCall.function.arguments;
-                        const parsedInput = args && args.length > 0 ? JSON.parse(args) : {};
+                        const parsedInput = typeof args === 'string' ? (args.length > 0 ? JSON.parse(args) : {}) : args;
                         
                         content.push({
                             type: McpContentType.TOOL_USE,
@@ -290,11 +299,8 @@ export class OllamaMcpClient extends BaseMcpClient {
                 content,
                 stop_reason: response.done ? 'stop' : 'length',
                 stop_sequence: null,
-                usage: {
-                    input_tokens: response.prompt_eval_count || 0,
-                    output_tokens: response.eval_count || 0,
-                    total_tokens: (response.prompt_eval_count || 0) + (response.eval_count || 0)
-                }
+                request: metadata,
+                usage: this.readReportedUsage(response)
             };
 
             return mcpResponse;
@@ -381,7 +387,7 @@ export class OllamaMcpClient extends BaseMcpClient {
 
         // Convert tools - Ollama uses OpenAI-compatible format
         const ollamaTools = context.availableTools && context.availableTools.length > 0
-            ? convertToolsToProviderFormat(context.availableTools as McpTool[], 'openai')
+            ? (context.promptMode === 'bare' ? buildBareChatTools(context.availableTools as McpTool[]) : convertToolsToProviderFormat(context.availableTools as McpTool[], 'openai'))
             : undefined;
 
         // Prepare request
@@ -399,16 +405,19 @@ export class OllamaMcpClient extends BaseMcpClient {
         if (ollamaTools) {
             request.tools = ollamaTools as OllamaRequest['tools'];
         }
+        if (options?.providerOptions) Object.assign(request, options.providerOptions);
 
         // Make request
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), this.timeout);
 
         try {
+            const serializedBody = JSON.stringify(request);
+            const observation = observeMcpRequest('ollama', request.model, serializedBody, options?.requestTrace);
             const response = await fetch(`${this.baseUrl}/api/chat`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(request),
+                body: serializedBody,
                 signal: controller.signal
             });
 
@@ -426,23 +435,35 @@ export class OllamaMcpClient extends BaseMcpClient {
                 id: `ollama-${Date.now()}`,
                 type: 'completion',
                 role: 'assistant',
-                content: [{
-                    type: McpContentType.TEXT,
-                    text: ollamaResponse.message.content
-                }],
+                content: [
+                    ...(ollamaResponse.message.content ? [{ type: McpContentType.TEXT as const, text: ollamaResponse.message.content }] : []),
+                    ...(ollamaResponse.message.tool_calls ?? []).map(call => ({
+                        type: McpContentType.TOOL_USE as const,
+                        id: call.id || uuidv4(),
+                        name: call.function.name,
+                        input: context.promptMode === 'bare'
+                            ? (typeof call.function.arguments === 'string' ? parseNativeToolArguments(call.function.arguments) : validateNativeToolInput(call.function.arguments))
+                            : (typeof call.function.arguments === 'string' ? JSON.parse(call.function.arguments) : call.function.arguments)
+                    }))
+                ],
                 model: ollamaResponse.model,
                 stop_reason: ollamaResponse.done ? 'stop' : null,
                 stop_sequence: null,
-                usage: {
-                    input_tokens: ollamaResponse.prompt_eval_count || 0,
-                    output_tokens: ollamaResponse.eval_count || 0,
-                    total_tokens: (ollamaResponse.prompt_eval_count || 0) + (ollamaResponse.eval_count || 0)
-                }
+                request: observation.complete(ollamaResponse.done_reason === undefined ? {} : { finishReason: ollamaResponse.done_reason }),
+                usage: this.readReportedUsage(ollamaResponse)
             };
         } catch (error) {
             clearTimeout(timeoutId);
             throw new Error(`Error sending message to Ollama: ${error instanceof Error ? error.message : String(error)}`);
         }
+    }
+
+    /** Ollama reports input/output counts separately, without an aggregate count. */
+    private readReportedUsage(response: OllamaResponse): McpApiResponse['usage'] {
+        const input = response.prompt_eval_count;
+        const output = response.eval_count;
+        const total = input === undefined && output === undefined ? undefined : Number(input) + Number(output);
+        return reportedTokenUsage('Ollama', input, output, total);
     }
 
     /**
@@ -455,6 +476,24 @@ export class OllamaMcpClient extends BaseMcpClient {
      * 4. Recent actions (if needed)
      */
     private structureMessagesFromContext(context: AgentContext): OllamaMessage[] {
+        if (context.promptMode === 'bare') {
+            const toolNames = new Map<string, string>();
+            return buildBareContextMessages(context).map(message => {
+                const native: OllamaMessage = { role: message.role, content: message.content };
+                if (message.tool_calls) {
+                    native.tool_calls = message.tool_calls.map(call => {
+                        toolNames.set(call.id, call.function.name);
+                        return { ...call, function: { name: call.function.name, arguments: parseNativeToolArguments(call.function.arguments) } };
+                    });
+                }
+                if (message.role === 'tool') {
+                    const name = message.tool_call_id && toolNames.get(message.tool_call_id);
+                    if (!name) throw new Error('Ollama tool results require a preceding matching tool call');
+                    native.tool_name = name;
+                }
+                return native;
+            });
+        }
         const messages: OllamaMessage[] = [];
 
         // 1. System message: Combine framework rules + agent identity

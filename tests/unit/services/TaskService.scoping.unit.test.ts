@@ -1371,3 +1371,122 @@ describe('TaskService scoping', () => {
         });
     });
 });
+
+/** The server setting is an upper bound, independent of runtime orchestration preferences. */
+describe('TaskService intelligent assignment server policy', () => {
+    const singleton = TaskService as unknown as { instance?: TaskService };
+    let priorInstance: TaskService | undefined;
+    let original: string | undefined;
+    let service: TaskService | undefined;
+
+    beforeEach(() => {
+        original = process.env.TASK_INTELLIGENT_ASSIGNMENT_ENABLED;
+        delete process.env.TASK_INTELLIGENT_ASSIGNMENT_ENABLED;
+        priorInstance = singleton.instance;
+        singleton.instance = undefined;
+        service = undefined;
+        jest.clearAllMocks();
+        mockFind.mockReturnValue({ sort: jest.fn().mockResolvedValue([]) });
+        (mockAgentService.getActiveAgentsInChannel as jest.Mock).mockResolvedValue([]);
+    });
+
+    afterEach(() => {
+        service?.shutdown();
+        singleton.instance = priorInstance;
+        if (original === undefined) delete process.env.TASK_INTELLIGENT_ASSIGNMENT_ENABLED;
+        else process.env.TASK_INTELLIGENT_ASSIGNMENT_ENABLED = original;
+    });
+
+    it('keeps assignment enabled by default and allows runtime opt-out and opt-in', () => {
+        service = TaskService.getInstance();
+        expect(service.getOrchestrationStatus().config.enableIntelligentAssignment).toBe(true);
+        service.updateOrchestrationConfig({ enableIntelligentAssignment: false });
+        expect(service.getOrchestrationStatus().config.enableIntelligentAssignment).toBe(false);
+        const event = (EventBus.server.emit as jest.Mock).mock.calls.find(
+            ([name]) => name === TaskEvents.ORCHESTRATION_CONFIG_UPDATED
+        )![1];
+        expect(event.data).toEqual({ config: service.getOrchestrationStatus().config });
+        expect(event.data).not.toHaveProperty('task');
+        expect(event.data).not.toHaveProperty('taskId');
+        expect(event.data.config).not.toBe(service.getOrchestrationStatus().config);
+        service.updateOrchestrationConfig({ enableIntelligentAssignment: true });
+        expect(service.getOrchestrationStatus().config.enableIntelligentAssignment).toBe(true);
+        expect(event.data.config.enableIntelligentAssignment).toBe(false);
+    });
+
+    it('fails construction before orchestration starts for an invalid setting', () => {
+        process.env.TASK_INTELLIGENT_ASSIGNMENT_ENABLED = 'yes';
+        expect(() => TaskService.getInstance()).toThrow('TASK_INTELLIGENT_ASSIGNMENT_ENABLED');
+        expect(EventBus.server.on).not.toHaveBeenCalled();
+        expect(mockGetSystemLlm).not.toHaveBeenCalled();
+    });
+
+    it('rejects re-enablement without changing or announcing configuration', () => {
+        process.env.TASK_INTELLIGENT_ASSIGNMENT_ENABLED = 'false';
+        service = TaskService.getInstance();
+        expect(service.getOrchestrationStatus().config.enableIntelligentAssignment).toBe(false);
+        expect(() => service!.updateOrchestrationConfig({
+            enableIntelligentAssignment: true,
+            maxTasksPerAgent: 99
+        })).toThrow('Cannot enable intelligent task assignment');
+        expect(service.getOrchestrationStatus().config).toEqual(expect.objectContaining({
+            enableIntelligentAssignment: false, maxTasksPerAgent: 5
+        }));
+        expect(EventBus.server.emit).not.toHaveBeenCalled();
+        service.updateOrchestrationConfig({ maxTasksPerAgent: 7 });
+        expect(service.getOrchestrationStatus().config).toEqual(expect.objectContaining({
+            enableIntelligentAssignment: false, maxTasksPerAgent: 7
+        }));
+    });
+
+    it('keeps the captured operator ceiling after the environment changes', async () => {
+        process.env.TASK_INTELLIGENT_ASSIGNMENT_ENABLED = 'false';
+        service = TaskService.getInstance();
+        process.env.TASK_INTELLIGENT_ASSIGNMENT_ENABLED = 'true';
+        await expect(service.assignTaskIntelligently('task-1')).rejects.toThrow(
+            'Intelligent task assignment is disabled by TASK_INTELLIGENT_ASSIGNMENT_ENABLED=false'
+        );
+        expect(Task.findById).not.toHaveBeenCalled();
+        expect(mockGetSystemLlm).not.toHaveBeenCalled();
+    });
+
+    it('does not assign or request SystemLLM when a pending task is created', async () => {
+        process.env.TASK_INTELLIGENT_ASSIGNMENT_ENABLED = 'false';
+        service = TaskService.getInstance();
+        const pendingTask = taskDoc({ status: 'pending', assignedAgentId: undefined });
+        const assignment = jest.spyOn(service, 'assignTaskIntelligently');
+        try {
+            await (service as unknown as {
+                handleTaskCreated: (task: Record<string, unknown>) => Promise<void>;
+            }).handleTaskCreated(pendingTask);
+            expect(pendingTask.status).toBe('pending');
+            expect(assignment).not.toHaveBeenCalled();
+            expect(mockGetSystemLlm).not.toHaveBeenCalled();
+            expect(mockFindOneAndUpdate).not.toHaveBeenCalled();
+            expect(mockFindByIdAndUpdate).not.toHaveBeenCalled();
+            expect(EventBus.server.emit).not.toHaveBeenCalled();
+        } finally {
+            assignment.mockRestore();
+        }
+    });
+
+    it('rejects scoped intelligent assignment after preserving the channel lookup', async () => {
+        process.env.TASK_INTELLIGENT_ASSIGNMENT_ENABLED = 'false';
+        service = TaskService.getInstance();
+        mockFindOne.mockReturnValue({ select: jest.fn().mockResolvedValue({ _id: 'task-1' }) });
+        await expect(service.assignTaskIntelligentlyInChannel('task-1', 'channel-a'))
+            .rejects.toThrow('Intelligent task assignment is disabled');
+        expect(mockFindOne).toHaveBeenCalledWith({ _id: 'task-1', channelId: 'channel-a' });
+        expect(Task.findById).not.toHaveBeenCalled();
+        expect(mockGetSystemLlm).not.toHaveBeenCalled();
+    });
+
+    it('still allows an explicit deterministic assignment while intelligent assignment is disabled', async () => {
+        process.env.TASK_INTELLIGENT_ASSIGNMENT_ENABLED = 'false';
+        service = TaskService.getInstance();
+        mockFindOneAndUpdate.mockResolvedValue(taskDoc({ assignedAgentId: 'agent-2' }));
+        await service.assignTaskInChannel('task-1', 'channel-a', 'agent-2', 'user-1');
+        expect(mockFindOneAndUpdate).toHaveBeenCalled();
+        expect(mockGetSystemLlm).not.toHaveBeenCalled();
+    });
+});

@@ -108,6 +108,41 @@ export interface McpMessage {
     content: McpContent | McpContent[];
 }
 
+/** Identifies one actual HTTP attempt, independently of a provider response ID. */
+export interface McpRequestObservation {
+    requestId: string;
+    activationId?: string;
+    provider: string;
+    model: string;
+    /** A parsed copy of the serialized wire body, present only when capture is enabled. */
+    body?: Record<string, unknown>;
+}
+
+/** Per-call transport observation. Callbacks receive no credentials or headers. */
+export interface McpRequestTrace {
+    activationId?: string;
+    captureBody?: boolean;
+    onRequest?: (request: McpRequestObservation) => void;
+}
+
+/** Measured request facts and provider-reported values; unknown values are omitted. */
+export interface McpResponseMetadata {
+    requestId: string;
+    activationId?: string;
+    provider: string;
+    latencyMs: number;
+    providerRoute?: string;
+    costUsd?: number;
+    finishReason?: string | null;
+    nativeFinishReason?: string | null;
+}
+
+/** Common options understood by the SDK and provider transports. */
+export interface McpRequestOptions extends Record<string, unknown> {
+    requestTrace?: McpRequestTrace;
+    providerOptions?: Record<string, unknown>;
+}
+
 /**
  * MCP API Response
  */
@@ -120,7 +155,10 @@ export interface McpApiResponse {
     stop_reason: string | null;
     stop_sequence: string | null;
     reasoning?: string;  // Reasoning tokens from reasoning models (e.g., o1, deepseek-reasoner)
-    usage: {
+    /** Transport metadata is separate from `id`, which belongs to the provider. */
+    request?: McpResponseMetadata;
+    /** Absent when the provider did not report token usage. */
+    usage?: {
         input_tokens: number;
         output_tokens: number;
         total_tokens: number;

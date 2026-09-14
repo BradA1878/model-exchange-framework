@@ -86,6 +86,9 @@ describe('MemorySearchTools tenant and filter security', () => {
             context
         );
 
+        if (Array.isArray(foreign.content) || Array.isArray(injected.content)) {
+            throw new Error('Expected internal memory search result objects');
+        }
         expect(foreign.content.data).toEqual(expect.objectContaining({ success: false }));
         expect(injected.content.data).toEqual(expect.objectContaining({ success: false }));
         expect(mockSearchConversations).not.toHaveBeenCalled();
@@ -117,6 +120,9 @@ describe('MemorySearchTools tenant and filter security', () => {
             context
         );
 
+        if (Array.isArray(crossChannel.content) || Array.isArray(invalidLimit.content) || Array.isArray(injectedEffectiveness.content)) {
+            throw new Error('Expected internal memory search result objects');
+        }
         expect(crossChannel.content.data).toEqual(expect.objectContaining({ success: false }));
         expect(invalidLimit.content.data).toEqual(expect.objectContaining({ success: false }));
         expect(injectedEffectiveness.content.data).toEqual(expect.objectContaining({ success: false }));

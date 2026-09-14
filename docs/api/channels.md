@@ -20,7 +20,10 @@ http://localhost:3001/api/channels
 
 ## Authentication
 
-All endpoints require JWT authentication via `Authorization: Bearer <token>` header.
+User sessions authenticate with `Authorization: Bearer <token>`. Channel context
+and memory routes also accept channel-bound agent credentials where stated; the
+server enforces channel access. Publishing a channel message is restricted to an
+owner or administrator user.
 
 ---
 
@@ -356,61 +359,79 @@ Update an agent's role or permissions in the channel.
 
 ---
 
-## Channel Context
+## Channel Messages and Context
 
-### Get Channel Context
+These routes accept authorized user sessions or channel-bound agent credentials,
+except message publication, which is user-only. An owner or administrator user has
+full visibility. With `MXF_CHANNEL_HISTORY_DM_VISIBILITY=parties`, agents receive
+only their permitted history and safe context fields.
 
-**GET** `/api/channels/:channelId/context`
+### Publish a Channel Message
 
-Retrieve the channel's shared context and memory.
+**POST** `/api/channels/:channelId/messages`
 
-**Response:**
+Only the channel's owner user or an administrator user may publish here. Agent keys
+receive 403 and should use `messaging_broadcast` instead.
+
 ```json
 {
-    "success": true,
-    "data": {
-        "sharedMemory": {
-            "project_goals": "Build an AI assistant",
-            "current_phase": "Development",
-            "key_decisions": [
-                {
-                    "date": "2024-01-15",
-                    "decision": "Use GPT-4 as primary model",
-                    "rationale": "Best performance for our use case"
-                }
-            ]
-        },
-        "configuration": {
-            "tools": ["web_search", "code_interpreter"],
-            "constraints": ["No external API calls without approval"],
-            "guidelines": ["Be helpful and accurate"]
-        },
-        "statistics": {
-            "totalInteractions": 1523,
-            "uniqueTopics": 45,
-            "avgSatisfaction": 0.92
-        }
-    }
+    "content": "Hello.",
+    "messageType": "user"
 }
 ```
 
-### Update Channel Context
+`content` must be a string or nonnull object, not an array; an empty string is valid.
+Optional `messageType` must be a nonblank string and defaults to `user`. The server
+uses the authenticated user's username as `senderId`, records its user ID, and
+creates the message ID/time. Body fields cannot impersonate another sender or
+replace those generated values.
 
-**PUT** `/api/channels/:channelId/context`
+The handler waits for the canonical `ChannelMemory.conversationHistory` append,
+then emits one ordinary `CHANNEL_MESSAGE`. HTTP 200 returns an object with
+`messageId: string` and `timestamp: number`. Persistence failure emits no message.
+See the [publication walkthrough](../server-agent-controls.md#publish-the-initial-message-as-a-user).
 
-Update the channel's shared context.
+### Read Channel Messages
 
-**Request Body:**
-```json
-{
-    "sharedMemory": {
-        "current_phase": "Testing"
-    },
-    "configuration": {
-        "tools": ["web_search", "calculator"]
-    }
-}
-```
+**GET** `/api/channels/:channelId/messages?limit=50`
+
+Returns `{success: true, messages: [...]}`. Omit `limit` for all visible messages;
+when present, it must be a positive integer and selects the latest visible records.
+In parties mode, DM filtering runs before the limit. A tagged DM lacking its recipient
+is visible only to its sender. User reads retain the full canonical history.
+
+### Create, Read, or Update Context
+
+| Method | Route | Body |
+| --- | --- | --- |
+| POST | `/api/channels/:channelId/context` | Required `name` and `creatorId`; optional `description`. |
+| GET | `/api/channels/:channelId/context` | None. |
+| PATCH | `/api/channels/:channelId/context` | Context fields to update. The authenticated actor replaces any supplied `updatedBy`. |
+
+Create returns 201; read/update return 200. The response is the context object itself,
+not a `sharedMemory` wrapper. In parties mode an agent receives only `id`, `channelId`,
+`name`, `description`, `createdAt`, `createdBy`, `status`, and `participants` when present.
+Stored conversation summaries, topics, metadata, counts and update/activity times are
+omitted. Read/update return 404 if the context does not exist.
+
+### Derived Context
+
+The following routes return 403 to agent credentials in parties mode before reading
+stored aggregates or invoking SystemLLM. Authorized users and default `all` mode
+retain access.
+
+| Method | Route | Result field |
+| --- | --- | --- |
+| GET | `/api/channels/:channelId/metadata` | `metadata` |
+| GET | `/api/channels/:channelId/metadata/:key` | `metadata` |
+| GET | `/api/channels/:channelId/history` | `history` (context changes, not messages) |
+| POST | `/api/channels/:channelId/topics` | `topics` |
+| POST | `/api/channels/:channelId/summary` | `summary` |
+
+These responses also contain `success`. Writing metadata through
+`POST /api/channels/:channelId/metadata/:key` returns an acknowledgement, not stored
+metadata. For canonical storage and existing-database migration, see
+[server controls](../server-agent-controls.md#canonical-channel-history-and-migration).
 
 ---
 

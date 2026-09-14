@@ -19,17 +19,9 @@
  */
 
 /**
- * Model Agent Class for the MXF - REFACTORED
- * 
- * Reduced from ~1500 lines to ~400 lines by extracting major subsystems into focused services.
- * Now serves as a clean orchestrator that composes specialized services.
- * 
- * Services extracted:
- * - MxfEventHandlerService: Event handling and responses (200 lines)
- * - MxfSystemPromptManager: Prompt generation and management (150 lines)  
- * - MemoryManager: Memory operations and conversation history (100 lines)
- * - TaskExecutor: Task execution workflows (80 lines)
- * - TelemetryService: Telemetry and analytics (100 lines)
+ * Model agent lifecycle and execution loop. Task and message admission share
+ * provider, tool, prompt, and memory services while retaining separate turn
+ * ownership so cancellation cannot advance a replacement session.
  */
 
 import { v4 as uuidv4 } from 'uuid';
@@ -40,6 +32,8 @@ import { MxfStructuredPromptBuilder } from './services/MxfStructuredPromptBuilde
 import { createStrictValidator } from '@mxf-dev/core/utils/validation';
 import { ConversationMessage } from '@mxf-dev/core/interfaces/ConversationMessage';
 import { AgentConfig } from '@mxf-dev/core/interfaces/AgentInterfaces';
+import { validateAgentExecutionConfig } from '@mxf-dev/core/config/AgentExecutionConfig';
+import { MessageActivationQueue, type MessageActivation } from './services/MessageActivationQueue.js';
 
 // Import the extracted services
 import { MxfEventHandlerService, EventHandlerCallbacks } from './services/MxfEventHandlerService.js';
@@ -80,7 +74,8 @@ import {
     McpTextContent,
     McpTool,
     McpApiResponse,
-    McpStreamChunk
+    McpStreamChunk,
+    McpRequestOptions
 } from '@mxf-dev/core/protocols/mcp/IMcpClient';
 import { McpToolDefinition } from '@mxf-dev/core/protocols/mcp/McpServerTypes';
 
@@ -103,6 +98,9 @@ import {
     createLlmReasoningToolsSynthesizedEventPayload,
     createLlmUsageEventPayload,
     createLlmStreamChunkEventPayload,
+    createLlmRequestEventPayload,
+    createAgentIterationLimitEventPayload,
+    EventCorrelation,
     LlmReasoningEventData,
     LlmReasoningToolsSynthesizedEventData,
     LlmStreamChunkEventData
@@ -141,6 +139,9 @@ export class MxfAgent extends MxfClient {
     private contextBuilder!: MxfContextBuilder;  // Context-based approach (production architecture)
     private messageAggregator?: MxfMessageAggregator;
     private reasoningToolParser?: ReasoningToolParser;
+    private messageActivations!: MessageActivationQueue;
+    /** A transport reconnect retains this session's history and admitted turns. */
+    private agentSessionInitialized = false;
     
     // Current state tracking (minimal)
     /** The task manager is the sole owner of accepted task identity. */
@@ -221,6 +222,7 @@ export class MxfAgent extends MxfClient {
      * Create a new MxfAgent instance with service-based architecture
      */
     constructor(config: AgentConfig) {
+        validateAgentExecutionConfig(config);
         // Initialize base client
         super(config);
         
@@ -273,6 +275,24 @@ export class MxfAgent extends MxfClient {
             backfillSearchIndexOnLoad: this.modelConfig.backfillSearchIndexOnLoad
         };
         this.memoryManager = new MxfMemoryManager(memoryConfig);
+        this.messageActivations = new MessageActivationQueue(
+            message => this.memoryManager.addConversationMessage(message),
+            async activation => {
+                // A reconnect may admit a message while the old provider call
+                // still drains. Keep the new turn reserved until that owner exits.
+                if (this.responseDrain) await this.responseDrain;
+                if (!this.messageActivations.isCurrent(activation)) return;
+                await this.generateResponse(undefined, undefined, undefined, activation);
+            },
+            (error, activation) => {
+                const message = error instanceof Error ? error.message : String(error);
+                this.modelLogger.error(`Message activation failed: ${message}`);
+                EventBus.client.emitOn(this.agentId, Events.Agent.ERROR, createBaseEventPayload(
+                    Events.Agent.ERROR, this.agentId, this.config.channelId,
+                    { message, phase: 'message_activation' }, { activationId: activation.activationId }
+                ));
+            }
+        );
         
         // Initialize System Prompt Manager
         const promptCallbacks: PromptManagerCallbacks = {
@@ -340,6 +360,7 @@ export class MxfAgent extends MxfClient {
         // Initialize Event Handler Service
         const eventHandlerCallbacks: EventHandlerCallbacks = {
             addConversationMessage: (msg) => this.memoryManager.addConversationMessage(msg),
+            acceptMessage: (trigger, message) => this.messageActivations.accept(trigger, message),
             provideImmediateToolFeedback: (fromAgent, tool, data, type) => this.provideImmediateToolFeedback(fromAgent, tool, data, type),
             generateResponse: (prompt, tools) => this.generateResponse(prompt, tools, undefined),
             getContextualTools: (history, tools) => this.getContextualTools(history, tools),
@@ -351,21 +372,27 @@ export class MxfAgent extends MxfClient {
             getAgentCapabilities: () => this.config.capabilities || [],
             tryAggregateMessage: (fromAgent, content) => this.tryAggregateMessage(fromAgent, content)
         };
-        this.eventHandlerService = new MxfEventHandlerService(this.agentId, eventHandlerCallbacks);
+        this.eventHandlerService = new MxfEventHandlerService(this.agentId, eventHandlerCallbacks, this.modelConfig);
     }
 
     /**
      * Perform agent-specific initialization after connection
      */
     protected async performAgentInitialization(): Promise<void> {
+        // The base client restores socket registration and tools on a transport
+        // reconnect. Reinitializing local state here would discard pending turns
+        // and invent missing results for a tool that is still about to run.
+        if (this.agentSessionInitialized && !this.disconnecting) return;
         // This runs on every connect(); a disconnect from the previous session ends here.
         this.disconnecting = false;
+        this.messageActivations.resume();
 
         // Initialize MCP client
         await this.mcpClientManager.initializeMcpClient();
         
         // Initialize memory
         await this.memoryManager.initialize();
+        if (this.modelConfig.promptMode === 'bare') await this.recordInterruptedToolResults();
         
         // Reconnect updates the existing system message; appending one on every
         // connection would crowd task context out of the bounded local history.
@@ -416,7 +443,18 @@ export class MxfAgent extends MxfClient {
             this.taskExecutionManager.clearCurrentTask(outcome);
         });
 
-        this.setTaskRequestHandler((taskRequest) => this.taskExecutionManager.executeTask(taskRequest));
+        this.setTaskRequestHandler(async taskRequest => {
+            // Message activation has one admission source. Task notifications
+            // remain data; disableTaskHandling also skips automatic task handling.
+            if (this.modelConfig.activation === 'message') {
+                return {
+                    taskId: taskRequest.taskId,
+                    toAgentId: taskRequest.fromAgentId,
+                    content: 'This agent activates only on incoming messages; this assignment did not start a turn.'
+                };
+            }
+            return this.taskExecutionManager.executeTask(taskRequest);
+        });
 
         // Reload the tool list before building the system prompt. The list the
         // server serves can change during memory initialization: it hides
@@ -435,6 +473,30 @@ export class MxfAgent extends MxfClient {
 
         // Load complete system prompt with tools
         await this.systemPromptManager.loadCompleteSystemPrompt();
+        this.agentSessionInitialized = true;
+    }
+
+    /** Close incomplete tool pairs recovered from a previous session with a factual record. */
+    private async recordInterruptedToolResults(): Promise<void> {
+        const history = this.memoryManager.getConversationHistory();
+        const recorded = new Set(history.filter(message => message.role === 'tool')
+            .map(message => message.metadata?.tool_call_id));
+        for (const message of history) {
+            for (const call of message.tool_calls ?? []) {
+                if (recorded.has(call.id)) continue;
+                // The previous session ended without recording a result. This
+                // says nothing about whether its external side effects finished.
+                await this.memoryManager.addConversationMessage({
+                    role: 'tool',
+                    content: `No result was recorded for ${call.function.name} before this session started.`,
+                    metadata: {
+                        tool_call_id: call.id, toolName: call.function.name,
+                        contextLayer: 'tool-result', isToolResult: true, error: true, interrupted: true
+                    }
+                });
+                recorded.add(call.id);
+            }
+        }
     }
 
     /** Prepare one admitted task before any generation starts. */
@@ -449,7 +511,7 @@ export class MxfAgent extends MxfClient {
             if (this.responseDrain) await this.responseDrain;
             if (!isActive()) return;
             const description = taskRequest.description || taskRequest.content || '';
-            if (description) {
+            if (description && this.modelConfig.promptMode !== 'bare') {
                 await this.memoryManager.addConversationMessage({
                     role: 'user',
                     content: `## Current Task\n${description}`,
@@ -572,17 +634,23 @@ export class MxfAgent extends MxfClient {
     /**
      * Generate response using the MCP client with tool execution
      */
-    private async generateResponse(userMessage?: string, tools?: any[], taskPrompt?: string): Promise<string> {
+    private async generateResponse(
+        userMessage?: string, tools?: McpTool[], taskPrompt?: string, messageActivation?: MessageActivation
+    ): Promise<string> {
         if (this.disconnecting) return '';
+        const messageDriven = messageActivation !== undefined;
+        if (this.modelConfig.activation === 'message' && !messageDriven) return '';
+        const bare = this.modelConfig.promptMode === 'bare';
+        const activationId = messageActivation?.activationId ?? uuidv4();
         const generation = this.taskExecutionManager.getExecutionGeneration();
         // Incoming messages are already in history for the first assigned turn.
         // They must not start a model call while its task prompt is still preparing.
-        if (!taskPrompt && this.firstResponseGeneration !== generation) return '';
+        if (!messageDriven && !taskPrompt && this.firstResponseGeneration !== generation) return '';
         // CRITICAL: Check if agent has completed its task
         // Only allow new responses if:
         // 1. Agent has not completed a task (taskCompleted = false), OR
         // 2. This is a new task assignment (taskPrompt provided)
-        if (this.taskCompleted && !taskPrompt) {
+        if (!messageDriven && this.taskCompleted && !taskPrompt) {
             return 'Task already completed - agent is idle';
         }
 
@@ -598,7 +666,9 @@ export class MxfAgent extends MxfClient {
         let releaseResponse!: () => void;
         const drain = new Promise<void>(resolve => { releaseResponse = resolve; });
         this.responseDrain = drain;
-        const isCurrent = (): boolean => generation === this.taskExecutionManager.getExecutionGeneration();
+        const isCurrent = (): boolean => messageActivation
+            ? this.messageActivations.isCurrent(messageActivation)
+            : generation === this.taskExecutionManager.getExecutionGeneration();
 
         try {
         const maxIterations = this.modelConfig.maxIterations ?? 10;
@@ -620,6 +690,7 @@ export class MxfAgent extends MxfClient {
         // Execute synchronous tool loop
         let iteration = 0;
         let taskComplete = false;
+        let endedWithoutTools = false;
 
         while (iteration < maxIterations && !taskComplete) {
             iteration++;
@@ -628,7 +699,7 @@ export class MxfAgent extends MxfClient {
             // When currentTask is cleared, stop the loop regardless of whether taskPrompt was set.
             // Previously, the `&& !taskPrompt` guard prevented this check from firing during
             // task-based execution, causing the loop to continue after disconnect.
-            if (!isCurrent() || !this.currentTask) {
+            if (!isCurrent() || (!messageDriven && !this.currentTask)) {
                 this.modelLogger.debug('🛑 Task canceled externally - stopping LLM loop');
                 break;
             }
@@ -640,7 +711,7 @@ export class MxfAgent extends MxfClient {
                 if (!isCurrent()) return '';
                 this.modelLogger.debug('[UserInputPause] Work loop resumed');
                 // Re-check task cancellation after waking up from pause
-                if (!isCurrent() || !this.currentTask) {
+                if (!isCurrent() || (!messageDriven && !this.currentTask)) {
                     this.modelLogger.debug('Task canceled while paused for user input');
                     break;
                 }
@@ -659,6 +730,7 @@ export class MxfAgent extends MxfClient {
                     availableTools = await this.toolService?.loadTools(undefined, true) || [];
                     if (!isCurrent()) return '';
                 } catch (error) {
+                    if (bare) throw error;
                     this.modelLogger.warn(`Failed to refresh tools, using cached: ${error}`);
                     availableTools = this.toolService?.getCachedTools() || [];
                 }
@@ -677,11 +749,19 @@ export class MxfAgent extends MxfClient {
 
             // Check if last message was a tool execution feedback - if so, send minimal tools
             const lastMessage = updatedConversation[updatedConversation.length - 1];
-            const isToolFeedback = lastMessage?.content?.includes('TOOL EXECUTION ACKNOWLEDGMENT') ||
-                                   lastMessage?.content?.includes('TOOL EXECUTION ERROR');
+            const isToolFeedback = !bare && (
+                lastMessage?.content?.includes('TOOL EXECUTION ACKNOWLEDGMENT') ||
+                lastMessage?.content?.includes('TOOL EXECUTION ERROR')
+            );
 
             // Use minimal tool set for tool feedback responses, full contextual tools otherwise
-            const toolsToSend = isToolFeedback ?
+            const toolsToSend = bare ? availableTools.map(tool => {
+                const inputSchema = tool.input_schema ?? tool.inputSchema;
+                if (!inputSchema || typeof inputSchema !== 'object' || Array.isArray(inputSchema)) {
+                    throw new Error(`Tool ${tool.name} has no valid input schema`);
+                }
+                return { name: tool.name, description: tool.description, input_schema: inputSchema };
+            }) : isToolFeedback ?
                 this.getMinimalToolsForFeedback(availableTools) :
                 this.getContextualTools(updatedConversation, availableTools);
             
@@ -731,7 +811,23 @@ export class MxfAgent extends MxfClient {
             if (!isCurrent()) return '';
 
             // Send using context-based approach — use streaming when available for live TUI feedback
-            const mcpOptions: Record<string, any> = {};
+            let requestCorrelation: EventCorrelation = { activationId };
+            const mcpOptions: McpRequestOptions = {
+                providerOptions: this.modelConfig.providerOptions,
+                requestTrace: {
+                    activationId,
+                    captureBody: this.modelConfig.captureLlmRequests === true,
+                    onRequest: request => {
+                        requestCorrelation = { activationId, requestId: request.requestId };
+                        if (!this.modelConfig.captureLlmRequests) return;
+                        if (!request.body) throw new Error('Provider did not supply a serialized request body for capture');
+                        EventBus.client.emitOn(this.agentId, Events.Agent.LLM_REQUEST, createLlmRequestEventPayload(
+                            Events.Agent.LLM_REQUEST, this.agentId, this.config.channelId,
+                            { ...request, activationId, body: request.body }
+                        ));
+                    }
+                }
+            };
             if (this.modelConfig.reasoning) {
                 // Forward the whole config and let the MCP client interpret it.
                 // An explicit enabled:false must reach the provider as the off-switch:
@@ -753,7 +849,8 @@ export class MxfAgent extends MxfClient {
                     AgentEvents.LLM_STREAM_CHUNK,
                     this.agentId,
                     this.config.channelId,
-                    chunkData
+                    chunkData,
+                    requestCorrelation
                 );
                 EventBus.client.emitOn(this.agentId, AgentEvents.LLM_STREAM_CHUNK, chunkPayload);
             };
@@ -770,13 +867,13 @@ export class MxfAgent extends MxfClient {
             let response: McpApiResponse;
             try {
                 response = await this.mcpClientManager.sendWithContextStreaming(agentContext, mcpOptions, onStreamChunk);
-                if (!isCurrent()) return '';
             } catch (streamError: any) {
                 if (this.disconnecting || !isCurrent()) return '';
                 const reactiveService = ReactiveCompactionService.getInstance();
                 const compactionConfig = loadPromptCompactionConfig();
 
                 const isRecoverableOverflow =
+                    !bare &&
                     compactionConfig.reactiveCompactionEnabled &&
                     reactiveService.isContextOverflowError(streamError);
 
@@ -806,7 +903,6 @@ export class MxfAgent extends MxfClient {
 
                 try {
                     response = await this.mcpClientManager.sendWithContextStreaming(agentContext, mcpOptions, onStreamChunk);
-                    if (!isCurrent()) return '';
                 } catch (retryError: any) {
                     // Second attempt — escalate the compaction strategy.
                     if (!reactiveService.isContextOverflowError(retryError)) {
@@ -829,11 +925,33 @@ export class MxfAgent extends MxfClient {
 
                     agentContext.conversationHistory = secondResult.messages;
                     response = await this.mcpClientManager.sendWithContextStreaming(agentContext, mcpOptions, onStreamChunk);
-                    if (!isCurrent()) return '';
                 }
             }
             
-            if (this.disconnecting || !isCurrent() || !this.currentTask) return '';
+            // A completed provider call consumed resources even when cancellation
+            // made its content stale. Report usage before discarding that content.
+            const request = response.request;
+            requestCorrelation = { activationId, ...(request ? { requestId: request.requestId } : {}) };
+            if (response.usage) {
+                const usagePayload = createLlmUsageEventPayload(
+                    AgentEvents.LLM_USAGE, this.agentId, this.config.channelId,
+                    {
+                        model: response.model,
+                        inputTokens: response.usage.input_tokens,
+                        outputTokens: response.usage.output_tokens,
+                        totalTokens: response.usage.total_tokens,
+                        timestamp: Date.now(),
+                        ...requestCorrelation,
+                        ...(request ? { latencyMs: request.latencyMs } : {}),
+                        ...(request?.providerRoute !== undefined ? { providerRoute: request.providerRoute } : {}),
+                        ...(request?.costUsd !== undefined ? { costUsd: request.costUsd } : {}),
+                        ...(request?.finishReason != null ? { finishReason: request.finishReason } : {}),
+                        ...(request?.nativeFinishReason != null ? { nativeFinishReason: request.nativeFinishReason } : {})
+                    }, requestCorrelation
+                );
+                EventBus.client.emitOn(this.agentId, AgentEvents.LLM_USAGE, usagePayload);
+            }
+            if (this.disconnecting || !isCurrent() || (!messageDriven && !this.currentTask)) return '';
 
             // Handle reasoning tokens if enabled and available  
             const responseWithReasoning = response as any; // Type assertion for reasoning property
@@ -850,7 +968,8 @@ export class MxfAgent extends MxfClient {
                     AgentEvents.LLM_REASONING,
                     this.agentId,
                     this.config.channelId,
-                    reasoningData
+                    reasoningData,
+                    requestCorrelation
                 );
 
                 // Emit reasoning event for transparency
@@ -860,7 +979,7 @@ export class MxfAgent extends MxfClient {
                 // This prevents duplicate tool calls when models provide both reasoning and standard tool_calls
                 const hasStandardToolCalls = response.content.some((c: any) => c.type === McpContentType.TOOL_USE);
                 
-                if (this.reasoningToolParser && toolsToSend && toolsToSend.length > 0 && !hasStandardToolCalls) {
+                if (!bare && !messageDriven && this.reasoningToolParser && toolsToSend && toolsToSend.length > 0 && !hasStandardToolCalls) {
                     try {
                         const parseResult = await this.reasoningToolParser.parseReasoningForTools(
                             responseWithReasoning.reasoning,
@@ -912,7 +1031,7 @@ export class MxfAgent extends MxfClient {
 
             // Check if task was canceled while LLM call was in-flight
             // Must happen BEFORE emitting LLM_RESPONSE to prevent stale output after cancellation
-            if (!isCurrent() || !this.currentTask) {
+            if (!isCurrent() || (!messageDriven && !this.currentTask)) {
                 this.modelLogger.debug('🛑 Task canceled during LLM call - discarding response');
                 break;
             }
@@ -921,28 +1040,12 @@ export class MxfAgent extends MxfClient {
                 AgentEvents.LLM_RESPONSE,
                 this.agentId,
                 this.config.channelId,
-                responseText
+                responseText,
+                requestCorrelation
             );
 
             // Emit LLM response event for external monitoring
             EventBus.client.emitOn(this.agentId,AgentEvents.LLM_RESPONSE, payload);
-
-            // Emit LLM usage event for token cost tracking
-            if (response.usage) {
-                const usagePayload = createLlmUsageEventPayload(
-                    AgentEvents.LLM_USAGE,
-                    this.agentId,
-                    this.config.channelId,
-                    {
-                        model: response.model,
-                        inputTokens: response.usage.input_tokens,
-                        outputTokens: response.usage.output_tokens,
-                        totalTokens: response.usage.total_tokens,
-                        timestamp: Date.now(),
-                    }
-                );
-                EventBus.client.emitOn(this.agentId, AgentEvents.LLM_USAGE, usagePayload);
-            }
 
             // Handle tool calls first to include them in conversation message
             let toolCalls = response.content.filter((content): content is McpToolUseContent => content.type === McpContentType.TOOL_USE);
@@ -958,7 +1061,7 @@ export class MxfAgent extends MxfClient {
             
             // Enhance intents for structured tool calls
             toolCalls = toolCalls.map(toolCall => {
-                if (toolCall.name === 'tools_recommend' && toolCall.input?.intent) {
+                if (!bare && toolCall.name === 'tools_recommend' && toolCall.input?.intent) {
                     const originalIntent = toolCall.input.intent;
                     const enhancedIntent = IntentFormulationHelper.formulateToolDiscoveryIntent(originalIntent);
 
@@ -976,7 +1079,7 @@ export class MxfAgent extends MxfClient {
             });
             
             // Parse JSON tool calls if no structured calls found
-            if (toolCalls.length === 0) {
+            if (!bare && !messageDriven && toolCalls.length === 0) {
                 const textContent = response.content.filter((content: any) => content.type === McpContentType.TEXT);
                 for (const content of textContent) {
                     const textStr = 'text' in content ? content.text : '';
@@ -1037,7 +1140,9 @@ export class MxfAgent extends MxfClient {
             if (!isCurrent()) return '';
 
             if (toolCalls.length > 0) {
-                const toolExecutionResult = await this.handleToolExecutionWithHelpers(toolCalls, availableTools, iteration, generation);
+                const toolExecutionResult = await this.handleToolExecutionWithHelpers(
+                    toolCalls, availableTools, iteration, generation, isCurrent, requestCorrelation
+                );
                 if (!isCurrent()) return '';
                 if (toolExecutionResult.taskComplete) {
                     taskComplete = true;
@@ -1047,7 +1152,7 @@ export class MxfAgent extends MxfClient {
                 // tools ran. Its results are not stored: the socket is closing or gone,
                 // and a save against it would only fail. A task_complete that just
                 // succeeded cleared the task itself and is stored like any other result.
-                if (!this.currentTask && !toolExecutionResult.taskComplete) {
+                if (!messageDriven && !this.currentTask && !toolExecutionResult.taskComplete) {
                     this.modelLogger.debug('🛑 Task canceled during tool execution - discarding results');
                     break;
                 }
@@ -1101,7 +1206,7 @@ export class MxfAgent extends MxfClient {
                         const toolName = (toolCalls.find(tc => tc.type === McpContentType.TOOL_USE && (tc as McpToolUseContent).id === toolResult.tool_use_id) as McpToolUseContent)?.name || 'unknown';
                         
                         // Special handling for read_file with empty content
-                        if (toolName === 'read_file' && (!content || content.trim() === '')) {
+                        if (!bare && toolName === 'read_file' && (!content || content.trim() === '')) {
                             content = '⚠️ FILE EXISTS BUT IS EMPTY: The file you requested exists but contains no content. This is not an error - the file is simply empty. You should proceed with your task assuming there is no existing data in this file.';
                             this.modelLogger.warn(`🔔 Empty file read detected for read_file - added helpful message to guide LLM`);
                         }
@@ -1165,6 +1270,10 @@ export class MxfAgent extends MxfClient {
                     continue;
                 }
             } else {
+                if (messageDriven) {
+                    endedWithoutTools = true;
+                    break;
+                }
                 // No tool calls this iteration. The agent has said something without
                 // doing anything. That is not completion — a task is complete when the
                 // agent calls task_complete, and at no other time.
@@ -1183,7 +1292,13 @@ export class MxfAgent extends MxfClient {
 
         // The loop is over. If the agent never called task_complete, the task did not
         // complete — say so, and fail it properly, rather than inventing a completion.
-        if (isCurrent() && !taskComplete && this.currentTask) {
+        if (messageActivation && isCurrent() && !endedWithoutTools && iteration >= maxIterations) {
+            EventBus.client.emitOn(this.agentId, Events.Agent.ITERATION_LIMIT, createAgentIterationLimitEventPayload(
+                Events.Agent.ITERATION_LIMIT, this.agentId, this.config.channelId,
+                { ...messageActivation, maxIterations }
+            ));
+        }
+        if (!messageDriven && isCurrent() && !taskComplete && this.currentTask) {
             const taskId = this.currentTask.taskId;
             const reason =
                 `Agent '${this.agentId}' reached the ${maxIterations}-iteration limit without calling task_complete`;
@@ -1264,6 +1379,9 @@ export class MxfAgent extends MxfClient {
 
             // Log the error so it's visible when client logging is enabled
             this.modelLogger.error(`generateResponse failed: ${errorMsg}`);
+            // The message queue owns failure reporting for its turn, including
+            // persistence failures that occur before generateResponse begins.
+            if (messageDriven) throw error;
 
             // Emit error event so channel monitors and agent.on() listeners can observe the failure.
             // Without this, errors were silently swallowed because client logging is disabled by default
@@ -1286,11 +1404,16 @@ export class MxfAgent extends MxfClient {
     /**
      * Handle tool execution with helpers support
      */
-    private async handleToolExecutionWithHelpers(toolCalls: McpToolUseContent[], availableTools: Array<McpTool & { inputSchema?: McpTool['input_schema'] }>, iteration: number, generation: number): Promise<{ taskComplete: boolean; toolResults?: McpToolResultContent[] }> {
+    private async handleToolExecutionWithHelpers(
+        toolCalls: McpToolUseContent[], availableTools: Array<McpTool & { inputSchema?: McpTool['input_schema'] }>,
+        iteration: number, generation: number, ownsExecution?: () => boolean, correlation: EventCorrelation = {}
+    ): Promise<{ taskComplete: boolean; toolResults?: McpToolResultContent[] }> {
         // Execute ALL tool calls to ensure every tool_call has a corresponding tool_result
         // This prevents OpenRouter/Bedrock errors about missing tool results
         const allToolResults: McpToolResultContent[] = [];
-        const isCurrent = (): boolean => generation === this.taskExecutionManager.getExecutionGeneration();
+        const isCurrent = ownsExecution ?? ((): boolean => generation === this.taskExecutionManager.getExecutionGeneration());
+        const messageDriven = this.modelConfig.activation === 'message';
+        const bare = this.modelConfig.promptMode === 'bare';
         let anyTaskComplete = false;
 
         // CRITICAL: Collect feedback messages to add AFTER all tool results
@@ -1301,7 +1424,7 @@ export class MxfAgent extends MxfClient {
         for (const toolCall of toolCalls) {
             if (!isCurrent()) return { taskComplete: false, toolResults: [] };
             // Skip remaining tools if task was canceled mid-execution
-            if (!this.taskExecutionManager.hasActiveTask()) {
+            if (!messageDriven && !this.taskExecutionManager.hasActiveTask()) {
                 this.modelLogger.debug(`🛑 Skipping tool ${toolCall.name} - task canceled`);
                 // Must provide a tool_result for every tool_call to avoid OpenRouter/Bedrock errors
                 const skipResult: McpToolResultContent = {
@@ -1317,10 +1440,12 @@ export class MxfAgent extends MxfClient {
             }
 
             // Track tool call for circuit breaker pattern (include params for better stuck detection)
-            this.trackToolCall(toolCall.name, iteration, toolCall.input);
+            if (this.modelConfig.circuitBreakerEnabled !== false) {
+                this.trackToolCall(toolCall.name, iteration, toolCall.input);
+            }
 
             // Check for stuck behavior before executing
-            if (this.checkForStuckBehavior()) {
+            if (this.modelConfig.circuitBreakerEnabled !== false && this.checkForStuckBehavior()) {
                 const stats = this.getCircuitBreakerStats();
                 this.modelLogger.error(
                     `CIRCUIT BREAKER ACTIVATED: Preventing tool execution due to stuck behavior. ` +
@@ -1363,7 +1488,7 @@ This iteration has been skipped. Choose a different action or complete the task.
             const inputKeys = Object.keys(toolCall.input || {});
             const missingRequired = requiredParams.filter(p => !inputKeys.includes(p));
 
-            if (missingRequired.length > 0 && inputKeys.length === 0) {
+            if (!bare && missingRequired.length > 0 && inputKeys.length === 0) {
                 this.modelLogger.warn(
                     `⚠️ Blocked ${toolCall.name}: empty input but requires [${missingRequired.join(', ')}]`
                 );
@@ -1394,11 +1519,11 @@ This iteration has been skipped. Choose a different action or complete the task.
 
             try {
                 // Execute tool synchronously
-                const toolResult = await this.executeTool(toolCall.name, toolCall.input || {});
+                const toolResult = await this.executeTool(toolCall.name, toolCall.input || {}, undefined, correlation);
                 if (!isCurrent()) return { taskComplete: false, toolResults: [] };
             
                 // SOLUTION 1: Smart feedback for messaging tools
-                if (isMessagingTool) {
+                if (!bare && isMessagingTool) {
                     // Check if the tool execution was successful
                     const isSuccess = toolResult && !toolResult.error && toolResult.status !== 'error';
                     
@@ -1451,7 +1576,7 @@ This iteration has been skipped. Choose a different action or complete the task.
                 // Create proper MCP tool result instead of conversation messages
                 const isSuccess = ToolExecutionHelpers.isToolExecutionSuccessful(toolResult);
                 
-                if (!isSuccess) {
+                if (!bare && !isSuccess) {
                     // DEFERRED: Add error feedback AFTER tool results to maintain conversation structure
                     deferredFeedbackMessages.push({
                         role: 'user',
@@ -1477,7 +1602,7 @@ This iteration has been skipped. Choose a different action or complete the task.
                     tool_use_id: toolCall.id,
                     content: {
                         type: McpContentType.TEXT,
-                        text: ToolExecutionHelpers.getDetailedToolResultMessage(
+                        text: bare ? ToolExecutionHelpers.getRawToolResultMessage(toolResult) : ToolExecutionHelpers.getDetailedToolResultMessage(
                             toolResult, 
                             toolCall.name, 
                             toolCall.input,
@@ -1490,13 +1615,13 @@ This iteration has been skipped. Choose a different action or complete the task.
                 // The agent yielded control to a downstream agent; we break the loop
                 // but leave taskCompleted=false so the agent can accept new tasks later,
                 // and we do NOT cancel the current task on the server.
-                if (toolCall.name === 'task_delegate') {
+                if (!messageDriven && toolCall.name === 'task_delegate' && isSuccess) {
                     allToolResults.push(toolResultContent);
                     return { taskComplete: true, toolResults: allToolResults };
                 }
 
                 // Check for task completion before returning tool result
-                const taskComplete = toolCall.name === 'task_complete';
+                const taskComplete = !messageDriven && toolCall.name === 'task_complete' && isSuccess;
                 if (taskComplete) {
                     // The authoritative outcome may arrive before this tool's own
                     // result and clear admission state. Keep the real accepted result;
@@ -1534,7 +1659,8 @@ This iteration has been skipped. Choose a different action or complete the task.
                     tool_use_id: toolCall.id,
                     content: {
                         type: McpContentType.TEXT,
-                        text: `Tool execution failed: ${error instanceof Error ? error.message : String(error)}`
+                        text: bare ? (error instanceof Error ? error.message : String(error))
+                            : `Tool execution failed: ${error instanceof Error ? error.message : String(error)}`
                     } as McpTextContent
                 };
                 allToolResults.push(errorResult);
@@ -1556,7 +1682,7 @@ This iteration has been skipped. Choose a different action or complete the task.
         
         // NOW add all deferred feedback messages AFTER tool results are complete
         // This maintains proper conversation structure: assistant(tool_calls) → tool → ... → user
-        for (const feedbackMsg of deferredFeedbackMessages) {
+        for (const feedbackMsg of bare ? [] : deferredFeedbackMessages) {
             if (!isCurrent()) return { taskComplete: false, toolResults: [] };
             await this.memoryManager.addConversationMessage(feedbackMsg);
         }
@@ -1641,6 +1767,7 @@ This iteration has been skipped. Choose a different action or complete the task.
         if (!this.taskExecutionManager.hasActiveTask() || this.taskCompleted) {
             return 'Task already completed - no further feedback needed.';
         }
+        if (this.modelConfig.promptMode === 'bare') return this.generateResponse();
         
         const generation = this.taskExecutionManager.getExecutionGeneration();
         const task = this.currentTask;
@@ -1705,7 +1832,9 @@ This iteration has been skipped. Choose a different action or complete the task.
     /**
      * Execute an MCP tool with enhanced LLM agent context
      */
-    public async executeTool(toolName: string, input: any, channelId?: string): Promise<any> {
+    public async executeTool(
+        toolName: string, input: Parameters<MxfClient['executeTool']>[1], channelId?: string, correlation: EventCorrelation = {}
+    ): ReturnType<MxfClient['executeTool']> {
         const generation = this.taskExecutionManager.getExecutionGeneration();
         try {
             // Ensure MCP client is ready
@@ -1715,11 +1844,11 @@ This iteration has been skipped. Choose a different action or complete the task.
             }
             
             // Use parent class proxy method
-            const result = await super.executeTool(toolName, input, channelId);
+            const result = await super.executeTool(toolName, input, channelId, correlation);
             if (generation !== this.taskExecutionManager.getExecutionGeneration() || this.disconnecting) return result;
             
             // Track action locally for context building
-            if (this.contextBuilder?.actionHistoryService) {
+            if (this.modelConfig.promptMode !== 'bare' && this.contextBuilder?.actionHistoryService) {
                 // Build action description based on tool type
                 let description = '';
                 let metadata: any = {};
@@ -2552,6 +2681,8 @@ This iteration has been skipped. Choose a different action or complete the task.
         // in generateResponse) and a task_complete answer that arrives late is
         // still the real completion, not a duplicate.
         this.disconnecting = true;
+        this.agentSessionInitialized = false;
+        this.messageActivations.stop();
 
         // Cleanup message aggregator
         if (this.messageAggregator) {

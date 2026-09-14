@@ -38,13 +38,18 @@ export interface AgentCreationConfig {
     temperature?: number;                    // LLM temperature (default: 0.7)
     maxTokens?: number;                      // Max tokens per response
     reasoning?: LlmReasoningConfig;          // Extended thinking config
+    providerOptions?: Record<string, unknown>; // Provider-native request fields
+    captureLlmRequests?: boolean;            // Emit exact serialized request bodies (default: false)
 
     // Optional: Tool access control
     allowedTools?: string[];                 // Restrict to specific tools only
     circuitBreakerExemptTools?: string[];   // Tools exempt from loop detection
+    circuitBreakerEnabled?: boolean;        // Track and block repeated calls (default: true)
 
     // Optional: Behavioral settings
     useMessageAggregate?: boolean;           // Enable message aggregation
+    promptMode?: 'framework' | 'bare';        // Prompt assembly (default: framework)
+    activation?: 'task' | 'message';          // Turn admission (default: task)
     maxIterations?: number;                  // Max LLM iterations per task (default: 10)
     disableTaskHandling?: boolean;           // Disable automatic task handling
     backfillSearchIndexOnLoad?: boolean;     // Send persisted history to the search index at connect (default: true)
@@ -102,6 +107,9 @@ export type AgentStatus = 'online' | 'offline' | 'busy' | 'away';
 ```
 
 ## MXP Protocol Interfaces
+
+See [bare prompts and message activation](bare-agents.md) for validation rules,
+request capture support, turn ownership, and event correlation.
 
 ```typescript
 // MXP Message structure

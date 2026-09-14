@@ -12,6 +12,7 @@
  */
 
 import { getCoreToolsArray } from '@mxf-dev/core/constants/CoreTools';
+import { getHybridMcpToolRegistry } from '../../mcp/services/HybridMcpRegistryAccess';
 
 export const UNSAFE_HOST_TOOLS_ENV = 'MXF_UNSAFE_HOST_TOOLS_ENABLED';
 export const UNSAFE_NETWORK_TOOLS_ENV = 'MXF_UNSAFE_NETWORK_TOOLS_ENABLED';
@@ -115,9 +116,20 @@ export const resolveCredentialBoundAgentPolicy = (
     return normalized;
 };
 
-/** Host process/filesystem/code capabilities require explicit operator opt-in. */
+/** Registry provenance used only with a current manager ownership check. */
+export interface PrivilegedHostToolDescriptor {
+    isExternal?: boolean;
+    operatorAgentFilesystem?: boolean;
+    source?: string;
+    scope?: string;
+    scopeId?: string;
+}
+
+/** Host tools require operator opt-in, except an agent's operator-provisioned filesystem. */
 export const isPrivilegedHostToolEnabled = (
-    toolNames: ReadonlySet<string>
+    toolNames: ReadonlySet<string>,
+    descriptor?: PrivilegedHostToolDescriptor,
+    agentId?: string
 ): boolean => {
     const isPrivileged = [...toolNames].some(name =>
         PRIVILEGED_HOST_TOOL_NAMES.has(name) ||
@@ -128,15 +140,22 @@ export const isPrivilegedHostToolEnabled = (
     }
 
     const configured = process.env[UNSAFE_HOST_TOOLS_ENV];
-    if (configured === undefined || configured === 'false') {
-        return false;
+    if (configured !== undefined && configured !== 'false' && configured !== 'true') {
+        throw new ToolAuthorizationError(
+            `${UNSAFE_HOST_TOOLS_ENV} must be exactly 'true' or 'false' when configured`
+        );
     }
     if (configured === 'true') {
         return true;
     }
-    throw new ToolAuthorizationError(
-        `${UNSAFE_HOST_TOOLS_ENV} must be exactly 'true' or 'false' when configured`
-    );
+
+    // A name, metadata flag, or stale descriptor cannot establish private
+    // filesystem ownership. Ask the registry's existing manager on every check.
+    return typeof agentId === 'string' && agentId.trim().length > 0 &&
+        descriptor?.isExternal === true && descriptor.operatorAgentFilesystem === true &&
+        descriptor.scope === 'agent' && descriptor.scopeId === agentId &&
+        typeof descriptor.source === 'string' && descriptor.source.length > 0 &&
+        getHybridMcpToolRegistry()?.isOperatorAgentFilesystem(descriptor.source, agentId) === true;
 };
 
 /** Server-originated browser and HTTP capabilities require explicit operator opt-in. */

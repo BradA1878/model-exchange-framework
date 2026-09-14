@@ -28,6 +28,7 @@
 
 import { v4 as uuidv4 } from 'uuid';
 import { BaseMcpClient } from './BaseMcpClient.js';
+import { buildBareContextMessages, type BareChatMessage } from './BareContextMessages.js';
 import { 
     McpMessage, 
     McpTool, 
@@ -245,10 +246,8 @@ export class CustomMcpClient extends BaseMcpClient {
      * 
      * Subclasses can use this helper or implement custom structuring.
      */
-    protected structureMessagesFromContext(context: AgentContext): Array<{
-        role: 'system' | 'user' | 'assistant';
-        content: string;
-    }> {
+    protected structureMessagesFromContext(context: AgentContext): BareChatMessage[] {
+        if (context.promptMode === 'bare') return buildBareContextMessages(context);
         const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [];
 
         // 1. System message: Combine framework rules + agent identity

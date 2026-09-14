@@ -28,9 +28,10 @@
  *
  * Encryption is a security boundary, so there is no degraded mode:
  *
- * - `encrypt()` / `decrypt()` return `null` ONLY to mean "encryption is not
- *   configured" (no MXP_ENCRYPTION_KEY). That is a deliberate, operator-chosen
- *   state, not a failure.
+ * - `MXP_ENABLED=false` disables encryption initialization entirely, so unused
+ *   encryption settings are neither validated nor used to derive a key.
+ * - `encrypt()` returns `null` when encryption is disabled or no key is
+ *   configured. `decrypt()` throws in either state.
  * - Any actual crypto failure — bad key, bad IV, failed authentication tag,
  *   unsupported algorithm — THROWS.
  *
@@ -40,6 +41,7 @@
  */
 
 import * as crypto from 'crypto';
+import { isServerMxpEnabled } from '../config/AgentExperimentConfig.js';
 import { requireEnv } from './env.js';
 import { EncryptedPayload, MxpPayload, MxpEncryptionAlgorithm } from '../schemas/MxpProtocolSchemas.js';
 import { Logger } from './Logger.js';
@@ -66,9 +68,13 @@ export class MxpEncryption {
     }
     
     /**
-     * Initialize encryption from environment variables
+     * Initialize encryption unless the operator explicitly disables MXP globally.
      */
     private initializeFromEnv(): void {
+        if (!isServerMxpEnabled()) {
+            return;
+        }
+
         const keyPhrase = process.env.MXP_ENCRYPTION_KEY;
         const enableEncryption = process.env.MXP_ENCRYPTION_ENABLED !== 'false'; // Default to true
         
@@ -98,8 +104,8 @@ export class MxpEncryption {
     /**
      * Encrypt an MXP payload.
      *
-     * @returns The encrypted payload, or null if encryption is not configured.
-     * @throws If encryption IS configured but the cipher fails. Never returns
+     * @returns The encrypted payload, or null if encryption is disabled or unconfigured.
+     * @throws If encryption is enabled but the cipher fails. Never returns
      *         plaintext.
      */
     public encrypt(payload: MxpPayload): EncryptedPayload | null {

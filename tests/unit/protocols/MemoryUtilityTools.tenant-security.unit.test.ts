@@ -13,13 +13,17 @@ import {
     memory_utility_config
 } from '@mxf-dev/core/protocols/mcp/tools/MemoryUtilityTools';
 import {
-    McpToolHandlerContext,
-    McpToolHandlerResult
+    McpToolHandlerContext
 } from '@mxf-dev/core/protocols/mcp/McpServerTypes';
 
-const resultData = (result: unknown): unknown => (
-    (result as McpToolHandlerResult).content.data
-);
+const resultData = (result: unknown): unknown => {
+    if (typeof result !== 'object' || result === null || !('content' in result) ||
+        typeof result.content !== 'object' || result.content === null ||
+        Array.isArray(result.content) || !('data' in result.content)) {
+        throw new Error('Expected a framework tool result with object content');
+    }
+    return result.content.data;
+};
 
 const agentContext: McpToolHandlerContext = {
     requestId: 'request-a',

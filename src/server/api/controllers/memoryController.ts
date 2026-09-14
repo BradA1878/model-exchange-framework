@@ -11,6 +11,8 @@ import { Request, Response } from 'express';
 import { firstValueFrom } from 'rxjs';
 import { Agent } from '@mxf-dev/core/models/agent';
 import { MemoryService } from '@mxf-dev/core/services/MemoryService';
+import { projectChannelMemory } from '@mxf-dev/core/utils/ChannelHistoryVisibility';
+import { authorizationService } from '../services/AuthorizationService';
 import {
     IAgentMemory,
     IChannelMemory,
@@ -195,7 +197,8 @@ export const getChannelMemory = async (req: Request, res: Response): Promise<voi
     try {
         const channelId = requireIdentifier(req.params.channelId, 'channelId');
         const memory = await firstValueFrom(MemoryService.getInstance().getChannelMemory(channelId));
-        res.status(200).json({ success: true, data: memory });
+        const principal = authorizationService.readPrincipal(req);
+        res.status(200).json({ success: true, data: principal.kind === 'agent' ? projectChannelMemory(memory, principal.agentId) : memory });
     } catch (error) {
         handleError(res, 'Get channel memory', error);
     }
@@ -208,7 +211,8 @@ export const updateChannelMemory = async (req: Request, res: Response): Promise<
         const memory = await firstValueFrom(
             MemoryService.getInstance().updateChannelMemory(channelId, updates)
         );
-        res.status(200).json({ success: true, data: memory });
+        const principal = authorizationService.readPrincipal(req);
+        res.status(200).json({ success: true, data: principal.kind === 'agent' ? projectChannelMemory(memory, principal.agentId) : memory });
     } catch (error) {
         handleError(res, 'Update channel memory', error);
     }

@@ -50,12 +50,67 @@ import {
     MemoryPatternModel
 } from '@mxf-dev/core/models/memoryStrata';
 import { MemoryUtility } from '@mxf-dev/core/models/memoryUtility';
-import { MemoryUtilitySubdocument } from '@mxf-dev/core/types/MemoryUtilityTypes';
+import { DEFAULT_UTILITY_SUBDOCUMENT, MemoryUtilitySubdocument } from '@mxf-dev/core/types/MemoryUtilityTypes';
+import { appendUniqueChannelMessages } from '@mxf-dev/core/utils/ChannelHistoryMessages';
 import {
     ChannelMemoryAtomicMutation,
     ChannelMemoryAtomicMutationResult,
     IMemoryPersistence
 } from '@mxf-dev/core/interfaces/IMemoryPersistence';
+
+/**
+ * One document update retains existing message IDs and appends only new IDs.
+ * Incoming objects are literals: dollar-prefixed content is data, not an expression.
+ * Exported so the explicit legacy migration uses the same atomic append operation.
+ */
+export const createChannelMessageAppendUpdate = (
+    channelId: string, messages: readonly unknown[], now: Date = new Date()
+): Record<string, unknown>[] => {
+    if (typeof channelId !== 'string' || channelId.trim().length === 0) throw new Error('Channel ID is required');
+    const uniqueMessages = appendUniqueChannelMessages([], messages);
+    if (uniqueMessages.length === 0) throw new Error('At least one channel message is required');
+    return [{
+        $set: {
+            id: { $ifNull: ['$id', { $literal: uuidv4() }] },
+            channelId: { $literal: channelId },
+            createdAt: { $ifNull: ['$createdAt', { $literal: now }] },
+            updatedAt: { $literal: now },
+            persistenceLevel: { $ifNull: ['$persistenceLevel', MemoryPersistenceLevel.PERSISTENT] },
+            notes: { $ifNull: ['$notes', {}] },
+            customData: { $ifNull: ['$customData', {}] },
+            sharedState: { $ifNull: ['$sharedState', {}] },
+            utility: { $ifNull: ['$utility', { $literal: { ...DEFAULT_UTILITY_SUBDOCUMENT, qValueHistory: [], lastRewardAt: now } }] },
+            conversationHistory: {
+                $let: {
+                    vars: {
+                        existing: {
+                            $reduce: {
+                                input: { $ifNull: ['$conversationHistory', []] }, initialValue: [],
+                                in: {
+                                    $cond: [
+                                        { $in: ['$$this.messageId', { $map: { input: '$$value', as: 'record', in: '$$record.messageId' } }] },
+                                        '$$value', { $concatArrays: ['$$value', ['$$this']] }
+                                    ]
+                                }
+                            }
+                        }
+                    },
+                    in: {
+                        $concatArrays: [
+                            '$$existing',
+                            {
+                                $filter: {
+                                    input: { $literal: uniqueMessages }, as: 'incoming',
+                                    cond: { $not: [{ $in: ['$$incoming.messageId', { $map: { input: '$$existing', as: 'record', in: '$$record.messageId' } }] }] }
+                                }
+                            }
+                        ]
+                    }
+                }
+            }
+        }
+    }];
+};
 
 /**
  * Memory Persistence Service interface
@@ -305,7 +360,8 @@ export class MemoryPersistenceService implements IMemoryPersistenceService, IMem
     /**
      * Atomically mutate a reserved keyed-channel field.
      *
-     * Message and history batches use MongoDB's document-level `$push`, so two
+     * Message batches filter existing IDs in an update pipeline; context history
+     * uses document-level `$push`. These atomic updates mean two
      * writers can never overwrite one another with stale read/modify/write
      * snapshots. Context replacement uses a single `$set`. Every branch returns
      * the database's post-update document as the authoritative result.
@@ -324,19 +380,12 @@ export class MemoryPersistenceService implements IMemoryPersistenceService, IMem
             persistenceLevel: MemoryPersistenceLevel.PERSISTENT
         };
         let query: Record<string, unknown> = { channelId };
-        let update: Record<string, unknown>;
+        let update: Record<string, unknown> | Record<string, unknown>[];
         let upsert = true;
 
         switch (mutation.kind) {
             case 'append_messages':
-                if (mutation.messages.length === 0) {
-                    throw new Error('At least one channel message is required');
-                }
-                update = {
-                    $set: { updatedAt: now },
-                    $setOnInsert: insertFields,
-                    $push: { conversationHistory: { $each: mutation.messages } }
-                };
+                update = createChannelMessageAppendUpdate(channelId, mutation.messages, now);
                 break;
             case 'replace_context':
                 if (!mutation.context || typeof mutation.context !== 'object') {
@@ -405,7 +454,7 @@ export class MemoryPersistenceService implements IMemoryPersistenceService, IMem
             ChannelMemory.findOneAndUpdate(
                 query,
                 update,
-                { upsert, new: true, setDefaultsOnInsert: upsert }
+                { upsert, new: true, setDefaultsOnInsert: upsert && mutation.kind !== 'append_messages' }
             ).exec()
         ).pipe(
             map(document => {

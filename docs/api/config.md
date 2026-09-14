@@ -1,5 +1,27 @@
 # Config API
 
+## Agent execution and server controls
+
+Agent execution options belong to `sdk.createAgent()`: `promptMode` defaults to
+`framework`, `activation` to `task`, `circuitBreakerEnabled` to `true`, and
+`captureLlmRequests` to `false`. `providerOptions` forwards native routing options.
+See [bare agents](../sdk/bare-agents.md) and [event contracts](../sdk/events.md).
+
+The server reads these operator settings at startup:
+
+| Setting | Default | Accepted values |
+| --- | --- | --- |
+| `AUTO_CORRECTION_ENABLED` | `true` | Exactly `true` / `false`; false also disables correction-pattern learning. |
+| `MXP_ENABLED` | `true` | Exactly `true` / `false`; false disables server messaging MXP. |
+| `TASK_INTELLIGENT_ASSIGNMENT_ENABLED` | `true` | Exactly `true` / `false`; false prevents intelligent assignment. |
+| `MXF_CHANNEL_HISTORY_DM_VISIBILITY` | `all` | `all` / `parties`. |
+| `MXF_AGENT_FILESYSTEM_ROOTS` | Unset, disabled | Nonempty comma-separated absolute templates using `{agentId}`; roots must exist. |
+| `MXF_EXTERNAL_MCP_AUTOSTART` | Predefined selection | Comma-separated predefined IDs; empty means no predefined boot launches. |
+
+These environment settings are separate from the configuration-template CRUD
+endpoints below. See [server deployment and migration](../server-agent-controls.md)
+for exact behavior, conflicts, dependencies, and required history migration.
+
 Detailed reference for all `/config` endpoints.
 
 ---

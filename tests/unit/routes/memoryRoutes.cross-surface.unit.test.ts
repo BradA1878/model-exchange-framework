@@ -1,6 +1,6 @@
 import express, { NextFunction, Request, Response } from 'express';
 import supertest from 'supertest';
-import { Observable, of } from 'rxjs';
+import { firstValueFrom, Observable, of } from 'rxjs';
 
 jest.mock('@mxf-dev/core/models/agent', () => ({
     Agent: { findOne: jest.fn() }
@@ -335,6 +335,38 @@ describe('canonical memory REST and EventBus surfaces', () => {
     afterEach(() => {
         EventBus.reset();
         (MemoryService as unknown as { instance?: MemoryService }).instance = undefined;
+    });
+
+    it('projects both GET and PATCH responses for agents while owner reads retain the full audit history', async () => {
+        const previous = process.env.MXF_CHANNEL_HISTORY_DM_VISIBILITY;
+        process.env.MXF_CHANNEL_HISTORY_DM_VISIBILITY = 'parties';
+        const memory = await firstValueFrom(persistence.getChannelMemory(CHANNEL_A));
+        const messages = [
+            { messageId: 'secret-dm', senderId: AGENT_A2, content: 'private-body', metadata: { originalMessageType: 'agent-to-agent', targetAgentId: 'third-agent' } },
+            { messageId: 'public', senderId: AGENT_A2, content: 'public-body' }
+        ];
+        await firstValueFrom(persistence.saveChannelMemory({
+            ...memory, conversationHistory: messages,
+            sharedState: { context: { name: 'Room', conversationSummary: 'private-body' } },
+            customData: { contextHistory: [{ data: { summary: 'private-body' } }] }
+        }));
+        try {
+            const app = buildApp();
+            const read = await supertest(app).get(`/channels/memory/${CHANNEL_A}`).set('x-test-principal', 'agent-a1');
+            const write = await supertest(app).patch(`/channels/memory/${CHANNEL_A}`).set('x-test-principal', 'agent-a1').send({ notes: { shared: true } });
+            for (const response of [read, write]) {
+                expect(response.status).toBe(200);
+                expect(response.body.data.conversationHistory).toEqual([messages[1]]);
+                expect(JSON.stringify(response.body)).not.toContain('private-body');
+            }
+            const owner = await supertest(app).get(`/channels/memory/${CHANNEL_A}`).set('x-test-principal', 'user-a');
+            expect(owner.status).toBe(200);
+            expect(owner.body.data.conversationHistory).toEqual(messages);
+            expect((await firstValueFrom(persistence.getChannelMemory(CHANNEL_A))).conversationHistory).toEqual(messages);
+        } finally {
+            if (previous === undefined) delete process.env.MXF_CHANNEL_HISTORY_DM_VISIBILITY;
+            else process.env.MXF_CHANNEL_HISTORY_DM_VISIBILITY = previous;
+        }
     });
 
     it.each([

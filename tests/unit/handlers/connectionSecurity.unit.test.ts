@@ -6,6 +6,7 @@ const mockSetupControlLoopHandlers = jest.fn();
 const mockSetupMcpEventHandlers = jest.fn();
 const mockRegisterTaskHandlers = jest.fn();
 const mockAddParticipant = jest.fn();
+const mockRemoveParticipant = jest.fn();
 const mockUpdateAllowedTools = jest.fn();
 const mockHandleSocketAuthentication = jest.fn();
 const mockSendAuthResponse = jest.fn();
@@ -95,7 +96,7 @@ jest.mock('../../../src/server/socket/handlers/adminHandlers', () => ({
 }));
 jest.mock('../../../src/server/socket/services/ChannelService', () => ({
     ChannelService: {
-        getInstance: jest.fn(() => ({ addParticipant: mockAddParticipant }))
+        getInstance: jest.fn(() => ({ addParticipant: mockAddParticipant, removeParticipant: mockRemoveParticipant }))
     }
 }));
 jest.mock('../../../src/server/socket/services/SystemLlmServiceManager', () => ({
@@ -164,6 +165,7 @@ describe('connection security', () => {
         mockAgentService.getAgent.mockReturnValue({ capabilities: [] });
         mockUpdateAllowedTools.mockReturnValue(true);
         mockAddParticipant.mockResolvedValue(true);
+        mockRemoveParticipant.mockResolvedValue(true);
         mockHandleSocketAuthentication.mockReset();
         mockSendAuthResponse.mockReset();
         mockAuthorize.mockReset();
@@ -269,6 +271,7 @@ describe('connection security', () => {
         mockAgentService.agentExists.mockReturnValue(true);
         mockAgentService.getAgent.mockReturnValue({ capabilities: [] });
         mockAddParticipant.mockResolvedValue(true);
+        mockRemoveParticipant.mockResolvedValue(true);
         const denyAllSocket = new FakeSocket();
         denyAllSocket.handshake.auth.allowedTools = [];
 
@@ -314,7 +317,7 @@ describe('connection security', () => {
         expect(socket.emitted).toContainEqual({
             event: AuthEvents.ERROR,
             payload: {
-                error: 'Authenticated channel is unavailable',
+                error: 'Authenticated channel deleted-channel is unavailable',
                 channelId: 'deleted-channel'
             }
         });

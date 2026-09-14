@@ -95,6 +95,7 @@ class FakeSocket extends EventEmitter {
         effectiveAllowedTools: undefined
     };
     public join = jest.fn();
+    public disconnect = jest.fn();
 
     /** Whether a handler was registered for an event. */
     public listensFor(eventName: string): boolean {
@@ -133,6 +134,30 @@ describe('socket-to-EventBus identity', () => {
         mockIsParticipant.mockClear();
         socket = new FakeSocket();
         setupSocketToEventBusForwarding(socket as any, AGENT, CHANNEL);
+    });
+
+    describe('explicit channel leave', () => {
+        it('closes only the authenticated single-channel connection and publishes a rebuilt event', () => {
+            socket.emit(Events.Agent.LEAVE_CHANNEL, clientEnvelope(Events.Agent.LEAVE_CHANNEL, {
+                data: { agentId: AGENT, channelId: CHANNEL, injected: 'discard' }
+            }));
+            expect(socket.disconnect).toHaveBeenCalledTimes(1);
+            expect(socket.disconnect).toHaveBeenCalledWith(true);
+            expect(emitted.find(event => event.eventType === Events.Agent.LEAVE_CHANNEL)?.payload.data).toEqual({
+                action: 'leave', agentId: AGENT, channelId: CHANNEL
+            });
+        });
+
+        it.each([
+            { agentId: 'other' },
+            { channelId: 'other' },
+            { data: { agentId: 'other' } },
+            { data: { channelId: 'other' } }
+        ])('rejects a leave request for a different identity: %j', overrides => {
+            socket.emit(Events.Agent.LEAVE_CHANNEL, clientEnvelope(Events.Agent.LEAVE_CHANNEL, overrides));
+            expect(socket.disconnect).not.toHaveBeenCalled();
+            expect(emitted.some(event => event.eventType === Events.Agent.LEAVE_CHANNEL)).toBe(false);
+        });
     });
 
     describe('Message events', () => {

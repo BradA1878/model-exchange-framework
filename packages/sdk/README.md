@@ -46,6 +46,27 @@ bun add @mxf-dev/sdk
 MXF server development uses Bun. The published SDK is ESM-only and supports Bun
 >= 1.2 or Node.js >= 20.19 for client applications.
 
+### Upgrading to 5.0
+
+Update core and SDK together and deploy the matching server. Native external MCP
+results now retain their full content arrays and result envelopes. Consumers of
+`McpToolHandlerResult` must narrow `content` with `Array.isArray()` before reading
+internal `.data` fields.
+
+This release adds bare operator prompts, message-triggered activations, request
+capture, history-trim events, and explicit circuit control. Defaults retain the
+framework prompt and task loop. OpenRouter keepalives no longer defeat the
+first-model-output bound; each retry has its own request ID.
+
+The matching server adds per-agent filesystem processes and private DM views.
+Existing channel history requires `bun run migrate:channel-history` with writers
+stopped. The channel-message POST endpoint now accepts owner/admin users and
+returns `{messageId, timestamp}` after persistence; agents use messaging tools.
+
+See the [5.0 upgrade guide](https://mxf-dev.github.io/mxf/#sdk/upgrade-5.md),
+[bare-agent options](https://mxf-dev.github.io/mxf/#sdk/bare-agents.md), and
+[server controls](https://mxf-dev.github.io/mxf/#server-agent-controls.md).
+
 ### Upgrading to 4.0
 
 Update core and SDK together. This major release changes two exported core contracts:

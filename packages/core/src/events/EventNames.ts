@@ -76,6 +76,7 @@ import { AgentEvents } from './event-definitions/AgentEvents.js';
 import type { AgentPayloads, AgentRegistrationEvent, AgentConnectionEvent } from './event-definitions/AgentEvents.js';
 export { AgentEvents };
 export type { AgentPayloads, AgentRegistrationEvent, AgentConnectionEvent };
+export type { LlmRequestEventData, AgentIterationLimitEventData, AgentHistoryTrimmedEventData } from '../schemas/EventPayloadSchema.js';
 
 import { MessageEvents } from './event-definitions/MessageEvents.js';
 import type { MessagePayloads, AgentMessageEvent } from './event-definitions/MessageEvents.js';

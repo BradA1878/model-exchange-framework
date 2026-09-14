@@ -73,6 +73,9 @@ export class SocketService implements ISocketService, ChannelKeySocketLifecycle,
     private agents = new Map<string, AgentSocketInfo>(); // Maps agentId -> socket info
     private socketIds = new Map<string, string>(); // Maps socketId -> agentId
     private sockets = new Map<string, Socket>(); // Maps socketId -> socket
+    // Authentication context belongs to a socket, even after a later socket
+    // reuses the same logical agent ID in another channel.
+    private readonly agentSocketContexts = new Map<string, { agentId: string; channelId: string }>();
     // Heartbeat tracking
     private heartbeats = new Map<string, number>(); // Maps agentId -> last heartbeat time
     private heartbeatMonitor: NodeJS.Timeout | null = null;
@@ -157,19 +160,14 @@ export class SocketService implements ISocketService, ChannelKeySocketLifecycle,
             
             // Use the connection handler to handle the connection
             // Pass the socketService instance so the handler can access our methods
-            handleConnection(socket, this);
             
             // Set up disconnect event handling once, to avoid multiple handlers
             // This ensures we don't process disconnects multiple times
-            socket.once('disconnect', (reason) => {
-                // Get agentId before potential cleanup by unregisterSocket
-                const agentId = this.socketIds.get(socket.id);
-                
-                // Get agent info
-                const agentInfo = agentId ? this.agents.get(agentId) : null;
-                const channelId = agentInfo ? agentInfo.channelId : '';
-                
-                
+            socket.once(CoreSocketEvents.DISCONNECT, (reason) => {
+                const context = this.agentSocketContexts.get(socket.id);
+                const agentId = context?.agentId;
+                const channelId = context?.channelId ?? '';
+
                 if (agentId) {
                     void this.handleSocketDisconnect(socket.id, channelId, agentId, reason);
                     return;
@@ -180,6 +178,8 @@ export class SocketService implements ISocketService, ChannelKeySocketLifecycle,
                 // release any JWT/PAT expiry timer on every disconnect path.
                 this.unregisterUserSession(socket.id);
             });
+            // Install cleanup before authentication can begin asynchronous admission.
+            handleConnection(socket, this);
         } catch (error) {
             this.logger.error(`Error handling socket connection: ${error}`);
         }
@@ -349,6 +349,7 @@ export class SocketService implements ISocketService, ChannelKeySocketLifecycle,
         // authoritative socket registry and channel lifecycle services.
         this.agents.clear();
         this.socketIds.clear();
+        this.agentSocketContexts.clear();
         this.sockets.clear();
         this.heartbeats.clear();
         channelKeyService.clearSocketLifecycle(this);
@@ -375,20 +376,15 @@ export class SocketService implements ISocketService, ChannelKeySocketLifecycle,
      * @returns The socket for the agent in that exact channel, or null if not found
      */
     public getSocketByAgentId(agentId: string, channelId: string): Socket | null {
-        const agentInfo = this.agents.get(agentId);
-        if (!agentInfo || agentInfo.channelId !== channelId) {
-            return null;
+        for (const [socketId, context] of [...this.agentSocketContexts].reverse()) {
+            if (context.agentId !== agentId || context.channelId !== channelId) continue;
+            const socket = this.sockets.get(socketId);
+            if (socket?.connected !== false && socket?.data?.connectionAdmitted === true &&
+                socket.data.agentId === agentId && socket.data.channelId === channelId) {
+                return socket;
+            }
         }
-
-        // Check both the server registry and the immutable authentication
-        // context. A later connection may reuse an agent id in another channel;
-        // it must never receive results addressed to the original channel.
-        if (agentInfo.socket.data?.agentId !== agentId ||
-            agentInfo.socket.data?.channelId !== channelId) {
-            return null;
-        }
-
-        return agentInfo.socket;
+        return null;
     }
     
     /**
@@ -428,6 +424,8 @@ export class SocketService implements ISocketService, ChannelKeySocketLifecycle,
             }
         }
 
+        if (socket.connected === false) throw new Error('Socket disconnected before registration');
+
         // Create agent info
         const agentInfo: AgentSocketInfo = {
             socket,
@@ -439,6 +437,7 @@ export class SocketService implements ISocketService, ChannelKeySocketLifecycle,
         // Store agent info
         this.agents.set(agentId, agentInfo);
         this.socketIds.set(socket.id, agentId);
+        this.agentSocketContexts.set(socket.id, { agentId, channelId });
         this.sockets.set(socket.id, socket);
         this.heartbeats.set(agentId, Date.now());
 
@@ -548,13 +547,24 @@ export class SocketService implements ISocketService, ChannelKeySocketLifecycle,
         validator.assertIsNonEmptyString(agentId);
 
 
-        // Remove from maps
-        this.agents.delete(agentId);
+        const owner = this.agentSocketContexts.get(socketId);
+        if (owner && owner.agentId !== agentId) throw new Error('Socket ownership does not match agent');
+        this.agentSocketContexts.delete(socketId);
         this.socketIds.delete(socketId);
         this.sockets.delete(socketId);
 
-        // Remove heartbeat entry to prevent stale entries
-        this.heartbeats.delete(agentId);
+        // Only replace the selected socket when that exact connection left.
+        if (this.agents.get(agentId)?.socket.id === socketId) {
+            this.agents.delete(agentId);
+            for (const [otherId, context] of [...this.agentSocketContexts].reverse()) {
+                const socket = this.sockets.get(otherId);
+                if (context.agentId === agentId && socket && socket.connected !== false) {
+                    this.agents.set(agentId, { socket, channelId: context.channelId, connected: true, lastActivity: Date.now() });
+                    break;
+                }
+            }
+        }
+        if (!this.agents.has(agentId)) this.heartbeats.delete(agentId);
         this.clearCredentialExpiryTimer(socketId);
 
     }

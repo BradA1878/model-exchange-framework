@@ -489,11 +489,47 @@ Available tools: ${availableTools.map((t: any) => t.name).join(', ')}`;
  * Tool Execution Result Helpers
  */
 export class ToolExecutionHelpers {
+    /** Extract the tool's actual payload without adding confirmations or advice. */
+    static getRawToolResultMessage(result: unknown): string {
+        if (typeof result === 'string') return result;
+        const isBlock = (value: unknown): value is Record<string, unknown> => value !== null &&
+            typeof value === 'object' && !Array.isArray(value) &&
+            ['text', 'image', 'audio', 'resource', 'resource_link', 'application/json'].includes(
+                String((value as Record<string, unknown>).type)
+            );
+        if (Array.isArray(result)) {
+            return result.length > 0 && result.every(isBlock)
+                ? result.map(value => this.getRawToolResultMessage(value)).join('\n')
+                : JSON.stringify(result);
+        }
+        if (result !== null && typeof result === 'object') {
+            const value = result as Record<string, unknown>;
+            if (value.type === 'text' && typeof value.text === 'string') return value.text;
+            if ((value.type === 'text' || value.type === 'application/json') && value.data !== undefined) {
+                return typeof value.data === 'string' ? value.data : JSON.stringify(value.data);
+            }
+            // Unwrap only a recognizable MCP envelope. Ordinary tool data may
+            // legitimately contain fields named content, data, error, or result.
+            const envelopeKeys = ['content', 'isError', 'metadata', '_meta'];
+            if (Object.keys(value).every(key => envelopeKeys.includes(key))) {
+                if (Array.isArray(value.content) && value.content.every(isBlock)) {
+                    return value.content.map(block => this.getRawToolResultMessage(block)).join('\n');
+                }
+                if (isBlock(value.content)) return this.getRawToolResultMessage(value.content);
+            }
+        }
+        if (result === undefined) throw new Error('Tool execution returned no result');
+        return JSON.stringify(result);
+    }
+
     /**
      * Check if tool execution was successful
      */
     static isToolExecutionSuccessful(toolResult: ToolExecutionResult): boolean {
         // Handle different tool result formats
+        if (toolResult === undefined || toolResult === null) return false;
+        if (typeof toolResult !== 'object') return true;
+        if ('isError' in toolResult && typeof toolResult.isError === 'boolean') return !toolResult.isError;
         
         // Standard success property
         if (typeof toolResult.success === 'boolean') {

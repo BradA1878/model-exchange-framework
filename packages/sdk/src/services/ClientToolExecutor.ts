@@ -43,6 +43,9 @@ import {
     createMcpToolResultLocalPayload,
     createMcpToolErrorLocalPayload,
     createMcpToolCallCompletedLocalPayload,
+    type EventCorrelation,
+    type McpToolCallEventPayload,
+    type McpToolResultEventPayload,
 } from '@mxf-dev/core/schemas/EventPayloadSchema';
 import type { McpToolHandlerContext } from '@mxf-dev/core/protocols/mcp/McpServerTypes';
 import type { MxfService } from './MxfService.js';
@@ -102,9 +105,15 @@ export class ClientToolExecutor {
      * @param toolName - Name of the tool to execute
      * @param input - Tool input parameters
      * @param channelId - Channel context for the execution
+     * @param correlation - Provider request and activation IDs, separate from the local call ID
      * @returns The tool result (extracted from MCP format if applicable)
      */
-    public async executeLocally(toolName: string, input: any, channelId: string): Promise<any> {
+    public async executeLocally(
+        toolName: string,
+        input: McpToolCallEventPayload['data']['arguments'],
+        channelId: string,
+        correlation: EventCorrelation = {}
+    ): Promise<McpToolResultEventPayload['data']['result']> {
         this.validator.assertIsNonEmptyString(toolName, 'toolName is required');
 
         const tool = this.clientToolRegistry.get(toolName);
@@ -113,6 +122,8 @@ export class ClientToolExecutor {
         }
 
         const callId = `tool-local-${crypto.randomUUID()}`;
+        // Snapshot the accepted trace before callbacks or the handler can mutate it.
+        const trace = { ...correlation };
 
         // Emit local call event for observability
         EventBus.client.emit(
@@ -121,7 +132,8 @@ export class ClientToolExecutor {
                 Events.Mcp.TOOL_CALL_LOCAL,
                 this.agentId,
                 channelId,
-                { toolName, callId, arguments: input }
+                { toolName, callId, arguments: input },
+                trace
             )
         );
 
@@ -131,6 +143,8 @@ export class ClientToolExecutor {
             // Build handler context
             const context: McpToolHandlerContext = {
                 requestId: callId,
+                llmRequestId: trace.requestId,
+                activationId: trace.activationId,
                 agentId: this.agentId,
                 channelId: channelId,
             };
@@ -169,12 +183,13 @@ export class ClientToolExecutor {
                     Events.Mcp.TOOL_RESULT_LOCAL,
                     this.agentId,
                     channelId,
-                    { toolName, callId, result, durationMs }
+                    { toolName, callId, result, durationMs },
+                    trace
                 )
             );
 
             // Fire-and-forget notification to server for DB history recording
-            this.notifyServerOfCompletion(callId, toolName, input, result, durationMs, channelId, tool.source);
+            this.notifyServerOfCompletion(callId, toolName, input, result, durationMs, channelId, tool.source, trace);
 
             return result;
 
@@ -191,7 +206,8 @@ export class ClientToolExecutor {
                     Events.Mcp.TOOL_ERROR_LOCAL,
                     this.agentId,
                     channelId,
-                    { toolName, callId, error: errorMessage }
+                    { toolName, callId, error: errorMessage },
+                    trace
                 )
             );
 
@@ -278,7 +294,8 @@ export class ClientToolExecutor {
         result: any,
         durationMs: number,
         channelId: string,
-        source: 'internal' | 'external-mcp'
+        source: 'internal' | 'external-mcp',
+        correlation: EventCorrelation
     ): void {
         try {
             this.mxfService.socketEmit(
@@ -295,7 +312,8 @@ export class ClientToolExecutor {
                         durationMs,
                         source,
                         executedOn: 'client',
-                    }
+                    },
+                    correlation
                 )
             );
         } catch (error) {

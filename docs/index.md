@@ -9,6 +9,14 @@ roles, evidence, permitted tools, and rules for using the results.
 
 - [Getting started](getting-started.md): install and configure MXF.
 - [SDK guide](sdk/index.md): connect an application and create agents.
+- [Core and SDK 5.0 upgrade guide](sdk/upgrade-5.md): native tool-result types,
+  user-only message publication, and required channel-history migration.
+- [Bare prompts and message activation](sdk/bare-agents.md): operator-only prompts,
+  task-free turns, request capture, and provider routing.
+- [Server agent controls and migration](server-agent-controls.md): canonical channel
+  history, private DM reads, owner-published messages, and per-agent filesystems.
+- [OpenRouter streaming bounds](sdk/openrouter-streaming.md): distinguish keepalives
+  from model output and account for retry attempts.
 - [Core and SDK 4.0 upgrade guide](../packages/sdk/README.md#upgrading-to-40):
   changed persistence and reconnect contracts, plus the new session-memory option.
 - [Agent memory lifetime and task outcomes](sdk/session-memory.md): persistent
@@ -31,9 +39,9 @@ Core, SDK, and server have separate responsibilities:
 | Desktop | Tauri application with a local SDK sidecar |
 | Dashboard | Separate `@mxf-dev/dashboard` package connecting to the server |
 
-Core and SDK are published together; this checkout uses 4.0.0. The root application
-version has a separate release cadence. Use SDK root imports in applications and
-read the upgrade guide before moving a 3.x consumer to 4.0.
+Core and SDK are published together. The root application version has a separate
+release cadence. Use SDK root imports in applications and
+read the applicable upgrade guides before changing major versions.
 
 ## Current feature boundaries
 
@@ -43,6 +51,9 @@ model architecture, or demonstration alone does not establish an end-to-end cont
 | Area | Implemented behavior and remaining limits |
 | --- | --- |
 | Tasks and tools | Task identities, assignments, and outcomes are persisted. Tool grants are enforced by the server. Failed tool execution remains a failure over HTTP and sockets. |
+| Message-driven agents | Bare prompts omit framework-authored text. Message activation runs without tasks, coalesces pending arrivals, and ends on no-tool responses or its iteration limit. Capture and usage events expose actual request/response evidence where supported. |
+| Channel history | New writes use `ChannelMemory.conversationHistory`; existing legacy history needs the explicit migration. Opt-in parties visibility filters agent reads before limits/counts and omits derived context. Owner/admin user reads retain canonical history. |
+| Agent filesystems | Operator templates start an installed filesystem MCP process per agent. Its allowed roots enforce access; exact credential and channel tool grants remain required. |
 | Session memory | `memoryMode: 'session'` keeps SDK-managed history in one agent instance without automatic remote loading, saving, backfill, or indexing. Reconnect retains that context; a new instance starts empty. Explicit memory tools and application storage remain independent. |
 | Task lifecycle | One accepted task owns an agent's execution context. Older asynchronous responses cannot mutate a successor task. Local cancellation does not guarantee that an issued provider request or remote tool was aborted. |
 | Memory utility | Retrieval blends relevance with learned Q-values. Persistence reads and writes are paired; cache admission is bounded and preserves unpersisted rewards. This is not evidence of improved application decisions. |
@@ -106,6 +117,7 @@ bun run mxf run "Summarize the supplied evidence and identify unanswered questio
 ### Memory, graphs, and execution
 
 - [Session memory and task outcomes](sdk/session-memory.md)
+- [Bare prompts and message activation](sdk/bare-agents.md) and [server controls/migration](server-agent-controls.md)
 - [Meilisearch integration](meilisearch-integration.md) and [user memory](mxf/user-memory.md)
 - [Memory utility learning](mxf/memory-utility-learning.md), [ORPAR memory routing](mxf/orpar-memory-integration.md), and [nested learning](mxf/nested-learning.md)
 - [Task DAG tools](api/dag-tools.md) and [knowledge graph tools](api/knowledge-graph-tools.md)
@@ -127,6 +139,8 @@ their current runtime limits are stated above and in the review.
 ### Operations and development
 
 - [Docker deployment](deployment.md) and [security](mxf/security.md)
+- [Message-agent deployment and channel-history migration](server-agent-controls.md)
+- [OpenRouter streaming bounds](sdk/openrouter-streaming.md)
 - [System overview](mxf/system-overview.md) and [key concepts](mxf/key-concepts.md)
 - [Repository examples](../examples) and [framework review](reviews/2026-09-06-framework-review.md)
 - [Report an issue](https://github.com/BradA1878/model-exchange-framework/issues)

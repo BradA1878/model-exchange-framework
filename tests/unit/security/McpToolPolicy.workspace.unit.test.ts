@@ -87,9 +87,11 @@ describe('McpToolPolicy workspace containment', () => {
 
     it('gives the filesystem MCP server only the configured workspace root', () => {
         const config = getFilesystemServerConfig();
+        const packagePath = require.resolve('@modelcontextprotocol/server-filesystem/package.json');
+        expect(config.version).toBe('2026.8.31');
+        expect(config.command).toBe(process.execPath);
         expect(config.args).toEqual([
-            '-y',
-            '@modelcontextprotocol/server-filesystem',
+            path.join(path.dirname(packagePath), 'dist/index.js'),
             path.resolve(workspaceRoot)
         ]);
     });

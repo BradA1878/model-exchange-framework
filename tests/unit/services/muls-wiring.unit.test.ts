@@ -221,6 +221,7 @@ describe('MULS wiring — learning must reach retrieval and persistence', () => 
         stubSearch([hit('weak', 0.90), hit('strong', 0.70)]);
 
         const result = await runSearch();
+        if (Array.isArray(result.content)) throw new Error('Expected an internal memory search result object');
         const returned = result.content.data.results.map((item: { content: string }) => item.content);
 
         expect(returned[0]).toBe('content of strong');
@@ -298,6 +299,7 @@ describe('MULS wiring — learning must reach retrieval and persistence', () => 
 
         const result = await runSearch();
 
+        if (Array.isArray(result.content)) throw new Error('Expected an internal memory search result object');
         expect(result.content.data.results).toHaveLength(2);
         expect(persistence.writes).toHaveLength(0);
     });

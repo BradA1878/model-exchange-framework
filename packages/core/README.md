@@ -12,6 +12,21 @@ bun add @mxf-dev/core   # or: npm install @mxf-dev/core
 
 Requires Node.js >= 20.19 or Bun >= 1.2. ESM-only.
 
+### Upgrading to 5.0
+
+Update core and SDK together. `McpToolHandlerResult.content` now accepts either
+the internal result object or a native MCP content-block array. Narrow with
+`Array.isArray()` before accessing `.data`; retain native `isError`,
+`structuredContent`, `_meta`, and all content blocks. External MCP servers must
+return an explicit content array, including `[]` for no content.
+
+New request, activation-limit, and history-trim events expose agent execution.
+Server controls add per-agent filesystem roots, private DM reads, and switches
+for correction, MXP, and intelligent assignment. Existing server history needs
+the explicit channel-history migration before writers resume. See the
+[5.0 upgrade guide](https://mxf-dev.github.io/mxf/#sdk/upgrade-5.md) and
+[server controls](https://mxf-dev.github.io/mxf/#server-agent-controls.md).
+
 ### Upgrading to 4.0
 
 Core and SDK versions must match. Two exported contracts require consumer changes:

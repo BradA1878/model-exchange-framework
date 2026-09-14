@@ -58,7 +58,7 @@ export interface TaskResponseEvent {
  * in the framework — a local duplicate here drifted from the envelope type and
  * made the typed EventBus double-wrap task entries.
  */
-import type { TaskEventPayload } from '../../schemas/EventPayloadSchema.js';
+import type { TaskEventPayload, TaskOrchestrationConfigEventPayload } from '../../schemas/EventPayloadSchema.js';
 export type { TaskEventPayload };
 
 /**
@@ -197,5 +197,5 @@ export interface TaskPayloads {
     'task:late_agent_joined': TaskEventPayload & { data: { task: ChannelTask; joinedAgentId: AgentId } };
     
     // System events
-    'task:orchestration_config_updated': TaskEventPayload;
+    'task:orchestration_config_updated': TaskOrchestrationConfigEventPayload;
 }

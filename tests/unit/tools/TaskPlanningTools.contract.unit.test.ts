@@ -113,6 +113,7 @@ describe('TaskPlanningTools authoritative contracts', () => {
         });
 
         const result = await resultPromise;
+        if (Array.isArray(result.content)) throw new Error('Expected task planning object content');
         expect(result.content.data).toEqual(expect.objectContaining({
             success: true,
             taskId: 'persisted-task'
@@ -183,6 +184,7 @@ describe('TaskPlanningTools authoritative contracts', () => {
         });
 
         const result = await resultPromise;
+        if (Array.isArray(result.content)) throw new Error('Expected task planning object content');
         expect(result.content.data).toEqual(expect.objectContaining({
             success: true,
             taskId: 'task-1',

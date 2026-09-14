@@ -4,6 +4,37 @@ MXF can start caller-supplied MCP servers and expose their discovered tools glob
 or to one channel. This is host process management, so it is intentionally separate
 from agent tool credentials.
 
+## Operator-managed agent filesystems
+
+`MXF_AGENT_FILESYSTEM_ROOTS=/srv/mxf-work/{agentId},/srv/mxf-work/shared` enables one
+filesystem server per agent. All expanded roots must already exist and be absolute;
+leave `MXF_WORKSPACE_ROOT` unset. An empty value is invalid. MXF uses the installed
+`@modelcontextprotocol/server-filesystem` package pinned to `2026.8.31`, with no
+filesystem `npx` download. Authentication waits for initialization and tool discovery;
+the last socket disconnect stops the process, including an in-progress startup.
+
+This trusted operator path is separate from administrator runtime registration
+below. It does not require `MXF_UNSAFE_STDIO_MCP_ENABLED` or the broad host-tools
+flag, but exact credential/channel allowlists remain required. Agents see permitted
+raw names (`read_file`, `write_file`, etc.) resolved to their own `filesystem:<agentId>`
+server. That namespace is reserved. Filesystem roots remain independent of
+`MXF_EXTERNAL_MCP_AUTOSTART` and the legacy `DISABLE_EXTERNAL_MCP_SERVERS` variable.
+
+`MXF_EXTERNAL_MCP_AUTOSTART` selects predefined boot servers; unset keeps existing
+defaults, empty starts none, and unknown IDs fail. See the
+[deployment guide](../server-agent-controls.md#per-agent-filesystem-processes) for
+directory preparation, admission cleanup, and the complete setting matrix.
+
+## Native tool results
+
+An external tool must return a valid MCP result with a `content` array, including
+an explicit empty array when it has no content. MXF retains every content block,
+`isError`, `structuredContent`, and `_meta`. It does not replace the envelope with
+its first text item, infer a MIME type, or manufacture missing content. Invalid
+envelopes fail explicitly. Error results preserve the server's content and emit
+the tool error event. SDK tool messages retain text blocks and serialize other
+returned data for the model.
+
 ## Security boundary
 
 All runtime registration and unregistration methods require:

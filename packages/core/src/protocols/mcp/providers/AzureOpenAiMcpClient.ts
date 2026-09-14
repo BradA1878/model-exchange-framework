@@ -49,9 +49,14 @@
 
 import { Observable } from 'rxjs';
 import { AzureOpenAI } from 'openai';
+import type { ChatCompletion } from 'openai/resources/chat/completions';
 import { BaseMcpClient } from './BaseMcpClient.js';
+import { ObservedSdkTransport } from './ObservedSdkTransport.js';
+import { buildBareChatTools, buildBareContextMessages, parseNativeToolArguments, type BareChatMessage } from './BareContextMessages.js';
+import { reportedTokenUsage } from './ProviderUsage.js';
 import {
     McpMessage,
+    McpRequestOptions,
     McpTool,
     McpApiResponse,
     McpContentType,
@@ -76,6 +81,7 @@ const logger = new Logger('debug', 'AzureOpenAiMcpClient', 'client');
  * Azure OpenAI implementation of the MCP client
  */
 export class AzureOpenAiMcpClient extends BaseMcpClient {
+    private readonly observedTransport = new ObservedSdkTransport('azure-openai');
     // Azure OpenAI client instance
     private apiClient: AzureOpenAI | null = null;
     
@@ -106,6 +112,7 @@ export class AzureOpenAiMcpClient extends BaseMcpClient {
         
         // Initialize the Azure OpenAI client with Azure-specific options
         this.apiClient = new AzureOpenAI({
+            fetch: this.observedTransport.fetch,
             endpoint,
             apiKey,
             apiVersion,
@@ -400,7 +407,7 @@ export class AzureOpenAiMcpClient extends BaseMcpClient {
      * @param response - Azure OpenAI response to convert
      * @returns MCP formatted response
      */
-    private convertToMcpResponse(response: any): McpApiResponse {
+    private convertToMcpResponse(response: ChatCompletion, strictToolArguments = false): McpApiResponse {
         // Get first choice from response
         if (!response.choices || response.choices.length === 0) {
             throw new Error('Azure OpenAI response does not contain any choices');
@@ -428,7 +435,7 @@ export class AzureOpenAiMcpClient extends BaseMcpClient {
                         type: McpContentType.TOOL_USE,
                         id: toolCall.id,
                         name: toolCall.function.name,
-                        input: JSON.parse(toolCall.function.arguments || '{}')
+                        input: strictToolArguments ? parseNativeToolArguments(toolCall.function.arguments) : JSON.parse(toolCall.function.arguments || '{}')
                     };
                     content.push(toolUseContent);
                 }
@@ -444,11 +451,7 @@ export class AzureOpenAiMcpClient extends BaseMcpClient {
             model: response.model,
             stop_reason: choice.finish_reason || null,
             stop_sequence: null,
-            usage: {
-                input_tokens: response.usage?.prompt_tokens || 0,
-                output_tokens: response.usage?.completion_tokens || 0,
-                total_tokens: response.usage?.total_tokens || 0
-            }
+            usage: reportedTokenUsage('AzureOpenAi', response.usage?.prompt_tokens, response.usage?.completion_tokens, response.usage?.total_tokens)
         };
     }
     
@@ -497,8 +500,16 @@ export class AzureOpenAiMcpClient extends BaseMcpClient {
         
         // Pass tools as-is to sendProviderMessage - it will convert them
         // DO NOT pre-convert here to avoid double conversion
-        const messages = this.convertAzureToMcpMessages(azureMessages);
-        return this.sendProviderMessage(messages, context.availableTools as any, options);
+        const messages = context.promptMode === 'bare'
+            ? azureMessages.map(message => ({
+                role: message.role,
+                content: { type: McpContentType.TEXT as const, text: message.content },
+                ...(message.tool_calls ? { tool_calls: message.tool_calls } : {}),
+                ...(message.tool_call_id ? { tool_call_id: message.tool_call_id } : {})
+            }))
+            : this.convertAzureToMcpMessages(azureMessages);
+        return this.sendProviderMessage(messages, context.availableTools as McpTool[], options,
+            context.promptMode === 'bare' ? azureMessages : undefined);
     }
     
     /**
@@ -508,6 +519,7 @@ export class AzureOpenAiMcpClient extends BaseMcpClient {
      * to intelligently filter and structure messages.
      */
     private structureMessagesFromContext(context: AgentContext): any[] {
+        if (context.promptMode === 'bare') return buildBareContextMessages(context);
         const messages: any[] = [];
         
         // 1. System message: Combine framework rules + agent identity
@@ -679,7 +691,8 @@ export class AzureOpenAiMcpClient extends BaseMcpClient {
     protected async sendProviderMessage(
         messages: McpMessage[],
         tools?: McpTool[],
-        options?: Record<string, any>
+        options?: McpRequestOptions,
+        nativeMessages?: BareChatMessage[]
     ): Promise<McpApiResponse> {
         if (!this.apiClient) {
             throw new Error('Azure OpenAI client not initialized');
@@ -692,7 +705,7 @@ export class AzureOpenAiMcpClient extends BaseMcpClient {
             }
             
             // Convert messages to Azure OpenAI format
-            const azureMessages = this.convertToAzureOpenAiMessages(messages);
+            const azureMessages = nativeMessages ?? this.convertToAzureOpenAiMessages(messages);
             
             // Prepare request parameters
             // For Azure OpenAI, the model name is specified in the deployment, 
@@ -711,7 +724,7 @@ export class AzureOpenAiMcpClient extends BaseMcpClient {
             
             // Add tools if provided
             if (tools && tools.length > 0) {
-                requestParams.tools = this.convertToAzureOpenAiTools(tools);
+                requestParams.tools = nativeMessages ? buildBareChatTools(tools) : this.convertToAzureOpenAiTools(tools);
                 
                 // Set tool_choice based on options
                 if (options?.requireToolUse) {
@@ -731,14 +744,17 @@ export class AzureOpenAiMcpClient extends BaseMcpClient {
             // console.log('');
             
             // Make the API request
-            const response = await this.apiClient.chat.completions.create(requestParams);
-
-            // console.log('');
-            // console.log('response', JSON.stringify(response));
-            // console.log('');
-            
-            // Convert and return response
-            return this.convertToMcpResponse(response);
+            if (options?.providerOptions) {
+                // Endpoint/deployment configure the SDK itself, not the JSON request.
+                const bodyOptions = { ...options.providerOptions };
+                delete bodyOptions.endpoint;
+                delete bodyOptions.deployment;
+                delete bodyOptions.apiVersion;
+                Object.assign(requestParams, bodyOptions);
+            }
+            return await this.observedTransport.run(options?.requestTrace, async () =>
+                this.convertToMcpResponse(await this.apiClient!.chat.completions.create(requestParams), Boolean(nativeMessages))
+            );
         } catch (error: any) {
             // Handle Azure OpenAI specific errors
             if (error?.status) {

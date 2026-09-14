@@ -35,9 +35,10 @@ import { AgentService } from '../../socket/services/AgentService';
 import { EventBus } from '@mxf-dev/core/events/EventBus';
 import { Events } from '@mxf-dev/core/events/EventNames';
 import { createAgentMessageEventPayload, createChannelMessageEventPayload, createBaseEventPayload } from '@mxf-dev/core/schemas/EventPayloadSchema';
+import { isServerMxpEnabled } from '@mxf-dev/core/config/AgentExperimentConfig';
 import { MxpMiddleware } from '@mxf-dev/core/middleware/MxpMiddleware';
 import { isMxpMessage } from '@mxf-dev/core/schemas/MxpProtocolSchemas';
-import { McpToolHandlerContext, McpToolHandlerResult, McpToolResultContent } from '@mxf-dev/core/protocols/mcp/McpServerTypes';
+import { McpToolDefinition, McpToolHandlerContext, McpToolHandlerResult, McpToolResultContent } from '@mxf-dev/core/protocols/mcp/McpServerTypes';
 import {
     requireChannelParticipants,
     requireCurrentChannelParticipant,
@@ -58,58 +59,64 @@ const hasMxpMessageFormat = (value: unknown): boolean =>
 export const agentMessageTool = {
     name: COMMUNICATION_TOOLS.SEND_MESSAGE,
     description: 'Send a direct message from one agent to another with optional metadata. Supports MXP protocol for structured communication.',
-    inputSchema: {
-        type: 'object',
-        properties: {
-            targetAgentId: {
-                type: 'string',
-                description: 'ID of the target agent to send the message to'
-            },
-            message: {
-                description: 'Message content to send (can be text, JSON, MXP format, or structured data)'
-            },
-            messageType: {
-                type: 'string',
-                description: 'Optional message type for categorization',
-                default: 'direct'
-            },
-            priority: {
-                type: 'number',
-                description: 'Message priority (1=low, 5=normal, 10=high)',
-                minimum: 1,
-                maximum: 10,
-                default: 5
-            },
-            metadata: {
-                type: 'object',
-                description: 'Optional metadata to include with the message'
-            },
-            mxpOptions: {
-                type: 'object',
-                description: 'MXP protocol options',
-                properties: {
-                    enableMxp: {
-                        type: 'boolean',
-                        description: 'Enable MXP protocol processing',
-                        default: true
-                    },
-                    preferredFormat: {
-                        type: 'string',
-                        enum: ['mxp', 'natural-language', 'auto'],
-                        description: 'Preferred message format',
-                        default: 'auto'
-                    },
-                    forceEncryption: {
-                        type: 'boolean',
-                        description: 'Force message encryption',
-                        default: false
+    // Resolve the operator policy when the registry copies the served schema.
+    get inputSchema(): McpToolDefinition['inputSchema'] {
+        return {
+            type: 'object',
+            properties: {
+                targetAgentId: {
+                    type: 'string',
+                    description: 'ID of the target agent to send the message to'
+                },
+                message: {
+                    description: 'Message content to send (can be text, JSON, MXP format, or structured data)'
+                },
+                messageType: {
+                    type: 'string',
+                    description: 'Optional message type for categorization',
+                    default: 'direct'
+                },
+                priority: {
+                    type: 'number',
+                    description: 'Message priority (1=low, 5=normal, 10=high)',
+                    minimum: 1,
+                    maximum: 10,
+                    default: 5
+                },
+                metadata: {
+                    type: 'object',
+                    description: 'Optional metadata to include with the message'
+                },
+                ...(isServerMxpEnabled() ? {
+                    mxpOptions: {
+                        type: 'object',
+                        description: 'MXP protocol options',
+                        properties: {
+                            enableMxp: {
+                                type: 'boolean',
+                                description: 'Enable MXP protocol processing',
+                                // Match the handler: MXP processing requires explicit opt-in.
+                                default: false
+                            },
+                            preferredFormat: {
+                                type: 'string',
+                                enum: ['mxp', 'natural-language', 'auto'],
+                                description: 'Preferred message format',
+                                default: 'auto'
+                            },
+                            forceEncryption: {
+                                type: 'boolean',
+                                description: 'Force message encryption',
+                                default: false
+                            }
+                        }
                     }
-                }
-            }
-        },
-        required: ['targetAgentId', 'message']
+                } : {})
+            },
+            required: ['targetAgentId', 'message']
+        };
     },
-    
+
     handler: async (input: {
         targetAgentId: string;
         message: unknown;
@@ -132,15 +139,18 @@ export const agentMessageTool = {
             // Process message through MXP middleware if enabled
             let processedMessage = input.message;
             let mxpProcessed = false;
-            const forceEncryption = input.mxpOptions?.forceEncryption ?? false;
+            // Disabled MXP ignores supplied options, including forced encryption.
+            const mxpEnabled = isServerMxpEnabled();
+            const suppliedMxpOptions = mxpEnabled ? input.mxpOptions : undefined;
+            const forceEncryption = suppliedMxpOptions?.forceEncryption ?? false;
             const mxpOptions = {
-                enableMxp: forceEncryption || (input.mxpOptions?.enableMxp ?? false),
-                preferredFormat: input.mxpOptions?.preferredFormat ?? 'auto',
+                enableMxp: forceEncryption || (suppliedMxpOptions?.enableMxp ?? false),
+                preferredFormat: suppliedMxpOptions?.preferredFormat ?? 'auto',
                 forceEncryption
             };
             
             // Check if MXP processing should be applied
-            if (mxpOptions.enableMxp) {
+            if (mxpEnabled && mxpOptions.enableMxp) {
                 try {
                     // If message is already MXP or should be converted
                     if (mxpOptions.forceEncryption ||
@@ -233,59 +243,65 @@ export const agentMessageTool = {
 export const agentBroadcastTool = {
     name: COMMUNICATION_TOOLS.BROADCAST,
     description: 'Broadcast a message to multiple agents or an entire channel. Supports MXP protocol for structured communication.',
-    inputSchema: {
-        type: 'object',
-        properties: {
-            targetChannelId: {
-                type: 'string',
-                description: 'Channel ID to broadcast to (optional - defaults to current channel)'
-            },
-            targetAgentIds: {
-                type: 'array',
-                items: { type: 'string' },
-                description: 'Array of specific agent IDs to send to (if targeting specific agents)'
-            },
-            message: {
-                description: 'Message content to broadcast (can be text, JSON, MXP format, or structured data)'
-            },
-            messageType: {
-                type: 'string',
-                description: 'Optional message type for categorization',
-                default: 'broadcast'
-            },
-            excludeSelf: {
-                type: 'boolean',
-                description: 'Whether to exclude the sending agent from receiving the broadcast',
-                default: true
-            },
-            metadata: {
-                type: 'object',
-                description: 'Optional metadata to include with the broadcast'
-            },
-            mxpOptions: {
-                type: 'object',
-                description: 'MXP protocol options',
-                properties: {
-                    enableMxp: {
-                        type: 'boolean',
-                        description: 'Enable MXP protocol processing',
-                        default: true
-                    },
-                    preferredFormat: {
-                        type: 'string',
-                        enum: ['mxp', 'natural-language', 'auto'],
-                        description: 'Preferred message format',
-                        default: 'auto'
-                    },
-                    forceEncryption: {
-                        type: 'boolean',
-                        description: 'Force message encryption',
-                        default: false
+    // Resolve the operator policy when the registry copies the served schema.
+    get inputSchema(): McpToolDefinition['inputSchema'] {
+        return {
+            type: 'object',
+            properties: {
+                targetChannelId: {
+                    type: 'string',
+                    description: 'Channel ID to broadcast to (optional - defaults to current channel)'
+                },
+                targetAgentIds: {
+                    type: 'array',
+                    items: { type: 'string' },
+                    description: 'Array of specific agent IDs to send to (if targeting specific agents)'
+                },
+                message: {
+                    description: 'Message content to broadcast (can be text, JSON, MXP format, or structured data)'
+                },
+                messageType: {
+                    type: 'string',
+                    description: 'Optional message type for categorization',
+                    default: 'broadcast'
+                },
+                excludeSelf: {
+                    type: 'boolean',
+                    description: 'Whether to exclude the sending agent from receiving the broadcast',
+                    default: true
+                },
+                metadata: {
+                    type: 'object',
+                    description: 'Optional metadata to include with the broadcast'
+                },
+                ...(isServerMxpEnabled() ? {
+                    mxpOptions: {
+                        type: 'object',
+                        description: 'MXP protocol options',
+                        properties: {
+                            enableMxp: {
+                                type: 'boolean',
+                                description: 'Enable MXP protocol processing',
+                                // Match the handler: MXP processing requires explicit opt-in.
+                                default: false
+                            },
+                            preferredFormat: {
+                                type: 'string',
+                                enum: ['mxp', 'natural-language', 'auto'],
+                                description: 'Preferred message format',
+                                default: 'auto'
+                            },
+                            forceEncryption: {
+                                type: 'boolean',
+                                description: 'Force message encryption',
+                                default: false
+                            }
+                        }
                     }
-                }
-            }
-        },
-        required: ['message']
+                } : {})
+            },
+            required: ['message']
+        };
     },
 
     handler: async (input: {
@@ -331,15 +347,18 @@ export const agentBroadcastTool = {
             
             // Process message through MXP middleware if enabled
             let processedMessage = input.message;
-            const forceEncryption = input.mxpOptions?.forceEncryption ?? false;
+            // Disabled MXP ignores supplied options, including forced encryption.
+            const mxpEnabled = isServerMxpEnabled();
+            const suppliedMxpOptions = mxpEnabled ? input.mxpOptions : undefined;
+            const forceEncryption = suppliedMxpOptions?.forceEncryption ?? false;
             const mxpOptions = {
-                enableMxp: forceEncryption || (input.mxpOptions?.enableMxp ?? false),
-                preferredFormat: input.mxpOptions?.preferredFormat ?? 'auto',
+                enableMxp: forceEncryption || (suppliedMxpOptions?.enableMxp ?? false),
+                preferredFormat: suppliedMxpOptions?.preferredFormat ?? 'auto',
                 forceEncryption
             };
             
             // Check if MXP processing should be applied
-            if (mxpOptions.enableMxp) {
+            if (mxpEnabled && mxpOptions.enableMxp) {
                 try {
                     // If message is already MXP or should be converted
                     if (mxpOptions.forceEncryption ||

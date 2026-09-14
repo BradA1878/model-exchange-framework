@@ -28,7 +28,7 @@ const response = {
     id: 'response', model: 'test-model', role: 'assistant', text: 'ok',
     content: [{ type: 'text', text: 'ok' }], message: { content: 'ok' }, done: true,
     choices: [{ message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
-    usage: { input_tokens: 1, output_tokens: 1, prompt_tokens: 1, completion_tokens: 1 }
+    usage: { input_tokens: 1, output_tokens: 1, prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 }
 };
 
 const providers = [

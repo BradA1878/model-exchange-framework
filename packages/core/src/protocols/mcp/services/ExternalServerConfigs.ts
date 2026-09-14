@@ -25,9 +25,9 @@
  * enhanced capabilities for the hybrid MCP architecture.
  */
 
-import * as path from 'path';
-import { ExternalServerConfig } from './ExternalMcpServerManager.js';
+import type { ExternalServerConfig } from './ExternalMcpServerManager.js';
 import { getWorkspaceRoot } from '../security/McpToolPolicy.js';
+import { getFilesystemServerExecutable, readAgentFilesystemRootTemplates } from './AgentFilesystemConfig.js';
 
 /**
  * Configuration for the Calculator MCP Server
@@ -83,16 +83,17 @@ export const SEQUENTIAL_THINKING_SERVER_CONFIG: ExternalServerConfig = {
  * a filesystem server needs an operator to say which directory agents may touch,
  * and the previous default answered that question with "all of them".
  */
+const filesystemExecutable = getFilesystemServerExecutable();
+
 export const FILESYSTEM_SERVER_CONFIG: ExternalServerConfig = {
     id: 'filesystem',
     name: 'Filesystem Server',
-    version: '0.6.0',
+    version: filesystemExecutable.version,
     description: 'File operations scoped to the configured workspace directory',
-    command: 'npx',
+    command: process.execPath,
     // The MCP filesystem server takes its allowed directories as positional args.
     args: [
-        '-y',
-        '@modelcontextprotocol/server-filesystem',
+        filesystemExecutable.entryPoint,
         // Empty when unset. getFilesystemServerConfig() below is what callers
         // should use — it fails fast rather than spawning a server with no root.
         getWorkspaceRoot() ?? ''
@@ -343,6 +344,7 @@ export const EXTERNAL_SERVER_CONFIGS: ExternalServerConfig[] = [
  * @throws Error when MXF_WORKSPACE_ROOT is not set
  */
 export const getFilesystemServerConfig = (): ExternalServerConfig => {
+    readAgentFilesystemRootTemplates();
     const workspaceRoot = getWorkspaceRoot();
 
     if (!workspaceRoot) {
@@ -355,22 +357,48 @@ export const getFilesystemServerConfig = (): ExternalServerConfig => {
         );
     }
 
+    const executable = getFilesystemServerExecutable();
     return {
         ...FILESYSTEM_SERVER_CONFIG,
-        args: [
-            '-y',
-            '@modelcontextprotocol/server-filesystem',
-            workspaceRoot
-        ],
+        version: executable.version,
+        command: process.execPath,
+        args: [executable.entryPoint, workspaceRoot],
         autoStart: true
     };
 };
 
 /**
- * Get configurations for auto-start servers only
+ * Read the operator's boot selection. Unset preserves defaults; empty starts none.
  */
 export const getAutoStartConfigs = (): ExternalServerConfig[] => {
-    return Object.values(EXTERNAL_SERVER_CONFIGS).filter(config => config.autoStart);
+    // Conflicting or malformed filesystem settings fail even when boot starts no servers.
+    readAgentFilesystemRootTemplates();
+    const configured = process.env.MXF_EXTERNAL_MCP_AUTOSTART;
+    let selected: ExternalServerConfig[];
+    if (configured === undefined) {
+        selected = EXTERNAL_SERVER_CONFIGS.filter(config =>
+            config.id === 'filesystem' ? getWorkspaceRoot() !== undefined : config.autoStart
+        );
+    } else if (configured.trim().length === 0) {
+        return [];
+    } else {
+        const ids = [...new Set(configured.split(',').map(id => id.trim()))];
+        selected = ids.map(id => {
+            const config = EXTERNAL_SERVER_CONFIGS.find(candidate => candidate.id === id);
+            if (!config) {
+                throw new Error(`Unknown predefined MCP server ${JSON.stringify(id)} in MXF_EXTERNAL_MCP_AUTOSTART`);
+            }
+            return config;
+        });
+    }
+    return selected.map(config => config.id === 'filesystem'
+        ? getFilesystemServerConfig()
+        : {
+            ...config,
+            args: [...config.args],
+            environmentVariables: { ...config.environmentVariables },
+            autoStart: true
+        });
 };
 
 /**

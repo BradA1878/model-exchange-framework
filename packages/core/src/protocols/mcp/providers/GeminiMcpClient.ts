@@ -31,6 +31,8 @@
 import { Logger } from '../../../utils/Logger.js';
 import { v4 as uuidv4 } from 'uuid';
 import { BaseMcpClient } from './BaseMcpClient.js';
+import { buildBareContextMessages, parseNativeToolArguments, validateNativeToolInput } from './BareContextMessages.js';
+import { reportedTokenUsage } from './ProviderUsage.js';
 import { 
     McpMessage, 
     McpTool, 
@@ -57,6 +59,14 @@ type Content = any;
 type FunctionDeclaration = any;
 type Type = any;
 type FunctionCallingConfigMode = any;
+
+/** Fields read from native generateContent responses, including SDK function-call getters. */
+interface GeminiCompletionResponse {
+    promptId?: string;
+    candidates?: Array<{ content?: { parts?: Array<{ text?: string; inlineData?: { mimeType: string; data: string } }> }; finishReason?: string }>;
+    functionCalls?: Array<{ name: string; args: Record<string, unknown> }>;
+    usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number; totalTokenCount?: number };
+}
 
 /**
  * Gemini implementation of the MCP client using the official Google Gen AI SDK
@@ -341,7 +351,7 @@ export class GeminiMcpClient extends BaseMcpClient {
      * @param modelName Model name used in the request
      * @returns MCP response
      */
-    private convertToMcpResponse(response: any, modelName: string): McpApiResponse {
+    private convertToMcpResponse(response: GeminiCompletionResponse, modelName: string, strictToolArguments = false): McpApiResponse {
         // Extract content from the response
         const content: McpApiResponse['content'] = [];
         
@@ -374,19 +384,15 @@ export class GeminiMcpClient extends BaseMcpClient {
                     type: McpContentType.TOOL_USE,
                     id: uuidv4(),
                     name: functionCall.name,
-                    input: functionCall.args
+                    input: strictToolArguments ? validateNativeToolInput(functionCall.args) : functionCall.args
                 });
             }
         }
         
-        // MCP requires numeric usage. Missing provider evidence is an error, not
-        // a zero-cost response. Keep the reported total, which may include tokens
+        // Preserve unreported usage as absent. Keep the reported total, which may include tokens
         // outside the prompt/candidate split (for example, thinking tokens).
         const usage = response.usageMetadata;
-        if (!usage || [usage.promptTokenCount, usage.candidatesTokenCount, usage.totalTokenCount]
-            .some((count: unknown) => typeof count !== 'number' || !Number.isFinite(count) || count < 0)) {
-            throw new Error('Gemini response has missing or invalid token usage');
-        }
+        const tokenUsage = reportedTokenUsage('Gemini', usage?.promptTokenCount, usage?.candidatesTokenCount, usage?.totalTokenCount);
         
         // Create MCP response
         return {
@@ -397,11 +403,7 @@ export class GeminiMcpClient extends BaseMcpClient {
             model: modelName,
             stop_reason: response.candidates?.[0]?.finishReason || null,
             stop_sequence: null,
-            usage: {
-                input_tokens: usage.promptTokenCount,
-                output_tokens: usage.candidatesTokenCount,
-                total_tokens: usage.totalTokenCount
-            }
+            usage: tokenUsage
         };
     }
     
@@ -479,7 +481,8 @@ export class GeminiMcpClient extends BaseMcpClient {
                 Object.assign(requestParams, options.providerOptions);
             }
             
-            // Generate content
+            // The installed SDK does not expose its final HTTP body for observation.
+            if (options?.requestTrace?.captureBody) throw new Error('Gemini does not support exact HTTP request capture');
             const response = await this.genAiClient.models.generateContent(requestParams);
             
             // Convert response to MCP format
@@ -547,7 +550,11 @@ export class GeminiMcpClient extends BaseMcpClient {
 
         // Add tools if provided
         if (context.availableTools && context.availableTools.length > 0) {
-            const functionDeclarations = this.convertToFunctionDeclarations(context.availableTools as McpTool[]);
+            // The SDK passes native parameters through. Preserve bare registry schemas;
+            // unsupported constraints must surface as provider errors, not disappear.
+            const functionDeclarations = context.promptMode === 'bare'
+                ? (context.availableTools as McpTool[]).map(tool => ({ name: tool.name, description: tool.description, parameters: tool.input_schema }))
+                : this.convertToFunctionDeclarations(context.availableTools as McpTool[]);
 
             requestParams.config = {
                 ...requestParams.config,
@@ -563,11 +570,14 @@ export class GeminiMcpClient extends BaseMcpClient {
             };
         }
 
+        if (options?.providerOptions) Object.assign(requestParams, options.providerOptions);
+        if (options?.requestTrace?.captureBody) throw new Error('Gemini does not support exact HTTP request capture');
+
         // Generate content
         const response = await this.genAiClient.models.generateContent(requestParams);
 
         // Convert response to MCP format
-        return this.convertToMcpResponse(response, modelName);
+        return this.convertToMcpResponse(response, modelName, context.promptMode === 'bare');
     }
 
     /**
@@ -580,6 +590,32 @@ export class GeminiMcpClient extends BaseMcpClient {
      * 3. Recent actions (if needed)
      */
     private structureMessagesFromContext(context: AgentContext): { systemPrompt: string; contents: Content[] } {
+        if (context.promptMode === 'bare') {
+            const contents: Content[] = [];
+            const toolNames = new Map<string, string>();
+            for (const message of buildBareContextMessages(context).slice(1)) {
+                const parts: NonNullable<Content['parts']> = [];
+                if (message.role === 'tool') {
+                    const name = message.tool_call_id && toolNames.get(message.tool_call_id);
+                    if (!name) throw new Error('Gemini tool results require a preceding matching tool call');
+                    parts.push({ functionResponse: { name, response: { output: message.content } } });
+                } else {
+                    if (message.content || !message.tool_calls?.length) parts.push({ text: message.content });
+                    for (const call of message.tool_calls ?? []) {
+                        toolNames.set(call.id, call.function.name);
+                        parts.push({ functionCall: { name: call.function.name, args: parseNativeToolArguments(call.function.arguments) } });
+                    }
+                }
+                // Keep parallel function results together after their model turn.
+                const previous = contents[contents.length - 1];
+                if (message.role === 'tool' && previous?.role === 'user' && previous.parts?.every((part: { functionResponse?: unknown }) => part.functionResponse)) {
+                    previous.parts.push(...parts);
+                } else {
+                    contents.push({ role: message.role === 'assistant' ? 'model' : 'user', parts });
+                }
+            }
+            return { systemPrompt: context.systemPrompt, contents };
+        }
         // Build system prompt
         const systemPrompt = [
             context.systemPrompt,

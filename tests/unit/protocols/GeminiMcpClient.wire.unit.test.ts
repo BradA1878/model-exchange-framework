@@ -119,11 +119,18 @@ describe('Gemini installed SDK wire contract', () => {
         expect(response.usage).toEqual({ input_tokens: 0, output_tokens: 0, total_tokens: 0 });
     });
 
+    it('omits unreported usage instead of inventing a zero-cost call', async () => {
+        fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({
+            candidates: [{ content: { parts: [{ text: 'ok' }] } }]
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+        const response = await lastValueFrom(client.sendMessage(messages));
+        expect(response.usage).toBeUndefined();
+    });
+
     it.each([
-        undefined,
         { promptTokenCount: 2, candidatesTokenCount: 1 },
         { promptTokenCount: 2, candidatesTokenCount: -1, totalTokenCount: 1 }
-    ])('rejects absent or incomplete usage instead of reporting a zero-cost call: %j', async usageMetadata => {
+    ])('rejects incomplete or invalid reported usage: %j', async usageMetadata => {
         fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({
             candidates: [{ content: { parts: [{ text: 'ok' }] } }], usageMetadata
         }), { status: 200, headers: { 'Content-Type': 'application/json' } }));

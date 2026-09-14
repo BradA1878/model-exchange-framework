@@ -40,6 +40,7 @@ import { Events } from '../events/EventNames.js';
 import { MemoryScope } from '../types/MemoryTypes.js';
 import { createMemoryGetEventPayload, createMemoryUpdateEventPayload } from '../schemas/EventPayloadSchema.js';
 import { v4 as uuidv4 } from 'uuid';
+import { appendUniqueChannelMessages } from '../utils/ChannelHistoryMessages.js';
 
 interface MemoryOperationResponseData {
     operationId?: string;
@@ -122,9 +123,7 @@ export class ChannelContextMessageOperations {
         messages: ChannelMessage[],
         updateMetadata: Record<string, unknown>
     ): Observable<boolean> => {
-        const uniqueMessages = [...new Map(
-            messages.map(message => [message.messageId, message])
-        ).values()];
+        const uniqueMessages = appendUniqueChannelMessages([], messages);
         const operationId = uuidv4();
         return this.requestMemoryResult(
             Events.Memory.UPDATE_RESULT,
@@ -162,8 +161,9 @@ export class ChannelContextMessageOperations {
     ): Observable<boolean> => {
         
         try {
-            // Use strict validator for fail-fast validation
+            // Validate canonical fields before asking the memory bridge to append.
             const validator = createStrictValidator('ChannelMessages');
+            validator.assertIsNonEmptyString(channelId, 'Channel ID is required');
             
             // Validate messages array
             if (!Array.isArray(messages) || messages.length === 0) {
@@ -172,16 +172,15 @@ export class ChannelContextMessageOperations {
             
             // Validate each message
             for (const [index, message] of messages.entries()) {
-                if (!message.messageId) throw new Error(`Message ${index}: Message ID is required`);
-                validator.assertIsString(message.messageId, `Message ${index}: Message ID must be a string`);
-                
-                if (!message.content) throw new Error(`Message ${index}: Message content is required`);
-                
-                if (!message.senderId) throw new Error(`Message ${index}: Message sender ID is required`);
-                validator.assertIsString(message.senderId, `Message ${index}: Message sender ID must be a string`);
-                
-                if (!message.timestamp) throw new Error(`Message ${index}: Message timestamp is required`);
-                validator.assertIsNumber(message.timestamp, `Message ${index}: Message timestamp must be a number`);
+                if (!message || typeof message !== 'object') throw new Error(`Message ${index}: Message must be an object`);
+                validator.assertIsNonEmptyString(message.messageId, `Message ${index}: Message ID is required`);
+                if (typeof message.content !== 'string' && (message.content === null || typeof message.content !== 'object' || Array.isArray(message.content))) {
+                    throw new Error(`Message ${index}: Message content must be a string or non-null object, not an array`);
+                }
+                validator.assertIsNonEmptyString(message.senderId, `Message ${index}: Message sender ID is required`);
+                if (typeof message.timestamp !== 'number' || !Number.isFinite(message.timestamp) || message.timestamp < 0) {
+                    throw new Error(`Message ${index}: Message timestamp must be a finite non-negative number`);
+                }
                 
                 if (!message.type) throw new Error(`Message ${index}: Message type is required`);
                 validator.assertIsString(message.type, `Message ${index}: Message type must be a string`);
