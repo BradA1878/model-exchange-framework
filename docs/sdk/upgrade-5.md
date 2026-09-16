@@ -13,6 +13,10 @@ history storage.
   `isError`, `structuredContent`, and `_meta`; do not assume the first item is text.
   External servers must return an explicit `content` array, including `[]` for no
   content. Invalid native envelopes fail instead of receiving invented content.
+  Upgrade the SDK with the server: SDK 5.0.0 and 5.0.1 turned every native envelope
+  into the word `Success` in the default prompt mode, so the model never received
+  an external tool's payload (bare mode was unaffected). Later 5.0.x SDKs send the
+  content blocks' text.
 - `POST /api/channels/:channelId/messages` is restricted to the owner or administrator
   **user**. Send `{content: string | object, messageType?: string}`. The response is
   `{messageId, timestamp}` after persistence. Sender attribution comes from the

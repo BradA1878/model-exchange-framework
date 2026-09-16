@@ -25,7 +25,9 @@ Server controls add per-agent filesystem roots, private DM reads, and switches
 for correction, MXP, and intelligent assignment. Existing server history needs
 the explicit channel-history migration before writers resume. See the
 [5.0 upgrade guide](https://mxf.dev/#sdk/upgrade-5.md) and
-[server controls](https://mxf.dev/#server-agent-controls.md).
+[server controls](https://mxf.dev/#server-agent-controls.md). Use SDK 5.0.2 or
+later: earlier 5.0.x SDKs sent the model the word `Success` instead of an
+external server's payload in the default prompt mode.
 
 ### Upgrading to 4.0
 

@@ -178,18 +178,41 @@ describe('task_complete handler summary normalization', () => {
         expect(mockHandleTaskCompletion).not.toHaveBeenCalled();
     });
 
-    it('names what it received and what is missing when details arrive without a summary', async () => {
-        // Sentinel, 2026-09-01: the model filled details and nextSteps and dropped
-        // the summary. The rejection has to say what to send on the next turn.
-        await expect(task_complete.handler(
-            { details: { alertEvaluated: 'BTC breakout', tradesOpened: 0 }, nextSteps: 'Hold cash' },
-            context
-        )).rejects.toThrow(
-            'Task completion summary or result is required: pass "summary" (prose, or an object stored as JSON) ' +
-            'or "result". Received only: details, nextSteps. Call task_complete again with a summary.'
+    it('uses a details object as the summary when summary and result are absent', async () => {
+        // Sentinel, 2026-09-01 and again on 2026-09-15 (about three times a day):
+        // the model puts all of its completion evidence in details and drops the
+        // summary. Rejecting that cost a round trip each time; the details object
+        // is stored as its JSON string, as an object-valued summary would be.
+        const details = { alertEvaluated: 'BTC breakout', tradesOpened: 0 };
+        await task_complete.handler({ details, nextSteps: 'Hold cash' }, context);
+
+        expect(mockHandleTaskCompletion).toHaveBeenCalledWith(
+            context.agentId,
+            context.channelId,
+            expect.objectContaining({ summary: JSON.stringify(details), details, nextSteps: 'Hold cash' })
+        );
+    });
+
+    it('names what it received and what is missing when only an empty details object arrives', async () => {
+        // An empty object carries no evidence. The rejection is the model's only
+        // guidance for its next turn, so it says what arrived and what to send.
+        await expect(task_complete.handler({ details: {}, nextSteps: 'Hold cash' }, context)).rejects.toThrow(
+            'Task completion summary or result is required: pass "summary" (prose, or an object stored as JSON), ' +
+            '"result", or a non-empty "details" object. Received only: details (empty), nextSteps. ' +
+            'Call task_complete again with a summary.'
         );
 
         expect(mockHandleTaskCompletion).not.toHaveBeenCalled();
+    });
+
+    it('prefers summary and result over details', async () => {
+        await task_complete.handler({ result: 'from result', details: { ignored: true } }, context);
+
+        expect(mockHandleTaskCompletion).toHaveBeenCalledWith(
+            context.agentId,
+            context.channelId,
+            expect.objectContaining({ summary: 'from result', details: { ignored: true } })
+        );
     });
 
     it('falls through an empty-string summary to result (unchanged behavior)', async () => {

@@ -53,6 +53,12 @@ results now retain their full content arrays and result envelopes. Consumers of
 `McpToolHandlerResult` must narrow `content` with `Array.isArray()` before reading
 internal `.data` fields.
 
+Use 5.0.2 or later. In 5.0.0 and 5.0.1 the framework prompt mode (every mode
+except bare) sent the model the word `Success` in place of an external server's
+payload. 5.0.2 sends the content blocks' text, sends falsy and unrecognized
+payloads as they are instead of `Success`, and lets `task_complete` accept a call
+that carries only `details`.
+
 This release adds bare operator prompts, message-triggered activations, request
 capture, history-trim events, and explicit circuit control. Defaults retain the
 framework prompt and task loop. OpenRouter keepalives no longer defeat the

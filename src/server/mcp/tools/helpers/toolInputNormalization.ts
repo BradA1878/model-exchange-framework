@@ -44,3 +44,20 @@ export const normalizeSummaryInput = (
     }
     return JSON.stringify(value);
 };
+
+/**
+ * Use a task_complete `details` object as the completion summary when neither
+ * summary nor result arrived. Some models put all of their completion evidence
+ * in details (GLM in Sentinel, about three times a day); rejecting that cost a
+ * round trip every time. The object is stored as its JSON string, as an
+ * object-valued summary is. An empty object carries no evidence and returns
+ * undefined so the call is still rejected.
+ */
+export const summarizeDetailsInput = (
+    details: Record<string, unknown> | undefined | null
+): string | undefined => {
+    if (details === undefined || details === null || typeof details !== 'object' || Array.isArray(details)) {
+        return undefined;
+    }
+    return Object.keys(details).length > 0 ? JSON.stringify(details) : undefined;
+};

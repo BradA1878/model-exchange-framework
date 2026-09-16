@@ -57,7 +57,7 @@ import { EnhancedParameterPattern, PatternRecommendation } from '@mxf-dev/core/t
 import { AgentId } from '@mxf-dev/core/types/Agent';
 import { ChannelId } from '@mxf-dev/core/types/ChannelContext';
 import { paginationInputSchema, paginateArray, checkResultSize, PaginationMetadata } from '@mxf-dev/core/utils/ToolPaginationUtils';
-import { normalizeSummaryInput } from './helpers/toolInputNormalization';
+import { normalizeSummaryInput, summarizeDetailsInput } from './helpers/toolInputNormalization';
 import type { McpToolHandlerContext } from '@mxf-dev/core/protocols/mcp/McpServerTypes';
 
 const logger = new Logger('info', 'MetaTools', 'server');
@@ -663,16 +663,17 @@ export const tools_recommend = {
 };
 
 /**
- * The task_complete rejection for a call with no usable summary or result.
- * Lists the parameters that did arrive (a blank summary or result counts as
- * received but empty) so the model can add the missing one.
+ * The task_complete rejection for a call with no usable summary, result, or
+ * details. Lists the parameters that did arrive (a blank summary or result and
+ * an empty details object count as received but empty) so the model can add
+ * the missing one.
  */
 const describeMissingSummary = (input: Record<string, unknown>): string => {
     const received = Object.keys(input)
         .filter(key => input[key] !== undefined)
-        .map(key => (key === 'summary' || key === 'result') ? `${key} (empty)` : key);
-    return 'Task completion summary or result is required: pass "summary" (prose, or an object stored as JSON) ' +
-        'or "result". ' +
+        .map(key => (key === 'summary' || key === 'result' || key === 'details') ? `${key} (empty)` : key);
+    return 'Task completion summary or result is required: pass "summary" (prose, or an object stored as JSON), ' +
+        '"result", or a non-empty "details" object. ' +
         (received.length > 0 ? `Received only: ${received.join(', ')}. ` : 'Received no parameters. ') +
         'Call task_complete again with a summary.';
 };
@@ -706,7 +707,7 @@ export const task_complete = {
             },
             details: {
                 type: 'object',
-                description: 'Optional detailed results, outputs, or artifacts from task completion',
+                description: 'Optional detailed results, outputs, or artifacts from task completion. When summary and result are absent, a non-empty details object is stored as the summary (as its JSON string).',
                 additionalProperties: true
             },
             nextSteps: {
@@ -726,19 +727,20 @@ export const task_complete = {
     }, context: McpToolHandlerContext) => {
         const startTime = Date.now();
 
-        // Accept either 'summary' or 'result' parameter (LLMs may use either),
-        // as prose or as a structured object — objects are stored as their JSON
-        // string. Missing completion evidence is rejected below.
+        // Accept 'summary' or 'result' (LLMs use either), as prose or as a
+        // structured object stored as its JSON string. A call that carries only
+        // a details object (seen in production about three times a day) uses
+        // that object as its summary instead of costing a rejection round trip.
+        // Missing completion evidence is rejected below.
         const summaryText = normalizeSummaryInput(input.summary)
-            || normalizeSummaryInput(input.result);
+            || normalizeSummaryInput(input.result)
+            || summarizeDetailsInput(input.details);
         
         // Validate context (but be forgiving on input)
         validator.assertIsNonEmptyString(context.agentId, 'agentId is required');
         validator.assertIsNonEmptyString(context.channelId, 'channelId is required');
         // The rejection is the model's only guidance for its next turn, so it
-        // says what arrived and what is missing. A model that fills details and
-        // nextSteps and drops the summary (seen in production) then knows what
-        // to send instead of guessing.
+        // says what arrived and what is missing.
         if (summaryText === undefined || summaryText.trim().length === 0) {
             throw new Error(describeMissingSummary(input));
         }

@@ -1035,3 +1035,45 @@ describe('MxfAgent.disconnect() against a finishing turn', () => {
     });
 
 });
+
+describe('MxfAgent framework-mode tool results', () => {
+    beforeEach(() => {
+        jest.clearAllMocks();
+        (EventBus.client as unknown as { _reset: () => void })._reset();
+        (EventBus.client.isRegisteredSocketConnected as jest.Mock).mockReturnValue(true);
+        mockAddConversationMessage.mockResolvedValue(undefined);
+    });
+
+    it('sends the model the payload of a native MCP result envelope, not "Success"', async () => {
+        // Since 5.0 the server forwards an external server's result unchanged as
+        // {content: [{type: 'text', text}]}. The default prompt mode turned that
+        // into the word "Success" while the channel monitor logged every payload.
+        const agent = new MxfAgent({ ...CONFIG });
+        const payload = JSON.stringify({ portfolio: { startingCapital: 2000 } });
+        mockSendWithContextStreaming.mockResolvedValueOnce({
+            content: [{ type: 'tool_use', id: 'read-call', name: 'fetch_feed', input: { scope: 'open' } }],
+            model: 'test-model'
+        }).mockResolvedValueOnce({
+            content: [{ type: 'tool_use', id: 'finish-call', name: 'task_complete', input: { summary: 'Reviewed positions' } }],
+            model: 'test-model'
+        });
+        jest.spyOn(agent, 'executeTool').mockImplementation(async (toolName: string) => toolName === 'fetch_feed'
+            ? { content: [{ type: 'text', text: payload }] }
+            : { status: 'task_completed', taskId: 'task-5', message: 'Task completed successfully: Reviewed positions' });
+
+        await expect(agent.getTaskExecutionManager().executeTask({
+            taskId: 'task-5', fromAgentId: 'requester', toAgentId: 'test-agent',
+            title: 'Review', description: 'Review the portfolio', content: 'Review the portfolio'
+        })).resolves.toBeDefined();
+
+        const toolMessages = mockAddConversationMessage.mock.calls
+            .map(call => call[0] as { role: string; content: string; metadata?: { tool_call_id?: string } })
+            .filter(message => message.role === 'tool');
+        expect(toolMessages.map(message => [message.metadata?.tool_call_id, message.content])).toEqual([
+            ['read-call', payload],
+            ['finish-call', expect.stringContaining('Reviewed positions')]
+        ]);
+        expect(mockLoggerError).not.toHaveBeenCalled();
+        await agent.disconnect();
+    });
+});

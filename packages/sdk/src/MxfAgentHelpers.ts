@@ -28,6 +28,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import { ConversationMessage } from '@mxf-dev/core/interfaces/ConversationMessage';
 import { McpMessage, McpRole, McpContentType } from '@mxf-dev/core/protocols/mcp/IMcpClient';
+import type { McpToolHandlerResult } from '@mxf-dev/core/protocols/mcp/McpServerTypes';
 import { Logger } from '@mxf-dev/core/utils/Logger';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -40,11 +41,14 @@ export interface ToolExecutionResult {
     error?: string;
     message?: string;
     failed?: boolean;
-    // MCP standardized format support
-    content?: {
-        type: string;
-        data: any;
-    };
+    /** Native MCP failure flag. The server answers such a result with a tool error before it reaches the SDK. */
+    isError?: boolean;
+    /**
+     * Internal tools answer with one {type, data} value. External servers answer
+     * with the native MCP content-block array, which the server forwards unchanged
+     * since 5.0 (McpToolHandlerResult.content covers both).
+     */
+    content?: McpToolHandlerResult['content'];
 }
 
 export interface TaskContext {
@@ -489,6 +493,14 @@ Available tools: ${availableTools.map((t: any) => t.name).join(', ')}`;
  * Tool Execution Result Helpers
  */
 export class ToolExecutionHelpers {
+    /**
+     * Join the content blocks of a native MCP result into the text a model reads:
+     * one line per block, an empty block list as empty text.
+     */
+    static formatContentBlocks(blocks: unknown[]): string {
+        return blocks.map(block => this.getRawToolResultMessage(block)).join('\n');
+    }
+
     /** Extract the tool's actual payload without adding confirmations or advice. */
     static getRawToolResultMessage(result: unknown): string {
         if (typeof result === 'string') return result;
@@ -499,7 +511,7 @@ export class ToolExecutionHelpers {
             );
         if (Array.isArray(result)) {
             return result.length > 0 && result.every(isBlock)
-                ? result.map(value => this.getRawToolResultMessage(value)).join('\n')
+                ? this.formatContentBlocks(result)
                 : JSON.stringify(result);
         }
         if (result !== null && typeof result === 'object') {
@@ -508,12 +520,14 @@ export class ToolExecutionHelpers {
             if ((value.type === 'text' || value.type === 'application/json') && value.data !== undefined) {
                 return typeof value.data === 'string' ? value.data : JSON.stringify(value.data);
             }
-            // Unwrap only a recognizable MCP envelope. Ordinary tool data may
-            // legitimately contain fields named content, data, error, or result.
-            const envelopeKeys = ['content', 'isError', 'metadata', '_meta'];
+            // Unwrap only a recognizable MCP envelope: every key is one the MCP
+            // CallToolResult defines (content, structuredContent, isError, _meta) or
+            // MXF's metadata. Ordinary tool data may legitimately contain fields
+            // named content, data, error, or result.
+            const envelopeKeys = ['content', 'structuredContent', 'isError', 'metadata', '_meta'];
             if (Object.keys(value).every(key => envelopeKeys.includes(key))) {
                 if (Array.isArray(value.content) && value.content.every(isBlock)) {
-                    return value.content.map(block => this.getRawToolResultMessage(block)).join('\n');
+                    return this.formatContentBlocks(value.content);
                 }
                 if (isBlock(value.content)) return this.getRawToolResultMessage(value.content);
             }
@@ -576,8 +590,10 @@ export class ToolExecutionHelpers {
     }
 
     /**
-     * Get detailed tool result message with guidance
-     * Returns a brief confirmation instead of verbose acknowledgment
+     * Format a tool result as the text of the tool-role message the model reads
+     * on its next turn (every prompt mode except 'bare', which uses
+     * getRawToolResultMessage). The text is the tool's payload; failures are
+     * reported as a one-line error.
      */
     static getDetailedToolResultMessage(
         toolResult: ToolExecutionResult, 
@@ -585,9 +601,24 @@ export class ToolExecutionHelpers {
         toolInput: any, 
         availableTools?: any[]
     ): string {
-        // Return brief confirmations that will be shown as [Tool Result] in the prompt
-        // These should NOT become part of conversation history
         if (ToolExecutionHelpers.isToolExecutionSuccessful(toolResult)) {
+            // A server up to 4.x unwrapped an external text result to its string, and
+            // an internal {type: 'text', data} value reaches the SDK as its string.
+            // Such a payload used to be sent JSON-quoted, with escaped newlines.
+            if (typeof toolResult === 'string') return toolResult;
+            // A native MCP result ({content: ContentBlock[], isError?, structuredContent?,
+            // _meta?}) is what an external server returns and what the server forwards
+            // unchanged since 5.0; a client-side external tool arrives as the bare block
+            // array. The payload is the blocks. Nothing below understands an array: the
+            // envelope is truthy, has no content.data or content.text, and carries no
+            // top-level data or result, so it used to fall through to 'Success' and the
+            // model never saw the payload.
+            if (Array.isArray(toolResult)) {
+                return ToolExecutionHelpers.getRawToolResultMessage(toolResult);
+            }
+            if (Array.isArray(toolResult.content)) {
+                return ToolExecutionHelpers.formatContentBlocks(toolResult.content);
+            }
             // CRITICAL: Check if result has content wrapper or is legacy format
             if (!toolResult.content) {
                 // Legacy format - plain object without content wrapper
@@ -598,8 +629,10 @@ export class ToolExecutionHelpers {
                 // Return entire result as JSON
                 return JSON.stringify(toolResult);
             }
-            // Handle MCP standardized format { content: { type, data } }
-            else if (toolResult.content?.data) {
+            // Handle MCP standardized format { content: { type, data } }. A defined
+            // payload is the payload, including '', 0, false, and null; a truthiness
+            // check here used to turn those into 'Success'.
+            else if (toolResult.content.data !== undefined) {
                 const data = toolResult.content.data;
                 // Return the actual data content
                 if (typeof data === 'string') {
@@ -608,8 +641,8 @@ export class ToolExecutionHelpers {
                 return JSON.stringify(data);
             }
             // Handle alternative format { content: { type, text } }
-            else if ((toolResult.content as any)?.text) {
-                return (toolResult.content as any).text;
+            else if (typeof (toolResult.content as { text?: unknown }).text === 'string') {
+                return (toolResult.content as { text?: unknown }).text as string;
             }
             // Handle direct data field { type: "application/json", data: {...} }
             else if ((toolResult as any).data !== undefined) {
@@ -627,9 +660,11 @@ export class ToolExecutionHelpers {
                 }
                 return JSON.stringify(result);
             }
-            // Fallback only if neither format is present
+            // Any other shape is sent as its payload (the raw formatter's JSON or
+            // block text). This used to return the word 'Success', which told the
+            // model nothing about a result the SDK did not recognize.
             else {
-                return 'Success';
+                return ToolExecutionHelpers.getRawToolResultMessage(toolResult);
             }
         } else {
             // For errors, return brief error message
